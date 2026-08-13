@@ -404,10 +404,19 @@ fn run_integration_target_with_dev_node(
 
     let rpc_url = started.rpc_url();
     let runtime_manifest = started.readiness().manifest_path.clone();
+    let default_key = started
+        .readiness()
+        .runtime_manifest
+        .as_ref()
+        .and_then(crate::runtime_manifest::lowest_local_user_key)
+        .ok_or_else(|| {
+            CliError::Other("local runtime manifest has no local_user account".into())
+        })?;
     let result = run_integration_against_node(
         &build,
         &rpc_url,
         runtime_manifest,
+        &default_key,
         options,
         cargo_args,
         artifacts,
@@ -510,6 +519,7 @@ fn run_integration_against_node(
     build: &IntegrationBuild,
     rpc_url: &str,
     runtime_manifest: Option<std::path::PathBuf>,
+    default_key: &str,
     options: &TestOptions,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
@@ -523,7 +533,7 @@ fn run_integration_against_node(
         &build.artifact.path,
         build.artifact.kind,
         rpc_url,
-        "dev-0",
+        default_key,
         runtime_manifest.clone(),
     )?;
     let submitted = crate::deploy::submit_prepared_deploy_and_resolve(&prepared)?;
@@ -537,8 +547,12 @@ fn run_integration_against_node(
         "Running RPC integration tests against {contract_address}..."
     ));
 
-    let mut env =
-        integration_test_environment(rpc_url, &contract_address, runtime_manifest.as_deref());
+    let mut env = integration_test_environment(
+        rpc_url,
+        &contract_address,
+        runtime_manifest.as_deref(),
+        default_key,
+    );
     let credential_environment = crate::auth::executor_credential_environment()?;
     env.extend(credential_environment.set.iter().cloned());
     let filter = SelectedFilter {
@@ -561,7 +575,7 @@ fn run_integration_against_node(
     let mut profile = build.profile.clone();
     profile.name = "integration".into();
     profile.rpc_url = Some(rpc_url.to_owned());
-    profile.default_key = Some("dev-0".into());
+    profile.default_key = Some(default_key.into());
     profile.runtime_manifest = runtime_manifest;
     profile.source = None;
     profile
@@ -575,7 +589,7 @@ fn run_integration_against_node(
         default_key: profile
             .default_key
             .clone()
-            .unwrap_or_else(|| "dev-0".into()),
+            .expect("integration profile default key was set"),
     };
 
     let report = build_test_report(
@@ -747,6 +761,7 @@ fn integration_test_environment(
     rpc_url: &str,
     contract_address: &str,
     runtime_manifest: Option<&std::path::Path>,
+    default_key: &str,
 ) -> Vec<(OsString, OsString)> {
     let mut env = vec![
         (
@@ -764,7 +779,7 @@ fn integration_test_environment(
         ),
         (
             OsString::from("GROUNDHOG_DEFAULT_KEY"),
-            OsString::from("dev-0"),
+            OsString::from(default_key),
         ),
     ];
     if let Some(path) = runtime_manifest {
@@ -2298,6 +2313,7 @@ mod tests {
             "http://127.0.0.1:1234",
             &format!("0x{}", "11".repeat(32)),
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
+            "dev-4",
         );
 
         assert!(env.contains(&(
@@ -2318,7 +2334,7 @@ mod tests {
         )));
         assert!(env.contains(&(
             OsString::from("GROUNDHOG_DEFAULT_KEY"),
-            OsString::from("dev-0")
+            OsString::from("dev-4")
         )));
         assert!(env.contains(&(
             OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
@@ -2346,6 +2362,7 @@ mod tests {
             "http://127.0.0.1:1234",
             &format!("0x{}", "11".repeat(32)),
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
+            "dev-4",
         );
 
         apply_test_environment(&mut command, &env, &[]);
@@ -2366,7 +2383,7 @@ mod tests {
             key == "GROUNDHOG_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
         }));
         assert!(applied.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
-        assert!(applied.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
+        assert!(applied.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-4".into())));
         assert!(applied.contains(&(
             "GROUNDHOG_RUNTIME_MANIFEST".into(),
             "/tmp/runtime-manifest.json".into()

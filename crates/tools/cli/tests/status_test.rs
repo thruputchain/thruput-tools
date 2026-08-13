@@ -111,7 +111,7 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
 
 #[test]
 #[serial]
-fn collect_report_uses_builtin_dev_key_for_local_profile() {
+fn collect_report_does_not_invent_builtin_key_without_active_local_runtime() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
     let project = tmp.path().join("proj");
@@ -131,14 +131,14 @@ fn collect_report_uses_builtin_dev_key_for_local_profile() {
     write_groundhog_registry_config(&cargo_home);
 
     let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
-    assert_eq!(report.effective_default_key.as_deref(), Some("dev-0"));
-    assert_eq!(report.effective_default_key_source, Some("local built-in"));
-    assert!(!report.findings.iter().any(|finding| {
-        matches!(
-            finding.code,
-            "no_keys" | "no_default_key" | "default_key_not_on_disk"
-        )
-    }));
+    assert_eq!(report.effective_default_key, None);
+    assert_eq!(report.effective_default_key_source, None);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "no_keys")
+    );
 
     unsafe {
         env::remove_var("CARGO_HOME");

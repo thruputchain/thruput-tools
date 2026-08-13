@@ -1,14 +1,19 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-bootstrap",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",
   "devWallet": {
     "profile": "hog-devnode-default"
   },
+  "bootstrapFaucet": {
+    "index": 0,
+    "initialStorageTokens": "10000000000000"
+  },
   "bootstrapAccounts": {
-    "count": 100,
-    "seed": "groundhog-bench-accounts",
+    "count": 10,
+    "firstIndex": 1,
+    "seed": "groundhog-dev-accounts",
     "initialStorageTokens": "1000000000"
   },
   "storageCostModel": {

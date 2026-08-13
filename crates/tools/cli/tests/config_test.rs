@@ -1059,7 +1059,7 @@ fn resolve_default_key_uses_builtin_dev_key_for_local_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let runtime_manifest = tmp.path().join("runtime-manifest.json");
-    fs::write(&runtime_manifest, "{}").unwrap();
+    write_local_runtime_manifest(&runtime_manifest, &[(0, "faucet"), (1, "local_user")]);
     fs::write(
         tmp.path().join("groundhog.toml"),
         r#"
@@ -1079,9 +1079,66 @@ network = "local"
     .unwrap();
 
     let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
-    assert_eq!(resolved.as_deref(), Some("dev-0"));
+    assert_eq!(resolved.as_deref(), Some("dev-1"));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]) {
+    let accounts: Vec<_> = accounts
+        .iter()
+        .map(|(index, role)| {
+            let signer = groundhog_signing::derive_default_dev_account_signer(*index as usize);
+            serde_json::json!({
+                "index": index,
+                "role": role,
+                "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+                "walletAddress": format!("0x{}", "71".repeat(32)),
+                "initialStorageTokens": "1000000000"
+            })
+        })
+        .collect();
+    fs::write(
+        path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "kind": "hogd-dev-runtime",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
+            "protocol": "hogp/test",
+            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "producer": { "binary": "hog-devnode", "version": "test" },
+            "endpoints": { "scheduler": "127.0.0.1:1000" },
+            "bootstrapAccountDerivation": {
+                "scheme": "groundhog-bootstrap-account-v1",
+                "seed": groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED
+            },
+            "bootstrapAccounts": accounts,
+            "bootstrap": {
+                "devWallet": {
+                    "contentHash": format!("0x{}", "51".repeat(32)),
+                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
+                    "artifactHint": "dev-wallet.wasm",
+                    "deployEntrypoint": "0x6465706c6f794e77",
+                    "createWalletEntrypoint": "0x6372656174655761",
+                    "doActionEntrypoint": "0x646f416374696f6e"
+                },
+                "storageCostModel": {
+                    "hash": format!("0x{}", "53".repeat(32)),
+                    "baseDataItemCost": "12000",
+                    "bytestringCostPerByte": "10",
+                    "baseContractDeploymentCost": "12000",
+                    "contractDeploymentCostPerByte": "10",
+                    "authPerKeyCost": "1111",
+                    "rcqCostPerEntry": "8",
+                    "replayCacheCostPerEntry": "7",
+                    "balanceCost": "1234"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]

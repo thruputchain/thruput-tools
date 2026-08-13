@@ -39,9 +39,6 @@ const HOG_TOKEN_ADDRESS: [u8; 32] = {
 const HOG_DECIMALS: usize = 7;
 const HOG_SCALE: u128 = 10_000_000;
 const PROVISION_RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
-const WALLET_SPONSOR_ROLE: &str = "wallet_sponsor";
-const FAUCET_ROLE: &str = "faucet";
-
 pub(crate) struct ActorProvisionInputs<'a> {
     pub(crate) manifest: &'a SimulationManifest,
     pub(crate) runtime_manifest: &'a RuntimeManifest,
@@ -53,6 +50,7 @@ pub(crate) struct ActorProvisionInputs<'a> {
 pub(crate) async fn provision_missing_actor_accounts<C>(
     client: C,
     inputs: ActorProvisionInputs<'_>,
+    sponsor: Option<&mut ActorState>,
     actor_states: &mut Vec<ActorState>,
     event_writer: &mut EventWriter,
 ) -> Result<(), SimError>
@@ -72,15 +70,23 @@ where
     if actor_states.len() >= required {
         return Ok(());
     }
-    if actor_states.is_empty() {
-        return Err(SimError::Executor(
-            "actor provisioning requires at least one runtime bootstrap account as sponsor".into(),
-        ));
-    }
+    let sponsor = sponsor.ok_or_else(|| {
+        SimError::Executor(
+            "actor provisioning requires runtime bootstrap account 0 with role `faucet`".into(),
+        )
+    })?;
 
-    let plan = prepare_provision_plan(&inputs, spec, actor_states)?;
+    let plan = prepare_provision_plan(&inputs, spec)?;
     while actor_states.len() < required {
-        provision_one_actor(client.clone(), &inputs, &plan, actor_states, event_writer).await?;
+        provision_one_actor(
+            client.clone(),
+            &inputs,
+            &plan,
+            sponsor,
+            actor_states,
+            event_writer,
+        )
+        .await?;
     }
 
     Ok(())
@@ -89,7 +95,6 @@ where
 fn prepare_provision_plan(
     inputs: &ActorProvisionInputs<'_>,
     spec: &ActorProvisioningSpec,
-    actor_states: &[ActorState],
 ) -> Result<ProvisionPlan, SimError> {
     let artifact_path = resolve_dev_wallet_artifact(
         spec,
@@ -136,17 +141,6 @@ fn prepare_provision_plan(
         .as_deref()
         .map(parse_hog_amount)
         .transpose()?;
-    let preferred_create_sponsor_index = select_sponsor_actor_index(
-        actor_states,
-        inputs.runtime_manifest,
-        &[WALLET_SPONSOR_ROLE, FAUCET_ROLE],
-    );
-    let preferred_airdrop_sponsor_index = select_sponsor_actor_index(
-        actor_states,
-        inputs.runtime_manifest,
-        &[FAUCET_ROLE, WALLET_SPONSOR_ROLE],
-    );
-
     Ok(ProvisionPlan {
         wallet_contract,
         wallet_contract_hash,
@@ -154,9 +148,6 @@ fn prepare_provision_plan(
         wallet_action_entrypoint,
         airdrop_raw_amount,
         airdrop_hog: spec.airdrop_hog.clone(),
-        initial_sponsor_count: actor_states.len(),
-        preferred_create_sponsor_index,
-        preferred_airdrop_sponsor_index,
     })
 }
 
@@ -167,15 +158,13 @@ struct ProvisionPlan {
     wallet_action_entrypoint: ContractEntrypointID,
     airdrop_raw_amount: Option<u128>,
     airdrop_hog: Option<String>,
-    initial_sponsor_count: usize,
-    preferred_create_sponsor_index: Option<usize>,
-    preferred_airdrop_sponsor_index: Option<usize>,
 }
 
 async fn provision_one_actor<C>(
     client: C,
     inputs: &ActorProvisionInputs<'_>,
     plan: &ProvisionPlan,
+    sponsor: &mut ActorState,
     actor_states: &mut Vec<ActorState>,
     event_writer: &mut EventWriter,
 ) -> Result<(), SimError>
@@ -184,19 +173,11 @@ where
 {
     let actor_id = u32::try_from(actor_states.len())
         .map_err(|_| SimError::Executor("provisioned actor id does not fit in u32".into()))?;
-    let account_index = next_unused_account_index(actor_states)?;
+    let account_index = next_unused_account_index(actor_states, sponsor.account_index)?;
     let signer = derive_provisioned_account_signer(inputs.runtime_manifest, account_index)?;
     let owner_public_key = Ed25519PublicKey::from(signer.verifying_key_bytes());
-    let fallback_sponsor_index =
-        (actor_states.len() - plan.initial_sponsor_count + 1) % plan.initial_sponsor_count;
-    let create_sponsor_index = plan
-        .preferred_create_sponsor_index
-        .unwrap_or(fallback_sponsor_index);
-    let airdrop_sponsor_index = plan
-        .preferred_airdrop_sponsor_index
-        .unwrap_or(create_sponsor_index);
     let prepared = prepare_wallet_create(
-        &actor_states[create_sponsor_index],
+        sponsor,
         plan.create_wallet_entrypoint,
         &plan.wallet_contract,
         plan.wallet_contract_hash,
@@ -204,11 +185,9 @@ where
         resolve_block_expiry_height(client.clone()).await?,
     )?;
     let mut event = actor_provision_event(
-        actor_states,
         actor_id,
         account_index,
-        create_sponsor_index,
-        airdrop_sponsor_index,
+        sponsor.account_index,
         plan,
         prepared.wallet_address,
     );
@@ -217,15 +196,9 @@ where
             event: event.clone(),
         })
         .await?;
-    submit_wallet_create_or_fail(
-        client.clone(),
-        &mut actor_states[create_sponsor_index],
-        &prepared,
-        &mut event,
-        event_writer,
-    )
-    .await?;
-    let nonce_namespace = actor_states[create_sponsor_index].nonce_namespace;
+    submit_wallet_create_or_fail(client.clone(), sponsor, &prepared, &mut event, event_writer)
+        .await?;
+    let nonce_namespace = sponsor.nonce_namespace;
     actor_states.push(ActorState::new(
         actor_id,
         SimAccount {
@@ -237,7 +210,7 @@ where
     ));
     submit_airdrop_if_configured(
         client,
-        &mut actor_states[airdrop_sponsor_index],
+        sponsor,
         plan,
         prepared.wallet_address,
         &mut event,
@@ -250,11 +223,15 @@ where
     Ok(())
 }
 
-fn next_unused_account_index(actor_states: &[ActorState]) -> Result<u32, SimError> {
-    let used = actor_states
+fn next_unused_account_index(
+    actor_states: &[ActorState],
+    sponsor_account_index: u32,
+) -> Result<u32, SimError> {
+    let mut used = actor_states
         .iter()
         .map(|actor| actor.account_index)
         .collect::<HashSet<_>>();
+    used.insert(sponsor_account_index);
     let mut index = 0_u32;
     while used.contains(&index) {
         index = index.checked_add(1).ok_or_else(|| {
@@ -265,22 +242,20 @@ fn next_unused_account_index(actor_states: &[ActorState]) -> Result<u32, SimErro
 }
 
 fn actor_provision_event(
-    actor_states: &[ActorState],
     actor_id: u32,
     account_index: u32,
-    create_sponsor_index: usize,
-    airdrop_sponsor_index: usize,
+    sponsor_account_index: u32,
     plan: &ProvisionPlan,
     wallet_address: ContractAddress,
 ) -> ActorProvisionEvent {
     ActorProvisionEvent {
         actor_id,
         account_index,
-        sponsor_actor_id: actor_states[create_sponsor_index].actor_id,
-        airdrop_sponsor_actor_id: plan
+        sponsor_account_index,
+        airdrop_sponsor_account_index: plan
             .airdrop_raw_amount
             .is_some()
-            .then_some(actor_states[airdrop_sponsor_index].actor_id),
+            .then_some(sponsor_account_index),
         wallet_address: format_contract_address(&wallet_address),
         create_tx_hash: None,
         create_height: None,
@@ -367,22 +342,6 @@ where
             ))
         }
     }
-}
-
-fn select_sponsor_actor_index(
-    actor_states: &[ActorState],
-    runtime_manifest: &RuntimeManifest,
-    preferred_roles: &[&str],
-) -> Option<usize> {
-    preferred_roles.iter().find_map(|role| {
-        let account = runtime_manifest
-            .bootstrap_accounts
-            .iter()
-            .find(|account| account.role == *role)?;
-        actor_states
-            .iter()
-            .position(|actor| actor.account_index == account.index)
-    })
 }
 
 pub fn actor_provisioning_enabled(manifest: &SimulationManifest) -> bool {
@@ -781,13 +740,14 @@ fn exec_status_name(status: &ExecStatus) -> &'static str {
 mod tests {
     use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
     use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::contract::Contract;
+    use groundhog_xdr::contract::{Contract, ContractBlob};
     use groundhog_xdr::types::ContractAddress;
     use serde_json::json;
+    use xdr_common::BytesM;
 
     use super::{
-        hog_transfer_entrypoint, load_dev_wallet_contract, next_unused_account_index,
-        parse_hog_amount, resolve_dev_wallet_artifact,
+        ProvisionPlan, actor_provision_event, hog_transfer_entrypoint, load_dev_wallet_contract,
+        next_unused_account_index, parse_hog_amount, resolve_dev_wallet_artifact,
     };
     use crate::actor::ActorState;
     use crate::manifest::{ActorProvisioningSpec, ContractArtifactKind};
@@ -899,9 +859,36 @@ mod tests {
     fn account_index_allocation_skips_sparse_runtime_indices() {
         let actors = vec![actor_state(0, 0), actor_state(1, 3)];
 
-        let next = next_unused_account_index(&actors).expect("unused index should exist");
+        let next = next_unused_account_index(&actors, 0).expect("unused index should exist");
 
         assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn provisioning_event_identifies_faucet_sponsor_outside_workload_actors() {
+        let event = actor_provision_event(
+            2,
+            3,
+            0,
+            &ProvisionPlan {
+                wallet_contract: Contract::kRv32 {
+                    rv32_contract: ContractBlob {
+                        data: BytesM(Vec::new()),
+                    },
+                },
+                wallet_contract_hash: [0; 32].into(),
+                create_wallet_entrypoint: [0; 8].into(),
+                wallet_action_entrypoint: [0; 8].into(),
+                airdrop_raw_amount: Some(1),
+                airdrop_hog: Some("0.0000001".into()),
+            },
+            ContractAddress::from([0x22; 32]),
+        );
+
+        assert_eq!(event.actor_id, 2);
+        assert_eq!(event.account_index, 3);
+        assert_eq!(event.sponsor_account_index, 0);
+        assert_eq!(event.airdrop_sponsor_account_index, Some(0));
     }
 
     fn runtime_manifest(artifact_hint: &str) -> RuntimeManifest {

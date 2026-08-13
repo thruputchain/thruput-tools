@@ -12,7 +12,7 @@ independent agents that each run arbitrary logic against the chain.
 It fills a specific gap in the existing tooling:
 
 - `groundhog test --integration` runs a *single* actor: it builds the project,
-  starts an ephemeral local node, deploys with `dev-0`, and runs
+  starts an ephemeral local node, deploys with the lowest-index `local_user`, and runs
   `tests/integration.rs`. There is no way to model several independent users
   interacting concurrently.
 - `hogsim` runs *many* actors, but their behavior is statically configured

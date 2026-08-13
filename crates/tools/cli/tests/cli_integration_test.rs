@@ -1419,6 +1419,8 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .arg(fake)
         .arg("--data-dir")
         .arg(&data_dir)
+        .arg("--dev-account-hog")
+        .arg("25.0000001")
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
         .env("XDG_CONFIG_HOME", config_home.path())
@@ -1470,6 +1472,10 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .expect("bug: rpc_url string")
         .to_string();
     assert!(rpc_url.starts_with("http://127.0.0.1:"));
+    let manifest_path = payload["data"]["runtime_manifest"]["path"]
+        .as_str()
+        .expect("bug: runtime manifest path should be a string");
+    assert_split_bootstrap_accounts(std::path::Path::new(manifest_path), "250000001");
 
     let tip = tokio::runtime::Runtime::new()
         .expect("bug: tokio runtime should start")
@@ -2645,6 +2651,8 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--data-dir"));
     assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--dev-account-count"));
+    assert!(stdout.contains("--dev-account-hog <HOG>"));
+    assert!(stdout.contains("Initial HOG allocated to each dev-1+ user account"));
     assert!(stdout.contains("--hogd-protocol"));
     assert!(stdout.contains("GROUNDHOG_DEVNODE_BINARY"));
     assert!(stdout.contains("RUST_LOG"));
@@ -3764,7 +3772,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["name"], "trading");
     assert_eq!(stdout["data"]["key"], "owner");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
-    assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
+    assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
     assert_eq!(stdout["data"]["prefund_raw_amount"], "200000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
@@ -4162,7 +4170,7 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["amount_hog"], "1.25");
     assert_eq!(stdout["data"]["raw_amount"], "12500000");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
-    assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
+    assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
     assert!(stdout["data"].get("signed_tx").is_none());
 }
 
@@ -11126,6 +11134,23 @@ fn advertised_dev_wallet_address(index: u8) -> String {
     format!("0x{}", hex::encode(address))
 }
 
+fn assert_split_bootstrap_accounts(manifest_path: &std::path::Path, user_tokens: &str) {
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(manifest_path).expect("bug: runtime manifest should be readable"),
+    )
+    .expect("bug: runtime manifest should parse");
+    assert_eq!(manifest["bootstrapAccounts"][0]["role"], "faucet");
+    assert_eq!(
+        manifest["bootstrapAccounts"][0]["initialStorageTokens"],
+        "10000000000000"
+    );
+    assert_eq!(manifest["bootstrapAccounts"][1]["role"], "local_user");
+    assert_eq!(
+        manifest["bootstrapAccounts"][1]["initialStorageTokens"],
+        user_tokens
+    );
+}
+
 fn write_runtime_manifest(
     dir: &std::path::Path,
     index: usize,
@@ -11171,10 +11196,14 @@ fn write_runtime_manifest_with_seed(
         },
         "bootstrapAccounts": [{
             "index": index,
-            "role": "local_user",
+            "role": if index == 0 { "faucet" } else { "local_user" },
             "publicKey": format!("0x{}", hex::encode(public_key)),
             "walletAddress": address,
-            "initialStorageTokens": groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS.to_string()
+            "initialStorageTokens": if index == 0 {
+                groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
+            } else {
+                groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_ACCOUNT_TOKENS
+            }.to_string()
         }],
         "bootstrap": {
             "devWallet": {

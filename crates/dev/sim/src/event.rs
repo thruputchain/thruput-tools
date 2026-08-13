@@ -10,7 +10,7 @@ use crate::result::{
 };
 use crate::target::TargetProviderKind;
 
-pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug)]
 pub struct EventWriter {
@@ -239,11 +239,17 @@ pub struct SimulatorOverloadEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActorProvisionEvent {
+    /// Workload actor created by this provisioning operation.
     pub actor_id: u32,
+    /// Bootstrap derivation index assigned to the new actor's account.
     pub account_index: u32,
-    pub sponsor_actor_id: u32,
+    /// Bootstrap derivation index of the external faucet account sponsoring
+    /// wallet creation. This is not a workload actor ID.
+    pub sponsor_account_index: u32,
+    /// Bootstrap derivation index of the external faucet account sponsoring
+    /// the optional airdrop. This is not a workload actor ID.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub airdrop_sponsor_actor_id: Option<u32>,
+    pub airdrop_sponsor_account_index: Option<u32>,
     pub wallet_address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_tx_hash: Option<String>,
@@ -730,6 +736,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn actor_provision_event_uses_account_indices_for_external_sponsors() {
+        let event = ResultEvent::ActorProvisionStarted {
+            event: ActorProvisionEvent {
+                actor_id: 2,
+                account_index: 3,
+                sponsor_account_index: 0,
+                airdrop_sponsor_account_index: Some(0),
+                wallet_address: format!("0x{}", "22".repeat(32)),
+                create_tx_hash: None,
+                create_height: None,
+                airdrop_tx_hash: None,
+                airdrop_height: None,
+                airdrop_hog: Some("1".into()),
+                error: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(value["schemaVersion"], RESULT_EVENT_SCHEMA_VERSION);
+        assert_eq!(value["actorId"], 2);
+        assert_eq!(value["accountIndex"], 3);
+        assert_eq!(value["sponsorAccountIndex"], 0);
+        assert_eq!(value["airdropSponsorAccountIndex"], 0);
+        assert!(value.get("sponsorActorId").is_none());
+        assert!(value.get("airdropSponsorActorId").is_none());
+    }
+
     #[tokio::test]
     async fn event_writer_appends_to_existing_stream() {
         let file = NamedTempFile::new().expect("temp file should be created");
@@ -758,7 +794,7 @@ mod tests {
             contents,
             concat!(
                 "{\"kind\":\"existing\"}\n",
-                "{\"schemaVersion\":3,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
+                "{\"schemaVersion\":4,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
                 "\"scheduledWorkloads\":0,\"completedWorkloads\":0,",
                 "\"failedWorkloads\":0,\"skippedWorkloads\":0}\n"
             )

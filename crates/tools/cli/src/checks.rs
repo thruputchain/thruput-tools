@@ -436,7 +436,7 @@ pub fn collect_report(
     add_environment_findings(&environment, &project, &mut findings);
 
     let (effective_default_key, effective_default_key_source) =
-        resolve_effective_key(&project, &keys);
+        resolve_effective_key(project_start, explicit_profile, &project, &keys)?;
 
     add_key_findings(
         &keys,
@@ -1202,17 +1202,21 @@ fn read_probe_output(mut file: std::fs::File, stream: &str, limit: u64) -> Resul
 }
 
 fn resolve_effective_key(
+    project_start: &Path,
+    explicit_profile: Option<&str>,
     project: &ProjectContext,
     keys: &KeyStatus,
-) -> (Option<String>, Option<&'static str>) {
+) -> Result<(Option<String>, Option<&'static str>), CliError> {
     if let Some(profile_key) = project.profile_key.clone() {
-        (Some(profile_key), Some("profile"))
+        Ok((Some(profile_key), Some("profile")))
     } else if let Some(global_key) = keys.global_default_key.clone() {
-        (Some(global_key), Some("global"))
+        Ok((Some(global_key), Some("global")))
     } else if project.network == Some(crate::config::Network::Local) {
-        (Some("dev-0".into()), Some("local built-in"))
+        let key = crate::config::resolve_default_key(project_start, explicit_profile)?;
+        let source = key.as_ref().map(|_| "local built-in");
+        Ok((key, source))
     } else {
-        (None, None)
+        Ok((None, None))
     }
 }
 

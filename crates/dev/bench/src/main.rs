@@ -20,8 +20,8 @@ use clap::Parser;
 #[cfg(test)]
 use groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION;
 use groundhog_json_rpc_types::runtime_manifest::{
-    BootstrapAccount, RuntimeManifest, RuntimeManifestEntrypointError, RuntimeManifestParseError,
-    parse_runtime_manifest,
+    BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount, RuntimeManifest,
+    RuntimeManifestEntrypointError, RuntimeManifestParseError, parse_runtime_manifest,
 };
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams, SigningError,
@@ -210,6 +210,7 @@ fn manifest_bench_accounts(manifest: &RuntimeManifest) -> Result<Vec<BenchAccoun
     manifest
         .bootstrap_accounts
         .iter()
+        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
         .map(|account| manifest_bench_account(manifest, account))
         .collect()
 }
@@ -935,6 +936,22 @@ mod tests {
         .expect("bug: manifest has the requested number of accounts");
 
         assert_eq!(accounts.len(), 2);
+    }
+
+    #[test]
+    fn send_raw_transaction_excludes_faucet_and_preserves_derivation_indices() {
+        let mut manifest = manifest_with_accounts(3);
+        manifest.bootstrap_accounts[0].role = "faucet".into();
+
+        let (accounts, _) = transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2)
+            .expect("bug: two local-user accounts should be available");
+
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(
+            accounts[0].signer.verifying_key_bytes(),
+            derive_dev_account_signer(&manifest.bootstrap_account_derivation.seed, 1)
+                .verifying_key_bytes()
+        );
     }
 
     #[test]

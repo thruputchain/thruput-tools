@@ -75,7 +75,7 @@ impl Default for FakeStartupConfig {
         Self {
             count: groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT,
             seed: groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED.to_string(),
-            tokens: groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
+            tokens: groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
         }
     }
 }
@@ -108,6 +108,13 @@ impl FakeStartupConfig {
             &fs::read(path).expect("bug: fake bootstrap manifest should be readable"),
         )
         .expect("bug: fake bootstrap manifest should parse");
+        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["kind"], "groundhog-bootstrap");
+        assert_eq!(manifest["bootstrapFaucet"]["index"], 0);
+        assert_eq!(
+            manifest["bootstrapFaucet"]["initialStorageTokens"],
+            groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS.to_string()
+        );
         let accounts = manifest
             .get("bootstrapAccounts")
             .and_then(Value::as_object)
@@ -117,17 +124,24 @@ impl FakeStartupConfig {
             .and_then(Value::as_u64)
             .and_then(|count| usize::try_from(count).ok())
             .expect("bug: fake bootstrap manifest count fits usize");
+        assert_eq!(accounts["firstIndex"], 1);
         let seed = accounts
             .get("seed")
             .and_then(Value::as_str)
             .expect("bug: fake bootstrap manifest seed is a string")
             .to_string();
-        let tokens = accounts
+        let raw_tokens = accounts
             .get("initialStorageTokens")
             .and_then(Value::as_str)
-            .expect("bug: fake bootstrap manifest token amount is a string")
+            .expect("bug: fake bootstrap manifest token amount is a string");
+        let tokens: u64 = raw_tokens
             .parse()
             .expect("bug: fake bootstrap manifest tokens parse");
+        assert_eq!(
+            raw_tokens,
+            tokens.to_string(),
+            "bug: bootstrap allocation should remain a raw decimal string"
+        );
         Self {
             count,
             seed,
@@ -566,17 +580,21 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
 }
 
 fn bootstrap_accounts(config: &FakeStartupConfig) -> Vec<Value> {
-    (0..config.count)
+    (0..=config.count)
         .map(|index| {
             let signer = groundhog_signing::derive_dev_account_signer(&config.seed, index);
             let mut address = [0x70_u8; 32];
             address[31] = u8::try_from(index).expect("bug: default account count fits in u8");
             json!({
                 "index": u32::try_from(index).expect("bug: fake account index fits in u32"),
-                "role": "local_user",
+                "role": if index == 0 { "faucet" } else { "local_user" },
                 "publicKey": Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes())),
                 "walletAddress": Hex0x(groundhog_xdr::types::ContractAddress::from(address)),
-                "initialStorageTokens": config.tokens.to_string(),
+                "initialStorageTokens": if index == 0 {
+                    groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
+                } else {
+                    config.tokens
+                }.to_string(),
             })
         })
         .collect()

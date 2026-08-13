@@ -5,7 +5,8 @@ use groundhog_json_rpc_types::{
     BlockHeight, NetworkHashHex, SHA256Hash,
     block::{ChainTip, consensus_value_hash},
     runtime_manifest::{
-        BootstrapAccount, RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
+        BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, BootstrapAccount,
+        RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
     },
 };
 use groundhog_scheduler::sched_coord::{
@@ -288,15 +289,26 @@ pub fn derive_accounts(
             scheme: manifest.bootstrap_account_derivation.scheme.clone(),
         });
     }
-    if manifest.bootstrap_accounts.is_empty() {
-        return Err(RuntimeManifestError::MissingBootstrapAccounts);
-    }
-
     manifest
         .bootstrap_accounts
         .iter()
+        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
         .map(|account| derive_account(manifest, account))
         .collect()
+}
+
+/// Resolve and verify the index-0 bootstrap faucet used to sponsor actor
+/// provisioning. The returned account is external to the workload actors
+/// returned by [`derive_accounts`].
+pub fn derive_provisioning_sponsor(
+    manifest: &RuntimeManifest,
+) -> Result<SimAccount, RuntimeManifestError> {
+    let account = manifest
+        .bootstrap_accounts
+        .iter()
+        .find(|account| account.index == 0 && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET)
+        .ok_or(RuntimeManifestError::MissingProvisioningFaucet)?;
+    derive_account(manifest, account)
 }
 
 pub fn derive_provisioned_account_signer(
@@ -360,8 +372,8 @@ pub enum RuntimeManifestError {
     UnsupportedSchema { actual: u32 },
     #[error("unsupported bootstrap account derivation scheme `{scheme}`")]
     UnsupportedDerivationScheme { scheme: String },
-    #[error("runtime manifest does not advertise bootstrap accounts")]
-    MissingBootstrapAccounts,
+    #[error("runtime manifest does not advertise bootstrap account 0 with role `faucet`")]
+    MissingProvisioningFaucet,
     #[error("runtime manifest bootstrap account index {index} does not fit this platform")]
     BootstrapAccountIndexTooLarge { index: u32 },
     #[error("runtime manifest bootstrap account {index} public key does not match derivation seed")]
@@ -442,6 +454,27 @@ mod tests {
             err,
             RuntimeManifestError::BootstrapPublicKeyMismatch { index: 0 }
         ));
+    }
+
+    #[test]
+    fn derive_accounts_excludes_faucet_and_preserves_local_user_index() {
+        let mut manifest = runtime_manifest(false);
+        manifest.bootstrap_accounts[0].role = "faucet".into();
+        let signer = derive_dev_account_signer("seed", 3);
+        let mut local_user = manifest.bootstrap_accounts[0].clone();
+        local_user.index = 3;
+        local_user.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
+        local_user.public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
+        manifest.bootstrap_accounts.push(local_user);
+
+        let accounts = derive_accounts(&manifest).expect("local-user account should derive");
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].index, 3);
+        assert_eq!(
+            accounts[0].signer.verifying_key_bytes(),
+            signer.verifying_key_bytes()
+        );
     }
 
     #[test]

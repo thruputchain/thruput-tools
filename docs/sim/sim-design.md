@@ -98,9 +98,14 @@ For v2, sim only needs the existing local-dev shape:
   "devWallet": {
     "profile": "hog-devnode-default"
   },
+  "bootstrapFaucet": {
+    "index": 0,
+    "initialStorageTokens": "10000000000000"
+  },
   "bootstrapAccounts": {
-    "count": 100,
-    "seed": "groundhog-bench-accounts",
+    "count": 10,
+    "firstIndex": 1,
+    "seed": "groundhog-dev-accounts",
     "initialStorageTokens": "1000000000"
   },
   "storageCostModel": {
@@ -152,7 +157,8 @@ Good split:
 
 The CLI already ships a short, deterministic, single-actor integration
 harness in `crates/tools/cli/src/test_cmd.rs`. It builds the project to WASM,
-starts an ephemeral `hogd-dev` on a random port, deploys with `dev-0`, runs
+starts an ephemeral `hogd-dev` on a random port, deploys with the lowest-index
+`local_user`, runs
 native libtest with `rpc_url`, `contract_address`, and `runtime_manifest`
 injected via env, and exits pass/fail.
 

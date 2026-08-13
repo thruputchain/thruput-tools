@@ -46,7 +46,9 @@ use crate::result::{
     RuntimeIdentity, SIM_RESULT_SCHEMA_VERSION, SimMetricAvailability, SimResult, SimRunOutcome,
     TargetIdentity, WorkloadCounts,
 };
-use crate::runtime::{derive_accounts, load_runtime_manifest, preflight_chain_identity};
+use crate::runtime::{
+    derive_accounts, derive_provisioning_sponsor, load_runtime_manifest, preflight_chain_identity,
+};
 use crate::scheduler::{
     PhaseStart, ScheduledSimulationEvent, phase_starts, resource_sample_interval_ms,
     schedule_summary,
@@ -508,6 +510,18 @@ async fn run_resolved_target(
     .await?;
 
     let client = SimHttpClientPool::new(&target.rpc_url, rpc_client_config)?;
+    let mut provisioning_sponsor =
+        if crate::provision::actor_provisioning_enabled(&loaded_sim.manifest)
+            && actor_states.len() < required_actors
+        {
+            Some(ActorState::new(
+                0,
+                derive_provisioning_sponsor(&loaded_runtime.manifest)?,
+                nonce_namespace,
+            ))
+        } else {
+            None
+        };
     provision_missing_actor_accounts(
         client.clone(),
         ActorProvisionInputs {
@@ -517,6 +531,7 @@ async fn run_resolved_target(
             scenario_path,
             contract_artifact_root,
         },
+        provisioning_sponsor.as_mut(),
         &mut actor_states,
         &mut event_writer,
     )

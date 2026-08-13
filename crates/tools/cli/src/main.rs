@@ -420,9 +420,12 @@ enum Command {
         /// Show forwarded hog-devnode info logs in addition to supervisor status
         #[arg(long, short = 'v')]
         verbose: bool,
-        /// Number of deterministic dev accounts to bootstrap
+        /// Number of dev-1+ user accounts to bootstrap; dev-0 faucet is always present
         #[arg(long)]
         dev_account_count: Option<usize>,
+        /// Initial HOG allocated to each dev-1+ user account (default: 100; up to 7 decimals)
+        #[arg(long, value_name = "HOG", value_parser = groundhog_cli::node::parse_dev_account_hog)]
+        dev_account_hog: Option<u64>,
         /// Explicit hog-devnode binary path
         #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
         hogd_dev_binary: Option<std::path::PathBuf>,
@@ -1296,6 +1299,7 @@ fn main() {
             port,
             verbose,
             dev_account_count,
+            dev_account_hog,
             hogd_dev_binary,
             data_dir,
             hogd_protocol,
@@ -1312,6 +1316,7 @@ fn main() {
             options.hogd_protocol = hogd_protocol;
             options.startup_timeout = startup_timeout_secs.map(std::time::Duration::from_secs);
             options.dev_account_count = dev_account_count;
+            options.dev_account_tokens = dev_account_hog;
             options.block_driver = block_driver.map(Into::into);
             options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
             options.rpc_max_connections = rpc_max_connections;
@@ -1626,6 +1631,18 @@ mod tests {
             Command::Node {
                 dev_account_count, ..
             } => assert_eq!(dev_account_count, Some(3)),
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_dev_account_hog_flag_parses_exact_raw_units() {
+        let cli = Cli::parse_from(["groundhog", "node", "--dev-account-hog", "25.0000001"]);
+
+        match cli.command {
+            Command::Node {
+                dev_account_hog, ..
+            } => assert_eq!(dev_account_hog, Some(250_000_001)),
             _ => panic!("expected node command"),
         }
     }

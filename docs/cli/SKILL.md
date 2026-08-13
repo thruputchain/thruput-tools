@@ -441,9 +441,9 @@ Meaning:
 - `groundhog test` runs executor-backed testing for the RV32 path.
 - `groundhog test --integration` starts an ephemeral hog-devnode local node,
   deploys the built contract
-  with `dev-0`, and runs `tests/integration.rs` with
+  with the runtime manifest's lowest-index `local_user`, and runs `tests/integration.rs` with
   `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
-  `GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-0`, and an
+  `GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-1` by default, and an
   optional `GROUNDHOG_RUNTIME_MANIFEST`. The profile and key values describe
   the deployment context; integration tests connect directly to the RPC URL.
 

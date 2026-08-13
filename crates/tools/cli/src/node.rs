@@ -123,8 +123,10 @@ pub struct LocalNodeOptions {
     pub startup_timeout: Option<Duration>,
     /// PID-file behavior for orphan detection.
     pub pid_file: LocalNodePidFile,
-    /// Override the deterministic dev-account count.
+    /// Override the local-user account count, excluding the dev-0 faucet.
     pub dev_account_count: Option<usize>,
+    /// Override initial raw HOG units allocated to each local-user account.
+    pub dev_account_tokens: Option<u64>,
     /// Override the local block production mode.
     pub block_driver: Option<LocalNodeBlockDriverMode>,
     /// Override the interval used by timer-driven block production.
@@ -560,10 +562,13 @@ fn local_node_config(
         LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
         LocalNodePidFile::Disabled => hogd,
     };
-    let hogd = match options.dev_account_count {
-        Some(count) => hogd.with_dev_account_count(count),
-        None => hogd,
-    };
+    let mut hogd = hogd;
+    if let Some(count) = options.dev_account_count {
+        hogd = hogd.with_dev_account_count(count);
+    }
+    if let Some(tokens) = options.dev_account_tokens {
+        hogd = hogd.with_dev_account_tokens(tokens);
+    }
     let hogd = match options.startup_timeout {
         Some(timeout) => hogd.with_startup_timeout(timeout),
         None => hogd,
@@ -602,6 +607,15 @@ fn local_node_config(
     Ok(match options.hogd_protocol {
         Some(protocol) => config.with_hogd_protocol_override(protocol),
         None => config,
+    })
+}
+
+/// Parse an exact HOG bootstrap allocation into seven-decimal raw units.
+pub fn parse_dev_account_hog(input: &str) -> Result<u64, CliError> {
+    let raw = crate::hog::parse_amount(input)?;
+    u64::try_from(raw).map_err(|_| CliError::InvalidHogAmount {
+        input: input.to_owned(),
+        message: "amount exceeds the supported raw-unit range".to_owned(),
     })
 }
 
@@ -798,6 +812,7 @@ mod tests {
             startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
             dev_account_count: Some(3),
+            dev_account_tokens: Some(12_345_678),
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
@@ -820,6 +835,7 @@ mod tests {
             Some(std::path::Path::new("/tmp/hog-devnode-test.pid"))
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
+        assert_eq!(config.hogd_dev.dev_account_tokens, 12_345_678);
         assert_eq!(config.hogd_dev.ramdb_bytes, Some(2_147_483_648));
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
         assert_eq!(
@@ -832,6 +848,30 @@ mod tests {
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
+    }
+
+    #[test]
+    fn dev_account_hog_parser_preserves_seven_decimal_places() {
+        assert_eq!(
+            super::parse_dev_account_hog("12.3456789").unwrap(),
+            123_456_789
+        );
+    }
+
+    #[test]
+    fn dev_account_hog_parser_rejects_more_than_seven_decimal_places() {
+        let error = super::parse_dev_account_hog("1.00000001")
+            .expect_err("more than seven decimal places should fail");
+
+        assert_eq!(error.code(), "invalid_hog_amount");
+    }
+
+    #[test]
+    fn dev_account_hog_parser_rejects_values_above_u64_raw_units() {
+        let error = super::parse_dev_account_hog("1844674407370.9551616")
+            .expect_err("raw allocation above u64 should fail");
+
+        assert!(error.to_string().contains("raw-unit range"));
     }
 
     #[test]

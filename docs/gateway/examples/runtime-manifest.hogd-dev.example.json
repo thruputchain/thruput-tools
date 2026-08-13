@@ -23,10 +23,10 @@
   "bootstrapAccounts": [
     {
       "index": 0,
-      "role": "local_user",
+      "role": "faucet",
       "publicKey": "0x6161616161616161616161616161616161616161616161616161616161616161",
       "walletAddress": "0x7171717171717171717171717171717171717171717171717171717171717171",
-      "initialStorageTokens": "1000000000"
+      "initialStorageTokens": "10000000000000"
     },
     {
       "index": 1,
