@@ -46,7 +46,7 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print, dev_keys};
 
-pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 3;
+pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 4;
 const WALLET_CREATE_PREFUND_HOG: &str = "1";
 const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
@@ -245,10 +245,8 @@ fn create_local_wallet(
     )?;
 
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
-    print.status(format_args!(
-        "Requested prefund: {} HOG",
-        hog::format_amount(prepared.prefund_raw_amount)
-    ));
+    let balance =
+        observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
     print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
     print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
@@ -271,6 +269,7 @@ fn create_local_wallet(
             "prefund_height": prefund_receipt.height,
             "create_tx_hash": create_tx_hash,
             "create_height": create_receipt.height,
+            "balance": balance,
         }),
     ))?;
 
@@ -394,6 +393,8 @@ fn create_remote_wallet(
         CliError::Other("remote wallet-create response omitted create height".into())
     })?;
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+    let balance =
+        observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
     print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
     print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
@@ -415,10 +416,45 @@ fn create_remote_wallet(
             "prefund_tx_hash": prefund_tx_hash,
             "create_tx_hash": create_tx_hash,
             "create_height": create_height,
+            "balance": balance,
         }),
     ))?;
 
     Ok(())
+}
+
+fn observe_created_wallet_balance(
+    rpc_url: &str,
+    address: &str,
+    print: &Print,
+) -> serde_json::Value {
+    let observation = parse_contract_address(address)
+        .map(groundhog_json_rpc_types::ContractAddress::from)
+        .and_then(|address| fetch_balance_blocking(rpc_url, address))
+        .and_then(|balance| {
+            let raw = balance.raw_balance.parse::<u128>().map_err(|error| {
+                CliError::Other(format!(
+                    "invalid raw balance `{}` from RPC: {error}",
+                    balance.raw_balance
+                ))
+            })?;
+            let balance_hog = hog::format_amount(raw);
+            print.status(format_args!(
+                "Balance: {balance_hog} HOG at block {}",
+                *balance.height
+            ));
+            Ok(json!({
+                "status": "observed",
+                "raw_balance": balance.raw_balance,
+                "balance_hog": balance_hog,
+                "height": balance.height,
+            }))
+        });
+
+    observation.unwrap_or_else(|error| {
+        print.warn(format_args!("could not observe wallet balance: {error}"));
+        json!({ "status": "unavailable", "error": error.to_string() })
+    })
 }
 
 fn validate_remote_create_wallet_address(prepared: &str, created: &str) -> Result<(), CliError> {

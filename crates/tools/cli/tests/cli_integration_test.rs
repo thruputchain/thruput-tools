@@ -3767,7 +3767,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "trading");
@@ -3841,7 +3841,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "owner");
