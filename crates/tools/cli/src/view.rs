@@ -7,14 +7,14 @@ use groundhog_json_rpc_types::{
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 
-use crate::account_resolution::lookup_dev_account_address;
+use crate::account_resolution::{lookup_dev_account_address, resolve_contract_target};
 use crate::artifacts::ArtifactOptions;
 use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
 };
 use crate::codec::{
     AbortDecodeError, DecodedAbort, decode_abort, decode_return, encode_args,
-    parse_contract_address,
+    format_contract_address, parse_contract_address,
 };
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::dev_detail::format_event;
@@ -130,8 +130,9 @@ fn prepare_view(
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?;
 
-    let contract_address_hex = resolved_profile.resolve_contract(contract);
-    let contract_address = ContractAddress::from(parse_contract_address(&contract_address_hex)?);
+    let contract_address =
+        ContractAddress::from(resolve_contract_target(&resolved_profile, contract)?);
+    let contract_address_hex = format_contract_address(&contract_address);
     let resolved = resolve_call(project_start, method, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
     let caller = resolve_caller(&resolved_profile, from, rt)?;

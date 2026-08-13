@@ -6,7 +6,7 @@ use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::state::StorageItemRead;
 use serde_json::json;
 
-use crate::codec::parse_contract_address;
+use crate::account_resolution::resolve_contract_target;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
@@ -27,8 +27,7 @@ pub fn run(
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?;
 
-    let resolved_address = resolved_profile.resolve_contract(address);
-    let address = ContractAddress::from(parse_contract_address(&resolved_address)?);
+    let address = ContractAddress::from(resolve_contract_target(&resolved_profile, address)?);
     let key = parse_storage_key(key)?;
     let key_hex = format_storage_key(&key);
     let address_hex = format_contract_address(&address);

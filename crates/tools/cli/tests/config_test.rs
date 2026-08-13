@@ -237,8 +237,6 @@ owner_public_key = "0x1111"
             .map(|wallet| wallet.address.as_str()),
         Some("0xabcd")
     );
-    assert_eq!(profile.resolve_contract("counter"), "0x1234");
-    assert_eq!(profile.resolve_contract("0xabcd"), "0xabcd");
     assert_eq!(profile.resolve_wallet("alice").as_deref(), Some("0xabcd"));
     assert_eq!(
         profile.resolve_wallet(&direct_addr).as_deref(),

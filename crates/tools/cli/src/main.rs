@@ -296,7 +296,7 @@ enum Command {
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and one raw hex calldata argument.")]
     Call {
-        /// Contract address or alias
+        /// Contract alias or direct 0x-prefixed address
         contract: String,
         /// Method name or 0x-prefixed 8-byte entrypoint ID
         method: String,
@@ -367,7 +367,7 @@ enum Command {
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and raw calldata.")]
     View {
-        /// Contract address or alias
+        /// Contract alias or direct 0x-prefixed address
         contract: String,
         /// Method name or 0x-prefixed 8-byte entrypoint ID
         method: String,
@@ -395,7 +395,7 @@ enum Command {
                       and `groundhog view` for sandboxed contract \
                       simulation.")]
     Storage {
-        /// Contract address or alias
+        /// Contract alias or direct 0x-prefixed address
         address: String,
         /// 32-byte storage key as 0x-prefixed hex
         key: String,

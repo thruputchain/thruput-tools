@@ -173,6 +173,13 @@ pub enum CliError {
     InvalidAddressTarget { target: String, message: String },
     #[error("unknown address target {target:?}")]
     UnknownAddressTarget { target: String },
+    #[error("unknown contract alias `{alias}` in profile `{profile}`")]
+    UnknownContractAlias {
+        alias: String,
+        profile: String,
+        config_source: Option<std::path::PathBuf>,
+        available_aliases: Vec<String>,
+    },
     #[error("invalid transaction hash `{display_input}`: {message}")]
     InvalidTransactionHash {
         input: String,
@@ -456,6 +463,7 @@ impl CliError {
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
+            Self::UnknownContractAlias { .. } => "unknown_contract_alias",
             Self::InvalidTransactionHash { .. } => "invalid_transaction_hash",
             Self::InvalidTransactionHistoryLimit { .. } => "invalid_transaction_history_limit",
             Self::InvalidTransactionCursor { .. } => "invalid_transaction_cursor",
@@ -641,6 +649,10 @@ impl CliError {
                     "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
                 ))
             }
+            Self::UnknownContractAlias { profile, .. } => Some(Cow::Owned(format!(
+                "use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases with `groundhog config get {} --sources`",
+                render_shell_arg(profile)
+            ))),
             Self::InvalidTransactionHash { .. } | Self::InvalidEventTopic { .. } => {
                 Some(Cow::Borrowed(
                     "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
@@ -1086,6 +1098,17 @@ impl CliError {
             })),
             Self::UnknownAddressTarget { target } => Some(json!({
                 "target": target,
+            })),
+            Self::UnknownContractAlias {
+                alias,
+                profile,
+                config_source,
+                available_aliases,
+            } => Some(json!({
+                "alias": alias,
+                "profile": profile,
+                "configSource": config_source,
+                "availableAliases": available_aliases,
             })),
             Self::TransactionInvalid { tx_hash, reason } => Some(json!({
                 "txHash": tx_hash,
