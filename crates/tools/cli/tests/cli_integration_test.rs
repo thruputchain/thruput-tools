@@ -3897,6 +3897,25 @@ fn wallet_create_remote_dry_run_does_not_call_faucet() {
         stdout["data"]["planned_requests"],
         serde_json::json!(["GET /v1/network", "POST /v1/create-wallet"])
     );
+
+    let human = groundhog()
+        .args([
+            "wallet",
+            "create",
+            "--key",
+            "alice",
+            "--profile",
+            "devnet",
+            "--dry-run",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(human.status.success());
+    let stderr = String::from_utf8(human.stderr).unwrap();
+    assert!(stderr.contains("wallet address: resolved during submission"));
+    assert!(!stderr.contains("GET /v1/network"));
 }
 
 #[test]
