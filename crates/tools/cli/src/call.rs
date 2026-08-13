@@ -19,7 +19,9 @@ use crate::codec::{
     format_contract_address, parse_contract_address, spec_string_text,
 };
 use crate::config::{ProfileOverrides, find_project_config, resolve_profile_with_overrides};
-use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
+use crate::contract_spec::{
+    InterfaceSpec, load_built_contract_spec, load_built_registered_interfaces,
+};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::CommandResult;
@@ -277,7 +279,7 @@ fn selector_summary(resolved: &ResolvedCall) -> String {
     match &resolved.metadata {
         Some(CallMetadata::Spec(metadata)) => {
             format!(
-                "embedded spec {} v{}",
+                "contract spec {} v{}",
                 metadata.interface_name, metadata.version
             )
         }
@@ -293,13 +295,17 @@ fn selector_summary(resolved: &ResolvedCall) -> String {
 
 pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     match &resolved.metadata {
-        Some(CallMetadata::Spec(metadata)) => json!({
-            "source": "embedded_spec",
-            "interface": {
-                "name": metadata.interface_name,
-                "version": metadata.version,
-            },
-        }),
+        Some(CallMetadata::Spec(metadata)) => {
+            // Keep the legacy machine-readable value stable even though specs
+            // may now come from an RV32 sidecar as well as embedded WASM.
+            json!({
+                "source": "embedded_spec",
+                "interface": {
+                    "name": metadata.interface_name,
+                    "version": metadata.version,
+                },
+            })
+        }
         Some(CallMetadata::Local(metadata)) => json!({
             "source": "local_metadata",
             "interface": {
@@ -498,8 +504,7 @@ fn resolve_spec_method(
     let Ok(pkg_name) = resolve_package(&metadata, None, cwd) else {
         return Ok(None);
     };
-    let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
-    let Some(spec) = load_contract_spec(&wasm)? else {
+    let Some(spec) = load_built_contract_spec(&metadata.target_directory, pkg_name)? else {
         return Ok(None);
     };
 
@@ -637,8 +642,7 @@ fn load_project_registered_interfaces(
 ) -> Result<Option<Vec<crate::contract_spec::InterfaceSpec>>, CliError> {
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, None, project_root)?;
-    let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
-    load_registered_interfaces(&wasm)
+    load_built_registered_interfaces(&metadata.target_directory, pkg_name)
 }
 
 fn filter_candidates_by_interfaces(
@@ -941,15 +945,15 @@ mod tests {
     use super::{
         ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
         filter_candidates_by_interfaces, format_entrypoint_id, load_project_registered_interfaces,
-        method_entrypoint_id, parse_contract_attr_value, resolve_spec_method, selector_json,
-        selector_summary,
+        method_entrypoint_id, parse_contract_attr_value, resolve_call, resolve_spec_method,
+        selector_json, selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
     use crate::codec::{
         CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, build_type_def_index,
         decode_return as decode_return_value, decode_spec_value, decode_spec_value_from_reader,
-        encode_args as encode_calldata, normalize_type_name,
+        encode_args as encode_calldata, normalize_type_name, parse_contract_address,
     };
     use crate::contract_spec::InterfaceSpec;
     use crate::tx_utils::summarize_exec_status;
@@ -1071,14 +1075,14 @@ mod tests {
     }
 
     #[test]
-    fn selector_helpers_report_embedded_spec_resolution() {
+    fn selector_helpers_report_contract_spec_resolution() {
         let metadata = sample_single_arg_spec_metadata(ContractType::U32);
         let resolved = ResolvedCall {
             entrypoint: method_entrypoint_id("Counter", "0.1.0", "call"),
             metadata: Some(CallMetadata::Spec(metadata)),
         };
 
-        assert_eq!(selector_summary(&resolved), "embedded spec Counter v0.1.0");
+        assert_eq!(selector_summary(&resolved), "contract spec Counter v0.1.0");
         assert_eq!(
             selector_json(&resolved),
             json!({
@@ -1603,11 +1607,15 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let wasm = custom_target.join("groundhog").join("demo_contract.wasm");
-        std::fs::create_dir_all(wasm.parent().expect("bug: wasm parent should exist"))
+        let rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+        std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
-        std::fs::write(&wasm, wasm_with_embedded_spec(&sample_contract_spec()))
-            .expect("bug: wasm fixture should be written");
+        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
+        std::fs::write(
+            rv32.with_extension("spec.xdr"),
+            xdrs::txs::encode(&sample_contract_spec()).expect("bug: spec should encode"),
+        )
+        .expect("bug: rv32 spec sidecar should be written");
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
@@ -1648,6 +1656,52 @@ mod tests {
             err.to_string(),
             "method `get` matches multiple interfaces in the embedded contract spec: Counter \
              v0.1.0, Other v0.1.0"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn resolves_and_encodes_erc20_methods_from_rv32_spec_sidecar() {
+        let project = create_temp_project("erc20");
+        let project_root =
+            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
+        let custom_target = project_root.join("custom-target");
+        let rv32 = custom_target.join("groundhog").join("erc20.rv32a");
+        std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
+            .expect("bug: custom target dir should be created");
+        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
+        std::fs::write(
+            rv32.with_extension("spec.xdr"),
+            xdrs::txs::encode(&sample_erc20_contract_spec()).expect("bug: spec should encode"),
+        )
+        .expect("bug: rv32 spec sidecar should be written");
+
+        let artifacts = ArtifactOptions::new(Some(custom_target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let resolved = resolve_call(&project_root, "mint", &artifacts)
+            .expect("bug: mint should resolve from the rv32 spec sidecar");
+        let receiver_hex = format!("0x{}", "04".repeat(32));
+        let encoded = encode_calldata(
+            &[receiver_hex.clone(), "55".into()],
+            resolved.metadata.as_ref(),
+        )
+        .expect("bug: the spec should encode address and u128 arguments");
+        let decoded: (groundhog_xdr::types::ContractAddress, u128) =
+            xdrs::cxs::decode(&encoded).expect("bug: encoded mint arguments should decode");
+        assert_eq!(
+            decoded,
+            (
+                parse_contract_address(&receiver_hex).expect("bug: receiver should parse"),
+                55,
+            )
+        );
+
+        let total_supply = resolve_call(&project_root, "total_supply", &artifacts)
+            .expect("bug: total_supply should resolve from the rv32 spec sidecar");
+        let return_data = xdrs::cxs::encode(&0_u128).expect("bug: u128 should encode");
+        assert_eq!(
+            decode_return_value(&return_data, total_supply.metadata.as_ref()),
+            Some(json!("0")),
         );
     }
 
@@ -1699,6 +1753,45 @@ mod tests {
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
                 }]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
+        }
+    }
+
+    fn sample_erc20_contract_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string_bytes("ERC20"),
+                vers: spec_string_bytes("0.1.9"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![
+                    ContractSpecMethod {
+                        name: spec_string_bytes("mint"),
+                        args: vec![
+                            ContractField {
+                                name: spec_string_bytes("receiver"),
+                                ty: ContractType::Address,
+                            },
+                            ContractField {
+                                name: spec_string_bytes("amount"),
+                                ty: ContractType::U128,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                        return_type: ContractType::Void,
+                    },
+                    ContractSpecMethod {
+                        name: spec_string_bytes("total_supply"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U128,
+                    },
+                ]
                 .try_into()
                 .unwrap(),
             }]

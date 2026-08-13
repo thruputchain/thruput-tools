@@ -1,4 +1,4 @@
-//! Call argument and return-value codecs for embedded specs and local source metadata.
+//! Call argument and return-value codecs for contract specs and local source metadata.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ pub(crate) struct MethodMetadata {
     pub(crate) return_type: Option<String>,
 }
 
-/// Embedded spec metadata for one resolved contract method.
+/// Contract spec metadata for one resolved contract method.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpecMethodMetadata {
     pub(crate) interface_name: String,
@@ -48,7 +48,7 @@ pub(crate) struct SpecMethodMetadata {
     pub(crate) throws: Vec<ContractExceptionType>,
 }
 
-/// Named embedded type definitions keyed by contract type name.
+/// Named contract type definitions keyed by contract type name.
 pub(crate) type TypeDefIndex<'a> = BTreeMap<String, &'a ContractTypeDef>;
 
 /// Encode CLI argument strings into contract calldata using the resolved metadata.
@@ -259,7 +259,7 @@ pub(crate) fn build_type_def_index(
     Ok(index)
 }
 
-/// Decode one top-level embedded spec value from a byte slice.
+/// Decode one top-level contract spec value from a byte slice.
 pub(crate) fn decode_spec_value(
     ty: &ContractType,
     bytes: &[u8],
@@ -279,7 +279,7 @@ pub(crate) fn decode_spec_value(
     Ok(value)
 }
 
-/// Decode one embedded spec value from the current XDR reader position.
+/// Decode one contract spec value from the current XDR reader position.
 pub(crate) fn decode_spec_value_from_reader(
     ty: &ContractType,
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
