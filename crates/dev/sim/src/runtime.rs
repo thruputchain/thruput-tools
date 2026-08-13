@@ -297,6 +297,9 @@ pub fn derive_accounts(
         .collect()
 }
 
+/// Resolve and verify the index-0 bootstrap faucet used to sponsor actor
+/// provisioning. The returned account is external to the workload actors
+/// returned by [`derive_accounts`].
 pub fn derive_provisioning_sponsor(
     manifest: &RuntimeManifest,
 ) -> Result<SimAccount, RuntimeManifestError> {
