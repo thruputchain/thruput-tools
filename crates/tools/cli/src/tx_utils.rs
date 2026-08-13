@@ -71,6 +71,17 @@ pub(crate) fn print_failed_receipt_data(
     if let Some(data) = receipt.return_data.as_ref() {
         print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
     }
+    print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
+}
+
+/// Print a receipt's abort context: the decoded exception when decoding
+/// succeeded, otherwise the raw buffer plus the decode failure when one
+/// was attempted.
+fn print_abort_context(
+    abort_data: Option<&groundhog_json_rpc_types::hex::HexBytes>,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
     if let Some(Ok(abort)) = decoded_abort {
         if let Some(label) = abort.exception_label() {
             print.detail("abort type", label);
@@ -78,8 +89,8 @@ pub(crate) fn print_failed_receipt_data(
         print.detail("abort value", &abort.value);
         return;
     }
-    if let Some(data) = receipt.abort_data.as_ref() {
-        print.status(format_args!("  abort data: 0x{}", hex::encode(&data.0)));
+    if let Some(data) = abort_data {
+        print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
     }
     if let Some(Err(error)) = decoded_abort {
         print.detail("abort decode error", error);
@@ -150,7 +161,11 @@ pub(crate) fn is_unsupported_rpc_method_error(error: &ClientError) -> bool {
     )
 }
 
-pub(crate) fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
+pub(crate) fn print_receipt_data(
+    receipt: &TransactionReceipt,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
     for event in &receipt.events {
         if let Ok(event) = serde_json::to_string(event) {
             print.detail("event", terminal_safe(&event));
@@ -159,9 +174,7 @@ pub(crate) fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
     if let Some(data) = &receipt.return_data {
         print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
     }
-    if let Some(data) = &receipt.abort_data {
-        print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
-    }
+    print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {

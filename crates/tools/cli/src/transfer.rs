@@ -332,7 +332,8 @@ fn print_committed(
     print.detail("recipient", format_contract_address(&prepared.recipient));
     print.detail("tx", &tx_hash);
     print.detail("height", *receipt.height);
-    print_receipt_data(&receipt, print);
+    let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
+    print_receipt_data(&receipt, decoded_abort.as_ref(), print);
 
     let command_error = command_error_for_exec_status(&receipt.status);
     let report = TransferCommittedReport {
@@ -342,6 +343,7 @@ fn print_committed(
         events: receipt.events,
         return_data: receipt.return_data,
         abort_data: receipt.abort_data,
+        abort: crate::abort_json::AbortReport::from_decode(decoded_abort.as_ref()),
     };
     if let Some(error) = command_error {
         print.json(&CommandResult::failure_with_error(cmd, report, error))?;

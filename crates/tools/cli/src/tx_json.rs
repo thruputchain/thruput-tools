@@ -17,6 +17,8 @@ pub struct TxShowReport {
     pub tx_hash: TxHash,
     pub status: TransactionStatus,
     pub receipt: Option<TransactionReceipt>,
+    #[serde(flatten)]
+    pub abort: crate::abort_json::AbortReport,
 }
 
 /// Stable JSON data for one page of root-invocation transaction history.
