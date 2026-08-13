@@ -159,16 +159,7 @@ pub fn run(
         "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
         "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
     });
-    match decoded_abort.as_ref() {
-        Some(Ok(abort)) => {
-            data["abort_exception"] = json!(abort.exception);
-            data["abort_value"] = json!(abort.value);
-        }
-        Some(Err(error)) => {
-            data["abort_decode_error"] = json!(error.to_string());
-        }
-        None => {}
-    }
+    crate::tx_utils::insert_abort_json(&mut data, decoded_abort.as_ref());
     if let Some(error) = command_error_for_exec_status(&receipt.status) {
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
         return Err(CliError::CommandReportedFailure);

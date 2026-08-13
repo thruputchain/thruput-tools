@@ -28,6 +28,14 @@ pub struct ViewJsonPayload<'a> {
     /// Exception type name decoded from an abort output, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub abort_exception: Option<&'a str>,
+    /// Crate defining the abort exception, when it is a known standard
+    /// exception rather than one declared by the viewed contract's spec.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abort_exception_crate: Option<&'a str>,
+    /// Major version of the defining crate baked into the abort selector,
+    /// when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abort_exception_version: Option<&'a str>,
     /// Exception payload decoded from an abort output, when decodable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub abort_value: Option<&'a serde_json::Value>,

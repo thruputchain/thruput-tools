@@ -4817,7 +4817,17 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
         assert_eq!(stdout["data"]["events"], serde_json::json!([event]));
         assert_eq!(stdout["data"]["returnData"], "0x0102");
         assert_eq!(stdout["data"]["abortData"], "0x0304");
+        // 0x0304 is too short to carry an abort selector, so decoding fails.
+        assert!(
+            stdout["data"]["abortDecodeError"]
+                .as_str()
+                .is_some_and(|error| error.contains("selector")),
+            "abortDecodeError: {}",
+            stdout["data"]["abortDecodeError"]
+        );
         for absent in [
+            "abortException",
+            "abortValue",
             "confirmation",
             "transactionStatus",
             "expiryHeight",
@@ -4829,6 +4839,41 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
             );
         }
     }
+}
+
+#[test]
+fn transfer_live_decodes_standard_exception_abort() {
+    let abort_data = xdrs::cxs::encode(&(
+        <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        groundhog_erc20_if::ERC20Error::TooLarge,
+    ))
+    .expect("bug: ERC20 exception should encode");
+    let abort_hex: &'static str =
+        Box::leak(format!("0x{}", hex::encode(&abort_data)).into_boxed_str());
+
+    let run = run_transfer_live_mock_with_hash(
+        TransferRpcMock {
+            submit: TransferSubmitMock::MatchingHash,
+            poll: Some(TransferPollMock::Receipt {
+                status: serde_json::json!({ "result": "reverted", "message": null }),
+                events: serde_json::json!([]),
+                return_data: None,
+                abort_data: Some(abort_hex),
+                mismatched_hash: false,
+            }),
+        },
+        true,
+    );
+
+    assert!(!run.output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["data"]["abortData"], abort_hex);
+    assert_eq!(stdout["data"]["abortException"], "ERC20Error");
+    assert_eq!(stdout["data"]["abortExceptionCrate"], "groundhog-erc20-if");
+    assert_eq!(stdout["data"]["abortExceptionVersion"], "0.1");
+    assert_eq!(stdout["data"]["abortValue"], "TooLarge");
+    assert!(stdout["data"].get("abortDecodeError").is_none());
 }
 
 #[test]
@@ -7162,6 +7207,8 @@ fn call_live_json_decodes_library_abort() {
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abort_data"], abort_hex);
     assert_eq!(stdout["data"]["abort_exception"], "LibraryExn");
+    assert_eq!(stdout["data"]["abort_exception_crate"], "sdk");
+    assert_eq!(stdout["data"]["abort_exception_version"], "1");
     assert_eq!(
         stdout["data"]["abort_value"],
         serde_json::json!({"case": "NonNegativeIntUnderflow"})
@@ -7204,7 +7251,7 @@ fn call_live_human_prints_decoded_abort() {
     // return data.
     assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(
-        stderr.contains("abort type: LibraryExn"),
+        stderr.contains("abort type: LibraryExn (sdk, v1)"),
         "stderr: {stderr}"
     );
     assert!(

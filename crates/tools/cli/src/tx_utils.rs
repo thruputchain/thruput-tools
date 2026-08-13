@@ -71,18 +71,57 @@ pub(crate) fn print_failed_receipt_data(
     if let Some(data) = receipt.return_data.as_ref() {
         print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
     }
+    print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
+}
+
+/// Print a receipt's abort context: the decoded exception when decoding
+/// succeeded, otherwise the raw buffer plus the decode failure when one
+/// was attempted.
+fn print_abort_context(
+    abort_data: Option<&groundhog_json_rpc_types::hex::HexBytes>,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
     if let Some(Ok(abort)) = decoded_abort {
-        if let Some(exception) = abort.exception.as_deref() {
-            print.detail("abort type", exception);
+        if let Some(label) = abort.exception_label() {
+            print.detail("abort type", label);
         }
         print.detail("abort value", &abort.value);
         return;
     }
-    if let Some(data) = receipt.abort_data.as_ref() {
-        print.status(format_args!("  abort data: 0x{}", hex::encode(&data.0)));
+    if let Some(data) = abort_data {
+        print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
     }
     if let Some(Err(error)) = decoded_abort {
         print.detail("abort decode error", error);
+    }
+}
+
+/// Insert decoded-abort fields into a command's `data` JSON payload.
+///
+/// A decoded abort contributes `abort_exception` and `abort_value`, plus
+/// `abort_exception_crate` / `abort_exception_version` when it resolved
+/// through the ambient exception registry; a failed decode contributes
+/// `abort_decode_error` instead.
+pub(crate) fn insert_abort_json(
+    data: &mut serde_json::Value,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+) {
+    match decoded_abort {
+        Some(Ok(abort)) => {
+            data["abort_exception"] = serde_json::json!(abort.exception);
+            data["abort_value"] = serde_json::json!(abort.value);
+            if let Some(crate_name) = abort.exception_crate {
+                data["abort_exception_crate"] = serde_json::json!(crate_name);
+            }
+            if let Some(version) = abort.exception_version {
+                data["abort_exception_version"] = serde_json::json!(version);
+            }
+        }
+        Some(Err(error)) => {
+            data["abort_decode_error"] = serde_json::json!(error.to_string());
+        }
+        None => {}
     }
 }
 
@@ -122,7 +161,11 @@ pub(crate) fn is_unsupported_rpc_method_error(error: &ClientError) -> bool {
     )
 }
 
-pub(crate) fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
+pub(crate) fn print_receipt_data(
+    receipt: &TransactionReceipt,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
     for event in &receipt.events {
         if let Ok(event) = serde_json::to_string(event) {
             print.detail("event", terminal_safe(&event));
@@ -131,9 +174,7 @@ pub(crate) fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
     if let Some(data) = &receipt.return_data {
         print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
     }
-    if let Some(data) = &receipt.abort_data {
-        print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
-    }
+    print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {

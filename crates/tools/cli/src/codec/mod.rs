@@ -97,13 +97,34 @@ pub(crate) fn decode_return(bytes: &[u8], metadata: Option<&CallMetadata>) -> Op
 }
 
 /// A contract abort payload decoded through exception metadata.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Not serialized wholesale: each command's wire projection copies the
+/// fields it exposes (see `tx_utils::insert_abort_json` and
+/// `ViewJsonPayload`).
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DecodedAbort {
     /// Exception type name, when the thrown type is a named spec type.
     pub(crate) exception: Option<String>,
     /// Decoded exception payload.
     pub(crate) value: Value,
+    /// Crate that defines the exception, when it decoded through the
+    /// describe registry rather than the method's declared spec exceptions.
+    pub(crate) exception_crate: Option<&'static str>,
+    /// Major version of the defining crate baked into the abort selector,
+    /// when known.
+    pub(crate) exception_version: Option<&'static str>,
+}
+
+impl DecodedAbort {
+    /// Exception name annotated with its defining crate and major version,
+    /// e.g. `LibraryExn (sdk, v1)`; the bare name when the origin is unknown.
+    pub(crate) fn exception_label(&self) -> Option<String> {
+        let name = self.exception.as_deref()?;
+        match (self.exception_crate, self.exception_version) {
+            (Some(crate_name), Some(version)) => Some(format!("{name} ({crate_name}, v{version})")),
+            _ => Some(name.to_owned()),
+        }
+    }
 }
 
 /// Why an abort buffer could not be decoded into an exception value.
@@ -117,8 +138,8 @@ pub(crate) enum AbortDecodeError {
     #[error("failed to read the exception selector: {detail}")]
     UnparseableAbort { detail: String },
     #[error(
-        "abort selector 0x{selector:016x} does not match a declared exception or the SDK \
-         LibraryExn; payload: 0x{}", hex::encode(.payload)
+        "abort selector 0x{selector:016x} does not match a declared exception or a known \
+         standard exception; payload: 0x{}", hex::encode(.payload)
     )]
     Unknown { selector: u64, payload: Vec<u8> },
     #[error(
@@ -137,7 +158,8 @@ pub(crate) enum AbortDecodeError {
 /// carries.
 ///
 /// The selector is matched against the resolved method's declared spec
-/// exceptions first, then against the SDK's implicit library exception.
+/// exceptions first, then against the describe registry of standard
+/// exceptions (`LibraryExn`, standard interface errors).
 /// An unknown selector or a payload that does not decode cleanly against
 /// the matched type is an error carrying the parsed selector and payload;
 /// callers report it alongside the raw hex.
@@ -159,17 +181,19 @@ pub(crate) fn decode_abort(
         return decode_abort_payload(&exception.ty, &spec.type_defs, selector, payload);
     }
 
-    let library = groundhog_spec_tool::describe::lookup("LibraryExn");
-    if let Some(library) = library
-        && library.selector == selector
-    {
-        let described = groundhog_spec_tool::describe::build_describe(library);
+    if let Some(ambient) = groundhog_spec_tool::describe::lookup_by_selector(selector) {
+        let described = groundhog_spec_tool::describe::build_describe(ambient);
         return decode_abort_payload(
             &described.exception.ty,
             &described.type_defs,
             selector,
             payload,
-        );
+        )
+        .map(|mut decoded| {
+            decoded.exception_crate = Some(ambient.crate_name);
+            decoded.exception_version = Some(ambient.major_version);
+            decoded
+        });
     }
 
     Err(AbortDecodeError::Unknown {
@@ -206,7 +230,12 @@ fn decode_abort_payload(
             reader.remaining()
         )));
     }
-    Ok(DecodedAbort { exception, value })
+    Ok(DecodedAbort {
+        exception,
+        value,
+        exception_crate: None,
+        exception_version: None,
+    })
 }
 
 /// Parse a hex-encoded contract address.
@@ -1854,8 +1883,12 @@ mod tests {
         let decoded = decode_abort(&bytes, Some(&metadata))
             .expect("bug: declared spec exception should decode");
 
+        // COUNTER_ERROR_SELECTOR collides with the ambient ERC20Error selector;
+        // a declared spec exception must win over the ambient fallback.
         assert_eq!(decoded.exception.as_deref(), Some("CounterError"));
         assert_eq!(decoded.value, expected);
+        assert_eq!(decoded.exception_crate, None);
+        assert_eq!(decoded.exception_version, None);
     }
 
     #[test]
@@ -1876,6 +1909,62 @@ mod tests {
         assert_eq!(
             decoded.value,
             serde_json::json!({"case": "NonNegativeIntUnderflow"})
+        );
+        assert_eq!(decoded.exception_crate, Some("sdk"));
+        assert_eq!(decoded.exception_version, Some("1"));
+    }
+
+    #[test]
+    fn decode_abort_decodes_erc20_error_without_metadata() {
+        let bytes = xdrs::cxs::encode(&(
+            <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+            groundhog_erc20_if::ERC20Error::TooLarge,
+        ))
+        .expect("bug: ERC20 exception should encode");
+
+        let decoded = decode_abort(&bytes, None).expect("bug: ERC20 exception should decode");
+
+        assert_eq!(decoded.exception.as_deref(), Some("ERC20Error"));
+        assert_eq!(decoded.value, serde_json::json!("TooLarge"));
+        assert_eq!(decoded.exception_crate, Some("groundhog-erc20-if"));
+        assert_eq!(decoded.exception_version, Some("0.1"));
+    }
+
+    #[test]
+    fn describe_registry_covers_wallet_ambient_exceptions() {
+        // The registry's label/selector consistency is asserted upstream in
+        // groundhog-spec-tool; this only pins that the exceptions the CLI's
+        // wallet flows depend on stay registered.
+        for name in ["LibraryExn", "ERC20Error"] {
+            assert!(
+                groundhog_spec_tool::describe::lookup(name).is_some(),
+                "{name} missing from the describe registry"
+            );
+        }
+    }
+
+    #[test]
+    fn decoded_abort_label_annotates_ambient_exceptions_only() {
+        let ambient = DecodedAbort {
+            exception: Some("LibraryExn".to_owned()),
+            value: serde_json::Value::Null,
+            exception_crate: Some("sdk"),
+            exception_version: Some("1"),
+        };
+        assert_eq!(
+            ambient.exception_label().as_deref(),
+            Some("LibraryExn (sdk, v1)")
+        );
+
+        let spec_declared = DecodedAbort {
+            exception: Some("CounterError".to_owned()),
+            value: serde_json::Value::Null,
+            exception_crate: None,
+            exception_version: None,
+        };
+        assert_eq!(
+            spec_declared.exception_label().as_deref(),
+            Some("CounterError")
         );
     }
 

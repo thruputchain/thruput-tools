@@ -47,9 +47,18 @@ pub fn show(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let (status, receipt) = rt.block_on(fetch_transaction(&rpc_url, tx_hash))?;
+    let decoded_abort = receipt
+        .as_ref()
+        .and_then(|receipt| crate::tx_utils::decode_receipt_abort(receipt, None));
 
     if !print.is_json() && !print.is_quiet() {
-        print_show(&tx_hash, &status, receipt.as_ref(), print);
+        print_show(
+            &tx_hash,
+            &status,
+            receipt.as_ref(),
+            decoded_abort.as_ref(),
+            print,
+        );
     }
     print.json(&CommandResult::new(
         cmd,
@@ -60,6 +69,7 @@ pub fn show(
             tx_hash,
             status,
             receipt,
+            abort: crate::abort_json::AbortReport::from_decode(decoded_abort.as_ref()),
         },
     ))
 }
@@ -237,6 +247,7 @@ fn print_show(
     tx_hash: &TxHash,
     status: &TransactionStatus,
     receipt: Option<&TransactionReceipt>,
+    decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
     print: &Print,
 ) {
     print.detail("hash", format_tx_hash(tx_hash));
@@ -279,7 +290,7 @@ fn print_show(
             "execution",
             terminal_safe(&summarize_exec_status(&receipt.status)),
         );
-        print_receipt_data(receipt, print);
+        print_receipt_data(receipt, decoded_abort, print);
     }
 }
 

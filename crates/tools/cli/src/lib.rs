@@ -1,5 +1,6 @@
 //! Groundhog CLI — smart contract development tools.
 
+pub mod abort_json;
 pub(crate) mod account_resolution;
 pub mod airdrop;
 pub mod artifacts;

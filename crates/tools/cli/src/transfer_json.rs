@@ -52,6 +52,8 @@ pub struct TransferCommittedReport {
     pub return_data: Option<HexBytes>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort_data: Option<HexBytes>,
+    #[serde(flatten)]
+    pub abort: crate::abort_json::AbortReport,
 }
 
 /// Confirmation classification when no matching receipt is available.
@@ -79,7 +81,82 @@ mod tests {
     use groundhog_json_rpc_types::transaction::TxHash;
     use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 
-    use super::{TRANSFER_JSON_SCHEMA_VERSION, TransferDryRunReport, TransferReportCommon};
+    use super::{
+        TRANSFER_JSON_SCHEMA_VERSION, TransferCommittedReport, TransferDryRunReport,
+        TransferReportCommon,
+    };
+    use crate::abort_json::AbortReport;
+
+    #[test]
+    fn committed_report_serializes_decoded_abort_fields() {
+        let report = TransferCommittedReport {
+            common: report_common(),
+            height: groundhog_json_rpc_types::BlockHeight::from(43),
+            status: groundhog_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
+            events: vec![],
+            return_data: None,
+            abort_data: Some(HexBytes(vec![0x01])),
+            abort: AbortReport {
+                abort_exception: Some("ERC20Error".into()),
+                abort_exception_crate: Some("groundhog-erc20-if".into()),
+                abort_exception_version: Some("0.1".into()),
+                abort_value: Some(serde_json::json!("TooLarge")),
+                abort_decode_error: None,
+            },
+        };
+
+        let value = serde_json::to_value(report).expect("bug: report should serialize");
+
+        assert_eq!(value["abortException"], "ERC20Error");
+        assert_eq!(value["abortExceptionCrate"], "groundhog-erc20-if");
+        assert_eq!(value["abortExceptionVersion"], "0.1");
+        assert_eq!(value["abortValue"], "TooLarge");
+        assert!(value.get("abortDecodeError").is_none());
+    }
+
+    #[test]
+    fn committed_report_omits_absent_abort_fields() {
+        let report = TransferCommittedReport {
+            common: report_common(),
+            height: groundhog_json_rpc_types::BlockHeight::from(43),
+            status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+            events: vec![],
+            return_data: None,
+            abort_data: None,
+            abort: AbortReport::from_decode(None),
+        };
+
+        let value = serde_json::to_value(report).expect("bug: report should serialize");
+
+        for absent in [
+            "abortException",
+            "abortExceptionCrate",
+            "abortExceptionVersion",
+            "abortValue",
+            "abortDecodeError",
+        ] {
+            assert!(value.get(absent).is_none(), "{absent} should be omitted");
+        }
+    }
+
+    fn report_common() -> TransferReportCommon {
+        TransferReportCommon {
+            schema_version: TRANSFER_JSON_SCHEMA_VERSION,
+            profile: "local".into(),
+            rpc_url: "http://127.0.0.1:9545".into(),
+            dry_run: false,
+            submitted: true,
+            sender: Hex0x(ContractAddress::from([0x11; 32])),
+            sender_wallet: Some("alice".into()),
+            signer_public_key: Hex0x(Ed25519PublicKey::from([0x22; 32])),
+            recipient_input: "alice".into(),
+            recipient: Hex0x(ContractAddress::from([0x33; 32])),
+            token_address: Hex0x(ContractAddress::from([0x44; 32])),
+            amount: "1.5".into(),
+            raw_amount: "15000000".into(),
+            tx_hash: TxHash(Hex0x(SHA256Hash::from([0x55; 32]))),
+        }
+    }
 
     #[test]
     fn dry_run_report_serializes_stable_camel_case_shape() {
