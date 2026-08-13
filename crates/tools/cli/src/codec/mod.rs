@@ -97,20 +97,21 @@ pub(crate) fn decode_return(bytes: &[u8], metadata: Option<&CallMetadata>) -> Op
 }
 
 /// A contract abort payload decoded through exception metadata.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// Not serialized wholesale: each command's wire projection copies the
+/// fields it exposes (see `tx_utils::insert_abort_json` and
+/// `ViewJsonPayload`).
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DecodedAbort {
     /// Exception type name, when the thrown type is a named spec type.
     pub(crate) exception: Option<String>,
     /// Decoded exception payload.
     pub(crate) value: Value,
-    /// Crate that defines the exception, when it decoded through the ambient
-    /// registry rather than the method's declared spec exceptions.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Crate that defines the exception, when it decoded through the
+    /// describe registry rather than the method's declared spec exceptions.
     pub(crate) exception_crate: Option<&'static str>,
     /// Major version of the defining crate baked into the abort selector,
     /// when known.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exception_version: Option<&'static str>,
 }
 

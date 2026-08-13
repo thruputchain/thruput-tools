@@ -57,6 +57,9 @@ pub fn run(
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
     let return_value = decoded_return_value(&prepared, &response);
     let decoded_abort = decoded_abort_value(&prepared, &response);
+    let abort = decoded_abort
+        .as_ref()
+        .and_then(|result| result.as_ref().ok());
 
     if !print.is_json() {
         task.clear();
@@ -83,22 +86,10 @@ pub fn run(
             output: &response.output,
             events: &response.events,
             return_value: return_value.as_ref(),
-            abort_exception: decoded_abort
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .and_then(|abort| abort.exception.as_deref()),
-            abort_exception_crate: decoded_abort
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .and_then(|abort| abort.exception_crate),
-            abort_exception_version: decoded_abort
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .and_then(|abort| abort.exception_version),
-            abort_value: decoded_abort
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .map(|abort| &abort.value),
+            abort_exception: abort.and_then(|abort| abort.exception.as_deref()),
+            abort_exception_crate: abort.and_then(|abort| abort.exception_crate),
+            abort_exception_version: abort.and_then(|abort| abort.exception_version),
+            abort_value: abort.map(|abort| &abort.value),
             abort_decode_error: decoded_abort
                 .as_ref()
                 .and_then(|result| result.as_ref().err())
