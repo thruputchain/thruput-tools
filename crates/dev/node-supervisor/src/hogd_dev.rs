@@ -15,6 +15,7 @@ use groundhog_json_rpc_types::{
     ContractAddress, NetworkHashHex,
     hex::HexBytes,
     runtime_manifest::{
+        BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER,
         HOGD_DEV_RUNTIME_MANIFEST_KIND, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
         RuntimeManifestChainState, parse_runtime_manifest,
     },
@@ -95,6 +96,8 @@ pub struct HogdDevEndpoints {
 pub(crate) struct HogdDevReadyAccount {
     /// Deterministic dev-account index.
     pub index: u32,
+    /// Infrastructure or local-user role advertised by the runtime manifest.
+    pub role: String,
     /// Wallet contract address bootstrapped by hogd-dev.
     pub address: ContractAddress,
     /// Ed25519 public key authorized by the wallet contract.
@@ -171,14 +174,12 @@ pub(crate) fn validate_dev_accounts(
             reason: "hog-devnode readiness must advertise a runtime manifest".to_string(),
         }
     })?;
-    validate_dev_account_count(config.dev_account_count, readiness.dev_accounts.len())?;
-    if config.dev_account_count == 0 {
-        return Ok(());
-    }
+    validate_dev_account_count(config.dev_account_count + 1, readiness.dev_accounts.len())?;
     validate_bootstrap_derivation(manifest, config)?;
 
     for (position, account) in readiness.dev_accounts.iter().enumerate() {
         validate_dev_account_index(position, account.index)?;
+        validate_dev_account_role(position, &account.role)?;
         validate_dev_account_tokens(position, account.initial_storage_tokens, config)?;
         let signer =
             groundhog_signing::derive_dev_account_signer(&config.dev_account_seed, position);
@@ -559,7 +560,7 @@ fn write_bootstrap_manifest(
         .to_bootstrap_manifest(local_dev_network_hash())
         .map_err(
             |source| NodeSupervisorError::InvalidBootstrapManifestConfig {
-                reason: format!("dev_account_count does not fit u32: {source}"),
+                reason: source.to_string(),
             },
         )?;
     let bytes = serde_json::to_vec_pretty(&manifest)
@@ -1030,6 +1031,7 @@ fn readiness_from_runtime_manifest(
                     })?;
             Ok(HogdDevReadyAccount {
                 index: account.index,
+                role: account.role.clone(),
                 address: account.wallet_address,
                 public_key: HexBytes(account.public_key.as_ref().to_vec()),
                 initial_storage_tokens,
@@ -1095,6 +1097,23 @@ fn validate_dev_account_index(position: usize, actual: u32) -> Result<(), NodeSu
     })
 }
 
+fn validate_dev_account_role(position: usize, actual: &str) -> Result<(), NodeSupervisorError> {
+    let expected = if position == 0 {
+        BOOTSTRAP_ACCOUNT_ROLE_FAUCET
+    } else {
+        BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER
+    };
+    if actual == expected {
+        return Ok(());
+    }
+    Err(NodeSupervisorError::InvalidRuntimeManifest {
+        program: DEFAULT_HOGD_DEV_BINARY.to_string(),
+        reason: format!(
+            "bootstrap account dev-{position} role `{actual}` does not match required role `{expected}`"
+        ),
+    })
+}
+
 fn validate_bootstrap_derivation(
     manifest: &RuntimeManifest,
     config: &HogdDevConfig,
@@ -1124,14 +1143,18 @@ fn validate_dev_account_tokens(
     actual: u64,
     config: &HogdDevConfig,
 ) -> Result<(), NodeSupervisorError> {
-    if actual == config.dev_account_tokens {
+    let expected = if index == 0 {
+        crate::config::LOCAL_FAUCET_STORAGE_TOKENS
+    } else {
+        config.dev_account_tokens
+    };
+    if actual == expected {
         return Ok(());
     }
     Err(NodeSupervisorError::InvalidRuntimeManifest {
         program: DEFAULT_HOGD_DEV_BINARY.to_string(),
         reason: format!(
-            "bootstrap account dev-{index} initialStorageTokens {actual} does not match requested {}",
-            config.dev_account_tokens
+            "bootstrap account dev-{index} initialStorageTokens {actual} does not match requested {expected}"
         ),
     })
 }
@@ -1827,14 +1850,21 @@ mod tests {
         )
         .expect("bug: bootstrap manifest should parse");
 
-        assert_eq!(value["kind"], "groundhog-bootstrap");
+        assert_eq!(value["kind"], "hogd-bootstrap");
         assert_eq!(
             value["networkHash"],
             "0000000000000000000000000000000000000000000000000000000000000000"
         );
         assert_eq!(value["profile"], "local-dev");
         assert_eq!(value["devWallet"]["profile"], "hog-devnode-default");
+        assert_eq!(value["schemaVersion"], 2);
+        assert_eq!(value["bootstrapFaucet"]["index"], 0);
+        assert_eq!(
+            value["bootstrapFaucet"]["initialStorageTokens"],
+            "10000000000000"
+        );
         assert_eq!(value["bootstrapAccounts"]["count"], 2);
+        assert_eq!(value["bootstrapAccounts"]["firstIndex"], 1);
         assert_eq!(value["bootstrapAccounts"]["seed"], "manifest-seed");
         assert_eq!(value["bootstrapAccounts"]["initialStorageTokens"], "1234");
         assert_eq!(value["storageCostModel"]["profile"], "hogd-default");
@@ -2352,11 +2382,14 @@ mod tests {
 
     #[test]
     fn readiness_line_parses_dev_accounts() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let faucet_signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let user_signer = groundhog_signing::derive_default_dev_account_signer(1);
         let accounts = format!(
-            r#"[{{"index":0,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}},{{"index":1,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
             "11".repeat(32),
-            hex::encode(signer.verifying_key_bytes()),
+            hex::encode(faucet_signer.verifying_key_bytes()),
+            "12".repeat(32),
+            hex::encode(user_signer.verifying_key_bytes()),
         );
         let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
         let readiness =
@@ -2366,7 +2399,7 @@ mod tests {
         validate_dev_accounts(&readiness, &config)
             .expect("bug: matching readiness dev account should validate");
 
-        assert_eq!(readiness.dev_accounts.len(), 1);
+        assert_eq!(readiness.dev_accounts.len(), 2);
         assert_eq!(
             serde_json::to_value(readiness.dev_accounts[0].address)
                 .expect("bug: address serializes"),
@@ -2374,11 +2407,11 @@ mod tests {
         );
         assert_eq!(
             readiness.dev_accounts[0].public_key.0,
-            signer.verifying_key_bytes().to_vec()
+            faucet_signer.verifying_key_bytes().to_vec()
         );
         assert_eq!(
             readiness.dev_accounts[0].initial_storage_tokens,
-            1_000_000_000
+            10_000_000_000_000
         );
     }
 
@@ -2407,7 +2440,7 @@ mod tests {
         assert!(matches!(
             err,
             NodeSupervisorError::DevAccountCountMismatch {
-                expected: 10,
+                expected: 11,
                 actual: 0
             }
         ));
@@ -2416,14 +2449,14 @@ mod tests {
     #[test]
     fn dev_account_public_key_mismatch_is_rejected() {
         let accounts = format!(
-            r#"[{{"index":0,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
             "11".repeat(32),
             "22".repeat(32),
         );
         let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-        let config = HogdDevConfig::default().with_dev_account_count(1);
+        let config = HogdDevConfig::default().with_dev_account_count(0);
         let err = validate_dev_accounts(&readiness, &config)
             .expect_err("bug: wrong readiness public key should fail validation");
 
@@ -2437,7 +2470,7 @@ mod tests {
     fn unsupported_manifest_derivation_scheme_is_rejected() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let accounts = format!(
-            r#"[{{"index":0,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
             "11".repeat(32),
             hex::encode(signer.verifying_key_bytes()),
         );
@@ -2449,7 +2482,7 @@ mod tests {
         );
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-        let config = HogdDevConfig::default().with_dev_account_count(1);
+        let config = HogdDevConfig::default().with_dev_account_count(0);
         let err = validate_dev_accounts(&readiness, &config)
             .expect_err("bug: unsupported derivation scheme should fail validation");
 
@@ -2464,7 +2497,7 @@ mod tests {
     fn manifest_derivation_seed_mismatch_is_rejected() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let accounts = format!(
-            r#"[{{"index":0,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
             "11".repeat(32),
             hex::encode(signer.verifying_key_bytes()),
         );
@@ -2476,7 +2509,7 @@ mod tests {
         );
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-        let config = HogdDevConfig::default().with_dev_account_count(1);
+        let config = HogdDevConfig::default().with_dev_account_count(0);
         let err = validate_dev_accounts(&readiness, &config)
             .expect_err("bug: derivation seed mismatch should fail validation");
 
@@ -2488,10 +2521,16 @@ mod tests {
     }
 
     #[test]
-    fn zero_dev_accounts_skips_manifest_derivation_validation() {
+    fn zero_user_accounts_still_validates_faucet_derivation() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let accounts = format!(
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
+            "11".repeat(32),
+            hex::encode(signer.verifying_key_bytes()),
+        );
         let line = manifest_readiness_line_with_derivation(
             r#"{"scheduler":"127.0.0.1:12345"}"#,
-            r"[]",
+            &accounts,
             "groundhog-bootstrap-account-v2",
             "different-seed",
         );
@@ -2499,27 +2538,52 @@ mod tests {
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
         let config = HogdDevConfig::default().with_dev_account_count(0);
 
-        validate_dev_accounts(&readiness, &config)
-            .expect("bug: count-zero dev accounts should not validate derivation metadata");
+        let error = validate_dev_accounts(&readiness, &config)
+            .expect_err("zero-user layout must still validate faucet derivation metadata");
+        assert!(error.to_string().contains("derivation scheme"));
     }
 
     #[test]
     fn manifest_token_funding_mismatch_is_rejected() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let accounts = format!(
-            r#"[{{"index":0,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"999"}}]"#,
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"999"}}]"#,
             "11".repeat(32),
             hex::encode(signer.verifying_key_bytes()),
         );
         let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-        let config = HogdDevConfig::default().with_dev_account_count(1);
+        let config = HogdDevConfig::default().with_dev_account_count(0);
         let err = validate_dev_accounts(&readiness, &config)
             .expect_err("bug: token mismatch should fail validation");
 
         assert!(matches!(
             err,
+            NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
+                if reason.contains("initialStorageTokens")
+        ));
+    }
+
+    #[test]
+    fn recovered_manifest_validates_effective_faucet_funding() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let accounts = format!(
+            r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"999"}}]"#,
+            "11".repeat(32),
+            hex::encode(signer.verifying_key_bytes()),
+        );
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
+        let mut readiness =
+            parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
+        readiness.chain_state = Some(RuntimeManifestChainState::Recovered);
+        let config = HogdDevConfig::default().with_dev_account_count(0);
+
+        let error = validate_dev_accounts(&readiness, &config)
+            .expect_err("recovered faucet token mismatch should fail");
+
+        assert!(matches!(
+            error,
             NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
                 if reason.contains("initialStorageTokens")
         ));

@@ -1,6 +1,6 @@
 use groundhog_json_rpc_types::{
     ContractAddress,
-    runtime_manifest::{BootstrapAccount, RuntimeManifest},
+    runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
 };
 use groundhog_signing::LocalSigner;
 
@@ -12,8 +12,6 @@ use crate::{
     runtime_manifest::{SUPPORTED_DERIVATION_SCHEME, load_configured_runtime_manifest},
 };
 
-const LOCAL_BOOTSTRAP_FALLBACK_INDEX: usize = 0;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalBootstrapRole {
     Faucet,
@@ -22,7 +20,7 @@ pub(crate) enum LocalBootstrapRole {
 impl LocalBootstrapRole {
     fn manifest_role(self) -> &'static str {
         match self {
-            Self::Faucet => "faucet",
+            Self::Faucet => BOOTSTRAP_ACCOUNT_ROLE_FAUCET,
         }
     }
 
@@ -268,8 +266,6 @@ fn parse_target_address(
 
 /// Resolve the local bootstrap account used for CLI-sponsored local flows.
 ///
-/// Dedicated manifest roles are preferred when present. Until hog-devnode emits
-/// those roles, local flows fall back to dev-0.
 pub(crate) fn resolve_local_bootstrap_account(
     profile: &ResolvedProfile,
     role: LocalBootstrapRole,
@@ -295,16 +291,11 @@ pub(crate) fn resolve_local_bootstrap_account(
     let selected = manifest
         .bootstrap_accounts
         .iter()
-        .find(|account| account.role == role.manifest_role())
-        .or_else(|| {
-            manifest.bootstrap_accounts.iter().find(|account| {
-                usize::try_from(account.index).ok() == Some(LOCAL_BOOTSTRAP_FALLBACK_INDEX)
-            })
-        })
+        .find(|account| account.index == 0 && account.role == role.manifest_role())
         .ok_or_else(|| {
             dev_account_error(
                 key_name,
-                "runtime manifest has no matching bootstrap account and no dev-0 fallback",
+                "runtime manifest requires bootstrap account dev-0 with role `faucet`",
             )
         })?;
 
@@ -941,31 +932,27 @@ mod tests {
     }
 
     #[test]
-    fn local_bootstrap_account_prefers_manifest_role() {
+    fn local_bootstrap_account_requires_faucet_at_index_zero() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
-        let dev0_wallet = groundhog_xdr::types::ContractAddress::from([0x70; 32]);
         let faucet_wallet = groundhog_xdr::types::ContractAddress::from([0x73; 32]);
-        write_test_runtime_manifest_with_accounts(
-            &manifest_path,
-            &[(0, "local_user", dev0_wallet), (3, "faucet", faucet_wallet)],
-        );
+        write_test_runtime_manifest_with_accounts(&manifest_path, &[(0, "faucet", faucet_wallet)]);
         let profile = profile_with_manifest(Some(manifest_path));
 
         let resolved = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)
             .expect("bug: faucet role should resolve");
 
-        assert_eq!(resolved.key_name, "dev-3");
+        assert_eq!(resolved.key_name, "dev-0");
         assert_eq!(resolved.role, "faucet");
         assert_eq!(resolved.wallet_address, faucet_wallet);
         assert_eq!(
             resolved.signer.verifying_key_bytes(),
-            groundhog_signing::derive_default_dev_account_signer(3).verifying_key_bytes(),
+            groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes(),
         );
     }
 
     #[test]
-    fn local_bootstrap_account_falls_back_to_dev_zero() {
+    fn local_bootstrap_account_rejects_dev_zero_without_faucet_role() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
         let dev0_wallet = groundhog_xdr::types::ContractAddress::from([0x70; 32]);
@@ -975,12 +962,10 @@ mod tests {
         );
         let profile = profile_with_manifest(Some(manifest_path));
 
-        let resolved = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)
-            .expect("bug: faucet should fall back to dev-0");
+        let error = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)
+            .expect_err("dev-0 without faucet role should fail");
 
-        assert_eq!(resolved.key_name, "dev-0");
-        assert_eq!(resolved.role, "local_user");
-        assert_eq!(resolved.wallet_address, dev0_wallet);
+        assert!(error.to_string().contains("role `faucet`"));
     }
 
     #[test]

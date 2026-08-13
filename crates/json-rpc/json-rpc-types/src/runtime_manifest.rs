@@ -14,6 +14,12 @@ pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 2;
 /// Runtime manifest family emitted by hog-devnode.
 pub const HOGD_DEV_RUNTIME_MANIFEST_KIND: &str = "hogd-dev-runtime";
 
+/// Runtime role assigned to the fixed local faucet account.
+pub const BOOTSTRAP_ACCOUNT_ROLE_FAUCET: &str = "faucet";
+
+/// Runtime role assigned to local developer accounts.
+pub const BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER: &str = "local_user";
+
 /// Runtime manifest written by a backend after bootstrap is complete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -159,7 +165,8 @@ pub struct BootstrapAccountDerivation {
 pub struct BootstrapAccount {
     /// Position passed to the derivation scheme.
     pub index: u32,
-    /// Free-form hint for benchmark and CLI account selection.
+    /// Account role discriminator. Local runtimes use `faucet` for index 0 and
+    /// `local_user` for ordinary workload accounts.
     pub role: String,
     /// Public key authorized for the wallet.
     pub public_key: Ed25519PublicKey,
@@ -309,10 +316,10 @@ mod tests {
     use crate::hex::Hex0x;
 
     use super::{
-        BootstrapAccount, BootstrapAccountDerivation, RUNTIME_MANIFEST_SCHEMA_VERSION,
-        RuntimeManifest, RuntimeManifestBootstrap, RuntimeManifestChainState,
-        RuntimeManifestDevWallet, RuntimeManifestEndpoints, RuntimeManifestProducer,
-        RuntimeManifestStorageCostModel,
+        BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, BootstrapAccountDerivation,
+        RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest, RuntimeManifestBootstrap,
+        RuntimeManifestChainState, RuntimeManifestDevWallet, RuntimeManifestEndpoints,
+        RuntimeManifestProducer, RuntimeManifestStorageCostModel,
     };
 
     #[test]
@@ -345,10 +352,10 @@ mod tests {
                 },
                 "bootstrapAccounts": [{
                     "index": 0,
-                    "role": "local_user",
+                    "role": BOOTSTRAP_ACCOUNT_ROLE_FAUCET,
                     "publicKey": prefixed_hex(0x61),
                     "walletAddress": prefixed_hex(0x71),
-                    "initialStorageTokens": "1000000000",
+                    "initialStorageTokens": "10000000000000",
                 }],
                 "bootstrap": {
                     "devWallet": {
@@ -467,10 +474,10 @@ mod tests {
             },
             bootstrap_accounts: vec![BootstrapAccount {
                 index: 0,
-                role: "local_user".into(),
+                role: BOOTSTRAP_ACCOUNT_ROLE_FAUCET.into(),
                 public_key: public_key(0x61),
                 wallet_address: contract_address(0x71),
-                initial_storage_tokens: "1000000000".into(),
+                initial_storage_tokens: "10000000000000".into(),
             }],
             bootstrap: RuntimeManifestBootstrap {
                 dev_wallet: RuntimeManifestDevWallet {

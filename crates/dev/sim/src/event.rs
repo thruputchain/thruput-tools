@@ -241,9 +241,11 @@ pub struct SimulatorOverloadEvent {
 pub struct ActorProvisionEvent {
     pub actor_id: u32,
     pub account_index: u32,
-    pub sponsor_actor_id: u32,
+    #[serde(rename = "sponsorActorId")]
+    pub sponsor_account_index: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub airdrop_sponsor_actor_id: Option<u32>,
+    #[serde(rename = "airdropSponsorActorId")]
+    pub airdrop_sponsor_account_index: Option<u32>,
     pub wallet_address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_tx_hash: Option<String>,

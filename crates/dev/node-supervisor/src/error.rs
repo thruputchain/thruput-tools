@@ -279,9 +279,9 @@ pub enum NodeSupervisorError {
         observed: Option<String>,
     },
 
-    /// hogd-dev advertised a different dev-account count than requested.
+    /// hogd-dev advertised a different bootstrap-account layout size than requested.
     #[error(
-        "hogd-dev readiness advertised {actual} dev accounts, but supervisor requested {expected}"
+        "hogd-dev readiness advertised {actual} bootstrap accounts, but supervisor required {expected} (one faucet plus requested local users)"
     )]
     DevAccountCountMismatch {
         /// Requested dev-account count.

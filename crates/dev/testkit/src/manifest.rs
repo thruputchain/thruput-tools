@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use groundhog_json_rpc_types::runtime_manifest::{
-    RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
+    BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, RuntimeManifest, RuntimeManifestParseError,
+    parse_runtime_manifest,
 };
 use groundhog_signing::{
     DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer,
@@ -77,7 +78,11 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount
             scheme: manifest.bootstrap_account_derivation.scheme.clone(),
         });
     }
-    if manifest.bootstrap_accounts.is_empty() {
+    if !manifest
+        .bootstrap_accounts
+        .iter()
+        .any(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+    {
         return Err(TestkitError::NoBootstrapAccounts);
     }
 
@@ -85,6 +90,7 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount
     manifest
         .bootstrap_accounts
         .iter()
+        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
         .map(|account| {
             let index = usize::try_from(account.index).unwrap_or(usize::MAX);
             let signer = derive_dev_account_signer(seed, index);

@@ -1,7 +1,6 @@
 //! Configuration for the node supervisor.
 
 use std::{
-    num::TryFromIntError,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -9,7 +8,7 @@ use std::{
 use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_json_rpc_types::bootstrap_manifest::{
     BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestDevWallet,
-    BootstrapManifestStorageCostModel,
+    BootstrapManifestFaucet, BootstrapManifestStorageCostModel,
 };
 use groundhog_signing::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
@@ -42,17 +41,26 @@ pub const DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE: Duration = Duration::from_
 /// Default startup timeout while waiting for hogd-dev readiness.
 pub const DEFAULT_HOGD_DEV_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Default number of dev accounts requested from hogd-dev.
+/// Default number of local-user accounts requested from hogd-dev, excluding the faucet.
 pub const DEFAULT_HOGD_DEV_ACCOUNT_COUNT: usize = DEFAULT_DEV_ACCOUNT_COUNT;
 
 /// Default dev account signer seed requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_ACCOUNT_SEED: &str = DEFAULT_DEV_ACCOUNT_SEED;
 
-/// Default storage-token funding target requested from hogd-dev per account.
+/// Fixed local faucet allocation in raw HOG units.
+pub const LOCAL_FAUCET_STORAGE_TOKENS: u64 = 10_000_000_000_000;
+
+/// Default local-user allocation in raw HOG units.
 pub const DEFAULT_HOGD_DEV_ACCOUNT_TOKENS: u64 = DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS;
 
+/// Fixed local faucet derivation index.
+pub const LOCAL_FAUCET_INDEX: u32 = 0;
+
+/// First local-user derivation index.
+pub const FIRST_LOCAL_USER_INDEX: u32 = 1;
+
 /// Bootstrap manifest kind emitted for hogd-dev shorthand lowering.
-pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "groundhog-bootstrap";
+pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "hogd-bootstrap";
 
 /// Default bootstrap profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
@@ -314,11 +322,13 @@ pub struct HogdDevConfig {
     pub shutdown_grace: Duration,
     /// Maximum time to wait for the readiness line after spawning hogd-dev.
     pub startup_timeout: Duration,
-    /// Number of deterministic dev accounts hogd-dev should bootstrap.
+    /// Number of deterministic local-user accounts hogd-dev should bootstrap.
+    ///
+    /// The always-present faucet at `dev-0` is excluded.
     pub dev_account_count: usize,
     /// Seed used by hogd-dev and the supervisor to derive dev-account signers.
     pub dev_account_seed: String,
-    /// Storage-token funding target per dev account.
+    /// Storage-token funding target per local-user account.
     pub dev_account_tokens: u64,
     /// RAM database capacity in bytes hog-devnode reserves at startup.
     ///
@@ -431,14 +441,19 @@ impl HogdDevConfig {
     pub fn to_bootstrap_manifest(
         &self,
         network_hash: NetworkHashHex,
-    ) -> Result<BootstrapManifest, TryFromIntError> {
+    ) -> Result<BootstrapManifest, std::num::TryFromIntError> {
         Ok(BootstrapManifest::new(
             HOGD_DEV_BOOTSTRAP_MANIFEST_KIND,
             network_hash,
             DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE,
             BootstrapManifestDevWallet::profile(DEFAULT_HOGD_DEV_WALLET_PROFILE),
+            BootstrapManifestFaucet::new(
+                LOCAL_FAUCET_INDEX,
+                LOCAL_FAUCET_STORAGE_TOKENS.to_string(),
+            ),
             BootstrapManifestAccounts::new(
                 u32::try_from(self.dev_account_count)?,
+                FIRST_LOCAL_USER_INDEX,
                 self.dev_account_seed.clone(),
                 self.dev_account_tokens.to_string(),
             ),
@@ -525,15 +540,20 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 1,
-                "kind": "groundhog-bootstrap",
+                "schemaVersion": 2,
+                "kind": "hogd-bootstrap",
                 "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",
                 "devWallet": {
                     "profile": "hog-devnode-default",
                 },
+                "bootstrapFaucet": {
+                    "index": 0,
+                    "initialStorageTokens": "10000000000000",
+                },
                 "bootstrapAccounts": {
                     "count": 3,
+                    "firstIndex": 1,
                     "seed": "bench-seed",
                     "initialStorageTokens": "42",
                 },
@@ -541,6 +561,14 @@ mod tests {
                     "profile": "hogd-default",
                 },
             })
+        );
+    }
+
+    #[test]
+    fn hogd_dev_default_funds_each_user_with_one_hundred_hog() {
+        assert_eq!(
+            HogdDevConfig::default().dev_account_tokens,
+            100 * 10_000_000
         );
     }
 }

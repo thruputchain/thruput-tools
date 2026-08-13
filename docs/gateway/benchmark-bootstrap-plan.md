@@ -88,8 +88,8 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
 
 ```json
 {
-  "schemaVersion": 1,
-  "kind": "groundhog-bootstrap",
+  "schemaVersion": 2,
+  "kind": "hogd-bootstrap",
   "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
   "profile": "local-dev",
   "devWallet": {
@@ -99,8 +99,13 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
     "deployEntrypoint": "0xadac498222148e4f",
     "doActionEntrypoint": "0x..."
   },
+  "bootstrapFaucet": {
+    "index": 0,
+    "initialStorageTokens": "10000000000000"
+  },
   "bootstrapAccounts": {
     "count": 100,
+    "firstIndex": 1,
     "seed": "groundhog-bench-accounts",
     "initialStorageTokens": "1000000000"
   },
@@ -155,12 +160,11 @@ into the concrete parameters actually applied. For example,
 `storageCostModel.profile = "hogd-default"` lowers to explicit cost-model
 fields in the runtime manifest.
 
-For v1, `bootstrapAccounts` describes a homogeneous account group. All
-bootstrapped accounts share the same derivation scheme and initial storage-token
-funding. Account `role` values are producer-assigned runtime hints derived from
-the selected profile, not input fields in the bootstrap manifest. Per-account
-roles or per-role funding can be added later with an explicit account-spec
-shape.
+For v2, `bootstrapFaucet` describes the fixed index-0 faucet and
+`bootstrapAccounts` describes the homogeneous local-user group beginning at
+`firstIndex`. Runtime account roles preserve this split. Account consumers must
+select `local_user` entries for ordinary traffic and preserve each advertised
+derivation index.
 
 ### Runtime Manifest
 
@@ -206,10 +210,10 @@ The runtime manifest file contains the full payload:
   "bootstrapAccounts": [
     {
       "index": 0,
-      "role": "local_user",
+      "role": "faucet",
       "publicKey": "0x...",
       "walletAddress": "0x...",
-      "initialStorageTokens": "1000000000"
+      "initialStorageTokens": "10000000000000"
     }
   ],
   "bootstrap": {

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
+use groundhog_json_rpc_types::runtime_manifest::{
+    BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, RuntimeManifest,
+};
 
 use crate::manifest::{
     EventQueryAnchorSpec, SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest,
@@ -714,14 +716,26 @@ pub fn validate_against_runtime(
     manifest: &SimulationManifest,
     runtime: &RuntimeManifest,
 ) -> Result<(), ValidationError> {
-    let account_count = u32::try_from(runtime.bootstrap_accounts.len()).unwrap_or(u32::MAX);
+    let account_count = u32::try_from(
+        runtime
+            .bootstrap_accounts
+            .iter()
+            .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
     let max_users = manifest
         .load_shape
         .iter()
         .map(|phase| phase.users)
         .max()
         .unwrap_or(0);
-    if max_users > 0 && account_count == 0 && actor_provisioning_enabled(manifest) {
+    let has_provisioning_faucet = runtime
+        .bootstrap_accounts
+        .iter()
+        .any(|account| account.index == 0 && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
+    if max_users > account_count && actor_provisioning_enabled(manifest) && !has_provisioning_faucet
+    {
         return Err(ValidationError::ActorProvisioningRequiresSponsor);
     }
     if max_users > account_count && !actor_provisioning_enabled(manifest) {
@@ -997,7 +1011,7 @@ pub enum ValidationError {
         "scenario requests {requested} actors but runtime manifest advertises {available} bootstrap accounts"
     )]
     TooManyActors { requested: u32, available: u32 },
-    #[error("actor provisioning requires at least one runtime bootstrap account as wallet sponsor")]
+    #[error("actor provisioning requires runtime bootstrap account 0 with role `faucet`")]
     ActorProvisioningRequiresSponsor,
     #[error("workload {workload:?} requires runtime manifest endpoint {endpoint}")]
     MissingReadPlane {
@@ -1809,6 +1823,28 @@ mod tests {
     }
 
     #[test]
+    fn faucet_does_not_count_as_an_actor_account() {
+        let mut manifest = basic_manifest();
+        manifest.load_shape[0].users = 2;
+        let mut runtime = runtime_manifest();
+        let mut faucet = runtime.bootstrap_accounts[0].clone();
+        faucet.index = 9;
+        faucet.role = "faucet".into();
+        runtime.bootstrap_accounts.push(faucet);
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("faucet should not satisfy actor count");
+
+        assert!(matches!(
+            err,
+            ValidationError::TooManyActors {
+                requested: 2,
+                available: 1
+            }
+        ));
+    }
+
+    #[test]
     fn allows_actor_count_above_bootstrap_accounts_when_provisioning_enabled() {
         let mut manifest = basic_manifest();
         manifest.load_shape[0].users = 2;
@@ -1816,7 +1852,7 @@ mod tests {
             accounts: 2,
             account_seed: "seed".into(),
             initial_storage_tokens: "1000000000".into(),
-            dev_wallet_profile: "default".into(),
+            dev_wallet_profile: "hog-devnode-default".into(),
             storage_cost_profile: "default".into(),
             actor_provisioning: Some(ActorProvisioningSpec {
                 enabled: true,
@@ -1826,19 +1862,49 @@ mod tests {
             }),
         });
         let runtime = runtime_manifest();
+        let mut runtime = runtime;
+        let mut faucet = runtime.bootstrap_accounts[0].clone();
+        faucet.index = 0;
+        faucet.role = BOOTSTRAP_ACCOUNT_ROLE_FAUCET.into();
+        runtime.bootstrap_accounts.push(faucet);
 
         validate_against_runtime(&manifest, &runtime)
             .expect("actor provisioning should allow creating missing accounts");
     }
 
     #[test]
-    fn rejects_actor_provisioning_without_runtime_sponsor() {
+    fn allows_faucet_only_runtime_to_provision_first_workload_actor() {
         let mut manifest = basic_manifest();
         manifest.bootstrap = Some(BootstrapSpec {
             accounts: 1,
             account_seed: "seed".into(),
             initial_storage_tokens: "1000000000".into(),
-            dev_wallet_profile: "default".into(),
+            dev_wallet_profile: "hog-devnode-default".into(),
+            storage_cost_profile: "hogd-default".into(),
+            actor_provisioning: Some(ActorProvisioningSpec {
+                enabled: true,
+                dev_wallet_artifact: None,
+                dev_wallet_artifact_kind: None,
+                airdrop_hog: None,
+            }),
+        });
+        let mut runtime = runtime_manifest();
+        runtime.bootstrap_accounts[0].index = 0;
+        runtime.bootstrap_accounts[0].role = BOOTSTRAP_ACCOUNT_ROLE_FAUCET.into();
+
+        validate_against_runtime(&manifest, &runtime)
+            .expect("index-zero faucet should sponsor the first workload actor");
+    }
+
+    #[test]
+    fn rejects_actor_provisioning_without_runtime_sponsor() {
+        let mut manifest = basic_manifest();
+        manifest.load_shape[0].users = 2;
+        manifest.bootstrap = Some(BootstrapSpec {
+            accounts: 1,
+            account_seed: "seed".into(),
+            initial_storage_tokens: "1000000000".into(),
+            dev_wallet_profile: "hog-devnode-default".into(),
             storage_cost_profile: "default".into(),
             actor_provisioning: Some(ActorProvisioningSpec {
                 enabled: true,
@@ -1848,7 +1914,7 @@ mod tests {
             }),
         });
         let mut runtime = runtime_manifest();
-        runtime.bootstrap_accounts.clear();
+        runtime.bootstrap_accounts[0].role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
 
         let err = validate_against_runtime(&manifest, &runtime)
             .expect_err("actor provisioning should require a sponsor account");

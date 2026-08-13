@@ -374,7 +374,7 @@ pub fn save_profile_default_wallet(
 /// Prefers `groundhog.toml` when the profile specifies
 /// `default_key`, otherwise falls back to the global default
 /// selected via `keys use`. Profiles targeting the active runtime
-/// started by `groundhog node` use its built-in `dev-0` signer when
+/// started by `groundhog node` use the lowest-index local-user signer when
 /// neither selection is present.
 pub fn resolve_default_key(
     start: &Path,
@@ -386,7 +386,7 @@ pub fn resolve_default_key(
 
 /// Resolve the effective default key from an already resolved profile.
 ///
-/// The implicit `dev-0` signer is available only when the profile still
+/// The implicit local-user signer is available only when the profile still
 /// targets the active local runtime recorded by `groundhog node`. Explicit
 /// project or CLI target overrides must select a key themselves.
 pub fn resolve_default_key_for_profile(
@@ -410,7 +410,16 @@ pub fn resolve_default_key_for_profile(
             && profile.runtime_manifest.as_deref() == Some(state.runtime_manifest.as_path())
     });
 
-    Ok(uses_active_local_runtime.then(|| "dev-0".to_string()))
+    if !uses_active_local_runtime {
+        return Ok(None);
+    }
+
+    let Some(manifest) =
+        crate::runtime_manifest::load_configured_runtime_manifest(profile, "local_user")?
+    else {
+        return Ok(None);
+    };
+    Ok(crate::runtime_manifest::lowest_local_user_key(&manifest))
 }
 
 /// Resolve the active profile and apply transient local-node state.
