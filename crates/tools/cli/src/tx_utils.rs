@@ -72,8 +72,8 @@ pub(crate) fn print_failed_receipt_data(
         print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
     }
     if let Some(Ok(abort)) = decoded_abort {
-        if let Some(exception) = abort.exception.as_deref() {
-            print.detail("abort type", exception);
+        if let Some(label) = abort.exception_label() {
+            print.detail("abort type", label);
         }
         print.detail("abort value", &abort.value);
         return;
@@ -83,6 +83,34 @@ pub(crate) fn print_failed_receipt_data(
     }
     if let Some(Err(error)) = decoded_abort {
         print.detail("abort decode error", error);
+    }
+}
+
+/// Insert decoded-abort fields into a command's `data` JSON payload.
+///
+/// A decoded abort contributes `abort_exception` and `abort_value`, plus
+/// `abort_exception_crate` / `abort_exception_version` when it resolved
+/// through the ambient exception registry; a failed decode contributes
+/// `abort_decode_error` instead.
+pub(crate) fn insert_abort_json(
+    data: &mut serde_json::Value,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+) {
+    match decoded_abort {
+        Some(Ok(abort)) => {
+            data["abort_exception"] = serde_json::json!(abort.exception);
+            data["abort_value"] = serde_json::json!(abort.value);
+            if let Some(crate_name) = abort.exception_crate {
+                data["abort_exception_crate"] = serde_json::json!(crate_name);
+            }
+            if let Some(version) = abort.exception_version {
+                data["abort_exception_version"] = serde_json::json!(version);
+            }
+        }
+        Some(Err(error)) => {
+            data["abort_decode_error"] = serde_json::json!(error.to_string());
+        }
+        None => {}
     }
 }
 

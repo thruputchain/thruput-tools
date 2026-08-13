@@ -87,6 +87,14 @@ pub fn run(
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
                 .and_then(|abort| abort.exception.as_deref()),
+            abort_exception_crate: decoded_abort
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .and_then(|abort| abort.exception_crate),
+            abort_exception_version: decoded_abort
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .and_then(|abort| abort.exception_version),
             abort_value: decoded_abort
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
@@ -246,8 +254,8 @@ fn print_view_response(
             print.detail("height", *response.height);
             match decoded_abort {
                 Some(Ok(abort)) => {
-                    if let Some(exception) = abort.exception.as_deref() {
-                        print.detail("abort type", exception);
+                    if let Some(label) = abort.exception_label() {
+                        print.detail("abort type", label);
                     }
                     print.detail("abort value", &abort.value);
                 }

@@ -7162,6 +7162,8 @@ fn call_live_json_decodes_library_abort() {
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abort_data"], abort_hex);
     assert_eq!(stdout["data"]["abort_exception"], "LibraryExn");
+    assert_eq!(stdout["data"]["abort_exception_crate"], "sdk");
+    assert_eq!(stdout["data"]["abort_exception_version"], "1");
     assert_eq!(
         stdout["data"]["abort_value"],
         serde_json::json!({"case": "NonNegativeIntUnderflow"})
@@ -7204,7 +7206,7 @@ fn call_live_human_prints_decoded_abort() {
     // return data.
     assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(
-        stderr.contains("abort type: LibraryExn"),
+        stderr.contains("abort type: LibraryExn (sdk, v1)"),
         "stderr: {stderr}"
     );
     assert!(

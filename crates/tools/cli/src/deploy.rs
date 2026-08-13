@@ -159,7 +159,7 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    let command_error = command_error_for_deploy_receipt(&receipt);
+    let command_error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref());
     let mut data = json!({
         "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
         "tx_hash": tx_hash_formatted,
@@ -181,16 +181,7 @@ pub fn run(
     if command_error.is_some() {
         data["return_data"] = json!(receipt.return_data);
         data["abort_data"] = json!(receipt.abort_data);
-        match decoded_abort.as_ref() {
-            Some(Ok(abort)) => {
-                data["abort_exception"] = json!(abort.exception);
-                data["abort_value"] = json!(abort.value);
-            }
-            Some(Err(error)) => {
-                data["abort_decode_error"] = json!(error.to_string());
-            }
-            None => {}
-        }
+        crate::tx_utils::insert_abort_json(&mut data, decoded_abort.as_ref());
     }
     if let Some(error) = command_error {
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
@@ -201,8 +192,11 @@ pub fn run(
     Ok(())
 }
 
-fn command_error_for_deploy_receipt(receipt: &TransactionReceipt) -> Option<CommandError> {
-    if is_insufficient_deploy_funding(receipt) {
+fn command_error_for_deploy_receipt(
+    receipt: &TransactionReceipt,
+    decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
+) -> Option<CommandError> {
+    if is_insufficient_deploy_funding(receipt, decoded_abort) {
         return Some(
             CommandError::new(
                 "transaction_insufficient_funds",
@@ -221,23 +215,23 @@ fn command_error_for_deploy_receipt(receipt: &TransactionReceipt) -> Option<Comm
     command_error_for_exec_status(&receipt.status)
 }
 
-fn is_insufficient_deploy_funding(receipt: &TransactionReceipt) -> bool {
+fn is_insufficient_deploy_funding(
+    receipt: &TransactionReceipt,
+    decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
+) -> bool {
     if !matches!(
         receipt.status,
         groundhog_json_rpc_types::receipt::ExecStatus::Reverted { .. }
     ) {
         return false;
     }
-    let Some(abort_data) = receipt.abort_data.as_ref() else {
-        return false;
-    };
-    let Ok((selector, error)) =
-        xdrs::cxs::decode::<(u64, groundhog_erc20_if::ERC20Error)>(&abort_data.0)
-    else {
-        return false;
-    };
-    selector == <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR
-        && matches!(error, groundhog_erc20_if::ERC20Error::TooLarge)
+    matches!(
+        decoded_abort,
+        Some(Ok(abort))
+            if abort.exception_crate == Some("groundhog-erc20-if")
+                && abort.exception.as_deref() == Some("ERC20Error")
+                && abort.value == json!("TooLarge")
+    )
 }
 
 fn print_dry_run(
@@ -657,8 +651,9 @@ mod tests {
         ))
         .expect("bug: ERC20 exception should encode");
         let receipt = failed_receipt(Some(HexBytes(abort_data)));
+        let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
 
-        let error = command_error_for_deploy_receipt(&receipt)
+        let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref())
             .expect("native HOG overdraft should be classified");
         let json = serde_json::to_value(error).expect("bug: command error should serialize");
 
@@ -674,8 +669,9 @@ mod tests {
     #[test]
     fn unrelated_revert_remains_generic_deploy_failure() {
         let receipt = failed_receipt(Some(HexBytes(vec![0x01, 0x02])));
+        let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
 
-        let error = command_error_for_deploy_receipt(&receipt)
+        let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref())
             .expect("reverted receipt should remain a command failure");
         let json = serde_json::to_value(error).expect("bug: command error should serialize");
 
