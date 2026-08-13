@@ -251,6 +251,25 @@ pub(crate) fn resolve_address_target(
     })
 }
 
+/// Resolve a contract alias or an explicitly prefixed direct address.
+pub(crate) fn resolve_contract_target(
+    profile: &ResolvedProfile,
+    target: &str,
+) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+    if let Some(address) = profile.contracts.get(target) {
+        return parse_target_address(target, address);
+    }
+    if target.starts_with("0x") || target.starts_with("0X") {
+        return parse_target_address(target, target);
+    }
+    Err(CliError::UnknownContractAlias {
+        alias: target.to_owned(),
+        profile: profile.name.clone(),
+        config_source: profile.source.clone(),
+        available_aliases: profile.contracts.keys().cloned().collect(),
+    })
+}
+
 fn parse_target_address(
     target: &str,
     address: &str,
@@ -492,6 +511,72 @@ mod tests {
                 .expect_err("bug: unknown target should fail");
 
         assert_eq!(error.code(), "unknown_address_target");
+    }
+
+    #[test]
+    fn contract_target_reports_unknown_alias_with_profile_context() {
+        let source = std::path::PathBuf::from("/tmp/project/groundhog.toml");
+        let mut profile = test_profile("alice", None, BTreeMap::new());
+        profile.name = "local".into();
+        profile.source = Some(source.clone());
+        profile
+            .contracts
+            .insert("zebra".into(), format_hex(&[0x11; 32]));
+        profile
+            .contracts
+            .insert("alpha".into(), format_hex(&[0x22; 32]));
+
+        let error = resolve_contract_target(&profile, "counter")
+            .expect_err("bug: unknown contract alias should fail");
+
+        assert_eq!(error.code(), "unknown_contract_alias");
+        assert_eq!(
+            error.details_json().expect("details expected"),
+            serde_json::json!({
+                "alias": "counter",
+                "profile": "local",
+                "configSource": source,
+                "availableAliases": ["alpha", "zebra"],
+            })
+        );
+        assert!(
+            error
+                .hint()
+                .expect("hint expected")
+                .contains("groundhog config get local --sources")
+        );
+    }
+
+    #[test]
+    fn contract_target_preserves_direct_address_validation() {
+        let profile = test_profile("alice", None, BTreeMap::new());
+
+        let error = resolve_contract_target(&profile, "0xdeadbeef")
+            .expect_err("bug: malformed direct address should fail");
+
+        assert_eq!(error.code(), "invalid_address_target");
+        assert_eq!(
+            error.details_json().expect("details expected")["target"],
+            "0xdeadbeef"
+        );
+    }
+
+    #[test]
+    fn contract_target_does_not_resolve_saved_wallet_names() {
+        let address = format_hex(&[0x33; 32]);
+        let wallets = BTreeMap::from([(
+            "counter".into(),
+            SavedWalletBinding {
+                address,
+                owner_public_key: format_hex(&[0x44; 32]),
+            },
+        )]);
+        let profile = test_profile("alice", None, wallets);
+
+        let error = resolve_contract_target(&profile, "counter")
+            .expect_err("bug: wallet names should not resolve as contract aliases");
+
+        assert_eq!(error.code(), "unknown_contract_alias");
     }
 
     #[test]

@@ -86,15 +86,6 @@ pub struct ProfileOverrides {
 }
 
 impl ResolvedProfile {
-    /// Resolve a contract alias from the active profile, falling
-    /// back to the original value when no alias exists.
-    pub fn resolve_contract(&self, name_or_address: &str) -> String {
-        self.contracts
-            .get(name_or_address)
-            .cloned()
-            .unwrap_or_else(|| name_or_address.to_string())
-    }
-
     /// Resolve a saved wallet name or direct address.
     pub fn resolve_wallet(&self, name_or_address: &str) -> Option<String> {
         if is_valid_address(name_or_address) {

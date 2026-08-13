@@ -6501,6 +6501,171 @@ fn storage_json_resolves_contract_alias() {
 }
 
 #[test]
+fn contract_commands_report_unknown_alias_before_rpc() {
+    let key = format!("0x{}", "42".repeat(32));
+    for (command, args) in [
+        (
+            "call",
+            vec!["call", "missing", "0x0102030405060708", "0x", "--dry-run"],
+        ),
+        (
+            "view",
+            vec!["view", "missing", "0x0102030405060708", "--calldata", "0x"],
+        ),
+        ("storage", vec!["storage", "missing", key.as_str()]),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let config_path = tmp.path().join("groundhog.toml");
+        std::fs::write(
+            &config_path,
+            concat!(
+                "default_profile = \"local\"\n\n",
+                "[profile.local]\n",
+                "[profile.local.contracts]\n",
+                "zebra = \"0x1111111111111111111111111111111111111111111111111111111111111111\"\n",
+                "alpha = \"0x2222222222222222222222222222222222222222222222222222222222222222\"\n",
+            ),
+        )
+        .unwrap();
+        let (rpc_url, rpc_server) = spawn_no_request_rpc();
+        let output = groundhog()
+            .arg("--json")
+            .args(args)
+            .args(["--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["command"], command);
+        assert_eq!(stderr["error"]["code"], "unknown_contract_alias");
+        assert_eq!(stderr["error"]["details"]["alias"], "missing");
+        assert_eq!(stderr["error"]["details"]["profile"], "local");
+        assert_eq!(
+            stderr["error"]["details"]["configSource"],
+            config_path.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            stderr["error"]["details"]["availableAliases"],
+            serde_json::json!(["alpha", "zebra"])
+        );
+    }
+}
+
+#[test]
+fn contract_aliases_are_isolated_by_profile() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("groundhog.toml");
+    std::fs::write(
+        &config_path,
+        concat!(
+            "default_profile = \"local\"\n\n",
+            "[profile.local]\n",
+            "[profile.local.contracts]\n",
+            "counter = \"0x1111111111111111111111111111111111111111111111111111111111111111\"\n\n",
+            "[profile.devnet]\n",
+            "[profile.devnet.contracts]\n",
+            "token = \"0x2222222222222222222222222222222222222222222222222222222222222222\"\n",
+        ),
+    )
+    .unwrap();
+    let key = format!("0x{}", "42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_no_request_rpc();
+    let output = groundhog()
+        .args([
+            "--json",
+            "storage",
+            "counter",
+            &key,
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            &rpc_url,
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "unknown_contract_alias");
+    assert_eq!(stderr["error"]["details"]["profile"], "devnet");
+    assert_eq!(
+        stderr["error"]["details"]["availableAliases"],
+        serde_json::json!(["token"])
+    );
+}
+
+#[test]
+fn contract_alias_error_is_actionable_and_terminal_safe() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"local\"\n\n[profile.local]\n",
+    )
+    .unwrap();
+    let key = format!("0x{}", "42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_no_request_rpc();
+    let output = groundhog()
+        .args([
+            "storage",
+            "missing\n\u{1b}[31m",
+            &key,
+            "--rpc-url",
+            &rpc_url,
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unknown contract alias `missing\\n\\u{1b}[31m` in profile `local`"));
+    assert!(stderr.contains("groundhog config get local --sources"));
+    assert!(!stderr.contains("missing\n"));
+    assert!(!stderr.contains('\u{1b}'));
+}
+
+#[test]
+fn contract_command_preserves_prefixed_address_validation_error() {
+    let tmp = TempDir::new().unwrap();
+    let key = format!("0x{}", "42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_no_request_rpc();
+    let output = groundhog()
+        .args([
+            "--json",
+            "storage",
+            "0xdeadbeef",
+            &key,
+            "--rpc-url",
+            &rpc_url,
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "invalid_address_target");
+    assert_eq!(stderr["error"]["details"]["target"], "0xdeadbeef");
+    assert!(
+        stderr["error"]["details"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("32 bytes")
+    );
+}
+
+#[test]
 fn storage_json_rejects_short_key_before_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

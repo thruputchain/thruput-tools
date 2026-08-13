@@ -11,12 +11,12 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
 
-use crate::account_resolution::resolve_transaction_sender;
+use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
 use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
-    format_contract_address, parse_contract_address, spec_string_text,
+    format_contract_address, spec_string_text,
 };
 use crate::config::{ProfileOverrides, find_project_config, resolve_profile_with_overrides};
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
@@ -363,8 +363,8 @@ fn prepare_call_with_runtime(
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?;
 
-    let contract_address_hex = resolved_profile.resolve_contract(contract);
-    let contract_address = parse_contract_address(&contract_address_hex)?;
+    let contract_address = resolve_contract_target(&resolved_profile, contract)?;
+    let contract_address_hex = format_contract_address(&contract_address);
 
     let sender = resolve_transaction_sender(&resolved_profile, wallet)?;
 
