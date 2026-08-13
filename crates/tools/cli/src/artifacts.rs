@@ -91,6 +91,17 @@ pub struct ResolvedArtifact {
     pub path: PathBuf,
 }
 
+/// Auto-detected artifact and the Cargo package it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPackageArtifact {
+    /// Resolved contract artifact.
+    pub artifact: ResolvedArtifact,
+    /// Selected Cargo package name.
+    pub package_name: String,
+    /// Directory containing the selected package's manifest.
+    pub package_root: PathBuf,
+}
+
 impl ArtifactOptions {
     /// Create artifact options from an optional target directory.
     pub fn new(target_dir: Option<PathBuf>) -> Self {
@@ -176,14 +187,15 @@ pub fn infer_artifact_kind(path: &Path) -> Result<ArtifactKind, CliError> {
     }
 }
 
-/// Resolve a Groundhog-owned build artifact for the package implied by `cwd`.
-pub fn resolve_groundhog_artifact_path(
+/// Resolve a Groundhog-owned build artifact for an explicit or inferred package.
+pub fn resolve_groundhog_artifact(
     cwd: &Path,
     artifacts: &ArtifactOptions,
+    package: Option<&str>,
     kind: ArtifactKind,
-) -> Result<PathBuf, CliError> {
+) -> Result<ResolvedPackageArtifact, CliError> {
     let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
-    let pkg_name = crate::build::resolve_package(&metadata, None, cwd)?;
+    let pkg_name = crate::build::resolve_package(&metadata, package, cwd)?;
     let path = groundhog_artifact_output_path(&metadata.target_directory, pkg_name, kind);
 
     if !path.try_exists()? {
@@ -193,7 +205,27 @@ pub fn resolve_groundhog_artifact_path(
         });
     }
 
-    Ok(path)
+    let package_root = metadata
+        .packages
+        .iter()
+        .find(|candidate| candidate.name == pkg_name)
+        .and_then(|candidate| candidate.manifest_path.parent())
+        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
+
+    Ok(ResolvedPackageArtifact {
+        artifact: ResolvedArtifact { kind, path },
+        package_name: pkg_name.to_owned(),
+        package_root,
+    })
+}
+
+/// Resolve a Groundhog-owned build artifact for the package implied by `cwd`.
+pub fn resolve_groundhog_artifact_path(
+    cwd: &Path,
+    artifacts: &ArtifactOptions,
+    kind: ArtifactKind,
+) -> Result<PathBuf, CliError> {
+    resolve_groundhog_artifact(cwd, artifacts, None, kind).map(|resolved| resolved.artifact.path)
 }
 
 /// Ensure passthrough cargo arguments do not override the CLI target directory.

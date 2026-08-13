@@ -43,6 +43,7 @@ pub(crate) struct PreparedDeploy {
     pub(crate) wallet_entrypoint_id: String,
     pub(crate) wallet_entrypoint_source: &'static str,
     pub(crate) tx_hex: String,
+    pub(crate) package_name: Option<String>,
 }
 
 /// Submitted deploy metadata after a live deploy transaction is accepted.
@@ -58,6 +59,7 @@ pub(crate) struct SubmittedDeploy {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run(
     artifact_path: Option<&Path>,
+    package: Option<&str>,
     target: ArtifactKind,
     dry_run: bool,
     wallet: Option<&str>,
@@ -70,6 +72,7 @@ pub fn run(
     let prepared = match wallet {
         Some(wallet) => prepare_deploy_with_wallet(
             artifact_path,
+            package,
             target,
             artifacts,
             Some(wallet),
@@ -77,7 +80,15 @@ pub fn run(
             overrides,
             print,
         )?,
-        None => prepare_deploy(artifact_path, target, artifacts, profile, overrides, print)?,
+        None => prepare_deploy(
+            artifact_path,
+            package,
+            target,
+            artifacts,
+            profile,
+            overrides,
+            print,
+        )?,
     };
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
@@ -132,7 +143,10 @@ pub fn run(
         let project_root = crate::config::find_project_config(&cwd)
             .and_then(|p| p.parent().map(Path::to_path_buf));
         if let Some(root) = project_root
-            && let Some(name) = root.file_name().and_then(|n| n.to_str())
+            && let Some(name) = prepared.package_name.as_deref().or_else(|| {
+                root.file_name()
+                    .and_then(|directory_name| directory_name.to_str())
+            })
             && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
         {
             let _ =
@@ -299,6 +313,7 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
 #[allow(clippy::too_many_lines)]
 pub(crate) fn prepare_deploy(
     artifact_path: Option<&Path>,
+    package: Option<&str>,
     target: ArtifactKind,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
@@ -307,6 +322,7 @@ pub(crate) fn prepare_deploy(
 ) -> Result<PreparedDeploy, CliError> {
     prepare_deploy_with_wallet(
         artifact_path,
+        package,
         target,
         artifacts,
         None,
@@ -316,9 +332,10 @@ pub(crate) fn prepare_deploy(
     )
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_deploy_with_wallet(
     artifact_path: Option<&Path>,
+    package: Option<&str>,
     target: ArtifactKind,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
@@ -334,20 +351,33 @@ fn prepare_deploy_with_wallet(
     }
     resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
-    let artifact = if let Some(path) = artifact_path {
-        ResolvedArtifact {
-            kind: crate::artifacts::infer_artifact_kind(path)?,
-            path: path.to_path_buf(),
-        }
+    let (artifact, package_name) = if let Some(path) = artifact_path {
+        (
+            ResolvedArtifact {
+                kind: crate::artifacts::infer_artifact_kind(path)?,
+                path: path.to_path_buf(),
+            },
+            None,
+        )
     } else {
-        let path = crate::artifacts::resolve_groundhog_artifact_path(&cwd, artifacts, target)?;
-        let artifact = ResolvedArtifact { kind: target, path };
-        warn_if_stale(&artifact, &cwd, print);
-        artifact
+        let resolved_artifact =
+            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package, target)?;
+        warn_if_stale(
+            &resolved_artifact.artifact,
+            &resolved_artifact.package_root,
+            &resolved_artifact.package_name,
+            print,
+        );
+        (
+            resolved_artifact.artifact,
+            Some(resolved_artifact.package_name),
+        )
     };
     let artifact_bytes = std::fs::read(&artifact.path)?;
 
-    prepare_deploy_transaction(artifact, artifact_bytes, &resolved, wallet)
+    let mut prepared = prepare_deploy_transaction(artifact, artifact_bytes, &resolved, wallet)?;
+    prepared.package_name = package_name;
+    Ok(prepared)
 }
 
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.
@@ -462,6 +492,7 @@ fn prepare_deploy_transaction(
         wallet_entrypoint_id: format!("0x{}", hex::encode(wallet_entrypoints.deploy.into_inner())),
         wallet_entrypoint_source: wallet_entrypoints.source,
         tx_hex,
+        package_name: None,
     })
 }
 
@@ -474,20 +505,24 @@ fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
         .map_err(|_| CliError::Other("predicted address must be exactly 32 bytes".into()))
 }
 
-fn warn_if_stale(artifact: &ResolvedArtifact, project_start: &Path, print: &Print) {
+fn warn_if_stale(
+    artifact: &ResolvedArtifact,
+    package_root: &Path,
+    package_name: &str,
+    print: &Print,
+) {
     let Ok(artifact_mtime) = std::fs::metadata(&artifact.path).and_then(|m| m.modified()) else {
         return;
     };
-    let src_dir = match crate::config::find_project_config(project_start)
-        .and_then(|p| p.parent().map(|d| d.join("src")))
-    {
-        Some(d) if d.is_dir() => d,
-        _ => return,
-    };
+    let src_dir = package_root.join("src");
+    if !src_dir.is_dir() {
+        return;
+    }
     if newest_source_mtime(&src_dir).is_some_and(|t| t > artifact_mtime) {
         print.warn(format_args!(
-            "source files are newer than the {} artifact — run `groundhog build --target {}` to avoid deploying stale code",
+            "source files are newer than the {} artifact — run `groundhog build -p {} --target {}` to avoid deploying stale code",
             artifact.kind.as_str(),
+            package_name,
             artifact.kind.as_str()
         ));
     }
@@ -544,7 +579,7 @@ mod tests {
         DeployAddressSource, command_error_for_deploy_receipt, derive_deploy_address,
         hex_to_32_bytes, resolve_deployed_address,
     };
-    use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact_path};
+    use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
     use groundhog_json_rpc_types::{
         BlockHeight,
         hex::{Hex0x, HexBytes},
@@ -678,10 +713,12 @@ mod tests {
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
         let resolved =
-            resolve_groundhog_artifact_path(&project_root, &artifacts, ArtifactKind::Wasm)
+            resolve_groundhog_artifact(&project_root, &artifacts, None, ArtifactKind::Wasm)
                 .expect("bug: wasm should resolve from explicit target dir");
 
-        assert_eq!(resolved, expected_wasm);
+        assert_eq!(resolved.artifact.path, expected_wasm);
+        assert_eq!(resolved.package_name, "demo-contract");
+        assert_eq!(resolved.package_root, project_root);
     }
 
     #[test]
@@ -695,7 +732,7 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let err = resolve_groundhog_artifact_path(&project_root, &artifacts, ArtifactKind::Rv32)
+        let err = resolve_groundhog_artifact(&project_root, &artifacts, None, ArtifactKind::Rv32)
             .expect_err("bug: missing rv32 artifact should error");
 
         assert!(
