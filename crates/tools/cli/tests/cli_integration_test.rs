@@ -3715,7 +3715,8 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
 
     let faucet_wallet = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (rpc_url, rpc_server) =
+        spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
     std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
@@ -3773,7 +3774,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["key"], "owner");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "200000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "10000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
         stdout["data"]["owner_public_key"]
@@ -3798,7 +3799,8 @@ fn wallet_create_dry_run_defaults_name_to_key() {
 
     let faucet_wallet = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (rpc_url, rpc_server) =
+        spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
     std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
@@ -3844,7 +3846,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "owner");
     assert_eq!(stdout["data"]["key"], "owner");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "200000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "10000000");
     assert!(stdout["data"].get("signed_prefund_tx").is_none());
     assert!(stdout["data"].get("signed_tx").is_none());
 }
@@ -3894,6 +3896,44 @@ fn wallet_create_remote_dry_run_does_not_call_faucet() {
     assert_eq!(
         stdout["data"]["planned_requests"],
         serde_json::json!(["GET /v1/network", "POST /v1/create-wallet"])
+    );
+}
+
+#[test]
+fn wallet_create_remote_rejects_prefund_override_without_network_requests() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = \"devnet\"\nrpc_url = \"http://127.0.0.1:1\"\nfaucet_url = \"http://127.0.0.1:1\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "wallet",
+            "create",
+            "--key",
+            "alice",
+            "--profile",
+            "devnet",
+            "--dry-run",
+            "--prefund",
+            "2",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("controlled by the faucet service")
     );
 }
 
@@ -4121,7 +4161,8 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
 
     let faucet_wallet = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
-    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (rpc_url, rpc_server) =
+        spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
     let recipient_wallet = format!("0x{}", "ab".repeat(32));
     let recipient_owner = format!("0x{}", "cd".repeat(32));
     std::fs::write(
@@ -10539,6 +10580,13 @@ fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
                 "prefundRawAmount": "100000000",
                 "walletContractHash": format!("0x{}", "51".repeat(32))
             },
+            "airdrop": {
+                "rawAmount": "25000000",
+                "recipientCooldownSeconds": 60,
+                "clientQuotaWindowSeconds": 3600,
+                "clientQuotaMax": 5,
+                "maxPendingPerRecipient": 1
+            },
             "devWallet": {
                 "deployEntrypoint": "0xf969542572bd6860",
                 "doActionEntrypoint": "0xa0fff94c64fbaf3c"
@@ -10646,6 +10694,46 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
         }
     });
 
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_balance_then_chain_tip_rpc(
+    address: &str,
+    raw_balance: &str,
+    height: i64,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = address.to_owned();
+    let raw_balance = raw_balance.to_owned();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
+        assert_eq!(request["method"], "groundhog_getBalance");
+        assert_eq!(request["params"][0], address);
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "address": address,
+                "rawBalance": raw_balance,
+                "height": height,
+            }),
+        );
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        assert_eq!(request["method"], "groundhog_chainTip");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "height": height,
+                "blockHash": format!("0x{}", "00".repeat(32)),
+            }),
+        );
+        assert_no_follow_up_rpc(&listener);
+    });
     (format!("http://{addr}"), handle)
 }
 

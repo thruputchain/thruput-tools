@@ -21,6 +21,10 @@ use xdr_common::VecM;
 use crate::account_resolution::{
     LocalBootstrapRole, resolve_local_bootstrap_account, resolve_transaction_sender,
 };
+use crate::balance::{
+    LocalFundingProjection, confirm_low_faucet_balance, fetch_balance_blocking,
+    insufficient_local_faucet_error, local_funding_projection,
+};
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     Network, ProfileOverrides, ResolvedProfile, cache_dir, find_project_config,
@@ -31,9 +35,11 @@ use crate::config::{
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::keys::load_local_signer;
+use crate::network_descriptor::fetch_network_descriptor;
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
 use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
+use crate::terminal::render_shell_arg;
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -41,7 +47,8 @@ use crate::tx_utils::{
 use crate::{CliError, Print, dev_keys};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 3;
-const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 200_000_000;
+const WALLET_CREATE_PREFUND_HOG: &str = "1";
+const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PreparedWalletCreate {
@@ -69,6 +76,9 @@ pub(crate) struct PreparedLocalWalletCreate {
     pub(crate) artifact_path: PathBuf,
     pub(crate) wallet_address: String,
     pub(crate) prefund_raw_amount: u128,
+    pub(crate) faucet_wallet: String,
+    pub(crate) faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    pub(crate) funding_projection: LocalFundingProjection,
     pub(crate) prefund_tx_hex: String,
     pub(crate) create_tx_hex: String,
 }
@@ -143,10 +153,13 @@ struct LoadedRemoteWalletCreateAttempt {
     path: PathBuf,
 }
 
+#[expect(clippy::too_many_arguments, reason = "CLI command boundary")]
 pub fn create(
     key_name: Option<&str>,
     wallet_name: Option<&str>,
     dry_run: bool,
+    prefund: Option<&str>,
+    yes: bool,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
@@ -154,13 +167,19 @@ pub fn create(
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     if dry_run
-        && let Some(prepared) =
-            prepare_remote_wallet_create_dry_run(&cwd, key_name, wallet_name, profile, overrides)?
+        && let Some(prepared) = prepare_remote_wallet_create_dry_run(
+            &cwd,
+            key_name,
+            wallet_name,
+            prefund,
+            profile,
+            overrides,
+        )?
     {
         return print_remote_dry_run_plan(&prepared, cmd, print);
     }
 
-    let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, profile, overrides)?;
+    let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, prefund, profile, overrides)?;
 
     if dry_run {
         return match &prepared {
@@ -172,7 +191,10 @@ pub fn create(
     }
 
     match prepared {
-        PreparedWalletCreate::Local(prepared) => create_local_wallet(&cwd, &prepared, cmd, print),
+        PreparedWalletCreate::Local(prepared) => {
+            preflight_local_wallet_create(&prepared, yes, print)?;
+            create_local_wallet(&cwd, &prepared, cmd, print)
+        }
         PreparedWalletCreate::Remote(prepared) => create_remote_wallet(&cwd, &prepared, cmd, print),
     }
 }
@@ -223,8 +245,18 @@ fn create_local_wallet(
     )?;
 
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+    print.status(format_args!(
+        "Requested prefund: {} HOG",
+        hog::format_amount(prepared.prefund_raw_amount)
+    ));
+    print.status("Wallet creation does not fund later contract deployments.");
     print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
+    print.next_steps(&[format!(
+        "groundhog airdrop {} --profile {}",
+        render_shell_arg(&prepared.wallet_name),
+        render_shell_arg(&prepared.profile_name)
+    )]);
 
     print.json(&CommandResult::new(
         cmd,
@@ -250,6 +282,42 @@ fn create_local_wallet(
     Ok(())
 }
 
+fn preflight_local_wallet_create(
+    prepared: &PreparedLocalWalletCreate,
+    yes: bool,
+    print: &Print,
+) -> Result<(), CliError> {
+    let Some(projected_balance) = prepared.funding_projection.projected_balance else {
+        return Err(insufficient_local_faucet_error(
+            prepared.prefund_raw_amount,
+            prepared.funding_projection.estimated_max,
+        ));
+    };
+    if projected_balance >= LOW_FAUCET_BALANCE_RAW {
+        return Ok(());
+    }
+
+    print.status(format_args!(
+        "Local faucet: {} ({})",
+        prepared.faucet_key_name, prepared.faucet_wallet
+    ));
+    print.status(format_args!(
+        "Committed balance: {} HOG at block {}",
+        hog::format_amount(prepared.funding_projection.committed_balance),
+        *prepared.faucet_balance_height
+    ));
+    print.status(format_args!(
+        "Requested prefund: {} HOG",
+        hog::format_amount(prepared.prefund_raw_amount)
+    ));
+    print.status(format_args!(
+        "Projected faucet balance: {} HOG",
+        hog::format_amount(projected_balance)
+    ));
+    print.warn("this would leave the local faucet below 10 HOG");
+    confirm_low_faucet_balance(print, yes)
+}
+
 fn create_remote_wallet(
     cwd: &Path,
     prepared: &PreparedRemoteWalletCreate,
@@ -269,6 +337,11 @@ fn create_remote_wallet(
     }
 
     let client = faucet_client()?;
+    let prefund = prepared
+        .prefund_raw_amount
+        .parse::<u128>()
+        .map_or_else(|_| prepared.prefund_raw_amount.clone(), hog::format_amount);
+    print.status(format_args!("Faucet wallet prefund: {prefund} HOG"));
     let create: CreateWalletResponse = post_json(
         &client,
         &format!("{}/v1/create-wallet", prepared.faucet_url),
@@ -613,6 +686,7 @@ pub(crate) fn prepare_wallet_create(
     cwd: &Path,
     key_name: Option<&str>,
     wallet_name: Option<&str>,
+    prefund: Option<&str>,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedWalletCreate, CliError> {
@@ -623,16 +697,35 @@ pub(crate) fn prepare_wallet_create(
 
     match resolve_wallet_create_backend(&profile)? {
         ProfileBackend::RemoteFaucet => {
+            if prefund.is_some() {
+                return Err(CliError::Other(
+                    "remote wallet prefunding is controlled by the faucet service; omit `--prefund`"
+                        .into(),
+                ));
+            }
             prepare_remote_wallet_create(&profile, key_name, wallet_name)
         }
         ProfileBackend::LocalManifest => {
-            prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
+            let prefund_raw_amount = parse_local_wallet_prefund(prefund)?;
+            prepare_local_wallet_create(cwd, profile, key_name, wallet_name, prefund_raw_amount)
         }
         ProfileBackend::RpcOnly => Err(CliError::Other(format!(
             "profile `{}` is RPC-only; wallet create requires either `runtime_manifest` or `faucet_url`",
             profile.name
         ))),
     }
+}
+
+fn parse_local_wallet_prefund(prefund: Option<&str>) -> Result<u128, CliError> {
+    let input = prefund.unwrap_or(WALLET_CREATE_PREFUND_HOG);
+    let amount = hog::parse_amount(input)?;
+    if amount < hog::SCALE {
+        return Err(CliError::InvalidHogAmount {
+            input: input.to_owned(),
+            message: "wallet prefund must be at least 1 HOG".into(),
+        });
+    }
+    Ok(amount)
 }
 
 fn resolve_wallet_create_backend(profile: &ResolvedProfile) -> Result<ProfileBackend, CliError> {
@@ -692,6 +785,7 @@ fn prepare_remote_wallet_create_dry_run(
     cwd: &Path,
     key_name: Option<&str>,
     wallet_name: Option<&str>,
+    prefund: Option<&str>,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<Option<PreparedRemoteWalletCreateDryRun>, CliError> {
@@ -701,6 +795,11 @@ fn prepare_remote_wallet_create_dry_run(
         ProfileBackend::RemoteFaucet
     ) {
         return Ok(None);
+    }
+    if prefund.is_some() {
+        return Err(CliError::Other(
+            "remote wallet prefunding is controlled by the faucet service; omit `--prefund`".into(),
+        ));
     }
     let faucet_url = inputs
         .profile
@@ -772,6 +871,7 @@ fn prepare_local_wallet_create(
     profile: crate::config::ResolvedProfile,
     key_name: String,
     wallet_name: String,
+    prefund_raw_amount: u128,
 ) -> Result<PreparedWalletCreate, CliError> {
     let rpc_url = profile
         .rpc_url
@@ -795,6 +895,23 @@ fn prepare_local_wallet_create(
         .do_action_entrypoint_id()
         .map_err(|error| CliError::Other(error.to_string()))?;
     let faucet = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)?;
+    let faucet_wallet = format_contract_address(&faucet.wallet_address);
+    let faucet_balance = fetch_balance_blocking(
+        &rpc_url,
+        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
+    )?;
+    let funding_projection = local_funding_projection(
+        &faucet_balance.raw_balance,
+        &manifest.bootstrap.storage_cost_model,
+        prefund_raw_amount,
+        2,
+    )?;
+    if funding_projection.projected_balance.is_none() {
+        return Err(insufficient_local_faucet_error(
+            prefund_raw_amount,
+            funding_projection.estimated_max,
+        ));
+    }
     let owner = load_local_signer(&key_name)?;
     let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
     let (artifact_path, contract, contract_hash) = load_dev_wallet_contract(
@@ -826,7 +943,7 @@ fn prepare_local_wallet_create(
         faucet_wallet_address: faucet.wallet_address,
         wallet_entrypoint: wallet_do_action_entrypoint,
         recipient: wallet_address,
-        raw_amount: WALLET_CREATE_PREFUND_RAW_AMOUNT,
+        raw_amount: prefund_raw_amount,
         block_expiry_height,
         nonce: deploy_nonce_val,
         signer: &faucet.signer,
@@ -851,7 +968,10 @@ fn prepare_local_wallet_create(
         owner_public_key,
         artifact_path,
         wallet_address: wallet_address_hex,
-        prefund_raw_amount: WALLET_CREATE_PREFUND_RAW_AMOUNT,
+        prefund_raw_amount,
+        faucet_wallet,
+        faucet_balance_height: faucet_balance.height,
+        funding_projection,
         prefund_tx_hex,
         create_tx_hex,
     }))
@@ -877,8 +997,7 @@ fn prepare_remote_wallet_create(
     let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
     let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
 
-    let client = faucet_client()?;
-    let descriptor = fetch_network_descriptor(&client, &faucet_url)?;
+    let descriptor = fetch_network_descriptor(profile, &key_name)?;
     let loaded_attempt = load_or_create_remote_wallet_create_attempt(
         profile,
         &key_name,
@@ -1060,22 +1179,6 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, CliError> {
     hex::decode(value).map_err(|error| CliError::Other(error.to_string()))
 }
 
-fn fetch_network_descriptor(
-    client: &reqwest::blocking::Client,
-    faucet_url: &str,
-) -> Result<NetworkDescriptor, CliError> {
-    let faucet_url = faucet_url.trim_end_matches('/');
-    let url = format!("{faucet_url}/v1/network");
-    client
-        .get(&url)
-        .send()
-        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?
-        .error_for_status()
-        .map_err(|error| CliError::Other(format!("faucet request `{url}` failed: {error}")))?
-        .json()
-        .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")))
-}
-
 struct SignWalletPrefundTransaction<'a> {
     faucet_wallet_address: ContractAddress,
     wallet_entrypoint: ContractEntrypointID,
@@ -1213,11 +1316,12 @@ mod tests {
 
     use super::{
         PreparedRemoteWalletCreate, RemoteWalletCreateAttempt,
-        load_or_create_remote_wallet_create_attempt, read_remote_wallet_create_attempt,
-        remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
-        resolve_dev_wallet_artifact_path, resolve_wallet_create_backend,
-        resolve_wallet_create_inputs, validate_remote_create_wallet_address,
-        wallet_should_become_default, write_remote_wallet_create_attempt,
+        load_or_create_remote_wallet_create_attempt, parse_local_wallet_prefund,
+        read_remote_wallet_create_attempt, remote_wallet_create_attempt_path,
+        remove_remote_wallet_create_attempt, resolve_dev_wallet_artifact_path,
+        resolve_wallet_create_backend, resolve_wallet_create_inputs,
+        validate_remote_create_wallet_address, wallet_should_become_default,
+        write_remote_wallet_create_attempt,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
 
@@ -1231,6 +1335,23 @@ mod tests {
             Some("alice"),
             "alice"
         ));
+    }
+
+    #[test]
+    fn local_wallet_prefund_defaults_to_one_hog_and_parses_exactly() {
+        assert_eq!(parse_local_wallet_prefund(None).unwrap(), crate::hog::SCALE);
+        assert_eq!(
+            parse_local_wallet_prefund(Some("1.0000001")).unwrap(),
+            crate::hog::SCALE + 1
+        );
+    }
+
+    #[test]
+    fn local_wallet_prefund_rejects_less_than_one_hog() {
+        let error = parse_local_wallet_prefund(Some("0.9999999"))
+            .expect_err("bug: sub-one HOG prefund should fail");
+
+        assert_eq!(error.code(), "invalid_hog_amount");
     }
 
     struct EnvGuard {
@@ -1763,6 +1884,13 @@ mod tests {
             },
             "faucet": {
                 "walletAddress": format!("0x{}", "04".repeat(32))
+            },
+            "airdrop": {
+                "rawAmount": "100000000",
+                "recipientCooldownSeconds": 43200,
+                "clientQuotaMax": 10,
+                "clientQuotaWindowSeconds": 3600,
+                "maxPendingPerRecipient": 1
             },
             "walletCreate": {
                 "prefundRawAmount": "100000000",

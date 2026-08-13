@@ -51,6 +51,10 @@ pub(crate) struct SpecMethodMetadata {
 /// Named contract type definitions keyed by contract type name.
 pub(crate) type TypeDefIndex<'a> = BTreeMap<String, &'a ContractTypeDef>;
 
+fn standard_erc20_error_selector() -> u64 {
+    groundhog_contract_util::exception_selector("0.1.9", "groundhog-erc20-if", "ERC20Error")
+}
+
 /// Encode CLI argument strings into contract calldata using the resolved metadata.
 pub(crate) fn encode_args(
     args: &[String],
@@ -127,6 +131,18 @@ impl DecodedAbort {
     }
 }
 
+pub(crate) fn is_erc20_too_large(
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+) -> bool {
+    matches!(
+        decoded_abort,
+        Some(Ok(DecodedAbort {
+            exception: Some(exception),
+            value: Value::String(value),
+        })) if exception == "ERC20Error" && value == "TooLarge"
+    )
+}
+
 /// Why an abort buffer could not be decoded into an exception value.
 ///
 /// The cases mirror the SDK's generated client error enum: `Unknown` and
@@ -193,6 +209,35 @@ pub(crate) fn decode_abort(
             decoded.exception_crate = Some(ambient.crate_name);
             decoded.exception_version = Some(ambient.major_version);
             decoded
+        });
+    }
+
+    if selector == standard_erc20_error_selector() {
+        let value = xdrs::cxs::decode::<groundhog_erc20_if::ERC20Error>(payload).map_err(|e| {
+            AbortDecodeError::BadDecode {
+                selector,
+                exception: "ERC20Error".to_owned(),
+                payload: payload.to_vec(),
+                detail: e.to_string(),
+            }
+        })?;
+        let value = match value {
+            groundhog_erc20_if::ERC20Error::AlreadyInitialized => "AlreadyInitialized",
+            groundhog_erc20_if::ERC20Error::MustBeContractOwner => "MustBeContractOwner",
+            groundhog_erc20_if::ERC20Error::TooLarge => "TooLarge",
+            groundhog_erc20_if::ERC20Error::Internal => "Internal",
+            _ => {
+                return Err(AbortDecodeError::BadDecode {
+                    selector,
+                    exception: "ERC20Error".to_owned(),
+                    payload: payload.to_vec(),
+                    detail: "unknown ERC20Error variant".to_owned(),
+                });
+            }
+        };
+        return Ok(DecodedAbort {
+            exception: Some("ERC20Error".to_owned()),
+            value: Value::from(value),
         });
     }
 
@@ -1966,6 +2011,22 @@ mod tests {
             spec_declared.exception_label().as_deref(),
             Some("CounterError")
         );
+    }
+
+    #[test]
+    fn decode_abort_decodes_standard_erc20_exception_without_metadata() {
+        let selector = standard_erc20_error_selector();
+        let mut bytes = xdrs::cxs::encode(&selector).expect("bug: selector should encode");
+        bytes.extend_from_slice(
+            &xdrs::cxs::encode(&groundhog_erc20_if::ERC20Error::TooLarge)
+                .expect("bug: ERC20 error should encode"),
+        );
+
+        let decoded =
+            decode_abort(&bytes, None).expect("bug: standard ERC20 exception should decode");
+
+        assert_eq!(decoded.exception.as_deref(), Some("ERC20Error"));
+        assert_eq!(decoded.value, serde_json::json!("TooLarge"));
     }
 
     #[test]

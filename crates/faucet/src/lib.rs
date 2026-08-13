@@ -333,6 +333,12 @@ mod tests {
             "0x63285b3523f9dc3f"
         );
         assert_eq!(json["walletCreate"]["prefundRawAmount"], "100000000");
+        assert_eq!(json["airdrop"]["rawAmount"], "100000000");
+        assert!(json["airdrop"].get("amountHog").is_none());
+        assert_eq!(json["airdrop"]["recipientCooldownSeconds"], 43_200);
+        assert_eq!(json["airdrop"]["clientQuotaMax"], 10);
+        assert_eq!(json["airdrop"]["clientQuotaWindowSeconds"], 3_600);
+        assert_eq!(json["airdrop"]["maxPendingPerRecipient"], 1);
         assert!(json.get("bootstrapAccountDerivation").is_none());
         assert!(json.get("bootstrapAccounts").is_none());
         assert!(json.get("privateKey").is_none());
@@ -629,6 +635,12 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(airdrop.calls(), 0);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: rejection body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: rejection body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_quota_exceeded");
     }
 
     #[tokio::test]
@@ -1518,6 +1530,13 @@ mod tests {
             },
             "faucet": {
                 "walletAddress": format!("0x{}", "00".repeat(32))
+            },
+            "airdrop": {
+                "rawAmount": "100000000",
+                "recipientCooldownSeconds": 43200,
+                "clientQuotaMax": 10,
+                "clientQuotaWindowSeconds": 3600,
+                "maxPendingPerRecipient": 1
             },
             "walletCreate": {
                 "prefundRawAmount": "100000000",

@@ -344,6 +344,9 @@ enum Command {
         /// Build and sign the airdrop transaction without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Confirm a low local faucet balance without prompting
+        #[arg(long)]
+        yes: bool,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -675,6 +678,12 @@ enum WalletCommand {
         /// Build and sign the wallet create transaction without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Exact local wallet prefund in HOG; remote faucets control this amount
+        #[arg(long)]
+        prefund: Option<String>,
+        /// Confirm a low local faucet balance without prompting
+        #[arg(long)]
+        yes: bool,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -1220,12 +1229,14 @@ fn main() {
             recipient,
             amount,
             dry_run,
+            yes,
             profile,
             target_args,
         } => groundhog_cli::airdrop::run(
             &recipient,
             amount.as_deref(),
             dry_run,
+            yes,
             profile.as_deref(),
             &target_args.into(),
             cmd_name,
@@ -1354,12 +1365,16 @@ fn main() {
                 key,
                 name,
                 dry_run,
+                prefund,
+                yes,
                 profile,
                 target_args,
             } => groundhog_cli::wallet::create(
                 key.as_deref(),
                 name.as_deref(),
                 dry_run,
+                prefund.as_deref(),
+                yes,
                 profile.as_deref(),
                 &target_args.into(),
                 cmd_name,

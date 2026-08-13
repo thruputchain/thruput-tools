@@ -1,27 +1,30 @@
 use std::path::{Path, PathBuf};
 
 use getrandom::getrandom;
-use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
-use groundhog_xdr::types::SHA256Hash;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::account_resolution::{
     LocalBootstrapRole, lookup_dev_account_address, resolve_local_bootstrap_account,
+};
+use crate::balance::{
+    LocalFundingProjection, confirm_low_faucet_balance, fetch_balance_blocking,
+    insufficient_local_faucet_error, local_funding_projection,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     Network, ProfileOverrides, ResolvedProfile, cache_dir, resolve_profile_with_overrides,
 };
 use crate::dev_keys;
-use crate::faucet_client::{client as faucet_client, get_json, post_json};
+use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
+use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
 use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
@@ -33,6 +36,7 @@ use crate::{CliError, Print};
 
 pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AIRDROP_HOG: &str = "10";
+const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PreparedAirdrop {
@@ -49,6 +53,9 @@ pub(crate) struct PreparedLocalAirdrop {
     pub(crate) raw_amount: u128,
     pub(crate) faucet_key_name: String,
     pub(crate) faucet_role: String,
+    pub(crate) faucet_wallet: String,
+    pub(crate) faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    pub(crate) funding_projection: LocalFundingProjection,
     pub(crate) tx_hex: String,
 }
 
@@ -61,6 +68,8 @@ pub(crate) struct PreparedRemoteAirdrop {
     client_nonce: String,
     network_id: String,
     genesis_hash: String,
+    airdrop_policy: groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
+    amount_hog: String,
     attempt_path: PathBuf,
 }
 
@@ -108,10 +117,12 @@ struct LoadedRemoteAirdropAttempt {
     path: PathBuf,
 }
 
+#[expect(clippy::too_many_arguments, reason = "CLI command boundary")]
 pub fn run(
     recipient: &str,
     amount: Option<&str>,
     dry_run: bool,
+    yes: bool,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
@@ -131,7 +142,7 @@ pub fn run(
     }
 
     match prepared {
-        PreparedAirdrop::Local(prepared) => run_local_airdrop(&prepared, cmd, print)?,
+        PreparedAirdrop::Local(prepared) => run_local_airdrop(&prepared, yes, cmd, print)?,
         PreparedAirdrop::Remote(prepared) => run_remote_airdrop(&prepared, cmd, print)?,
     }
 
@@ -181,17 +192,20 @@ fn prepare_remote_airdrop_dry_run(
 
 fn run_local_airdrop(
     prepared: &PreparedLocalAirdrop,
+    yes: bool,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    preflight_local_airdrop(prepared, yes, print)?;
     print.status(format_args!(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
     ));
     let (tx_hash, receipt) = submit_and_poll_blocking(&prepared.rpc_url, &prepared.tx_hex)?;
     let tx_hash = format_tx_hash(&tx_hash);
-    ensure_tx_success("airdrop", &receipt, &tx_hash)?;
+    ensure_local_airdrop_success(prepared, &receipt, &tx_hash)?;
     print.status(format_args!("Airdrop sent: {tx_hash}"));
+    let observations = post_airdrop_observations(prepared, print);
 
     print.json(&CommandResult::new(
         cmd,
@@ -209,8 +223,108 @@ fn run_local_airdrop(
             "tx_hash": tx_hash,
             "height": receipt.height,
             "status": receipt.status,
+            "observations": observations,
         }),
     ))
+}
+
+fn ensure_local_airdrop_success(
+    prepared: &PreparedLocalAirdrop,
+    receipt: &groundhog_json_rpc_types::receipt::TransactionReceipt,
+    tx_hash: &str,
+) -> Result<(), CliError> {
+    let decoded_abort = crate::tx_utils::decode_receipt_abort(receipt, None);
+    if crate::codec::is_erc20_too_large(decoded_abort.as_ref()) {
+        return Err(insufficient_local_faucet_error(
+            prepared.raw_amount,
+            prepared.funding_projection.estimated_max,
+        ));
+    }
+    ensure_tx_success("airdrop", receipt, tx_hash)
+}
+
+fn preflight_local_airdrop(
+    prepared: &PreparedLocalAirdrop,
+    yes: bool,
+    print: &Print,
+) -> Result<(), CliError> {
+    let Some(projected_balance) = prepared.funding_projection.projected_balance else {
+        return Err(insufficient_local_faucet_error(
+            prepared.raw_amount,
+            prepared.funding_projection.estimated_max,
+        ));
+    };
+    if projected_balance >= LOW_FAUCET_BALANCE_RAW {
+        return Ok(());
+    }
+
+    print.status(format_args!(
+        "Local faucet: {} ({})",
+        prepared.faucet_key_name, prepared.faucet_wallet
+    ));
+    print.status(format_args!(
+        "Committed balance: {} HOG at block {}",
+        hog::format_amount(prepared.funding_projection.committed_balance),
+        *prepared.faucet_balance_height
+    ));
+    print.status(format_args!(
+        "Estimated max now: {} HOG",
+        hog::format_amount(prepared.funding_projection.estimated_max)
+    ));
+    print.status(format_args!("Requested: {} HOG", prepared.amount_hog));
+    print.status(format_args!(
+        "Projected faucet balance: {} HOG",
+        hog::format_amount(projected_balance)
+    ));
+    print.warn("this would leave the local faucet below 10 HOG");
+    confirm_low_faucet_balance(print, yes)
+}
+
+fn post_airdrop_observations(prepared: &PreparedLocalAirdrop, print: &Print) -> Value {
+    json!({
+        "faucet": observe_post_airdrop_balance(
+            "Faucet balance",
+            &prepared.rpc_url,
+            &prepared.faucet_wallet,
+            print,
+        ),
+        "recipient": observe_post_airdrop_balance(
+            "Recipient balance",
+            &prepared.rpc_url,
+            &prepared.recipient_wallet,
+            print,
+        ),
+    })
+}
+
+fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print: &Print) -> Value {
+    let observation = parse_contract_address(address)
+        .map(groundhog_json_rpc_types::ContractAddress::from)
+        .and_then(|address| fetch_balance_blocking(rpc_url, address))
+        .and_then(|balance| {
+            let raw = balance.raw_balance.parse::<u128>().map_err(|error| {
+                CliError::Other(format!(
+                    "invalid raw balance `{}` from RPC: {error}",
+                    balance.raw_balance
+                ))
+            })?;
+            print.status(format_args!(
+                "{label}: {} HOG at block {}",
+                hog::format_amount(raw),
+                *balance.height
+            ));
+            Ok(json!({
+                "status": "observed",
+                "raw_balance": balance.raw_balance,
+                "balance_hog": hog::format_amount(raw),
+                "height": balance.height,
+            }))
+        });
+
+    observation.unwrap_or_else(|error| {
+        print.warn(format_args!("could not observe {label}: {error}"));
+        json!({ "status": "unavailable", "error": error.to_string() })
+    })
 }
 
 fn run_remote_airdrop(
@@ -218,6 +332,7 @@ fn run_remote_airdrop(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    print_remote_airdrop_policy(&prepared.airdrop_policy, &prepared.amount_hog, print);
     print.status(format_args!(
         "Requesting remote airdrop to {}...",
         prepared.recipient_wallet
@@ -272,11 +387,39 @@ fn run_remote_airdrop(
             "faucet_url": prepared.faucet_url,
             "rpc_url": prepared.rpc_url,
             "raw_amount": response.raw_amount,
+            "policy": {
+                "raw_amount": prepared.airdrop_policy.raw_amount,
+                "amount_hog": prepared.amount_hog,
+                "recipient_cooldown_seconds": prepared.airdrop_policy.recipient_cooldown_seconds,
+                "client_quota_max": prepared.airdrop_policy.client_quota_max,
+                "client_quota_window_seconds": prepared.airdrop_policy.client_quota_window_seconds,
+                "max_pending_per_recipient": prepared.airdrop_policy.max_pending_per_recipient,
+            },
             "tx_hash": tx_hash,
             "height": height,
             "status": status,
         }),
     ))
+}
+
+fn print_remote_airdrop_policy(
+    policy: &groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
+    amount_hog: &str,
+    print: &Print,
+) {
+    print.status(format_args!("Fixed airdrop amount: {amount_hog} HOG"));
+    print.status(format_args!(
+        "Recipient cooldown: {} seconds",
+        policy.recipient_cooldown_seconds
+    ));
+    print.status(format_args!(
+        "Client/IP quota: {} per {} seconds",
+        policy.client_quota_max, policy.client_quota_window_seconds
+    ));
+    print.status(format_args!(
+        "Pending per recipient: {}",
+        policy.max_pending_per_recipient
+    ));
 }
 
 pub(crate) fn prepare_airdrop(
@@ -379,6 +522,23 @@ fn prepare_local_airdrop(
     let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
     let amount_hog = hog::format_amount(raw_amount);
     let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
+    let faucet_wallet = format_contract_address(&faucet.wallet_address);
+    let faucet_balance = fetch_balance_blocking(
+        &rpc_url,
+        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
+    )?;
+    let funding_projection = local_funding_projection(
+        &faucet_balance.raw_balance,
+        &manifest.bootstrap.storage_cost_model,
+        raw_amount,
+        1,
+    )?;
+    if funding_projection.projected_balance.is_none() {
+        return Err(insufficient_local_faucet_error(
+            raw_amount,
+            funding_projection.estimated_max,
+        ));
+    }
 
     let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
     let transfer_entrypoint = hog::transfer_entrypoint();
@@ -412,6 +572,9 @@ fn prepare_local_airdrop(
         raw_amount,
         faucet_key_name: faucet.key_name,
         faucet_role: faucet.role,
+        faucet_wallet,
+        faucet_balance_height: faucet_balance.height,
+        funding_projection,
         tx_hex,
     }))
 }
@@ -432,8 +595,7 @@ fn prepare_remote_airdrop(
     let faucet_url = faucet_url.trim_end_matches('/').to_owned();
     let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
     parse_contract_address(&recipient_wallet)?;
-    let client = faucet_client()?;
-    let descriptor: NetworkDescriptor = get_json(&client, &format!("{faucet_url}/v1/network"))?;
+    let descriptor = fetch_remote_airdrop_descriptor(profile)?;
 
     prepare_remote_airdrop_with_descriptor(
         profile,
@@ -451,7 +613,7 @@ fn prepare_remote_airdrop_with_descriptor(
     recipient_wallet: String,
     faucet_url: String,
     rpc_url: String,
-    descriptor: &NetworkDescriptor,
+    descriptor: &RemoteAirdropDescriptor,
 ) -> Result<PreparedAirdrop, CliError> {
     let loaded_attempt =
         load_or_create_remote_airdrop_attempt(profile, &recipient_wallet, descriptor)?;
@@ -465,6 +627,8 @@ fn prepare_remote_airdrop_with_descriptor(
         client_nonce: attempt.client_nonce,
         network_id: attempt.network_id,
         genesis_hash: attempt.genesis_hash,
+        airdrop_policy: descriptor.policy.clone(),
+        amount_hog: descriptor.amount_hog.clone(),
         attempt_path: loaded_attempt.path,
     }))
 }
@@ -472,10 +636,10 @@ fn prepare_remote_airdrop_with_descriptor(
 fn load_or_create_remote_airdrop_attempt(
     profile: &ResolvedProfile,
     recipient_wallet: &str,
-    descriptor: &NetworkDescriptor,
+    descriptor: &RemoteAirdropDescriptor,
 ) -> Result<LoadedRemoteAirdropAttempt, CliError> {
     let network_id = descriptor.network_id.clone();
-    let genesis_hash = format_sha256_hash(&descriptor.genesis_hash.0);
+    let genesis_hash = descriptor.genesis_hash.clone();
     let path =
         remote_airdrop_attempt_path(&profile.name, recipient_wallet, &network_id, &genesis_hash)?;
     if let Some(attempt) = read_remote_airdrop_attempt(&path)?
@@ -545,10 +709,6 @@ fn remote_airdrop_attempt_path(
     Ok(cache_dir()?
         .join("airdrop-attempts")
         .join(format!("{}.json", hex::encode(hash))))
-}
-
-fn format_sha256_hash(hash: &SHA256Hash) -> String {
-    format!("0x{}", hex::encode(hash.as_ref()))
 }
 
 fn resolve_airdrop_recipient(
@@ -683,8 +843,9 @@ mod tests {
     use serial_test::serial;
 
     use super::{
-        PreparedAirdrop, prepare_remote_airdrop_with_descriptor, resolve_airdrop_backend,
-        resolve_airdrop_recipient,
+        PreparedAirdrop, PreparedLocalAirdrop, ensure_local_airdrop_success,
+        observe_post_airdrop_balance, prepare_remote_airdrop_with_descriptor,
+        resolve_airdrop_backend, resolve_airdrop_recipient,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
@@ -882,6 +1043,101 @@ mod tests {
         assert_eq!(entrypoint.as_ref(), hog::transfer_entrypoint().as_ref());
     }
 
+    #[test]
+    #[serial]
+    fn remote_airdrop_requires_additive_policy_at_airdrop_boundary() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+        let mut value = test_network_descriptor_value();
+        value.as_object_mut().unwrap().remove("airdrop");
+        let error = crate::network_descriptor::parse_remote_airdrop_descriptor(
+            "http://127.0.0.1:9545",
+            value,
+        )
+        .expect_err("bug: remote airdrop needs advertised policy");
+
+        assert!(matches!(
+            error,
+            crate::CliError::NetworkDescriptorInvalid {
+                field: "airdrop",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn failed_post_airdrop_observation_is_structured_and_nonfatal() {
+        let observation = observe_post_airdrop_balance(
+            "Recipient balance",
+            "http://127.0.0.1:9545",
+            "invalid",
+            &crate::Print::new(false, true),
+        );
+
+        assert_eq!(observation["status"], "unavailable");
+        assert!(observation["error"].as_str().is_some());
+    }
+
+    #[test]
+    fn committed_too_large_airdrop_reports_actionable_local_faucet_error() {
+        let prepared = PreparedLocalAirdrop {
+            rpc_url: String::new(),
+            recipient_input: "alice".into(),
+            recipient_wallet: format!("0x{}", "ab".repeat(32)),
+            amount_hog: "10".into(),
+            raw_amount: 100_000_000,
+            faucet_key_name: "dev-0".into(),
+            faucet_role: "local_user".into(),
+            faucet_wallet: format!("0x{}", "cd".repeat(32)),
+            faucet_balance_height: groundhog_json_rpc_types::BlockHeight::from(42),
+            funding_projection: crate::balance::LocalFundingProjection {
+                committed_balance: 200_000_000,
+                transaction_storage_cost: 12_007,
+                estimated_max: 199_987_993,
+                projected_balance: Some(99_987_993),
+            },
+            tx_hex: String::new(),
+        };
+        let receipt = groundhog_json_rpc_types::receipt::TransactionReceipt {
+            tx_hash: groundhog_json_rpc_types::transaction::TxHash(
+                groundhog_json_rpc_types::hex::Hex0x(groundhog_xdr::types::SHA256Hash::from(
+                    [0x44; 32],
+                )),
+            ),
+            height: groundhog_json_rpc_types::BlockHeight::from(43),
+            status: groundhog_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
+            return_data: None,
+            abort_data: Some(groundhog_json_rpc_types::hex::HexBytes(
+                erc20_too_large_abort(),
+            )),
+            events: Vec::new(),
+        };
+
+        let error = ensure_local_airdrop_success(&prepared, &receipt, "0x44")
+            .expect_err("bug: committed TooLarge should map to faucet funding guidance");
+
+        assert!(
+            error
+                .to_string()
+                .contains("insufficient actionable balance")
+        );
+        assert!(error.to_string().contains("start a fresh local chain"));
+    }
+
+    fn erc20_too_large_abort() -> Vec<u8> {
+        let selector = groundhog_contract_util::exception_selector(
+            "0.1.9",
+            "groundhog-erc20-if",
+            "ERC20Error",
+        );
+        let mut bytes = xdrs::cxs::encode(&selector).expect("bug: selector should encode");
+        bytes.extend_from_slice(
+            &xdrs::cxs::encode(&groundhog_erc20_if::ERC20Error::TooLarge)
+                .expect("bug: ERC20 error should encode"),
+        );
+        bytes
+    }
+
     fn test_profile(wallets: BTreeMap<String, SavedWalletBinding>) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
@@ -900,9 +1156,16 @@ mod tests {
         }
     }
 
-    fn test_network_descriptor() -> groundhog_json_rpc_types::network_descriptor::NetworkDescriptor
-    {
-        serde_json::from_value(serde_json::json!({
+    fn test_network_descriptor() -> crate::network_descriptor::RemoteAirdropDescriptor {
+        crate::network_descriptor::parse_remote_airdrop_descriptor(
+            "http://127.0.0.1:9545",
+            test_network_descriptor_value(),
+        )
+        .expect("bug: test network descriptor should validate")
+    }
+
+    fn test_network_descriptor_value() -> serde_json::Value {
+        serde_json::json!({
             "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
@@ -915,6 +1178,13 @@ mod tests {
                 "transferEntrypoint": "0x63285b3523f9dc3f"
             },
             "faucet": { "walletAddress": format!("0x{}", "04".repeat(32)) },
+            "airdrop": {
+                "rawAmount": "100000000",
+                "recipientCooldownSeconds": 43200,
+                "clientQuotaMax": 10,
+                "clientQuotaWindowSeconds": 3600,
+                "maxPendingPerRecipient": 1
+            },
             "walletCreate": {
                 "prefundRawAmount": "100000000",
                 "walletContractHash": format!("0x{}", "03".repeat(32))
@@ -923,7 +1193,6 @@ mod tests {
                 "deployEntrypoint": "0xf969542572bd6860",
                 "doActionEntrypoint": "0xa0fff94c64fbaf3c"
             }
-        }))
-        .expect("bug: test network descriptor should deserialize")
+        })
     }
 }

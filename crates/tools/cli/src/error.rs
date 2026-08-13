@@ -165,6 +165,19 @@ pub enum CliError {
     MissingRpcUrl,
     #[error("profile `{profile}` {message}")]
     ProfileConfigInvalid { profile: String, message: String },
+    #[error("confirmation required to {action}")]
+    ConfirmationRequired { action: &'static str },
+    #[error(
+        "faucet service request `{url}` failed with HTTP {http_status}: {message} ({service_code}){}",
+        .retry_after_seconds.map_or_else(String::new, |seconds| format!("; retry after {seconds}s"))
+    )]
+    FaucetService {
+        url: String,
+        http_status: u16,
+        service_code: String,
+        message: String,
+        retry_after_seconds: Option<u64>,
+    },
     #[error("no signing key configured")]
     MissingSigningKey,
     #[error("invalid HOG amount `{input}`: {message}")]
@@ -452,6 +465,8 @@ impl CliError {
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::ProfileConfigInvalid { .. } => "profile_config_invalid",
+            Self::ConfirmationRequired { .. } => "confirmation_required",
+            Self::FaucetService { .. } => "faucet_service_error",
             Self::MissingSigningKey => "missing_signing_key",
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
@@ -629,6 +644,18 @@ impl CliError {
             )),
             Self::ProfileConfigInvalid { .. } => Some(Cow::Borrowed(
                 "update the selected profile in project or global config, or choose a profile that matches the requested command",
+            )),
+            Self::ConfirmationRequired { .. } => Some(Cow::Borrowed(
+                "review the warning and rerun with `--yes` to confirm non-interactively",
+            )),
+            Self::FaucetService {
+                retry_after_seconds: Some(_),
+                ..
+            } => Some(Cow::Borrowed(
+                "wait for the advertised retry interval, then retry the same command",
+            )),
+            Self::FaucetService { .. } => Some(Cow::Borrowed(
+                "check the faucet response and selected profile, then retry",
             )),
             Self::MissingSigningKey => Some(Cow::Borrowed(
                 "set `default_key` in project or global config, or run `groundhog keys generate`",
@@ -993,6 +1020,22 @@ impl CliError {
                 "expected": expected,
                 "actual": actual,
             })),
+            Self::ConfirmationRequired { action } => Some(json!({
+                "action": action,
+                "requiredFlag": "--yes",
+            })),
+            Self::FaucetService {
+                url,
+                http_status,
+                service_code,
+                retry_after_seconds,
+                ..
+            } => Some(json!({
+                "url": url,
+                "httpStatus": http_status,
+                "code": service_code,
+                "retryAfterSeconds": retry_after_seconds,
+            })),
             Self::SavedWalletMissing { key_name, profile } => Some(json!({
                 "keyName": key_name,
                 "profile": profile,
@@ -1189,5 +1232,22 @@ mod tests {
             hint(&error),
             "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild groundhog node against a matching groundhog-xdr"
         );
+    }
+
+    #[test]
+    fn faucet_service_error_preserves_machine_readable_response_fields() {
+        let error = CliError::FaucetService {
+            url: "https://faucet.example/v1/airdrop".into(),
+            http_status: 429,
+            service_code: "airdrop_recipient_cooldown".into(),
+            message: "recipient is cooling down".into(),
+            retry_after_seconds: Some(42),
+        };
+        let details = error.details_json().expect("bug: details should exist");
+
+        assert_eq!(error.code(), "faucet_service_error");
+        assert_eq!(details["httpStatus"], 429);
+        assert_eq!(details["code"], "airdrop_recipient_cooldown");
+        assert_eq!(details["retryAfterSeconds"], 42);
     }
 }

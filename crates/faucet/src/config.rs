@@ -7,8 +7,8 @@ use crate::wallet_create::{WalletCreateRuntimeConfig, WalletCreateRuntimeConfigE
 use axum::http::HeaderValue;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::{
-    DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
-    NetworkDescriptorEndpoints, WalletCreateDescriptor,
+    AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor,
+    NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
 };
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
 use groundhog_signing::LocalSigner;
@@ -58,7 +58,9 @@ pub struct FaucetConfigParts {
 impl FaucetConfigFile {
     /// Convert this config into the public network descriptor served by `/v1/network`.
     pub fn into_network_descriptor(self) -> NetworkDescriptor {
-        self.network.into_descriptor()
+        let policy = self.policy.into_runtime_config();
+        self.network
+            .into_descriptor(self.airdrop.raw_amount, &policy.airdrop)
     }
 
     /// Split this config into the optional listen override and public descriptor.
@@ -93,6 +95,7 @@ impl FaucetConfigFile {
         validate_faucet_public_key_shape(&self.network.faucet.public_key)?;
         let faucet_secret_key = key_loader.load(&self.airdrop.secret_key_source).await?;
         validate_faucet_public_key_match(&self.network.faucet.public_key, &faucet_secret_key)?;
+        let airdrop_raw_amount = self.airdrop.raw_amount.clone();
         let airdrop = self.airdrop.into_runtime_config(faucet_secret_key)?;
         let wallet_create = self.wallet_create.into_runtime_config()?;
         let cors_allowed_origins = self
@@ -107,13 +110,17 @@ impl FaucetConfigFile {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let policy = self.policy.into_runtime_config();
+        let network_descriptor = self
+            .network
+            .into_descriptor(airdrop_raw_amount, &policy.airdrop);
         Ok(FaucetConfigParts {
             listen_address: self.listen_address,
-            network_descriptor: self.network.into_descriptor(),
+            network_descriptor,
             airdrop,
             wallet_create_prefund_raw_amount,
             wallet_create,
-            policy: self.policy.into_runtime_config(),
+            policy,
             cors_allowed_origins,
         })
     }
@@ -291,7 +298,11 @@ pub struct NetworkConfig {
 }
 
 impl NetworkConfig {
-    fn into_descriptor(self) -> NetworkDescriptor {
+    fn into_descriptor(
+        self,
+        airdrop_raw_amount: String,
+        policy: &AirdropPolicyRuntimeConfig,
+    ) -> NetworkDescriptor {
         NetworkDescriptor::new(
             self.network_id,
             self.protocol,
@@ -312,6 +323,13 @@ impl NetworkConfig {
                 self.dev_wallet.do_action_entrypoint,
             ),
         )
+        .with_airdrop(AirdropDescriptor::new(
+            airdrop_raw_amount,
+            policy.recipient_cooldown_secs,
+            policy.ip_quota_max,
+            policy.ip_quota_window_secs,
+            policy.max_pending_per_recipient,
+        ))
     }
 }
 
@@ -472,6 +490,7 @@ mod tests {
 
         assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
         assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
+        assert_eq!(config.network.wallet_create.prefund_raw_amount, "10000000");
     }
 
     #[async_trait]
@@ -528,6 +547,14 @@ mod tests {
         assert_eq!(descriptor.endpoints.rpc_url, "https://rpc.devnet.example");
         assert_eq!(descriptor.native_hog.decimals, 7);
         assert_eq!(descriptor.wallet_create.prefund_raw_amount, "100000000");
+        let airdrop = descriptor
+            .airdrop
+            .expect("bug: faucet descriptor should advertise airdrop policy");
+        assert_eq!(airdrop.raw_amount, "100000000");
+        assert_eq!(airdrop.recipient_cooldown_seconds, 43_200);
+        assert_eq!(airdrop.client_quota_max, 10);
+        assert_eq!(airdrop.client_quota_window_seconds, 3_600);
+        assert_eq!(airdrop.max_pending_per_recipient, 1);
         assert_eq!(descriptor.dev_wallet.deploy_entrypoint.0.len(), 8);
         assert_eq!(descriptor.dev_wallet.do_action_entrypoint.0.len(), 8);
     }
@@ -616,6 +643,32 @@ mod tests {
             parts.policy.wallet_create.prefunded_attempt_retention_secs,
             240
         );
+    }
+
+    #[tokio::test]
+    async fn config_advertises_zero_airdrop_policy_values() {
+        let config: FaucetConfigFile = toml::from_str(&format!(
+            "{}\n{}",
+            test_config(),
+            r"
+            [policy.airdrop]
+            recipient_cooldown_secs = 0
+            ip_quota_window_secs = 0
+            ip_quota_max = 0
+            max_pending_per_recipient = 0
+            "
+        ))
+        .expect("bug: zero-policy fixture should parse");
+
+        let descriptor = config.into_network_descriptor();
+        let policy = descriptor
+            .airdrop
+            .expect("airdrop policy should be advertised");
+
+        assert_eq!(policy.recipient_cooldown_seconds, 0);
+        assert_eq!(policy.client_quota_max, 0);
+        assert_eq!(policy.client_quota_window_seconds, 0);
+        assert_eq!(policy.max_pending_per_recipient, 0);
     }
 
     #[test]
