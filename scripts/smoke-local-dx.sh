@@ -404,10 +404,11 @@ run_json_failure() {
     shift
     log "$label: $(display_command "$@")"
     local output
-    if output="$("$@" 2> >(sed "s/^/[$label stderr] /" >&2))"; then
+    if output="$("$@" 2>&1)"; then
         printf '%s\n' "$output" >&2
         die "$label unexpectedly succeeded"
     fi
+    printf '%s\n' "$output" | sed "s/^/[$label stderr] /" >&2
     printf '%s\n' "$output"
 }
 
@@ -1024,6 +1025,12 @@ WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
 log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
 
 "$CLI" keys use "$USER_KEY"
+# Wallet creation leaves the default 1 HOG prefund just below the transaction
+# gas limit. Add 1 HOG so this deploy reaches execution and exercises the
+# receipt-level insufficient-funding guidance instead of scheduler rejection.
+SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop "$USER_KEY" --amount 1)"
+[[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
+    || die "scheduler-floor airdrop did not commit successfully"
 UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy)"
 UNDERFUNDED_CODE="$(json_field error.code "$UNDERFUNDED_DEPLOY_JSON")"
 case "$UNDERFUNDED_CODE" in
