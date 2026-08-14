@@ -175,7 +175,7 @@ export const ERC20 = {
   getBalanceOf: defineContractMethod<
     ERC20GetBalanceOfArgs,
     ERC20GetBalanceOfResult,
-    ERC20Abort
+    ERC20DeclaredAbort
   >({
     entrypoint: entrypoints.ERC20.getBalanceOf,
     args: [
@@ -217,9 +217,11 @@ Views preserve response height and raw emitted events. Return and abort decoders
 
 Keep the same-named event type/value pattern and combined `decodeEvent` dispatcher.
 
-Each event wrapper calls `defineContractEvent` with signature, ordered topic metadata, ordered payload metadata, and the module's shared `ContractCodecContext`. Topic metadata identifies direct address, direct fixed-32, or raw hash representation. Property names remain ABI names.
+Each event wrapper calls `defineContractEvent` with its event name, signature, ordered topic metadata, ordered payload metadata, and the module's shared `ContractCodecContext`. Topic metadata identifies direct address, direct fixed-32, or raw hash representation. Property names remain ABI names.
 
-Generate an `<EventName>Filter` type containing only directly represented named topics. Each property accepts its value or `{ oneOf: readonly Value[] }`. The generated filter input places that type under `topics`, separate from `contractAddresses`. The event wrapper is a `ContractEvent<DecodedEvent, EventFilterType>` and therefore exposes typed decode, filter, `allFromReceipt`, and `singleFromReceipt` methods.
+Generate an `<EventName>Filter` type containing only directly represented named topics. Each property accepts its value or `{ oneOf: readonly [Value, ...Value[]] }`. The generated filter input places that type under `topics`, separate from `contractAddresses`.
+
+Each generated event interface extends `DecodedContractEvent<"EventName", Topics, Fields>`. Its same-named value calls `defineContractEvent<"EventName", EventName["topics"], EventName["fields"], EventNameFilter>` and therefore exposes typed decode, filter, `allFromReceipt`, and `singleFromReceipt` methods.
 
 ### Decoding
 
@@ -242,7 +244,7 @@ Generate `.filter(...)` for every event and return the client's existing `EventF
 - requires non-empty `contractAddresses`;
 - inserts the signature at topic 0;
 - maps named direct topic fields to their declared positions;
-- accepts one value or `{ oneOf: readonly T[] }` per field;
+- accepts one value or `{ oneOf: readonly [T, ...T[]] }` per field;
 - leaves omitted fields unconstrained;
 - rejects empty `oneOf` and non-32-byte values.
 
@@ -262,7 +264,7 @@ RequestAccepted.singleFromReceipt(receipt, {
 });
 ```
 
-Emitter scoping is optional. `allFromReceipt` preserves receipt order, ignores other signatures, and throws for malformed matching events. `singleFromReceipt` requires exactly one result and reports the actual count.
+Emitter scoping is optional. Receipt helper results retain the emitting `contractAddress`. `allFromReceipt` preserves receipt order, ignores other signatures, and throws for malformed matching events. `singleFromReceipt` requires exactly one result and reports the actual count.
 
 ## Safe Source Emission
 
