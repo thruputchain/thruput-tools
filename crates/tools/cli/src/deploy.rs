@@ -19,6 +19,7 @@ use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_over
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::{CommandError, CommandResult};
+use crate::terminal::render_shell_arg;
 use crate::tx_utils::{
     command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
     resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
@@ -37,6 +38,9 @@ pub(crate) enum DeployAddressSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedDeploy {
     pub(crate) rpc_url: String,
+    pub(crate) profile_name: String,
+    pub(crate) wallet_name: Option<String>,
+    pub(crate) wallet_address: String,
     pub(crate) artifact: ResolvedArtifact,
     pub(crate) artifact_bytes_len: usize,
     pub(crate) predicted_address: String,
@@ -111,6 +115,7 @@ pub fn run(
     let cwd = std::env::current_dir()?;
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
+    let insufficient_funding = is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref());
     match &receipt.status {
         groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
             let contract_addr_hex = contract_addr_hex
@@ -128,7 +133,11 @@ pub fn run(
             print.detail("height", *receipt.height);
         }
         other => {
-            print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+            if insufficient_funding {
+                print_insufficient_deploy_funding(&prepared, print);
+            } else {
+                print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+            }
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
             print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
@@ -159,7 +168,8 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    let command_error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref());
+    let command_error =
+        command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref(), Some(&prepared));
     let mut data = json!({
         "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
         "tx_hash": tx_hash_formatted,
@@ -195,8 +205,20 @@ pub fn run(
 fn command_error_for_deploy_receipt(
     receipt: &TransactionReceipt,
     decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
+    prepared: Option<&PreparedDeploy>,
 ) -> Option<CommandError> {
     if is_insufficient_deploy_funding(receipt, decoded_abort) {
+        let hint = prepared.map_or_else(
+            || {
+                "fund the signing wallet before retrying; when the selected profile has a faucet, run `groundhog airdrop <WALLET>`".to_owned()
+            },
+            |prepared| {
+                let [balance, airdrop] = deploy_funding_commands(prepared);
+                format!(
+                    "fund the signing wallet before retrying; inspect it with `{balance}`, then run `{airdrop}` when the selected profile has a faucet"
+                )
+            },
+        );
         return Some(
             CommandError::new(
                 "transaction_insufficient_funds",
@@ -207,9 +229,7 @@ fn command_error_for_deploy_receipt(
                     "erc20Error": "tooLarge",
                 }),
             )
-            .with_hint(
-                "fund the signing wallet before retrying; when the selected profile has a faucet, run `groundhog airdrop <WALLET>`",
-            ),
+            .with_hint(hint),
         );
     }
     command_error_for_exec_status(&receipt.status)
@@ -232,6 +252,39 @@ fn is_insufficient_deploy_funding(
                 && abort.exception.as_deref() == Some("ERC20Error")
                 && abort.value == json!("TooLarge")
     )
+}
+
+fn deploy_funding_commands(prepared: &PreparedDeploy) -> [String; 2] {
+    let wallet = prepared
+        .wallet_name
+        .as_deref()
+        .unwrap_or(&prepared.wallet_address);
+    let wallet = render_shell_arg(wallet);
+    let profile = render_shell_arg(&format!("--profile={}", prepared.profile_name));
+    [
+        format!("groundhog balance {profile} -- {wallet}"),
+        format!("groundhog airdrop {profile} -- {wallet}"),
+    ]
+}
+
+fn print_insufficient_deploy_funding(prepared: &PreparedDeploy, print: &Print) {
+    let wallet = prepared
+        .wallet_name
+        .as_deref()
+        .unwrap_or(&prepared.wallet_address);
+    let wallet = crate::terminal::terminal_safe(wallet);
+    print.warn(format_args!(
+        "Deploy failed because wallet `{wallet}` has insufficient HOG for deployment"
+    ));
+    print.detail("wallet address", &prepared.wallet_address);
+    print.detail(
+        "profile",
+        crate::terminal::terminal_safe(&prepared.profile_name),
+    );
+    print.status(
+        "The project alias and prior deployment are not the cause; fund the selected wallet and retry the original deploy command.",
+    );
+    print.next_steps(&deploy_funding_commands(prepared));
 }
 
 fn print_dry_run(
@@ -480,6 +533,9 @@ fn prepare_deploy_transaction(
 
     Ok(PreparedDeploy {
         rpc_url: rpc_url.to_owned(),
+        profile_name: profile.name.clone(),
+        wallet_name: sender.wallet_name,
+        wallet_address: format!("0x{}", hex::encode(wallet_address.as_ref())),
         artifact,
         artifact_bytes_len,
         predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
@@ -570,8 +626,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        DeployAddressSource, command_error_for_deploy_receipt, derive_deploy_address,
-        hex_to_32_bytes, resolve_deployed_address,
+        DeployAddressSource, PreparedDeploy, command_error_for_deploy_receipt,
+        deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, resolve_deployed_address,
     };
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
     use groundhog_json_rpc_types::{
@@ -653,7 +709,7 @@ mod tests {
         let receipt = failed_receipt(Some(HexBytes(abort_data)));
         let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
 
-        let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref())
+        let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref(), None)
             .expect("native HOG overdraft should be classified");
         let json = serde_json::to_value(error).expect("bug: command error should serialize");
 
@@ -671,12 +727,40 @@ mod tests {
         let receipt = failed_receipt(Some(HexBytes(vec![0x01, 0x02])));
         let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
 
-        let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref())
+        let error = command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref(), None)
             .expect("reverted receipt should remain a command failure");
         let json = serde_json::to_value(error).expect("bug: command error should serialize");
 
         assert_eq!(json["code"], "transaction_reverted");
         assert!(json["hint"].is_null());
+    }
+
+    #[test]
+    fn funding_commands_support_option_like_wallet_and_profile_names() {
+        let prepared = PreparedDeploy {
+            rpc_url: String::new(),
+            profile_name: "-preview".into(),
+            wallet_name: Some("-alice".into()),
+            wallet_address: format!("0x{}", "11".repeat(32)),
+            artifact: crate::artifacts::ResolvedArtifact {
+                kind: ArtifactKind::Wasm,
+                path: std::path::PathBuf::new(),
+            },
+            artifact_bytes_len: 0,
+            predicted_address: String::new(),
+            wallet_entrypoint_id: String::new(),
+            wallet_entrypoint_source: "test",
+            tx_hex: String::new(),
+            package_name: None,
+        };
+
+        assert_eq!(
+            deploy_funding_commands(&prepared),
+            [
+                "groundhog balance --profile=-preview -- -alice",
+                "groundhog airdrop --profile=-preview -- -alice",
+            ]
+        );
     }
 
     fn failed_receipt(abort_data: Option<HexBytes>) -> TransactionReceipt {

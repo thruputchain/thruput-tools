@@ -55,6 +55,16 @@ impl Print {
         self.quiet
     }
 
+    /// Returns whether this invocation may safely read an interactive answer.
+    pub fn can_prompt(&self) -> bool {
+        self.output_allows_prompt()
+            && terminals_allow_prompt(io::stdin().is_terminal(), io::stderr().is_terminal())
+    }
+
+    fn output_allows_prompt(&self) -> bool {
+        !self.quiet && !self.json
+    }
+
     /// Returns whether styled interactive output is appropriate.
     pub fn is_human_tty(&self) -> bool {
         !self.quiet && !self.json && supports_ansi_stderr()
@@ -270,6 +280,10 @@ fn terminal_allows_ansi(
     !matches!(term.and_then(std::ffi::OsStr::to_str), Some("dumb"))
 }
 
+fn terminals_allow_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
+    stdin_tty && stderr_tty
+}
+
 fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
     let label_width = items
         .iter()
@@ -368,7 +382,7 @@ fn render_command(command: &std::process::Command) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_command, terminal_allows_ansi};
+    use super::{Print, render_command, terminal_allows_ansi, terminals_allow_prompt};
     use std::ffi::OsStr;
     use std::process::Command;
 
@@ -397,5 +411,15 @@ mod tests {
             Some(OsStr::new("1"))
         ));
         assert!(!terminal_allows_ansi(Some(OsStr::new("dumb")), None));
+    }
+
+    #[test]
+    fn prompts_require_human_mode_and_terminal_input_and_output() {
+        assert!(Print::new(false, false).output_allows_prompt());
+        assert!(!Print::quiet().output_allows_prompt());
+        assert!(!Print::new(false, true).output_allows_prompt());
+        assert!(terminals_allow_prompt(true, true));
+        assert!(!terminals_allow_prompt(false, true));
+        assert!(!terminals_allow_prompt(true, false));
     }
 }

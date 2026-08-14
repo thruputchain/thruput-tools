@@ -43,6 +43,18 @@ impl FaucetConfig {
         wallet_prefund_submitter: Arc<dyn airdrop::AirdropSubmitter>,
         wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
     ) -> Self {
+        let descriptor_airdrop_raw_amount = network_descriptor
+            .airdrop
+            .as_ref()
+            .expect("faucet network descriptor must advertise airdrop policy")
+            .raw_amount
+            .parse::<u128>()
+            .expect("airdrop amount in network descriptor must be a valid u128");
+        assert_eq!(
+            airdrop_submitter.raw_amount(),
+            descriptor_airdrop_raw_amount,
+            "airdrop submitter amount must match network descriptor"
+        );
         let descriptor_prefund_raw_amount = network_descriptor
             .wallet_create
             .prefund_raw_amount
@@ -333,6 +345,12 @@ mod tests {
             "0x63285b3523f9dc3f"
         );
         assert_eq!(json["walletCreate"]["prefundRawAmount"], "100000000");
+        assert_eq!(json["airdrop"]["rawAmount"], "100000000");
+        assert!(json["airdrop"].get("amountHog").is_none());
+        assert_eq!(json["airdrop"]["recipientCooldownSeconds"], 43_200);
+        assert_eq!(json["airdrop"]["clientQuotaMax"], 10);
+        assert_eq!(json["airdrop"]["clientQuotaWindowSeconds"], 3_600);
+        assert_eq!(json["airdrop"]["maxPendingPerRecipient"], 1);
         assert!(json.get("bootstrapAccountDerivation").is_none());
         assert!(json.get("bootstrapAccounts").is_none());
         assert!(json.get("privateKey").is_none());
@@ -432,35 +450,33 @@ mod tests {
         assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
     }
 
-    #[tokio::test]
-    async fn airdrop_uses_submitted_raw_amount_for_response_and_retry() {
-        let airdrop = Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000"));
-        let config = FaucetConfig::new(
+    #[test]
+    #[should_panic(expected = "airdrop submitter amount must match network descriptor")]
+    fn airdrop_submitter_amount_must_match_network_descriptor() {
+        FaucetConfig::new(
             test_network_descriptor(),
-            airdrop.clone(),
+            Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000")),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
         );
-        let response = airdrop_request(&config).await;
+    }
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("bug: airdrop body should read");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-        assert_eq!(json["rawAmount"], "200000000");
+    #[tokio::test]
+    async fn airdrop_rejects_mismatched_accepted_amount_without_resubmitting() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success_with_mismatched_accepted_amount());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 
         let response = airdrop_request(&config).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(airdrop.calls(), 1);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("bug: airdrop retry body should read");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("bug: airdrop retry body should be JSON");
-        assert_eq!(json["rawAmount"], "200000000");
+        assert_eq!(airdrop.poll_calls(), 1);
     }
 
     #[tokio::test]
@@ -629,6 +645,12 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(airdrop.calls(), 0);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: rejection body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: rejection body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_quota_exceeded");
     }
 
     #[tokio::test]
@@ -1519,6 +1541,13 @@ mod tests {
             "faucet": {
                 "walletAddress": format!("0x{}", "00".repeat(32))
             },
+            "airdrop": {
+                "rawAmount": "100000000",
+                "recipientCooldownSeconds": 43200,
+                "clientQuotaMax": 10,
+                "clientQuotaWindowSeconds": 3600,
+                "maxPendingPerRecipient": 1
+            },
             "walletCreate": {
                 "prefundRawAmount": "100000000",
                 "walletContractHash": format!("0x{}", "00".repeat(32))
@@ -1537,6 +1566,7 @@ mod tests {
         calls: Mutex<usize>,
         poll_calls: Mutex<usize>,
         raw_amount: String,
+        accepted_raw_amount: String,
     }
 
     impl MockAirdropSubmitter {
@@ -1551,7 +1581,14 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: raw_amount.into(),
+                accepted_raw_amount: raw_amount.into(),
             }
+        }
+
+        fn success_with_mismatched_accepted_amount() -> Self {
+            let mut submitter = Self::success();
+            submitter.accepted_raw_amount = "200000000".into();
+            submitter
         }
 
         fn failure() -> Self {
@@ -1561,6 +1598,7 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
+                accepted_raw_amount: "100000000".into(),
             }
         }
 
@@ -1571,6 +1609,7 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
+                accepted_raw_amount: "100000000".into(),
             }
         }
 
@@ -1585,6 +1624,7 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
+                accepted_raw_amount: "100000000".into(),
             }
         }
 
@@ -1620,7 +1660,7 @@ mod tests {
                 return Err(airdrop::AirdropSubmitError::BuildTransaction("boom".into()));
             }
             Ok(airdrop::AcceptedAirdrop {
-                raw_amount: self.raw_amount.clone(),
+                raw_amount: self.accepted_raw_amount.clone(),
                 tx_hash: test_tx_hash(),
             })
         }

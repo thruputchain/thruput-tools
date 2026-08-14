@@ -1,5 +1,6 @@
 use groundhog_json_rpc_types::network_descriptor::{
-    NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
+    AirdropDescriptor, NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+    NetworkDescriptor,
 };
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 use groundhog_signing::WALLET_DEPLOY_ENTRYPOINT;
@@ -25,6 +26,14 @@ pub(crate) struct WalletEntrypoints {
     pub(crate) source: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemoteAirdropDescriptor {
+    pub(crate) network_id: String,
+    pub(crate) genesis_hash: String,
+    pub(crate) policy: AirdropDescriptor,
+    pub(crate) amount_hog: String,
+}
+
 pub(crate) fn resolve_wallet_entrypoints(
     profile: &ResolvedProfile,
     key_name: &str,
@@ -34,10 +43,101 @@ pub(crate) fn resolve_wallet_entrypoints(
         return runtime_or_legacy_entrypoints(runtime_manifest.as_ref(), key_name);
     };
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let descriptor = fetch_network_descriptor_value(faucet_url)?;
+    descriptor_entrypoints(key_name, rpc_url, &descriptor, runtime_manifest.as_ref())
+}
+
+pub(crate) fn fetch_network_descriptor(
+    profile: &ResolvedProfile,
+    key_name: &str,
+) -> Result<NetworkDescriptor, CliError> {
+    let faucet_url = profile
+        .faucet_url
+        .as_deref()
+        .ok_or_else(|| descriptor_invalid("profile.faucetUrl", "is required".into()))?;
+    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let descriptor = fetch_network_descriptor_value(faucet_url)?;
+    let runtime_manifest = load_configured_runtime_manifest(profile, key_name)?;
+    let deploy = descriptor
+        .dev_wallet
+        .deploy_entrypoint_id()
+        .map_err(|error| descriptor_invalid("devWallet.deployEntrypoint", error.to_string()))?;
+    let do_action = descriptor
+        .dev_wallet
+        .do_action_entrypoint_id()
+        .map_err(|error| descriptor_invalid("devWallet.doActionEntrypoint", error.to_string()))?;
+    validate_descriptor(
+        key_name,
+        rpc_url,
+        &descriptor,
+        runtime_manifest.as_ref(),
+        deploy,
+        do_action,
+    )?;
+    parse_positive_raw_amount(
+        "walletCreate.prefundRawAmount",
+        &descriptor.wallet_create.prefund_raw_amount,
+    )?;
+    Ok(descriptor)
+}
+
+pub(crate) fn fetch_remote_airdrop_descriptor(
+    profile: &ResolvedProfile,
+) -> Result<RemoteAirdropDescriptor, CliError> {
+    let faucet_url = profile
+        .faucet_url
+        .as_deref()
+        .ok_or_else(|| descriptor_invalid("profile.faucetUrl", "is required".into()))?;
+    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let descriptor = fetch_network_descriptor_value(faucet_url)?;
+    remote_airdrop_descriptor(rpc_url, descriptor)
+}
+
+#[cfg(test)]
+pub(crate) fn parse_remote_airdrop_descriptor(
+    rpc_url: &str,
+    value: serde_json::Value,
+) -> Result<RemoteAirdropDescriptor, CliError> {
+    let descriptor = parse_descriptor_value(value)?;
+    remote_airdrop_descriptor(rpc_url, descriptor)
+}
+
+fn remote_airdrop_descriptor(
+    rpc_url: &str,
+    descriptor: NetworkDescriptor,
+) -> Result<RemoteAirdropDescriptor, CliError> {
+    validate_descriptor_identity(rpc_url, &descriptor)?;
+    if descriptor.native_hog.decimals != crate::hog::DECIMALS {
+        return Err(descriptor_invalid(
+            "nativeHog.decimals",
+            format!(
+                "unsupported value {}; expected {}",
+                descriptor.native_hog.decimals,
+                crate::hog::DECIMALS
+            ),
+        ));
+    }
+    let policy = descriptor.airdrop.ok_or_else(|| {
+        descriptor_invalid(
+            "airdrop",
+            "is required for remote airdrop; use a faucet that advertises its airdrop policy"
+                .into(),
+        )
+    })?;
+    let raw_amount = parse_positive_raw_amount("airdrop.rawAmount", &policy.raw_amount)?;
+
+    Ok(RemoteAirdropDescriptor {
+        network_id: descriptor.network_id,
+        genesis_hash: format_hex(descriptor.genesis_hash.0.as_ref()),
+        policy,
+        amount_hog: crate::hog::format_amount(raw_amount),
+    })
+}
+
+fn fetch_network_descriptor_value(faucet_url: &str) -> Result<NetworkDescriptor, CliError> {
     let descriptor_url = format!("{}/v1/network", faucet_url.trim_end_matches('/'));
     let descriptor_value: serde_json::Value = get_json(&client()?, &descriptor_url)?;
-    let descriptor = parse_descriptor_value(descriptor_value)?;
-    descriptor_entrypoints(key_name, rpc_url, &descriptor, runtime_manifest.as_ref())
+    parse_descriptor_value(descriptor_value)
 }
 
 fn parse_descriptor_value(value: serde_json::Value) -> Result<NetworkDescriptor, CliError> {
@@ -127,24 +227,7 @@ fn validate_descriptor(
     descriptor_deploy: ContractEntrypointID,
     descriptor_do_action: ContractEntrypointID,
 ) -> Result<(), CliError> {
-    matches_expected(
-        "schemaVersion",
-        &NETWORK_DESCRIPTOR_SCHEMA_VERSION.to_string(),
-        &descriptor.schema_version.to_string(),
-    )?;
-    matches_expected("kind", NETWORK_DESCRIPTOR_KIND, &descriptor.kind)?;
-    matches_expected(
-        "endpoints.rpcUrl",
-        &canonical_rpc_url("profile.rpcUrl", rpc_url)?,
-        &canonical_rpc_url("endpoints.rpcUrl", &descriptor.endpoints.rpc_url)?,
-    )?;
-    if descriptor.network_id.trim().is_empty() {
-        return Err(descriptor_invalid("networkId", "must not be empty".into()));
-    }
-    if descriptor.protocol.trim().is_empty() {
-        return Err(descriptor_invalid("protocol", "must not be empty".into()));
-    }
-
+    validate_descriptor_identity(rpc_url, descriptor)?;
     let Some(manifest) = runtime_manifest else {
         return Ok(());
     };
@@ -188,6 +271,47 @@ fn validate_descriptor(
         &format_hex(descriptor_do_action.as_ref()),
     )?;
     Ok(())
+}
+
+fn validate_descriptor_identity(
+    rpc_url: &str,
+    descriptor: &NetworkDescriptor,
+) -> Result<(), CliError> {
+    matches_expected(
+        "schemaVersion",
+        &NETWORK_DESCRIPTOR_SCHEMA_VERSION.to_string(),
+        &descriptor.schema_version.to_string(),
+    )?;
+    matches_expected("kind", NETWORK_DESCRIPTOR_KIND, &descriptor.kind)?;
+    matches_expected(
+        "endpoints.rpcUrl",
+        &canonical_rpc_url("profile.rpcUrl", rpc_url)?,
+        &canonical_rpc_url("endpoints.rpcUrl", &descriptor.endpoints.rpc_url)?,
+    )?;
+    if descriptor.network_id.trim().is_empty() {
+        return Err(descriptor_invalid("networkId", "must not be empty".into()));
+    }
+    if descriptor.protocol.trim().is_empty() {
+        return Err(descriptor_invalid("protocol", "must not be empty".into()));
+    }
+    Ok(())
+}
+
+fn parse_positive_raw_amount(field: &'static str, raw: &str) -> Result<u128, CliError> {
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(descriptor_invalid(
+            field,
+            "must be an exact unsigned raw decimal amount".into(),
+        ));
+    }
+    match raw.parse::<u128>() {
+        Ok(amount) if amount > 0 => Ok(amount),
+        Ok(_) => Err(descriptor_invalid(field, "must be positive".into())),
+        Err(error) => Err(descriptor_invalid(
+            field,
+            format!("must fit in an unsigned 128-bit raw amount: {error}"),
+        )),
+    }
 }
 
 fn canonical_rpc_url(field: &'static str, url: &str) -> Result<String, CliError> {
@@ -255,6 +379,67 @@ mod tests {
             entrypoints.source,
             WALLET_ENTRYPOINT_SOURCE_NETWORK_DESCRIPTOR
         );
+    }
+
+    #[test]
+    fn hosted_descriptor_without_airdrop_policy_still_resolves_wallet_entrypoints() {
+        let mut descriptor = descriptor();
+        descriptor.airdrop = None;
+
+        descriptor_entrypoints("alice", "https://rpc.devnet.example/", &descriptor, None)
+            .expect("bug: airdrop policy is unrelated to deploy and call entrypoints");
+    }
+
+    #[test]
+    fn remote_airdrop_rejects_zero_amount_but_allows_zero_policy_values() {
+        let mut value = serde_json::to_value(descriptor()).unwrap();
+        value["airdrop"]["rawAmount"] = serde_json::json!("0");
+        let error = parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
+            .expect_err("bug: zero airdrop amount should fail validation");
+        assert_invalid_field(error, "airdrop.rawAmount");
+
+        let mut value = serde_json::to_value(descriptor()).unwrap();
+        value["airdrop"]["recipientCooldownSeconds"] = serde_json::json!(0);
+        value["airdrop"]["clientQuotaMax"] = serde_json::json!(0);
+        value["airdrop"]["clientQuotaWindowSeconds"] = serde_json::json!(0);
+        value["airdrop"]["maxPendingPerRecipient"] = serde_json::json!(0);
+        parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
+            .expect("bug: zero policy values should be displayed and enforced by the faucet");
+    }
+
+    #[test]
+    fn wallet_prefund_rejects_non_positive_amount() {
+        let error = parse_positive_raw_amount("walletCreate.prefundRawAmount", "invalid")
+            .expect_err("bug: invalid wallet prefund should fail validation");
+
+        assert_invalid_field(error, "walletCreate.prefundRawAmount");
+    }
+
+    #[test]
+    fn remote_airdrop_ignores_unrelated_wallet_semantics() {
+        let mut value = serde_json::to_value(descriptor()).unwrap();
+        value["walletCreate"]["prefundRawAmount"] = serde_json::json!("not-an-amount");
+        value["devWallet"]["deployEntrypoint"] = serde_json::json!("0x00");
+
+        let descriptor = parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
+            .expect("bug: remote airdrop should validate only its required descriptor projection");
+
+        assert_eq!(descriptor.amount_hog, "10");
+    }
+
+    #[test]
+    fn remote_airdrop_rejects_unsupported_decimals_and_inexact_raw_amount() {
+        let mut value = serde_json::to_value(descriptor()).unwrap();
+        value["nativeHog"]["decimals"] = serde_json::json!(6);
+        let error = parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
+            .expect_err("bug: unsupported native HOG decimals should fail");
+        assert_invalid_field(error, "nativeHog.decimals");
+
+        let mut value = serde_json::to_value(descriptor()).unwrap();
+        value["airdrop"]["rawAmount"] = serde_json::json!("1.0");
+        let error = parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
+            .expect_err("bug: raw amount must be an exact integer string");
+        assert_invalid_field(error, "airdrop.rawAmount");
     }
 
     #[test]
@@ -393,6 +578,13 @@ mod tests {
         }
     }
 
+    fn assert_invalid_field(error: CliError, expected_field: &str) {
+        match error {
+            CliError::NetworkDescriptorInvalid { field, .. } => assert_eq!(field, expected_field),
+            other => panic!("bug: expected invalid descriptor, got {other}"),
+        }
+    }
+
     fn descriptor() -> NetworkDescriptor {
         serde_json::from_value(serde_json::json!({
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
@@ -407,6 +599,13 @@ mod tests {
                 "transferEntrypoint": "0x63285b3523f9dc3f"
             },
             "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
+            "airdrop": {
+                "rawAmount": "100000000",
+                "recipientCooldownSeconds": 43200,
+                "clientQuotaMax": 10,
+                "clientQuotaWindowSeconds": 3600,
+                "maxPendingPerRecipient": 1
+            },
             "walletCreate": {
                 "prefundRawAmount": "100000000",
                 "walletContractHash": format!("0x{}", "51".repeat(32))

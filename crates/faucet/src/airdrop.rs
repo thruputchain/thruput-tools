@@ -248,7 +248,8 @@ impl AirdropService {
     ) -> Response {
         match self.submitter.submit_airdrop(request.recipient).await {
             Ok(accepted) => {
-                attempt.raw_amount = accepted.raw_amount;
+                let amount_matches =
+                    accepted.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
                 attempt.tx_hash = Some(hex_string(accepted.tx_hash.0.0));
                 // An accepted transaction must not age out while its receipt is unresolved;
                 // otherwise the same idempotency key could submit a second transaction.
@@ -256,6 +257,13 @@ impl AirdropService {
                 attempt.updated_at = SystemTime::now();
                 if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
                     return policy_store_error_response(&error);
+                }
+                if !amount_matches {
+                    return error_response(
+                        StatusCode::BAD_GATEWAY,
+                        "airdrop_submit_amount_mismatch",
+                        "airdrop submitter returned an amount that does not match its configuration",
+                    );
                 }
                 self.poll_airdrop_attempt(&request, attempt).await
             }
@@ -436,7 +444,7 @@ pub trait AirdropSubmitter: Send + Sync + 'static {
 /// Faucet airdrop accepted by the transaction submission endpoint.
 #[derive(Debug, Clone)]
 pub struct AcceptedAirdrop {
-    /// Raw HOG units transferred to the recipient.
+    /// Raw HOG units reported by the submitter.
     pub raw_amount: String,
     /// Submitted transaction hash.
     pub tx_hash: TxHash,

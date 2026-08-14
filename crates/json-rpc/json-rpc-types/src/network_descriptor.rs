@@ -37,6 +37,9 @@ pub struct NetworkDescriptor {
     pub native_hog: NativeHogDescriptor,
     /// Public faucet account metadata. No signing material is included.
     pub faucet: FaucetDescriptor,
+    /// Static hosted-faucet airdrop policy. Live balance and usage are intentionally excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airdrop: Option<AirdropDescriptor>,
     /// Public metadata required for faucet-backed wallet creation.
     pub wallet_create: WalletCreateDescriptor,
     /// Public dev-wallet entrypoints required to deploy and call contracts.
@@ -65,8 +68,52 @@ impl NetworkDescriptor {
             endpoints,
             native_hog,
             faucet,
+            airdrop: None,
             wallet_create,
             dev_wallet,
+        }
+    }
+
+    /// Add static hosted-faucet airdrop policy metadata.
+    #[must_use]
+    pub fn with_airdrop(mut self, airdrop: AirdropDescriptor) -> Self {
+        self.airdrop = Some(airdrop);
+        self
+    }
+}
+
+/// Static hosted-faucet airdrop policy advertised to clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct AirdropDescriptor {
+    /// Fixed raw HOG amount transferred per successful request.
+    pub raw_amount: String,
+    /// Cooldown applied to each recipient.
+    pub recipient_cooldown_seconds: u64,
+    /// Number of requests allowed for each client identity in the quota window.
+    pub client_quota_max: u32,
+    /// Client quota window duration.
+    pub client_quota_window_seconds: u64,
+    /// Maximum in-flight requests for one recipient.
+    pub max_pending_per_recipient: u32,
+}
+
+impl AirdropDescriptor {
+    /// Construct static hosted-faucet airdrop policy metadata.
+    pub fn new(
+        raw_amount: String,
+        recipient_cooldown_seconds: u64,
+        client_quota_max: u32,
+        client_quota_window_seconds: u64,
+        max_pending_per_recipient: u32,
+    ) -> Self {
+        Self {
+            raw_amount,
+            recipient_cooldown_seconds,
+            client_quota_max,
+            client_quota_window_seconds,
+            max_pending_per_recipient,
         }
     }
 }

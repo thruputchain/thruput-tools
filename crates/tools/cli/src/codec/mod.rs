@@ -127,6 +127,20 @@ impl DecodedAbort {
     }
 }
 
+pub(crate) fn is_erc20_too_large(
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+) -> bool {
+    matches!(
+        decoded_abort,
+        Some(Ok(DecodedAbort {
+            exception: Some(exception),
+            value: Value::String(value),
+            exception_crate: Some("groundhog-erc20-if"),
+            ..
+        })) if exception == "ERC20Error" && value == "TooLarge"
+    )
+}
+
 /// Why an abort buffer could not be decoded into an exception value.
 ///
 /// The cases mirror the SDK's generated client error enum: `Unknown` and

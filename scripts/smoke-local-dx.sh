@@ -2,12 +2,11 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
-#   groundhog new -> build -> persistent node -> dev-0 deploy/call/view/storage
-#   -> dev-0/dev-1 transfer with recipient and sender balance validation
+#   groundhog new -> build -> persistent node -> dev-1 deploy/call/view/storage
+#   -> dev-1/dev-2 transfer with recipient and sender balance validation
 #   -> transaction show and bounded sender-history pagination
 #   -> raw/spec-decoded counter events and canonical token transfer history
-#   -> key generate -> wallet create -> saved-wallet deploy
-#   -> saved-wallet airdrop -> second deploy/call
+#   -> key generate -> wallet create -> airdrop -> saved-wallet deploy/call
 #   -> stop -> dump/restore -> restart -> verify state and continued progress
 #
 # Required environment:
@@ -28,6 +27,9 @@ PROJECT_NAME="smoke-counter"
 SMOKE_PROFILE="local"
 INITIAL_VALUE=7
 INCREMENT_AMOUNT=5
+CUSTOM_DEV_ACCOUNT_HOG="1234567.0000001"
+CUSTOM_DEV_ACCOUNT_RAW="12345670000001"
+FIXED_FAUCET_RAW="10000000000000"
 
 log() {
     printf '==> %s\n' "$*" >&2
@@ -402,10 +404,11 @@ run_json_failure() {
     shift
     log "$label: $(display_command "$@")"
     local output
-    if output="$("$@" 2> >(sed "s/^/[$label stderr] /" >&2))"; then
+    if output="$("$@" 2>&1)"; then
         printf '%s\n' "$output" >&2
         die "$label unexpectedly succeeded"
     fi
+    printf '%s\n' "$output" | sed "s/^/[$label stderr] /" >&2
     printf '%s\n' "$output"
 }
 
@@ -577,7 +580,13 @@ WORK="$(mktemp -d)"
 export XDG_CONFIG_HOME="$WORK/config"
 export XDG_CACHE_HOME="$WORK/cache"
 NODE_DATA_DIR="$WORK/node-data"
-NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY" --data-dir "$NODE_DATA_DIR")
+NODE_ARGS=(
+    --json node
+    --port 0
+    --dev-account-count 3
+    --hog-devnode-binary "$DEVNODE_BINARY"
+    --data-dir "$NODE_DATA_DIR"
+)
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
@@ -634,7 +643,8 @@ COUNTER_SPEC_XDR="$(json_field data.spec_xdr "$COUNTER_BUILD_JSON")"
     || die "counter build did not return a readable spec_xdr path: $COUNTER_SPEC_XDR"
 
 log "Starting local node"
-"$CLI" "${NODE_ARGS[@]}" > "$WORK/node.json" 2> "$WORK/node.err" &
+"$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
+    > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
     cat "$WORK/node.err" >&2 || true
@@ -657,6 +667,31 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
     || die "groundhog node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
+RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
+[[ "$(json_len bootstrapAccounts "$RUNTIME_JSON")" == "4" ]] \
+    || die "runtime manifest did not contain exactly four bootstrap accounts"
+[[ "$(json_field bootstrapAccounts.0.role "$RUNTIME_JSON")" == "faucet" ]] \
+    || die "runtime manifest account 0 was not the faucet"
+[[ "$(json_field bootstrapAccounts.0.initialStorageTokens "$RUNTIME_JSON")" == "$FIXED_FAUCET_RAW" ]] \
+    || die "runtime manifest faucet did not retain its fixed allocation"
+[[ "$(json_field bootstrapAccounts.1.role "$RUNTIME_JSON")" == "local_user" ]] \
+    || die "runtime manifest account 1 was not a local user"
+[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_DEV_ACCOUNT_RAW" ]] \
+    || die "runtime manifest did not propagate custom local-user HOG allocation"
+for index in 0 1 2 3; do
+    [[ "$(json_field bootstrapAccounts.$index.index "$RUNTIME_JSON")" == "$index" ]] \
+        || die "runtime manifest account position $index did not advertise index $index"
+    expected_role="local_user"
+    expected_tokens="$CUSTOM_DEV_ACCOUNT_RAW"
+    if (( index == 0 )); then
+        expected_role="faucet"
+        expected_tokens="$FIXED_FAUCET_RAW"
+    fi
+    [[ "$(json_field bootstrapAccounts.$index.role "$RUNTIME_JSON")" == "$expected_role" ]] \
+        || die "runtime manifest account $index did not advertise role $expected_role"
+    [[ "$(json_field bootstrapAccounts.$index.initialStorageTokens "$RUNTIME_JSON")" == "$expected_tokens" ]] \
+        || die "runtime manifest account $index did not advertise funding $expected_tokens"
+done
 NODE_PROFILE="$(toml_field groundhog.toml default_profile)"
 [[ "$NODE_PROFILE" == "$SMOKE_PROFILE" ]] \
     || die "default_profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
@@ -675,8 +710,8 @@ GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runti
     || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
 unset GROUNDHOG_RUNTIME_MANIFEST
 
-TRANSFER_SENDER="dev-0"
-TRANSFER_RECIPIENT="dev-1"
+TRANSFER_SENDER="dev-1"
+TRANSFER_RECIPIENT="dev-2"
 TRANSFER_AMOUNT="0.0000001"
 TRANSFER_RAW_AMOUNT="1"
 
@@ -880,7 +915,7 @@ DECODED_EVENTS_JSON="$(run_json "decoded counter events" "$CLI" --json events li
     || die "counter ping decoded as the wrong event"
 log "counter event result: tx=$PING_TX_HASH raw+decoded"
 
-VIEW_FROM="dev-0"
+VIEW_FROM="dev-1"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
     export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
@@ -981,8 +1016,8 @@ WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
 [[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
     || die "wallet create did not return a wallet address"
 WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
-[[ "$WALLET_PREFUND" == "200000000" ]] \
-    || die "wallet create prefund was $WALLET_PREFUND, expected 200000000"
+[[ "$WALLET_PREFUND" == "10000000" ]] \
+    || die "wallet create prefund was $WALLET_PREFUND, expected 10000000"
 [[ "$(json_field data.prefund_tx_hash "$WALLET_JSON")" != "null" ]] \
     || die "wallet create did not return a prefund transaction hash"
 [[ "$(json_field data.create_tx_hash "$WALLET_JSON")" != "null" ]] \
@@ -990,12 +1025,12 @@ WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
 log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
 
 "$CLI" keys use "$USER_KEY"
-USER_DEPLOY_JSON="$(run_json "saved-wallet deploy" "$CLI" --json deploy)"
-USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
-[[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
-    || die "saved-wallet deploy did not return a contract address"
-log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
-
+# Wallet creation leaves the default 1 HOG prefund just below the transaction
+# gas limit. Add 1 HOG so this deploy reaches execution and exercises the
+# receipt-level insufficient-funding guidance instead of scheduler rejection.
+SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop "$USER_KEY" --amount 1)"
+[[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
+    || die "scheduler-floor airdrop did not commit successfully"
 UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy)"
 UNDERFUNDED_CODE="$(json_field error.code "$UNDERFUNDED_DEPLOY_JSON")"
 case "$UNDERFUNDED_CODE" in
@@ -1016,22 +1051,27 @@ log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDE
 
 WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
 WALLET_BALANCE_BEFORE="$(json_field data.raw_balance "$WALLET_BALANCE_BEFORE_JSON")"
-AIRDROP_JSON="$(run_json "saved-wallet airdrop" "$CLI" --json airdrop "$USER_KEY")"
+AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop "$USER_KEY" --amount 10)"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
+[[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" ]] \
+    || die "saved-wallet airdrop JSON did not identify faucet key dev-0"
+[[ "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
+    || die "saved-wallet airdrop JSON did not identify role faucet"
 WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$USER_KEY")"
 WALLET_BALANCE_AFTER="$(json_field data.raw_balance "$WALLET_BALANCE_AFTER_JSON")"
 AIRDROP_RAW_AMOUNT="$(json_field data.raw_amount "$AIRDROP_JSON")"
 assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
 log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.tx_hash "$AIRDROP_JSON")"
 
-SECOND_DEPLOY_JSON="$(run_json "same-wallet deploy after airdrop" "$CLI" --json deploy)"
-SECOND_CONTRACT_ADDRESS="$(json_field data.address "$SECOND_DEPLOY_JSON")"
-[[ "$SECOND_CONTRACT_ADDRESS" != "null" && -n "$SECOND_CONTRACT_ADDRESS" ]] \
-    || die "same-wallet deploy retry did not return a contract address"
-[[ "$SECOND_CONTRACT_ADDRESS" != "$USER_CONTRACT_ADDRESS" ]] \
-    || die "same-wallet deploy retry returned the first contract address"
-log "same-wallet deploy retry result: address=$SECOND_CONTRACT_ADDRESS height=$(json_field data.height "$SECOND_DEPLOY_JSON") tx=$(json_field data.tx_hash "$SECOND_DEPLOY_JSON")"
+USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy)"
+USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
+[[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
+    || die "saved-wallet deploy did not return a contract address"
+log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
+SAVED_ALIAS="$(toml_field groundhog.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
+[[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
+    || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
 
 USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call "$PROJECT_NAME" initialize 11)"
 assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
@@ -1040,7 +1080,7 @@ assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
 log "saved-wallet call result: status=$(json_field data.status_summary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.tx_hash "$USER_INCREMENT_JSON")"
 
 unset GROUNDHOG_RUNTIME_MANIFEST
-VIEW_FROM="dev-0"
+VIEW_FROM="dev-1"
 PERSISTED_VIEW_BEFORE="$(run_view_json "view before persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_BEFORE="$(json_field data.returnValue "$PERSISTED_VIEW_BEFORE")"
 [[ "$PERSISTED_VALUE_BEFORE" != "null" ]] \
@@ -1076,10 +1116,11 @@ CHAIN_RESTORE_JSON="$(run_json "chain restore" "$CLI" --json chain restore --for
 [[ "$(json_field command "$CHAIN_RESTORE_JSON")" == "chain.restore" ]] \
     || die "chain restore returned the wrong command envelope"
 
-log "Restarting persistent local node"
+log "Restarting persistent local node with the original allocation"
 : > "$WORK/node.json"
 : > "$WORK/node.err"
-"$CLI" "${NODE_ARGS[@]}" > "$WORK/node.json" 2> "$WORK/node.err" &
+"$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
+    > "$WORK/node.json" 2> "$WORK/node.err" &
 NODE_PID=$!
 if ! wait_for_node_json "$WORK/node.json"; then
     cat "$WORK/node.err" >&2 || true
@@ -1095,6 +1136,11 @@ REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
     || die "restarted node data_dir was $REPORTED_DATA_DIR, expected $NODE_DATA_DIR"
 [[ "$CHAIN_STATE" == "recovered" ]] \
     || die "restarted node chain_state was $CHAIN_STATE, expected recovered"
+RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
+[[ "$(json_field bootstrapAccounts.0.initialStorageTokens "$RUNTIME_JSON")" == "$FIXED_FAUCET_RAW" ]] \
+    || die "restarted runtime manifest faucet did not retain its fixed allocation"
+[[ "$(json_field bootstrapAccounts.1.initialStorageTokens "$RUNTIME_JSON")" == "$CUSTOM_DEV_ACCOUNT_RAW" ]] \
+    || die "restarted runtime manifest did not retain custom local-user HOG allocation"
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi

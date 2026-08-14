@@ -75,8 +75,9 @@ mod wire_format {
     };
     use crate::hex::{Hex0x, HexBytes, Topic};
     use crate::network_descriptor::{
-        DevWalletDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
-        NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
+        AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor,
+        NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor, NetworkDescriptor,
+        NetworkDescriptorEndpoints, WalletCreateDescriptor,
     };
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::StorageItemInfo;
@@ -143,6 +144,13 @@ mod wire_format {
             faucet: FaucetDescriptor {
                 wallet_address: zero_address(),
             },
+            airdrop: Some(AirdropDescriptor {
+                raw_amount: "100000000".into(),
+                recipient_cooldown_seconds: 43_200,
+                client_quota_max: 10,
+                client_quota_window_seconds: 3_600,
+                max_pending_per_recipient: 1,
+            }),
             wallet_create: WalletCreateDescriptor {
                 prefund_raw_amount: "100000000".into(),
                 wallet_contract_hash: zero_hash(),
@@ -187,6 +195,8 @@ mod wire_format {
             "0x63285b3523f9dc3f"
         );
         assert_eq!(value["walletCreate"]["prefundRawAmount"], "100000000");
+        assert_eq!(value["airdrop"]["rawAmount"], "100000000");
+        assert!(value["airdrop"].get("amountHog").is_none());
         assert_eq!(value["devWallet"]["deployEntrypoint"], "0xf969542572bd6860");
         assert_eq!(
             value["devWallet"]["doActionEntrypoint"],
@@ -211,6 +221,16 @@ mod wire_format {
 
         let roundtrip: NetworkDescriptor = serde_json::from_value(value).unwrap();
         assert_eq!(roundtrip, descriptor);
+    }
+
+    #[test]
+    fn schema_v2_network_descriptor_accepts_missing_airdrop_policy() {
+        let mut value = serde_json::to_value(test_network_descriptor()).unwrap();
+        value.as_object_mut().unwrap().remove("airdrop");
+
+        let descriptor: NetworkDescriptor = serde_json::from_value(value).unwrap();
+
+        assert!(descriptor.airdrop.is_none());
     }
 
     #[test]

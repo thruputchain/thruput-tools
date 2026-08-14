@@ -1,7 +1,10 @@
+use std::io::BufRead as _;
 use std::path::Path;
 
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use groundhog_json_rpc_types::{ContractAddress, balance::BalanceResponse};
+use groundhog_json_rpc_types::{
+    ContractAddress, balance::BalanceResponse, runtime_manifest::RuntimeManifestStorageCostModel,
+};
 use serde_json::json;
 
 use crate::account_resolution::resolve_address_target;
@@ -31,8 +34,7 @@ pub fn run(
     let address_hex = format_contract_address(&address);
     let address = ContractAddress::from(address);
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let balance = rt.block_on(fetch_balance(&rpc_url, address))?;
+    let balance = fetch_balance_blocking(&rpc_url, address)?;
     let raw_balance = parse_raw_balance(&balance.raw_balance)?;
     let balance_hog = hog::format_amount(raw_balance);
 
@@ -51,6 +53,14 @@ pub fn run(
     ))?;
 
     Ok(())
+}
+
+pub(crate) fn fetch_balance_blocking(
+    rpc_url: &str,
+    address: ContractAddress,
+) -> Result<BalanceResponse, CliError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    rt.block_on(fetch_balance(rpc_url, address))
 }
 
 async fn fetch_balance(
@@ -72,4 +82,146 @@ async fn fetch_balance(
 fn parse_raw_balance(raw: &str) -> Result<u128, CliError> {
     raw.parse::<u128>()
         .map_err(|error| CliError::Other(format!("invalid raw balance `{raw}` from RPC: {error}")))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalFundingProjection {
+    pub(crate) committed_balance: u128,
+    pub(crate) transaction_storage_cost: u128,
+    pub(crate) estimated_max: u128,
+    pub(crate) projected_balance: Option<u128>,
+}
+
+pub(crate) fn local_funding_projection(
+    raw_balance: &str,
+    costs: &RuntimeManifestStorageCostModel,
+    requested: u128,
+    transaction_count: u128,
+) -> Result<LocalFundingProjection, CliError> {
+    let committed_balance = parse_raw_balance(raw_balance)?;
+    let base_data_item_cost = parse_storage_cost("baseDataItemCost", &costs.base_data_item_cost)?;
+    let replay_cache_cost = parse_storage_cost(
+        "replayCacheCostPerEntry",
+        &costs.replay_cache_cost_per_entry,
+    )?;
+    let transaction_storage_cost = base_data_item_cost
+        .checked_add(replay_cache_cost)
+        .and_then(|cost| cost.checked_mul(transaction_count))
+        .ok_or_else(|| CliError::Other("local transaction storage cost overflows u128".into()))?;
+    let estimated_max = committed_balance.saturating_sub(transaction_storage_cost);
+    let projected_balance = estimated_max.checked_sub(requested);
+
+    Ok(LocalFundingProjection {
+        committed_balance,
+        transaction_storage_cost,
+        estimated_max,
+        projected_balance,
+    })
+}
+
+pub(crate) fn confirm_low_faucet_balance(print: &Print, yes: bool) -> Result<(), CliError> {
+    if yes {
+        return Ok(());
+    }
+    if !print.can_prompt() {
+        return Err(CliError::ConfirmationRequired {
+            action: "continue with low local faucet balance",
+        });
+    }
+
+    print.prompt("Continue? [y/N] ")?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    if answer.trim().eq_ignore_ascii_case("y") || answer.trim().eq_ignore_ascii_case("yes") {
+        return Ok(());
+    }
+    Err(CliError::Other(
+        "local funding cancelled; rerun with `--yes` to confirm non-interactively".into(),
+    ))
+}
+
+pub(crate) fn insufficient_local_faucet_error(requested: u128, estimated_max: u128) -> CliError {
+    CliError::Other(format!(
+        "local faucet has insufficient actionable balance: requested {} HOG, estimated maximum is {} HOG; reduce the amount or start a fresh local chain",
+        hog::format_amount(requested),
+        hog::format_amount(estimated_max)
+    ))
+}
+
+fn parse_storage_cost(field: &str, raw: &str) -> Result<u128, CliError> {
+    raw.parse::<u128>().map_err(|error| {
+        CliError::Other(format!(
+            "invalid runtime manifest storage cost `{field}` value `{raw}`: {error}"
+        ))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
+    use serde_json::json;
+
+    use super::{confirm_low_faucet_balance, local_funding_projection};
+    use crate::{CliError, Print};
+
+    #[test]
+    fn projection_reserves_active_transaction_storage_cost() {
+        let projection = local_funding_projection("10000000000000", &costs(), 500_000_000, 1)
+            .expect("bug: projection should succeed");
+
+        assert_eq!(projection.transaction_storage_cost, 12_007);
+        assert_eq!(projection.estimated_max, 9_999_999_987_993);
+        assert_eq!(projection.projected_balance, Some(9_999_499_987_993));
+    }
+
+    #[test]
+    fn projection_marks_request_over_estimate() {
+        let projection = local_funding_projection("12006", &costs(), 1, 1)
+            .expect("bug: projection should succeed");
+
+        assert_eq!(projection.estimated_max, 0);
+        assert_eq!(projection.projected_balance, None);
+    }
+
+    #[test]
+    fn projection_reserves_exact_storage_cost_for_two_transactions() {
+        let projection = local_funding_projection("100000", &costs(), 1, 2)
+            .expect("bug: projection should succeed");
+
+        assert_eq!(projection.transaction_storage_cost, 24_014);
+        assert_eq!(projection.estimated_max, 75_986);
+        assert_eq!(projection.projected_balance, Some(75_985));
+    }
+
+    #[test]
+    fn projection_rejects_transaction_storage_cost_overflow() {
+        let error = local_funding_projection("100000", &costs(), 1, u128::MAX)
+            .expect_err("bug: transaction cost multiplication should be checked");
+
+        assert!(error.to_string().contains("overflows u128"));
+    }
+
+    #[test]
+    fn low_balance_confirmation_never_prompts_in_json_or_quiet_mode() {
+        for print in [Print::new(false, true), Print::quiet()] {
+            let error = confirm_low_faucet_balance(&print, false)
+                .expect_err("bug: non-interactive confirmation should require --yes");
+            assert!(matches!(error, CliError::ConfirmationRequired { .. }));
+        }
+    }
+
+    fn costs() -> RuntimeManifestStorageCostModel {
+        serde_json::from_value(json!({
+            "hash": format!("0x{}", "00".repeat(32)),
+            "baseDataItemCost": "12000",
+            "bytestringCostPerByte": "10",
+            "baseContractDeploymentCost": "12000",
+            "contractDeploymentCostPerByte": "10",
+            "authPerKeyCost": "1111",
+            "rcqCostPerEntry": "8",
+            "replayCacheCostPerEntry": "7",
+            "balanceCost": "1234"
+        }))
+        .expect("bug: storage costs should deserialize")
+    }
 }
