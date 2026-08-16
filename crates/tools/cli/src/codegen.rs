@@ -1351,7 +1351,7 @@ fn validate_interface_method_name_collisions(
     for (method_index, method) in iface.methods.iter().enumerate() {
         let method_name = spec_string_text(&method.name)?;
         let public_method_name = public_method_names[method_index].as_str();
-        validate_ts_identifier(
+        validate_ts_property_identifier(
             public_method_name,
             &format!("method \"{iface_name}.{method_name}\""),
         )?;
@@ -1383,6 +1383,15 @@ fn validate_ts_identifier(name: &str, source: &str) -> Result<(), CliError> {
     if !is_ts_identifier(name) || name == "__proto__" {
         return Err(CliError::SpecFailed(format!(
             "generated TypeScript identifier \"{name}\" for {source} is invalid"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_ts_property_identifier(name: &str, source: &str) -> Result<(), CliError> {
+    if !is_ts_identifier_name(name) || name == "__proto__" {
+        return Err(CliError::SpecFailed(format!(
+            "generated TypeScript property name \"{name}\" for {source} is invalid"
         )));
     }
     Ok(())
@@ -1456,6 +1465,10 @@ fn is_ts_identifier(name: &str) -> bool {
     if RESERVED.contains(&name) {
         return false;
     }
+    is_ts_identifier_name(name)
+}
+
+fn is_ts_identifier_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -1801,7 +1814,7 @@ fn validate_method_arg_name_collisions(
     for arg in method.args.iter() {
         let arg_name = spec_string_text(&arg.name)?;
         let public_arg_name = to_camel_case(arg_name);
-        validate_ts_identifier(
+        validate_ts_property_identifier(
             &public_arg_name,
             &format!("method \"{method_name}\" argument \"{arg_name}\""),
         )?;
@@ -2450,6 +2463,28 @@ export type Result =
             let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
             assert!(error.to_string().contains(name));
         }
+    }
+
+    #[test]
+    fn reserved_property_names_are_allowed_for_methods_and_arguments() {
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("symbol"),
+                args: vec![ContractField {
+                    name: spec_string("return"),
+                    ty: ContractType::String,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::String,
+            }],
+            false,
+        );
+
+        let output = generate_ts_bindings(&spec, "counter.wasm").unwrap();
+        assert!(output.contains("export interface CounterSymbolArgs"));
+        assert!(output.contains("  return: string;"));
+        assert!(output.contains("  symbol: defineContractMethod<"));
     }
 
     #[test]
