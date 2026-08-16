@@ -1,6 +1,6 @@
 # TypeScript Binding Codegen Upgrade
 
-**Date:** 2026-08-14 **Status:** Ready for implementation
+**Date:** 2026-08-14 **Status:** Codegen implemented; coordinated rollout pending
 
 ## Goal
 
@@ -46,7 +46,7 @@ These features can build on descriptors and corrected codecs without changing th
 
 This work does not:
 
-- change the contract spec, CXS encoding, entrypoint derivation, CLI command surface, or artifacts;
+- change the contract spec, CXS encoding, entrypoint derivation, CLI command surface, or contract artifact formats;
 - add RPC methods, pinned-height views, transaction polling, pagination, or history policy;
 - infer method mutability, gas policy, or event-to-method relationships;
 - recover hashed event topic preimages;
@@ -276,6 +276,7 @@ Required checks:
 - valid non-empty TypeScript identifiers for interfaces, named types, events, generated method types, public methods, and public method arguments;
 - safely quoted and escaped property keys for ABI-named struct, union struct, event topic, and event payload fields;
 - duplicate field or member names within each emitted struct, union arm, enum, and event object;
+- duplicate event signatures;
 - rejection of unsafe emitted object keys such as `__proto__`;
 - collisions among imports, interface objects, descriptors, named method types, event values, and event unions;
 - method and argument collisions after camelCase conversion;
@@ -340,6 +341,7 @@ Cover:
 - method args/results, zero args, void results, and multiple interfaces;
 - declared abort metadata and duplicate selectors;
 - strict event decoder generation;
+- duplicate event signature rejection;
 - direct-topic filters and receipt helpers;
 - source escaping, emitted identifier validation, relevant collisions, and deterministic output.
 
