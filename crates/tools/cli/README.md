@@ -481,6 +481,7 @@ prototype backend is no longer wired into this command.
 ```bash
 groundhog node
 groundhog node --port 9546
+groundhog node --host 0.0.0.0 --port 9545
 groundhog node --dev-account-hog 2500000.5
 groundhog node --hog-devnode-binary /path/to/hog-devnode
 groundhog node --hog-devnode-binary /path/to/hog-devnode --hogd-protocol hogp/<hash>
@@ -495,6 +496,17 @@ scripting. Stdout is reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
 `--rpc-max-connections` controls the public JSON-RPC simultaneous connection
 cap; the default is 2000.
+
+The public JSON-RPC listener binds to `127.0.0.1` by default. Use `--host`
+when the node runs across a container or VM boundary. For example, run
+`groundhog node --host 0.0.0.0 --port 9545` inside a Linux container, publish
+`9545/tcp`, then configure a host-side profile whose `rpc_url` is
+`http://127.0.0.1:9545`. `--host` changes only the public JSON-RPC facade;
+hog-devnode's internal x23 services remain on loopback.
+
+Binding to `0.0.0.0` or another non-loopback address exposes an unauthenticated
+development RPC endpoint. Only do this on a trusted network or behind an
+appropriate container, VM, or host firewall.
 
 The fixed `dev-0` faucet receives 1,000,000 HOG. Ten local-user accounts,
 `dev-1` through `dev-10`, each receive 100 HOG by default.

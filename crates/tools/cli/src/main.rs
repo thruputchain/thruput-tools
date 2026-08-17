@@ -414,9 +414,12 @@ enum Command {
                       backed by a supervised hog-devnode process. The \
                       native_exec/test_ffi prototype backend is no longer \
                       wired into this command.",
-        after_help = "Protocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {
+        /// Host/interface for the public JSON-RPC listener
+        #[arg(long, default_value = "127.0.0.1", value_name = "ADDRESS")]
+        host: std::net::IpAddr,
         /// Port to listen on
         #[arg(long, default_value = "9545")]
         port: u16,
@@ -1307,6 +1310,7 @@ fn main() {
                 )
             }),
         Command::Node {
+            host,
             port,
             verbose,
             dev_account_count,
@@ -1321,6 +1325,7 @@ fn main() {
             ramdb_bytes,
         } => {
             let mut options = groundhog_cli::node::LocalNodeOptions::default();
+            options.host = Some(host);
             options.port = port;
             options.hogd_dev_binary = hogd_dev_binary;
             options.data_dir = data_dir;
@@ -1648,6 +1653,40 @@ mod tests {
             } => assert_eq!(dev_account_count, Some(3)),
             _ => panic!("expected node command"),
         }
+    }
+
+    #[test]
+    fn node_host_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "node", "--host", "0.0.0.0"]);
+
+        match cli.command {
+            Command::Node { host, .. } => {
+                assert_eq!(host, std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            }
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_host_defaults_to_loopback() {
+        let cli = Cli::parse_from(["groundhog", "node"]);
+
+        match cli.command {
+            Command::Node { host, .. } => {
+                assert_eq!(host, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            }
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_host_rejects_invalid_address() {
+        let Err(error) = Cli::try_parse_from(["groundhog", "node", "--host", "not-an-address"])
+        else {
+            panic!("invalid host address should be rejected");
+        };
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
     #[test]

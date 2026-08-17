@@ -6,7 +6,7 @@ use crate::result::CommandResult;
 use serde_json::json;
 use std::future::Future;
 use std::io::{self, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -111,6 +111,8 @@ pub fn run_with_options(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalNodeOptions {
+    /// Public JSON-RPC bind host. Defaults to IPv4 loopback when omitted.
+    pub host: Option<IpAddr>,
     /// Public JSON-RPC port. Use `0` to ask the OS for a free port.
     pub port: u16,
     /// Explicit hog-devnode binary path.
@@ -578,7 +580,7 @@ fn local_node_config(
         None => hogd,
     };
     let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address(format!("127.0.0.1:{}", options.port))
+        .with_rpc_listen_address(rpc_listen_address(options.host, options.port))
         .with_hogd_dev(hogd);
     let config = match options.rpc_max_connections {
         Some(max_connections) => config.with_rpc_max_connections(max_connections),
@@ -608,6 +610,11 @@ fn local_node_config(
         Some(protocol) => config.with_hogd_protocol_override(protocol),
         None => config,
     })
+}
+
+fn rpc_listen_address(host: Option<IpAddr>, port: u16) -> String {
+    let host = host.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    SocketAddr::new(host, port).to_string()
 }
 
 /// Parse an exact HOG bootstrap allocation into seven-decimal raw units.
@@ -798,13 +805,19 @@ mod tests {
         BackendPlanes, NodeSupervisorError, PlaneStatus, parse_readiness_line,
     };
     use sha2::{Digest, Sha256};
-    use std::{fs, path::PathBuf, time::Duration};
+    use std::{
+        fs,
+        net::{IpAddr, Ipv4Addr},
+        path::PathBuf,
+        time::Duration,
+    };
     use tempfile::TempDir;
 
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
         let binary = PathBuf::from("/tmp/hog-devnode-test");
         let config = local_node_config(LocalNodeOptions {
+            host: None,
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
             data_dir: Some(PathBuf::from("/tmp/hog-devnode-data")),
@@ -848,6 +861,34 @@ mod tests {
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
+    }
+
+    #[test]
+    fn local_node_config_sets_public_rpc_host_without_changing_hogd_host() {
+        let config = local_node_config(LocalNodeOptions {
+            host: Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            port: 9545,
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: public RPC host should configure");
+
+        assert_eq!(config.rpc_listen_address, "0.0.0.0:9545");
+        assert_eq!(
+            config.hogd_dev.listen_host,
+            groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_LISTEN_HOST
+        );
+    }
+
+    #[test]
+    fn local_node_config_formats_ipv6_rpc_host() {
+        let config = local_node_config(LocalNodeOptions {
+            host: Some(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
+            port: 9545,
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: IPv6 public RPC host should configure");
+
+        assert_eq!(config.rpc_listen_address, "[::1]:9545");
     }
 
     #[test]

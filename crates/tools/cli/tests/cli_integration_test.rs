@@ -1403,7 +1403,7 @@ fn config_use_warns_when_environment_profile_remains_active() {
 
 #[cfg(unix)]
 #[test]
-fn node_hogd_dev_binary_json_starts_supervisor() {
+fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
     let data_root = TempDir::new().unwrap();
@@ -1413,6 +1413,8 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     let child = groundhog()
         .arg("--json")
         .arg("node")
+        .arg("--host")
+        .arg("0.0.0.0")
         .arg("--port")
         .arg("0")
         .arg("--hog-devnode-binary")
@@ -1471,7 +1473,8 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .as_str()
         .expect("bug: rpc_url string")
         .to_string();
-    assert!(rpc_url.starts_with("http://127.0.0.1:"));
+    assert!(rpc_url.starts_with("http://0.0.0.0:"));
+    let client_rpc_url = rpc_url.replacen("0.0.0.0", "127.0.0.1", 1);
     let manifest_path = payload["data"]["runtime_manifest"]["path"]
         .as_str()
         .expect("bug: runtime manifest path should be a string");
@@ -1481,7 +1484,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .expect("bug: tokio runtime should start")
         .block_on(async {
             let client = HttpClientBuilder::default()
-                .build(&rpc_url)
+                .build(&client_rpc_url)
                 .expect("bug: JSON-RPC client should build");
             client
                 .chain_tip()
