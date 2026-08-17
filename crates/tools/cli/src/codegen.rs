@@ -3235,7 +3235,7 @@ export type Result =
         clippy::too_many_lines,
         reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
     )]
-    fn swap_shaped_spec() -> ContractSpec {
+    fn typed_contract_spec() -> ContractSpec {
         let request_id = ContractType::Array {
             array: ContractArrayType {
                 element: Box::new(ContractType::U8),
@@ -3250,19 +3250,19 @@ export type Result =
         };
         ContractSpec {
             interfaces: vec![ContractSpecInterface {
-                name: spec_string("SwapPair"),
+                name: spec_string("ExampleContract"),
                 vers: spec_string("0.1.0"),
                 throws: vec![ContractExceptionType {
                     selector: 0x1234,
                     ty: ContractType::Named {
-                        named: spec_string("SwapError"),
+                        named: spec_string("ExampleError"),
                     },
                 }]
                 .try_into()
                 .unwrap(),
                 methods: vec![
                     ContractSpecMethod {
-                        name: spec_string("get_reserves"),
+                        name: spec_string("get_values"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::Tuple {
                             tuple: vec![ContractType::U128, ContractType::U128, ContractType::U64]
@@ -3271,10 +3271,10 @@ export type Result =
                         },
                     },
                     ContractSpecMethod {
-                        name: spec_string("swap"),
+                        name: spec_string("update"),
                         args: vec![
                             ContractField {
-                                name: spec_string("amount_out"),
+                                name: spec_string("value"),
                                 ty: ContractType::U128,
                             },
                             ContractField {
@@ -3296,15 +3296,15 @@ export type Result =
             .unwrap(),
             type_defs: vec![ContractTypeDef::TypeDefUnion {
                 union_def: ContractUnionDef {
-                    name: spec_string("SwapError"),
+                    name: spec_string("ExampleError"),
                     cases: vec![
                         ContractUnionCase {
-                            name: spec_string("InvalidAmount"),
+                            name: spec_string("InvalidValue"),
                             discriminant: -1,
                             case_type: ContractUnionCaseType::UnionCaseVoid,
                         },
                         ContractUnionCase {
-                            name: spec_string("TransferFailed"),
+                            name: spec_string("UpdateFailed"),
                             discriminant: 2,
                             case_type: ContractUnionCaseType::UnionCaseTuple {
                                 tuple: vec![ContractType::U32].try_into().unwrap(),
@@ -3318,11 +3318,11 @@ export type Result =
             .try_into()
             .unwrap(),
             events: vec![ContractEventDef {
-                name: spec_string("SwapEvent"),
+                name: spec_string("ChangedEvent"),
                 signature: [0x5a; 32].into(),
                 topics: vec![
                     ContractField {
-                        name: spec_string("sender"),
+                        name: spec_string("actor"),
                         ty: ContractType::Address,
                     },
                     ContractField {
@@ -3334,11 +3334,11 @@ export type Result =
                 .unwrap(),
                 fields: vec![
                     ContractField {
-                        name: spec_string("amounts_in"),
+                        name: spec_string("previous_values"),
                         ty: amounts.clone(),
                     },
                     ContractField {
-                        name: spec_string("amounts_out"),
+                        name: spec_string("current_values"),
                         ty: amounts,
                     },
                     ContractField {
@@ -3365,7 +3365,11 @@ export type Result =
                 "recursive_type.wasm",
                 recursive_type_spec(),
             ),
-            ("swap_shaped", "swap_pair.spec.xdr", swap_shaped_spec()),
+            (
+                "typed_contract",
+                "typed_contract.spec.xdr",
+                typed_contract_spec(),
+            ),
         ] {
             let output = generate_ts_bindings(&spec, source_name).unwrap();
             assert_codegen_snapshot(name, &output);

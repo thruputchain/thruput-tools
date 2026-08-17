@@ -349,7 +349,7 @@ Use structural or snapshot assertions for complete generated sections. Error tes
 
 ### Compatibility fixtures
 
-The codegen repository owns source specs and golden output for focused ERC20, recursive, and swap-shaped fixtures. The client repository owns runtime and type fixtures generated from those shapes. The `groundhog-examples` repository owns real swap bindings and migration tests.
+The codegen repository owns source specs and golden output for focused ERC20, recursive, and typed-contract fixtures. The client repository owns runtime and type fixtures generated from those shapes. The `groundhog-examples` repository owns real swap bindings and migration tests.
 
 The coordinated client tests prove:
 
@@ -383,6 +383,6 @@ The release is ready when:
 4. generated event decoders are strict and expose direct-topic filters and receipt extraction;
 5. raw client APIs remain available while generated methods use the single descriptor API;
 6. all source fragments emitted in this release are safely escaped and all emitted identifiers are validated contextually;
-7. curated and swap-shaped fixtures compile and pass focused round-trip tests against the coordinated client release;
+7. curated and typed-contract fixtures compile and pass focused round-trip tests against the coordinated client release;
 8. the real swap app removes runtime method-name lookup, handwritten return/abort decoding, fixed-length event repair, positional direct-topic filters, and handwritten receipt event scanning;
 9. deferred binders, root-receipt decoders, event encoders, hashed-topic filters, naming migration, and decoder budgets are not implementation prerequisites.
