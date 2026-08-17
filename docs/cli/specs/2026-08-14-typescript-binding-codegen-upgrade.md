@@ -4,9 +4,9 @@
 
 ## Goal
 
-Generate TypeScript bindings that preserve method arguments, return values, declared aborts, and identity through invocation and typed views, while strictly decoding contract events.
+Generate TypeScript bindings that preserve method arguments, return values, declared exceptions, and identity through invocation and typed views, while strictly decoding contract events.
 
-The first release targets integration code demonstrated by the swap app: anonymous method types, runtime method-name lookup, handwritten return and abort decoding, fixed-length repair, positional direct-topic filters, and receipt event scanning.
+The first release targets integration code demonstrated by the swap app: anonymous method types, runtime method-name lookup, handwritten return and exception decoding, fixed-length repair, positional direct-topic filters, and receipt event scanning.
 
 ## Scope
 
@@ -21,7 +21,7 @@ Generated files add:
 
 - corrected TypeScript projections for supported ABI types;
 - exported method argument and result types;
-- typed method descriptors for invocation, return, abort, and view workflows;
+- typed method descriptors for invocation, return, exception, and view workflows;
 - strict event decoders with semantic direct-topic types;
 - named event filters for directly represented topics;
 - receipt event extraction helpers;
@@ -135,7 +135,7 @@ Codecs map case names to signed discriminants. Reject unknown cases, undeclared 
 
 ## Generated Method API
 
-### Named types and aborts
+### Named types and exceptions
 
 For every method, export deterministic interface-qualified types:
 
@@ -149,20 +149,20 @@ export type ERC20GetBalanceOfResult = bigint;
 
 Zero-argument methods export `...Args = void`; void methods export `...Result = void`.
 
-Generate one declared-abort union per interface because the ABI declares `throws` at interface scope:
+Generate one declared-exception union per interface because the ABI declares `throws` at interface scope:
 
 ```ts
-export type ERC20DeclaredAbort = {
+export type ERC20DeclaredException = {
   kind: "declared";
-  exception: "ERC20Error";
+  name: "ERC20Error";
   selector: 0xb19947acb2fa14ffn;
   value: ERC20Error;
 };
 
-export type ERC20Abort = ContractAbort<ERC20DeclaredAbort>;
+export type ERC20Exception = ContractException<ERC20DeclaredException>;
 ```
 
-Unknown selectors preserve the selector and complete raw abort bytes. Declared abort decoding consumes the selector and value completely. Faults remain separate from aborts.
+Unknown exceptions preserve the selector and complete raw abort bytes. Declared exception decoding consumes the selector and value completely. Faults remain separate from aborts.
 
 ### Descriptors
 
@@ -175,7 +175,7 @@ export const ERC20 = {
   getBalanceOf: defineContractMethod<
     ERC20GetBalanceOfArgs,
     ERC20GetBalanceOfResult,
-    ERC20DeclaredAbort
+    ERC20DeclaredException
   >({
     entrypoint: entrypoints.ERC20.getBalanceOf,
     args: [
@@ -196,7 +196,7 @@ The metadata contract is:
 
 - each argument has ABI name, public camelCase name, and direct `ContractType`;
 - the result has a direct `ContractType`;
-- each exception has selector, `ContractType`, and a label equal to its named type or `null` for supported non-named types;
+- each exception has selector, `ContractType`, and a name equal to its named type or `null` for supported non-named types;
 - every descriptor receives the module's shared `ContractCodecContext`.
 
 It must not require a public reader-aware codec DSL. Reject duplicate exception selectors.
@@ -205,13 +205,13 @@ Each descriptor exposes:
 
 - `invocation(contract, gasLimit, args?)`;
 - strict `decodeReturn(data)`;
-- `decodeAbort(data)`;
+- `decodeException(data)`;
 - typed non-throwing `viewOutcome({ client, contract, caller?, args? })`;
 - ergonomic throwing `view({ client, contract, caller?, args? })`.
 
 Descriptor construction may resolve internal codecs once. Descriptor operations must not search a `ContractSpec` by interface or method name. Do not generate invocation-builder aliases or a second encoding path.
 
-Views preserve response height and raw emitted events. Return and abort decoders reject trailing bytes. Transport and RPC errors propagate unchanged.
+Views preserve response height and raw emitted events. Return and exception decoders reject trailing bytes. Transport and RPC errors propagate unchanged.
 
 ## Generated Event API
 
@@ -321,7 +321,7 @@ The client runtime owns:
 
 - corrected dynamic codecs and fixed-value validation;
 - complete-consumption helpers;
-- method descriptor, view, and abort behavior;
+- method descriptor, view abort-outcome behavior, and exception decoding;
 - strict event decoding, direct-topic filter, receipt extraction, and byte-equality primitives;
 - shared public outcome and error types.
 
@@ -339,7 +339,7 @@ Cover:
 - case-name unions with void, tuple, and struct arms;
 - recursive named types;
 - method args/results, zero args, void results, and multiple interfaces;
-- declared abort metadata and duplicate selectors;
+- declared exception metadata and duplicate selectors;
 - strict event decoder generation;
 - duplicate event signature rejection;
 - direct-topic filters and receipt helpers;
@@ -356,7 +356,7 @@ The coordinated client tests prove:
 - argument and return round trips;
 - signed enum and union values;
 - U8 containers and fixed lengths;
-- strict return, abort, and event decoding;
+- strict return, exception, and event decoding;
 - view return, abort, and fault outcomes with height and events;
 - direct-topic filters;
 - emitter-scoped receipt extraction and cardinality.
@@ -384,5 +384,5 @@ The release is ready when:
 5. raw client APIs remain available while generated methods use the single descriptor API;
 6. all source fragments emitted in this release are safely escaped and all emitted identifiers are validated contextually;
 7. curated and typed-contract fixtures compile and pass focused round-trip tests against the coordinated client release;
-8. the real swap app removes runtime method-name lookup, handwritten return/abort decoding, fixed-length event repair, positional direct-topic filters, and handwritten receipt event scanning;
+8. the real swap app removes runtime method-name lookup, handwritten return/exception decoding, fixed-length event repair, positional direct-topic filters, and handwritten receipt event scanning;
 9. deferred binders, root-receipt decoders, event encoders, hashed-topic filters, naming migration, and decoder budgets are not implementation prerequisites.

@@ -232,7 +232,7 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         let _ = writeln!(out, "{}", emit_type_def(def)?);
     }
 
-    // 5. Method argument, result, and abort declarations
+    // 5. Method argument, result, and exception declarations
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
         let _ = writeln!(out);
         emit_interface_types(
@@ -371,7 +371,7 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         client_imports.push("defineContractMethod");
     }
     if !spec.interfaces.is_empty() {
-        client_imports.push("type ContractAbort");
+        client_imports.push("type ContractException");
     }
     if uses_fixed_array {
         client_imports.push("type FixedArray");
@@ -812,17 +812,17 @@ fn emit_interface_types(
         let _ = writeln!(out);
     }
 
-    let declared_abort = format!("{iface_name}DeclaredAbort");
+    let declared_exception = format!("{iface_name}DeclaredException");
     if iface.throws.is_empty() {
-        let _ = writeln!(out, "export type {declared_abort} = never;");
+        let _ = writeln!(out, "export type {declared_exception} = never;");
     } else {
-        let _ = writeln!(out, "export type {declared_abort} =");
+        let _ = writeln!(out, "export type {declared_exception} =");
         for (index, exception) in iface.throws.iter().enumerate() {
             let prefix = if index == 0 { "  " } else { "  | " };
-            let label = exception_label(&exception.ty)?;
+            let name = exception_name(&exception.ty)?;
             let _ = writeln!(out, "{prefix}{{");
             let _ = writeln!(out, "    kind: \"declared\";");
-            let _ = writeln!(out, "    exception: {label};");
+            let _ = writeln!(out, "    name: {name};");
             let _ = writeln!(out, "    selector: 0x{:x}n;", exception.selector);
             let _ = writeln!(out, "    value: {};", ts_type_ref(&exception.ty)?);
             let _ = writeln!(
@@ -838,7 +838,7 @@ fn emit_interface_types(
     }
     let _ = writeln!(
         out,
-        "export type {iface_name}Abort = ContractAbort<{declared_abort}>;"
+        "export type {iface_name}Exception = ContractException<{declared_exception}>;"
     );
     Ok(())
 }
@@ -857,7 +857,7 @@ fn emit_interface_method(
     let _ = writeln!(out, "  {public_method_name}: defineContractMethod<");
     let _ = writeln!(out, "    {stem}Args,");
     let _ = writeln!(out, "    {stem}Result,");
-    let _ = writeln!(out, "    {iface_name}DeclaredAbort");
+    let _ = writeln!(out, "    {iface_name}DeclaredException");
     let _ = writeln!(out, "  >({{");
     let _ = writeln!(
         out,
@@ -889,11 +889,7 @@ fn emit_interface_method(
     for (exception_index, exception) in iface.throws.iter().enumerate() {
         let _ = writeln!(out, "      {{");
         let _ = writeln!(out, "        selector: 0x{:x}n,", exception.selector);
-        let _ = writeln!(
-            out,
-            "        exception: {},",
-            exception_label(&exception.ty)?
-        );
+        let _ = writeln!(out, "        name: {},", exception_name(&exception.ty)?);
         let _ = writeln!(
             out,
             "        type: spec.interfaces[{iface_index}]!.throws[{exception_index}]!.ty,"
@@ -1111,7 +1107,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         conditional_imports.push("ContractTypeDefKind");
     }
     if !spec.interfaces.is_empty() {
-        conditional_imports.push("ContractAbort");
+        conditional_imports.push("ContractException");
     }
     if uses_address {
         conditional_imports.push("ContractAddress");
@@ -1203,14 +1199,17 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             iface_name.to_owned(),
             format!("interface \"{iface_name}\""),
         )?;
-        let declared_abort = format!("{iface_name}DeclaredAbort");
-        let abort = format!("{iface_name}Abort");
+        let declared_exception = format!("{iface_name}DeclaredException");
+        let exception = format!("{iface_name}Exception");
         for (name, source) in [
             (
-                declared_abort,
-                format!("interface \"{iface_name}\" abort union"),
+                declared_exception,
+                format!("interface \"{iface_name}\" exception union"),
             ),
-            (abort, format!("interface \"{iface_name}\" public abort")),
+            (
+                exception,
+                format!("interface \"{iface_name}\" public exception"),
+            ),
         ] {
             validate_ts_identifier(&name, &source)?;
             reserve_ts_value_name(&mut top_level_values, name, source)?;
@@ -1674,7 +1673,7 @@ fn method_type_stem(interface_name: &str, public_method_name: &str) -> String {
     )
 }
 
-fn exception_label(ty: &ContractType) -> Result<String, CliError> {
+fn exception_name(ty: &ContractType) -> Result<String, CliError> {
     if let ContractType::Named { named } = ty {
         Ok(ts_string_literal(spec_string_text(named)?))
     } else {
@@ -2635,8 +2634,10 @@ export type Result =
         assert!(output.contains("export interface CounterIncrementArgs"));
         assert!(output.contains("amount: bigint"));
         assert!(output.contains("export type CounterIncrementResult = void;"));
-        assert!(output.contains("export type CounterDeclaredAbort = never;"));
-        assert!(output.contains("export type CounterAbort = ContractAbort<CounterDeclaredAbort>;"));
+        assert!(output.contains("export type CounterDeclaredException = never;"));
+        assert!(output.contains(
+            "export type CounterException = ContractException<CounterDeclaredException>;"
+        ));
         assert!(output.contains("  get: defineContractMethod<"));
         assert!(output.contains("  increment: defineContractMethod<"));
         assert!(output.contains("returnType: spec.interfaces[0]!.methods[0]!.return_type"));
@@ -2820,10 +2821,14 @@ export type Result =
         );
         assert!(output.contains("abiName: \"account_id\""));
         assert!(output.contains("publicName: \"accountId\""));
-        assert!(output.contains("export type ERC20DeclaredAbort ="));
-        assert!(output.contains("exception: \"ERC20Error\";"));
+        assert!(output.contains("export type ERC20DeclaredException ="));
+        assert!(output.contains("name: \"ERC20Error\";"));
         assert!(output.contains("value: ERC20Error;"));
-        assert!(output.contains("export type ERC20Abort = ContractAbort<ERC20DeclaredAbort>;"));
+        assert!(
+            output.contains(
+                "export type ERC20Exception = ContractException<ERC20DeclaredException>;"
+            )
+        );
         assert!(output.contains("type: spec.interfaces[0]!.throws[0]!.ty"));
 
         // Spec literal contains exception selector

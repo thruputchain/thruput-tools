@@ -5,7 +5,7 @@ import type { ContractAddress } from "@groundhogchain/protocol";
 import { contractEntrypointID, topic } from "@groundhogchain/protocol";
 import { fromHex } from "@groundhogchain/protocol/utils";
 import { ContractTypeKind, ContractTypeDefKind, contractSpecString, ContractUnionCaseKind } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractAbort, type FixedBytes, defineContractEvent, type DecodedContractEvent, type ContractEventFilterValue } from "@groundhogchain/client/contract";
+import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException, type FixedBytes, defineContractEvent, type DecodedContractEvent, type ContractEventFilterValue } from "@groundhogchain/client/contract";
 
 const s = contractSpecString;
 
@@ -29,14 +29,14 @@ export interface ExampleContractUpdateArgs {
 }
 export type ExampleContractUpdateResult = void;
 
-export type ExampleContractDeclaredAbort =
+export type ExampleContractDeclaredException =
   {
     kind: "declared";
-    exception: "ExampleError";
+    name: "ExampleError";
     selector: 0x1234n;
     value: ExampleError;
   };
-export type ExampleContractAbort = ContractAbort<ExampleContractDeclaredAbort>;
+export type ExampleContractException = ContractException<ExampleContractDeclaredException>;
 
 export const spec: ContractSpec = {
   interfaces: [
@@ -107,7 +107,7 @@ export const ExampleContract = {
   getValues: defineContractMethod<
     ExampleContractGetValuesArgs,
     ExampleContractGetValuesResult,
-    ExampleContractDeclaredAbort
+    ExampleContractDeclaredException
   >({
     entrypoint: entrypoints.ExampleContract.getValues,
     args: [
@@ -116,7 +116,7 @@ export const ExampleContract = {
     throws: [
       {
         selector: 0x1234n,
-        exception: "ExampleError",
+        name: "ExampleError",
         type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
@@ -125,7 +125,7 @@ export const ExampleContract = {
   update: defineContractMethod<
     ExampleContractUpdateArgs,
     ExampleContractUpdateResult,
-    ExampleContractDeclaredAbort
+    ExampleContractDeclaredException
   >({
     entrypoint: entrypoints.ExampleContract.update,
     args: [
@@ -144,7 +144,7 @@ export const ExampleContract = {
     throws: [
       {
         selector: 0x1234n,
-        exception: "ExampleError",
+        name: "ExampleError",
         type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],

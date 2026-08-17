@@ -4,7 +4,7 @@
 import { contractEntrypointID } from "@groundhogchain/protocol";
 import { fromHex } from "@groundhogchain/protocol/utils";
 import { ContractTypeKind, ContractTypeDefKind, contractSpecString } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractAbort } from "@groundhogchain/client/contract";
+import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException } from "@groundhogchain/client/contract";
 
 const s = contractSpecString;
 
@@ -21,8 +21,8 @@ export interface RecursiveTypeContractDepthArgs {
 }
 export type RecursiveTypeContractDepthResult = bigint;
 
-export type RecursiveTypeContractDeclaredAbort = never;
-export type RecursiveTypeContractAbort = ContractAbort<RecursiveTypeContractDeclaredAbort>;
+export type RecursiveTypeContractDeclaredException = never;
+export type RecursiveTypeContractException = ContractException<RecursiveTypeContractDeclaredException>;
 
 export const spec: ContractSpec = {
   interfaces: [
@@ -65,7 +65,7 @@ export const RecursiveTypeContract = {
   depth: defineContractMethod<
     RecursiveTypeContractDepthArgs,
     RecursiveTypeContractDepthResult,
-    RecursiveTypeContractDeclaredAbort
+    RecursiveTypeContractDeclaredException
   >({
     entrypoint: entrypoints.RecursiveTypeContract.depth,
     args: [

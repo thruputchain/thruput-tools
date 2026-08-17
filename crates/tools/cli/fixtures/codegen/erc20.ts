@@ -5,7 +5,7 @@ import type { ContractAddress } from "@groundhogchain/protocol";
 import { contractEntrypointID } from "@groundhogchain/protocol";
 import { fromHex } from "@groundhogchain/protocol/utils";
 import { ContractTypeKind, ContractTypeDefKind, contractSpecString } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractAbort } from "@groundhogchain/client/contract";
+import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException } from "@groundhogchain/client/contract";
 
 const s = contractSpecString;
 
@@ -35,14 +35,14 @@ export interface ERC20GetBalanceOfArgs {
 }
 export type ERC20GetBalanceOfResult = bigint;
 
-export type ERC20DeclaredAbort =
+export type ERC20DeclaredException =
   {
     kind: "declared";
-    exception: "ERC20Error";
+    name: "ERC20Error";
     selector: 0xb19947acb2fa14ffn;
     value: ERC20Error;
   };
-export type ERC20Abort = ContractAbort<ERC20DeclaredAbort>;
+export type ERC20Exception = ContractException<ERC20DeclaredException>;
 
 export const spec: ContractSpec = {
   interfaces: [
@@ -101,7 +101,7 @@ export const ERC20 = {
   transfer: defineContractMethod<
     ERC20TransferArgs,
     ERC20TransferResult,
-    ERC20DeclaredAbort
+    ERC20DeclaredException
   >({
     entrypoint: entrypoints.ERC20.transfer,
     args: [
@@ -120,7 +120,7 @@ export const ERC20 = {
     throws: [
       {
         selector: 0xb19947acb2fa14ffn,
-        exception: "ERC20Error",
+        name: "ERC20Error",
         type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
@@ -129,7 +129,7 @@ export const ERC20 = {
   getBalance: defineContractMethod<
     ERC20GetBalanceArgs,
     ERC20GetBalanceResult,
-    ERC20DeclaredAbort
+    ERC20DeclaredException
   >({
     entrypoint: entrypoints.ERC20.getBalance,
     args: [
@@ -138,7 +138,7 @@ export const ERC20 = {
     throws: [
       {
         selector: 0xb19947acb2fa14ffn,
-        exception: "ERC20Error",
+        name: "ERC20Error",
         type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
@@ -147,7 +147,7 @@ export const ERC20 = {
   getBalanceOf: defineContractMethod<
     ERC20GetBalanceOfArgs,
     ERC20GetBalanceOfResult,
-    ERC20DeclaredAbort
+    ERC20DeclaredException
   >({
     entrypoint: entrypoints.ERC20.getBalanceOf,
     args: [
@@ -161,7 +161,7 @@ export const ERC20 = {
     throws: [
       {
         selector: 0xb19947acb2fa14ffn,
-        exception: "ERC20Error",
+        name: "ERC20Error",
         type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
