@@ -72,10 +72,10 @@ export const RecursiveTypeContract = {
       {
         abiName: "tree",
         publicName: "tree",
-        type: spec.interfaces[0].methods[0].args[0].ty,
+        type: spec.interfaces[0]!.methods[0]!.args[0]!.ty,
       },
     ],
-    returnType: spec.interfaces[0].methods[0].return_type,
+    returnType: spec.interfaces[0]!.methods[0]!.return_type,
     throws: [
     ],
     codecs,

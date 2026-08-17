@@ -108,20 +108,20 @@ export const ERC20 = {
       {
         abiName: "to",
         publicName: "to",
-        type: spec.interfaces[0].methods[0].args[0].ty,
+        type: spec.interfaces[0]!.methods[0]!.args[0]!.ty,
       },
       {
         abiName: "amount",
         publicName: "amount",
-        type: spec.interfaces[0].methods[0].args[1].ty,
+        type: spec.interfaces[0]!.methods[0]!.args[1]!.ty,
       },
     ],
-    returnType: spec.interfaces[0].methods[0].return_type,
+    returnType: spec.interfaces[0]!.methods[0]!.return_type,
     throws: [
       {
         selector: 0xb19947acb2fa14ffn,
         exception: "ERC20Error",
-        type: spec.interfaces[0].throws[0].ty,
+        type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
     codecs,
@@ -134,12 +134,12 @@ export const ERC20 = {
     entrypoint: entrypoints.ERC20.getBalance,
     args: [
     ],
-    returnType: spec.interfaces[0].methods[1].return_type,
+    returnType: spec.interfaces[0]!.methods[1]!.return_type,
     throws: [
       {
         selector: 0xb19947acb2fa14ffn,
         exception: "ERC20Error",
-        type: spec.interfaces[0].throws[0].ty,
+        type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
     codecs,
@@ -154,15 +154,15 @@ export const ERC20 = {
       {
         abiName: "account_id",
         publicName: "accountId",
-        type: spec.interfaces[0].methods[2].args[0].ty,
+        type: spec.interfaces[0]!.methods[2]!.args[0]!.ty,
       },
     ],
-    returnType: spec.interfaces[0].methods[2].return_type,
+    returnType: spec.interfaces[0]!.methods[2]!.return_type,
     throws: [
       {
         selector: 0xb19947acb2fa14ffn,
         exception: "ERC20Error",
-        type: spec.interfaces[0].throws[0].ty,
+        type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
     codecs,

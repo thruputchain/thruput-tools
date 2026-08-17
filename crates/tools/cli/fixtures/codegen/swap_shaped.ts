@@ -112,12 +112,12 @@ export const SwapPair = {
     entrypoint: entrypoints.SwapPair.getReserves,
     args: [
     ],
-    returnType: spec.interfaces[0].methods[0].return_type,
+    returnType: spec.interfaces[0]!.methods[0]!.return_type,
     throws: [
       {
         selector: 0x1234n,
         exception: "SwapError",
-        type: spec.interfaces[0].throws[0].ty,
+        type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
     codecs,
@@ -132,20 +132,20 @@ export const SwapPair = {
       {
         abiName: "amount_out",
         publicName: "amountOut",
-        type: spec.interfaces[0].methods[1].args[0].ty,
+        type: spec.interfaces[0]!.methods[1]!.args[0]!.ty,
       },
       {
         abiName: "request_id",
         publicName: "requestId",
-        type: spec.interfaces[0].methods[1].args[1].ty,
+        type: spec.interfaces[0]!.methods[1]!.args[1]!.ty,
       },
     ],
-    returnType: spec.interfaces[0].methods[1].return_type,
+    returnType: spec.interfaces[0]!.methods[1]!.return_type,
     throws: [
       {
         selector: 0x1234n,
         exception: "SwapError",
-        type: spec.interfaces[0].throws[0].ty,
+        type: spec.interfaces[0]!.throws[0]!.ty,
       },
     ],
     codecs,
@@ -170,23 +170,23 @@ export const SwapEvent = defineContractEvent<
   SwapEventFilter
 >({
   name: "SwapEvent",
-  signature: spec.events[0].signature,
+  signature: spec.events[0]!.signature,
   topics: [
     {
       name: "sender",
-      type: spec.events[0].topics[0].ty,
+      type: spec.events[0]!.topics[0]!.ty,
       representation: "address",
     },
     {
       name: "request_id",
-      type: spec.events[0].topics[1].ty,
+      type: spec.events[0]!.topics[1]!.ty,
       representation: "fixedBytes32",
     },
   ],
   fields: [
-    { name: "amounts_in", type: spec.events[0].fields[0].ty },
-    { name: "amounts_out", type: spec.events[0].fields[1].ty },
-    { name: "request_id", type: spec.events[0].fields[2].ty },
+    { name: "amounts_in", type: spec.events[0]!.fields[0]!.ty },
+    { name: "amounts_out", type: spec.events[0]!.fields[1]!.ty },
+    { name: "request_id", type: spec.events[0]!.fields[2]!.ty },
   ],
   codecs,
 });

@@ -876,14 +876,14 @@ fn emit_interface_method(
         );
         let _ = writeln!(
             out,
-            "        type: spec.interfaces[{iface_index}].methods[{method_index}].args[{arg_index}].ty,"
+            "        type: spec.interfaces[{iface_index}]!.methods[{method_index}]!.args[{arg_index}]!.ty,"
         );
         let _ = writeln!(out, "      }},");
     }
     let _ = writeln!(out, "    ],");
     let _ = writeln!(
         out,
-        "    returnType: spec.interfaces[{iface_index}].methods[{method_index}].return_type,"
+        "    returnType: spec.interfaces[{iface_index}]!.methods[{method_index}]!.return_type,"
     );
     let _ = writeln!(out, "    throws: [");
     for (exception_index, exception) in iface.throws.iter().enumerate() {
@@ -896,7 +896,7 @@ fn emit_interface_method(
         );
         let _ = writeln!(
             out,
-            "        type: spec.interfaces[{iface_index}].throws[{exception_index}].ty,"
+            "        type: spec.interfaces[{iface_index}]!.throws[{exception_index}]!.ty,"
         );
         let _ = writeln!(out, "      }},");
     }
@@ -967,7 +967,7 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
     let _ = writeln!(out, "  {name}Filter");
     let _ = writeln!(out, ">({{");
     let _ = writeln!(out, "  name: {},", ts_string_literal(name));
-    let _ = writeln!(out, "  signature: spec.events[{idx}].signature,");
+    let _ = writeln!(out, "  signature: spec.events[{idx}]!.signature,");
     let _ = writeln!(out, "  topics: [");
     for (field_index, field) in event.topics.iter().enumerate() {
         let fname = spec_string_text(&field.name)?;
@@ -975,7 +975,7 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         let _ = writeln!(out, "      name: {},", ts_string_literal(fname));
         let _ = writeln!(
             out,
-            "      type: spec.events[{idx}].topics[{field_index}].ty,"
+            "      type: spec.events[{idx}]!.topics[{field_index}]!.ty,"
         );
         let _ = writeln!(
             out,
@@ -990,7 +990,7 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         let fname = spec_string_text(&field.name)?;
         let _ = writeln!(
             out,
-            "    {{ name: {}, type: spec.events[{idx}].fields[{field_index}].ty }},",
+            "    {{ name: {}, type: spec.events[{idx}]!.fields[{field_index}]!.ty }},",
             ts_string_literal(fname)
         );
     }
@@ -2202,9 +2202,11 @@ export type Result =
             "missing event descriptor:\n{output}"
         );
         assert!(
-            output.contains("signature: spec.events[0].signature"),
+            output.contains("signature: spec.events[0]!.signature"),
             "missing signature metadata:\n{output}"
         );
+        assert!(output.contains("type: spec.events[0]!.topics[0]!.ty"));
+        assert!(output.contains("type: spec.events[0]!.fields[0]!.ty"));
         assert!(
             output.contains("representation: \"hash\""),
             "missing topic representation metadata:\n{output}"
@@ -2357,8 +2359,8 @@ export type Result =
         assert!(output.contains("  initialize: defineContractMethod<"));
         assert!(output.contains("entrypoint: entrypoints.ERC20.initialize,"));
         assert!(output.contains("entrypoint: entrypoints.ERC20Metadata.initialize,"));
-        assert!(output.contains("type: spec.interfaces[0].methods[0].args[0].ty"));
-        assert!(output.contains("type: spec.interfaces[1].methods[0].args[0].ty"));
+        assert!(output.contains("type: spec.interfaces[0]!.methods[0]!.args[0]!.ty"));
+        assert!(output.contains("type: spec.interfaces[1]!.methods[0]!.args[0]!.ty"));
     }
 
     #[test]
@@ -2637,8 +2639,8 @@ export type Result =
         assert!(output.contains("export type CounterAbort = ContractAbort<CounterDeclaredAbort>;"));
         assert!(output.contains("  get: defineContractMethod<"));
         assert!(output.contains("  increment: defineContractMethod<"));
-        assert!(output.contains("returnType: spec.interfaces[0].methods[0].return_type"));
-        assert!(output.contains("returnType: spec.interfaces[0].methods[1].return_type"));
+        assert!(output.contains("returnType: spec.interfaces[0]!.methods[0]!.return_type"));
+        assert!(output.contains("returnType: spec.interfaces[0]!.methods[1]!.return_type"));
         assert!(!output.contains("encodeCalldata"));
         assert!(!output.contains("createInvocation"));
 
@@ -2822,6 +2824,7 @@ export type Result =
         assert!(output.contains("exception: \"ERC20Error\";"));
         assert!(output.contains("value: ERC20Error;"));
         assert!(output.contains("export type ERC20Abort = ContractAbort<ERC20DeclaredAbort>;"));
+        assert!(output.contains("type: spec.interfaces[0]!.throws[0]!.ty"));
 
         // Spec literal contains exception selector
         assert!(
