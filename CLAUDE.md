@@ -531,6 +531,8 @@ history retains the design context for anything not currently active.
   transaction detail / receipt response shape.
 - `docs/cli/specs/2026-06-25-remote-devnet-faucet-design.md` —
   remote devnet network UX, faucet funding, and wallet-create flow.
+- `docs/cli/specs/2026-08-17-wasm-removal-design.md` — WASM removal
+  audit and slice plan for the tooling workspace.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — gateway architecture.
 - `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
