@@ -64,6 +64,7 @@ Hosted Devnet loads the same hex string from AWS Secrets Manager:
 [airdrop.secret_key_source]
 type = "aws_secrets_manager"
 secret_id = "groundhog/devnet/faucet"
+version_id = "EXAMPLE_VERSION_ID"
 region = "us-west-2"
 ```
 

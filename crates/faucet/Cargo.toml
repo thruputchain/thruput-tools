@@ -44,5 +44,8 @@ xdrs = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+aws-smithy-http-client = { workspace = true }
+aws-smithy-types = { workspace = true }
+http = { workspace = true }
 serial_test = { workspace = true }
 tower = { workspace = true, features = ["util"] }

@@ -40,13 +40,13 @@ jobs:
             rm -f /home/hogci/.gitconfig
 
       - name: Setup SSH Agent
-        uses: webfactory/ssh-agent@v0.9.1
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: |
             ${{ secrets.ACTIONS_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: true
 
@@ -55,11 +55,11 @@ jobs:
           git config --global url."git@github.com:".insteadOf "https://github.com/"
 
       - name: Checkout actions repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: groundhogchain/actions
           path: actions
-          ref: main
+          ref: 6661fedc744b057368d7ecb0127aece0aa12b426
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown

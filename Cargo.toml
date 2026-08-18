@@ -23,7 +23,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 authors = ["Stellar Development Foundation"]
 license = "Apache-2.0"
@@ -39,17 +39,17 @@ categories = ["development-tools"]
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.9.3", registry = "groundhog" }
-groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.9.3", registry = "groundhog" }
-groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.9.3", registry = "groundhog" }
-groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.9.3", registry = "groundhog" }
-groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.9.3", registry = "groundhog" }
-groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.9.3", registry = "groundhog" }
-groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.9.3", registry = "groundhog" }
-groundhog-signing = { path = "crates/tools/signing", version = "=0.9.3", registry = "groundhog" }
-groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.9.3", registry = "groundhog" }
-groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.9.3", registry = "groundhog" }
-groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.9.3", registry = "groundhog" }
+groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.9.4", registry = "groundhog" }
+groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.9.4", registry = "groundhog" }
+groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.9.4", registry = "groundhog" }
+groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.9.4", registry = "groundhog" }
+groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.9.4", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.9.4", registry = "groundhog" }
+groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.9.4", registry = "groundhog" }
+groundhog-signing = { path = "crates/tools/signing", version = "=0.9.4", registry = "groundhog" }
+groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.9.4", registry = "groundhog" }
+groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.9.4", registry = "groundhog" }
+groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.9.4", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 groundhog-xdr = { version = "0.21.1", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
@@ -75,6 +75,8 @@ sdk = { version = "0.19.6", registry = "groundhog" }
 async-trait = "0.1"
 aws-config = { version = "1.9.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-secretsmanager = "1.109.0"
+aws-smithy-http-client = { version = "1.2.0", features = ["test-util"] }
+aws-smithy-types = "1.6.1"
 
 # --- JSON-RPC ---
 jsonrpsee = { version = "0.25", features = ["server", "client", "macros"] }
@@ -82,6 +84,7 @@ jsonrpsee-types = "0.25"
 
 # --- HTTP / Async ---
 axum = "0.8"
+http = "1"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
