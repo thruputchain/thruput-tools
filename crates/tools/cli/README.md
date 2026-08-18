@@ -490,9 +490,11 @@ groundhog node -v
 RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 ```
 
-`groundhog node --json` emits the startup payload with `rpc_url`, hog-devnode
-backend planes, endpoint metadata, and the local dev-account surface for
-scripting. Stdout is reserved for this startup payload in JSON mode.
+`groundhog node --json` emits the startup payload with a connectable `rpc_url`,
+the actual `rpc_listen_address`, hog-devnode backend planes, endpoint metadata,
+and the local dev-account surface for scripting. When the listener uses a
+wildcard address, `rpc_url` uses loopback in the same address family. Stdout is
+reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
 `--rpc-max-connections` controls the public JSON-RPC simultaneous connection
 cap; the default is 2000.
