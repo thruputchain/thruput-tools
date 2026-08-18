@@ -442,7 +442,7 @@ manifest rather than ad hoc readiness JSON.
 - [x] Teach `groundhog-bench` to read a runtime manifest.
 - [x] Generate valid dev-wallet transaction workloads from `bootstrapAccounts`.
 - [x] Keep the current URL-only mode for simple RPC smoke tests.
-- [ ] Add machine-readable benchmark output if missing for comparison across runs.
+- [x] Add machine-readable benchmark output for comparison across runs.
 - [x] Teach CLI `dev-N` wallet-address resolution to use a configured runtime
   manifest.
 

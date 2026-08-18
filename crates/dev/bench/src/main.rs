@@ -13,7 +13,7 @@
 //!   # Against real gateway (load):
 //!   groundhog-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{path::Path, process, sync::Arc};
 
 use clap::Parser;
@@ -31,10 +31,167 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 use hdrhistogram::Histogram;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
+const BENCH_RESULT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestOutcome {
+    Success,
+    Error(RequestErrorKind),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestErrorKind {
+    Transport,
+    HttpStatus,
+    InvalidJsonRpcResponse,
+    JsonRpc,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestErrorCounts {
+    transport: u64,
+    http_status: u64,
+    invalid_json_rpc_response: u64,
+    json_rpc: u64,
+}
+
+impl RequestErrorCounts {
+    fn record(&mut self, kind: RequestErrorKind) {
+        match kind {
+            RequestErrorKind::Transport => self.transport += 1,
+            RequestErrorKind::HttpStatus => self.http_status += 1,
+            RequestErrorKind::InvalidJsonRpcResponse => self.invalid_json_rpc_response += 1,
+            RequestErrorKind::JsonRpc => self.json_rpc += 1,
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.transport += other.transport;
+        self.http_status += other.http_status;
+        self.invalid_json_rpc_response += other.invalid_json_rpc_response;
+        self.json_rpc += other.json_rpc;
+    }
+
+    fn total(self) -> u64 {
+        self.transport + self.http_status + self.invalid_json_rpc_response + self.json_rpc
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BenchResult {
+    schema_version: u32,
+    kind: &'static str,
+    generated_at_unix_ms: u128,
+    producer: ProducerMetadata,
+    platform: PlatformMetadata,
+    runtime: Option<RuntimeIdentity>,
+    configuration: BenchConfiguration,
+    calibration: CalibrationMetrics,
+    requests: RequestMetrics,
+    rates: RateMetrics,
+    successful_latency_us: Option<LatencyMetrics>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProducerMetadata {
+    name: &'static str,
+    version: &'static str,
+    build_profile: &'static str,
+    git_commit: Option<String>,
+    git_dirty: Option<bool>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct PlatformMetadata {
+    os: &'static str,
+    arch: &'static str,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeIdentity {
+    manifest_sha256: String,
+    manifest_schema_version: u32,
+    kind: String,
+    chain_state: Option<String>,
+    network_hash: String,
+    protocol: String,
+    genesis_hash: String,
+    producer: RuntimeProducerIdentity,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeProducerIdentity {
+    binary: String,
+    version: String,
+    commit_hash: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BenchConfiguration {
+    scenario: Option<String>,
+    target_label: Option<String>,
+    url: String,
+    method: String,
+    mode: &'static str,
+    target_requests_per_second: Option<u64>,
+    duration_seconds: u64,
+    warmup_seconds: u64,
+    workers: usize,
+    connections_per_worker: usize,
+    max_inflight_per_worker: usize,
+    accounts: usize,
+    transaction_batch_size: usize,
+    max_skew_seconds: f64,
+    runtime_manifest: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CalibrationMetrics {
+    median_rtt_us: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RequestMetrics {
+    total: u64,
+    successful: u64,
+    failed: u64,
+    errors: RequestErrorCounts,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RateMetrics {
+    attempted_requests_per_second: f64,
+    successful_requests_per_second: f64,
+    target_achievement_percent: Option<f64>,
+    run_wall_time_ms: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct LatencyMetrics {
+    samples: u64,
+    min: u64,
+    p50: u64,
+    p90: u64,
+    p95: u64,
+    p99: u64,
+    p999: u64,
+    max: u64,
+    mean: f64,
+}
 
 #[derive(Debug, thiserror::Error)]
 enum BenchError {
@@ -160,6 +317,18 @@ struct Cli {
     /// Max accumulated scheduling skew before aborting (seconds).
     #[arg(long, default_value = "1.0")]
     max_skew: f64,
+
+    /// Stable name for the enclosing scenario, when run by an orchestrator.
+    #[arg(long)]
+    scenario: Option<String>,
+
+    /// Human-readable identity for the endpoint under test.
+    #[arg(long)]
+    target_label: Option<String>,
+
+    /// Emit a versioned machine-readable result on stdout.
+    #[arg(long)]
+    json: bool,
 }
 
 fn dev_signer_from_seed(seed: &str, index: usize) -> LocalSigner {
@@ -169,6 +338,11 @@ fn dev_signer_from_seed(seed: &str, index: usize) -> LocalSigner {
 struct BenchAccount {
     signer: LocalSigner,
     wallet_address: ContractAddress,
+}
+
+struct LoadedRuntimeManifest {
+    manifest: RuntimeManifest,
+    sha256: String,
 }
 
 /// Pre-generate a batch of hex-encoded signed transactions.
@@ -268,7 +442,7 @@ fn transaction_inputs_for_method(
     Ok((accounts, entrypoint))
 }
 
-async fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest, BenchError> {
+async fn load_runtime_manifest(path: &Path) -> Result<LoadedRuntimeManifest, BenchError> {
     let path_display = path.display().to_string();
     let file = tokio::fs::File::open(path)
         .await
@@ -300,7 +474,10 @@ async fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest, BenchErro
             BenchError::UnsupportedManifestSchema { actual }
         }
     })?;
-    Ok(manifest)
+    Ok(LoadedRuntimeManifest {
+        manifest,
+        sha256: format!("0x{}", hex::encode(Sha256::digest(&bytes))),
+    })
 }
 
 /// Build a JSON-RPC request body.
@@ -337,6 +514,55 @@ fn validate_method(method: &str) -> Result<(), BenchError> {
     }
 }
 
+fn classify_json_rpc_value(value: &serde_json::Value, expected_id: u64) -> RequestOutcome {
+    let Some(object) = value.as_object() else {
+        return RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse);
+    };
+    if object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+        || object.get("id").and_then(serde_json::Value::as_u64) != Some(expected_id)
+    {
+        return RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse);
+    }
+    match (object.get("result"), object.get("error")) {
+        (Some(_), None) => RequestOutcome::Success,
+        (None, Some(serde_json::Value::Object(error)))
+            if error
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .is_some()
+                && error
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some() =>
+        {
+            RequestOutcome::Error(RequestErrorKind::JsonRpc)
+        }
+        _ => RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse),
+    }
+}
+
+async fn classify_response(
+    response: Result<reqwest::Response, reqwest::Error>,
+    expected_id: u64,
+) -> RequestOutcome {
+    let response = match response {
+        Ok(response) => response,
+        Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
+    };
+    let status = response.status();
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
+    };
+    if !status.is_success() {
+        return RequestOutcome::Error(RequestErrorKind::HttpStatus);
+    }
+    match serde_json::from_slice(&body) {
+        Ok(value) => classify_json_rpc_value(&value, expected_id),
+        Err(_) => RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse),
+    }
+}
+
 /// Calibrate connection pool size by measuring RTT with a small burst.
 ///
 /// Always probes with `chainTip` — it's cheap, read-only, always valid,
@@ -354,11 +580,8 @@ async fn calibrate_rtt(client: &reqwest::Client, url: &str) -> Result<Duration, 
     for _ in 0..20 {
         let start = Instant::now();
         let result = client.post(url).json(&body).send().await;
-        let rtt = start.elapsed();
-        if let Ok(resp) = result
-            && resp.status().is_success()
-        {
-            rtts.push(rtt);
+        if classify_response(result, 0).await == RequestOutcome::Success {
+            rtts.push(start.elapsed());
         }
     }
 
@@ -378,7 +601,7 @@ async fn calibrate_rtt(client: &reqwest::Client, url: &str) -> Result<Duration, 
 struct WorkerResult {
     histogram: Histogram<u64>,
     successes: u64,
-    errors: u64,
+    errors: RequestErrorCounts,
 }
 
 /// Parameters shared across all workers.
@@ -398,7 +621,7 @@ struct WorkerConfig {
 /// Latency sample sent from a spawned request task back to its worker.
 enum Sample {
     Success(u64), // latency in microseconds
-    Error,
+    Error(RequestErrorKind),
 }
 
 /// Fold a sample into the per-worker counters.
@@ -406,14 +629,14 @@ fn record_sample(
     sample: Sample,
     histogram: &mut Histogram<u64>,
     successes: &mut u64,
-    errors: &mut u64,
+    errors: &mut RequestErrorCounts,
 ) {
     match sample {
         Sample::Success(us) => {
             histogram.record(us).ok();
             *successes += 1;
         }
-        Sample::Error => *errors += 1,
+        Sample::Error(kind) => errors.record(kind),
     }
 }
 
@@ -432,7 +655,7 @@ async fn run_worker(
     let mut histogram =
         Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram");
     let mut successes = 0u64;
-    let mut errors = 0u64;
+    let mut errors = RequestErrorCounts::default();
 
     // Spawned tasks send latency samples back over this channel so the
     // worker can record them into its own histogram without a shared
@@ -481,6 +704,10 @@ async fn run_worker(
             }
         }
 
+        if next_fire >= end_time {
+            break;
+        }
+
         let scheduled_time = next_fire;
         next_fire += worker_interval;
 
@@ -520,6 +747,7 @@ async fn run_worker(
         tokio::spawn(async move {
             let req_start = Instant::now();
             let result = client.post(&url).json(&body).send().await;
+            let outcome = classify_response(result, tick).await;
             let latency_us = req_start.elapsed().as_micros() as u64;
             drop(permit);
 
@@ -527,9 +755,9 @@ async fn run_worker(
                 return;
             }
 
-            let sample = match result {
-                Ok(resp) if resp.status().is_success() => Sample::Success(latency_us),
-                _ => Sample::Error,
+            let sample = match outcome {
+                RequestOutcome::Success => Sample::Success(latency_us),
+                RequestOutcome::Error(kind) => Sample::Error(kind),
             };
             // Unbounded send — infallible unless the worker has dropped
             // its receiver (which only happens after the dispatch loop
@@ -569,7 +797,7 @@ async fn run_unthrottled_worker(
     let mut histogram =
         Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram");
     let mut successes = 0u64;
-    let mut errors = 0u64;
+    let mut errors = RequestErrorCounts::default();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Sample>();
 
     let end_time = cfg.start + cfg.total_run_duration;
@@ -599,6 +827,11 @@ async fn run_unthrottled_worker(
             }
         };
 
+        if Instant::now() >= end_time {
+            drop(permit);
+            break;
+        }
+
         let tick = worker_id as u64 + dispatched * cfg.num_workers as u64;
         let tx_hex: String = if cfg.tx_batch.is_empty() {
             String::new()
@@ -614,6 +847,7 @@ async fn run_unthrottled_worker(
         tokio::spawn(async move {
             let req_start = Instant::now();
             let result = client.post(&url).json(&body).send().await;
+            let outcome = classify_response(result, tick).await;
             let latency_us = req_start.elapsed().as_micros() as u64;
             drop(permit);
 
@@ -621,9 +855,9 @@ async fn run_unthrottled_worker(
                 return;
             }
 
-            let sample = match result {
-                Ok(resp) if resp.status().is_success() => Sample::Success(latency_us),
-                _ => Sample::Error,
+            let sample = match outcome {
+                RequestOutcome::Success => Sample::Success(latency_us),
+                RequestOutcome::Error(kind) => Sample::Error(kind),
             };
             let _ = tx.send(sample);
         });
@@ -640,6 +874,113 @@ async fn run_unthrottled_worker(
         histogram,
         successes,
         errors,
+    }
+}
+
+fn latency_metrics(histogram: &Histogram<u64>) -> Option<LatencyMetrics> {
+    if histogram.is_empty() {
+        return None;
+    }
+    Some(LatencyMetrics {
+        samples: histogram.len(),
+        min: histogram.min(),
+        p50: histogram.value_at_percentile(50.0),
+        p90: histogram.value_at_percentile(90.0),
+        p95: histogram.value_at_percentile(95.0),
+        p99: histogram.value_at_percentile(99.0),
+        p999: histogram.value_at_percentile(99.9),
+        max: histogram.max(),
+        mean: histogram.mean(),
+    })
+}
+
+fn benchmark_git_commit() -> Option<String> {
+    std::env::var("GROUNDHOG_BENCH_GIT_COMMIT")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| option_env!("GIT_COMMIT").map(str::to_owned))
+}
+
+fn benchmark_git_dirty() -> Option<bool> {
+    match std::env::var("GROUNDHOG_BENCH_GIT_DIRTY").as_deref() {
+        Ok("true") => Some(true),
+        Ok("false") => Some(false),
+        _ => None,
+    }
+}
+
+fn print_human_result(result: &BenchResult) {
+    let config = &result.configuration;
+    let requests = &result.requests;
+    let rates = &result.rates;
+
+    println!("\n=== Groundhog RPC Benchmark Results ===");
+    println!("Method:      {}", config.method);
+    if let Some(target) = config.target_requests_per_second {
+        println!("Target:      {target} req/s");
+        println!(
+            "Achieved:    {:.0} req/s ({:.1}% of target)",
+            rates.attempted_requests_per_second,
+            rates.target_achievement_percent.unwrap_or_default(),
+        );
+    } else {
+        println!("Target:      unthrottled");
+        println!(
+            "Attempted:   {:.0} req/s",
+            rates.attempted_requests_per_second
+        );
+        println!(
+            "Achieved:    {:.0} successful req/s",
+            rates.successful_requests_per_second
+        );
+    }
+    println!(
+        "Duration:    {}s ({}s warmup)",
+        config.duration_seconds, config.warmup_seconds
+    );
+    println!(
+        "Workers:     {} x {} connections",
+        config.workers, config.connections_per_worker,
+    );
+    println!(
+        "Requests:    {} ({} errors, {:.1}%)",
+        requests.total,
+        requests.failed,
+        if requests.total > 0 {
+            requests.failed as f64 / requests.total as f64 * 100.0
+        } else {
+            0.0
+        },
+    );
+    if requests.failed > 0 {
+        println!(
+            "Errors:      transport={} http={} invalid-json-rpc={} json-rpc={}",
+            requests.errors.transport,
+            requests.errors.http_status,
+            requests.errors.invalid_json_rpc_response,
+            requests.errors.json_rpc,
+        );
+    }
+    println!(
+        "Throughput:  {:.0} successful req/s",
+        rates.successful_requests_per_second
+    );
+    println!(
+        "Median RTT:  {} us (from calibration)",
+        result.calibration.median_rtt_us
+    );
+    println!();
+    println!("Latency (microseconds):");
+    if let Some(latency) = &result.successful_latency_us {
+        println!("  p50:  {}", latency.p50);
+        println!("  p90:  {}", latency.p90);
+        println!("  p95:  {}", latency.p95);
+        println!("  p99:  {}", latency.p99);
+        println!("  p999: {}", latency.p999);
+        println!("  max:  {}", latency.max);
+        println!("  mean: {:.0}", latency.mean);
+    } else {
+        println!("  (no samples recorded)");
     }
 }
 
@@ -665,13 +1006,14 @@ async fn run() -> Result<(), BenchError> {
     }
     validate_method(&cli.method)?;
 
-    let manifest = match &cli.runtime_manifest {
+    let loaded_manifest = match &cli.runtime_manifest {
         Some(path) => Some(load_runtime_manifest(path).await?),
         None => None,
     };
+    let manifest = loaded_manifest.as_ref().map(|loaded| &loaded.manifest);
     let needs_transactions = cli.method == "sendRawTransaction";
     let (accounts, entrypoint) =
-        transaction_inputs_for_method(&cli.method, manifest.as_ref(), cli.accounts)?;
+        transaction_inputs_for_method(&cli.method, manifest, cli.accounts)?;
 
     let total_duration = Duration::from_secs(cli.duration);
     let warmup_duration = Duration::from_secs(cli.warmup);
@@ -699,6 +1041,7 @@ async fn run() -> Result<(), BenchError> {
     } else {
         Arc::new(vec![])
     };
+    let transaction_batch_size = tx_batch.len();
 
     // --- Calibrate RTT to size connection pools ---
     let probe_client = reqwest::Client::builder()
@@ -784,7 +1127,7 @@ async fn run() -> Result<(), BenchError> {
     let mut merged_hist =
         Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram");
     let mut total_successes = 0u64;
-    let mut total_errors = 0u64;
+    let mut errors = RequestErrorCounts::default();
 
     for handle in handles {
         let result = handle
@@ -792,64 +1135,99 @@ async fn run() -> Result<(), BenchError> {
             .map_err(|source| BenchError::WorkerJoin { source })?;
         merged_hist.add(&result.histogram).ok();
         total_successes += result.successes;
-        total_errors += result.errors;
+        errors.merge(result.errors);
     }
 
+    let total_errors = errors.total();
     let total_sent = total_successes + total_errors;
     let actual_duration = total_duration.as_secs_f64();
-
-    println!("\n=== Groundhog RPC Benchmark Results ===");
-    println!("Method:      {}", cli.method);
-    if cli.unthrottled {
-        println!("Target:      unthrottled");
-        println!(
-            "Attempted:   {:.0} req/s",
-            total_sent as f64 / actual_duration
-        );
-        println!(
-            "Achieved:    {:.0} successful req/s",
-            total_successes as f64 / actual_duration
-        );
-    } else {
-        println!("Target:      {} req/s", cli.rate);
-        println!(
-            "Achieved:    {:.0} req/s ({:.1}% of target)",
-            total_sent as f64 / actual_duration,
-            (total_sent as f64 / actual_duration) / cli.rate as f64 * 100.0,
-        );
-    }
-    println!("Duration:    {}s ({}s warmup)", cli.duration, cli.warmup);
-    println!(
-        "Workers:     {} x {} connections",
-        cli.workers, connections_per_worker,
-    );
-    println!(
-        "Requests:    {} ({} errors, {:.1}%)",
-        total_sent,
-        total_errors,
-        if total_sent > 0 {
-            total_errors as f64 / total_sent as f64 * 100.0
-        } else {
-            0.0
+    let attempted_requests_per_second = total_sent as f64 / actual_duration;
+    let result = BenchResult {
+        schema_version: BENCH_RESULT_SCHEMA_VERSION,
+        kind: "groundhog-bench-result",
+        generated_at_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        producer: ProducerMetadata {
+            name: "groundhog-bench",
+            version: env!("CARGO_PKG_VERSION"),
+            build_profile: if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            },
+            git_commit: benchmark_git_commit(),
+            git_dirty: benchmark_git_dirty(),
         },
-    );
-    println!(
-        "Throughput:  {:.0} successful req/s",
-        total_successes as f64 / actual_duration,
-    );
-    println!("Median RTT:  {median_rtt:.1?} (from calibration)");
-    println!();
-    println!("Latency (microseconds):");
-    if merged_hist.is_empty() {
-        println!("  (no samples recorded)");
+        platform: PlatformMetadata {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+        },
+        runtime: loaded_manifest.as_ref().map(|loaded| RuntimeIdentity {
+            manifest_sha256: loaded.sha256.clone(),
+            manifest_schema_version: loaded.manifest.schema_version,
+            kind: loaded.manifest.kind.clone(),
+            chain_state: loaded
+                .manifest
+                .chain_state
+                .map(|chain_state| chain_state.to_string()),
+            network_hash: loaded.manifest.network_hash.to_string(),
+            protocol: loaded.manifest.protocol.clone(),
+            genesis_hash: format!("0x{}", hex::encode(loaded.manifest.genesis_hash.as_ref())),
+            producer: RuntimeProducerIdentity {
+                binary: loaded.manifest.producer.binary.clone(),
+                version: loaded.manifest.producer.version.clone(),
+                commit_hash: loaded.manifest.producer.commit_hash.clone(),
+            },
+        }),
+        configuration: BenchConfiguration {
+            scenario: cli.scenario,
+            target_label: cli.target_label,
+            url: cli.url,
+            method: cli.method,
+            mode: if cli.unthrottled {
+                "unthrottled"
+            } else {
+                "rate_limited"
+            },
+            target_requests_per_second: (!cli.unthrottled).then_some(cli.rate),
+            duration_seconds: cli.duration,
+            warmup_seconds: cli.warmup,
+            workers: cli.workers,
+            connections_per_worker,
+            max_inflight_per_worker,
+            accounts: cli.accounts,
+            transaction_batch_size,
+            max_skew_seconds: cli.max_skew,
+            runtime_manifest: cli.runtime_manifest.map(|path| path.display().to_string()),
+        },
+        calibration: CalibrationMetrics {
+            median_rtt_us: median_rtt.as_micros() as u64,
+        },
+        requests: RequestMetrics {
+            total: total_sent,
+            successful: total_successes,
+            failed: total_errors,
+            errors,
+        },
+        rates: RateMetrics {
+            attempted_requests_per_second,
+            successful_requests_per_second: total_successes as f64 / actual_duration,
+            target_achievement_percent: (!cli.unthrottled)
+                .then_some(attempted_requests_per_second / cli.rate as f64 * 100.0),
+            run_wall_time_ms: start.elapsed().as_secs_f64() * 1000.0,
+        },
+        successful_latency_us: latency_metrics(&merged_hist),
+    };
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).expect("bug: benchmark result should serialize")
+        );
     } else {
-        println!("  p50:  {}", merged_hist.value_at_percentile(50.0));
-        println!("  p90:  {}", merged_hist.value_at_percentile(90.0));
-        println!("  p95:  {}", merged_hist.value_at_percentile(95.0));
-        println!("  p99:  {}", merged_hist.value_at_percentile(99.0));
-        println!("  p999: {}", merged_hist.value_at_percentile(99.9));
-        println!("  max:  {}", merged_hist.max());
-        println!("  mean: {:.0}", merged_hist.mean());
+        print_human_result(&result);
     }
     Ok(())
 }
@@ -863,6 +1241,230 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn json_rpc_result_is_successful() {
+        assert_eq!(
+            classify_json_rpc_value(&json!({"jsonrpc": "2.0", "id": 7, "result": null}), 7,),
+            RequestOutcome::Success
+        );
+    }
+
+    #[test]
+    fn json_rpc_error_is_not_successful() {
+        assert_eq!(
+            classify_json_rpc_value(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "error": {"code": -32000, "message": "rejected"}
+                }),
+                7,
+            ),
+            RequestOutcome::Error(RequestErrorKind::JsonRpc)
+        );
+    }
+
+    #[test]
+    fn mismatched_or_incomplete_json_rpc_response_is_invalid() {
+        for value in [
+            json!({"jsonrpc": "2.0", "id": 8, "result": true}),
+            json!({"jsonrpc": "2.0", "id": 7}),
+            json!({"id": 7, "result": true}),
+            json!({"jsonrpc": "2.0", "id": 7, "result": true, "error": null}),
+            json!({"jsonrpc": "2.0", "id": 7, "error": "rejected"}),
+            json!([]),
+        ] {
+            assert_eq!(
+                classify_json_rpc_value(&value, 7),
+                RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse)
+            );
+        }
+    }
+
+    #[test]
+    fn error_counts_have_stable_json_field_names() {
+        let value = serde_json::to_value(RequestErrorCounts {
+            transport: 1,
+            http_status: 2,
+            invalid_json_rpc_response: 3,
+            json_rpc: 4,
+        })
+        .expect("bug: error counts should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "transport": 1,
+                "httpStatus": 2,
+                "invalidJsonRpcResponse": 3,
+                "jsonRpc": 4,
+            })
+        );
+    }
+
+    #[test]
+    fn benchmark_result_has_stable_json_shape() {
+        let value = serde_json::to_value(BenchResult {
+            schema_version: BENCH_RESULT_SCHEMA_VERSION,
+            kind: "groundhog-bench-result",
+            generated_at_unix_ms: 1_700_000_000_000,
+            producer: ProducerMetadata {
+                name: "groundhog-bench",
+                version: "0.9.2",
+                build_profile: "release",
+                git_commit: Some("abcdef0".into()),
+                git_dirty: Some(false),
+            },
+            platform: PlatformMetadata {
+                os: "linux",
+                arch: "x86_64",
+            },
+            runtime: Some(RuntimeIdentity {
+                manifest_sha256: format!("0x{}", "11".repeat(32)),
+                manifest_schema_version: 2,
+                kind: "hogd-dev-runtime".into(),
+                chain_state: Some("fresh".into()),
+                network_hash: "22".repeat(32),
+                protocol: "hogp/abcdef012345".into(),
+                genesis_hash: format!("0x{}", "33".repeat(32)),
+                producer: RuntimeProducerIdentity {
+                    binary: "hog-devnode".into(),
+                    version: "1.2.3".into(),
+                    commit_hash: Some("7654321".into()),
+                },
+            }),
+            configuration: BenchConfiguration {
+                scenario: Some("gateway-baseline".into()),
+                target_label: Some("standalone gateway baseline".into()),
+                url: "http://127.0.0.1:9546".into(),
+                method: "chainTip".into(),
+                mode: "rate_limited",
+                target_requests_per_second: Some(250),
+                duration_seconds: 30,
+                warmup_seconds: 2,
+                workers: 4,
+                connections_per_worker: 16,
+                max_inflight_per_worker: 32,
+                accounts: 10,
+                transaction_batch_size: 0,
+                max_skew_seconds: 1.0,
+                runtime_manifest: Some("/tmp/runtime-manifest.json".into()),
+            },
+            calibration: CalibrationMetrics { median_rtt_us: 800 },
+            requests: RequestMetrics {
+                total: 7_500,
+                successful: 7_496,
+                failed: 4,
+                errors: RequestErrorCounts {
+                    transport: 1,
+                    http_status: 1,
+                    invalid_json_rpc_response: 1,
+                    json_rpc: 1,
+                },
+            },
+            rates: RateMetrics {
+                attempted_requests_per_second: 250.0,
+                successful_requests_per_second: 249.866,
+                target_achievement_percent: Some(100.0),
+                run_wall_time_ms: 32_010.5,
+            },
+            successful_latency_us: Some(LatencyMetrics {
+                samples: 7_496,
+                min: 410,
+                p50: 700,
+                p90: 900,
+                p95: 1_000,
+                p99: 1_200,
+                p999: 1_500,
+                max: 2_000,
+                mean: 725.5,
+            }),
+        })
+        .expect("bug: benchmark result should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "schemaVersion": 1,
+                "kind": "groundhog-bench-result",
+                "generatedAtUnixMs": 1_700_000_000_000_u64,
+                "producer": {
+                    "name": "groundhog-bench",
+                    "version": "0.9.2",
+                    "buildProfile": "release",
+                    "gitCommit": "abcdef0",
+                    "gitDirty": false,
+                },
+                "platform": {
+                    "os": "linux",
+                    "arch": "x86_64",
+                },
+                "runtime": {
+                    "manifestSha256": format!("0x{}", "11".repeat(32)),
+                    "manifestSchemaVersion": 2,
+                    "kind": "hogd-dev-runtime",
+                    "chainState": "fresh",
+                    "networkHash": "22".repeat(32),
+                    "protocol": "hogp/abcdef012345",
+                    "genesisHash": format!("0x{}", "33".repeat(32)),
+                    "producer": {
+                        "binary": "hog-devnode",
+                        "version": "1.2.3",
+                        "commitHash": "7654321",
+                    },
+                },
+                "configuration": {
+                    "scenario": "gateway-baseline",
+                    "targetLabel": "standalone gateway baseline",
+                    "url": "http://127.0.0.1:9546",
+                    "method": "chainTip",
+                    "mode": "rate_limited",
+                    "targetRequestsPerSecond": 250,
+                    "durationSeconds": 30,
+                    "warmupSeconds": 2,
+                    "workers": 4,
+                    "connectionsPerWorker": 16,
+                    "maxInflightPerWorker": 32,
+                    "accounts": 10,
+                    "transactionBatchSize": 0,
+                    "maxSkewSeconds": 1.0,
+                    "runtimeManifest": "/tmp/runtime-manifest.json",
+                },
+                "calibration": {
+                    "medianRttUs": 800,
+                },
+                "requests": {
+                    "total": 7_500,
+                    "successful": 7_496,
+                    "failed": 4,
+                    "errors": {
+                        "transport": 1,
+                        "httpStatus": 1,
+                        "invalidJsonRpcResponse": 1,
+                        "jsonRpc": 1,
+                    },
+                },
+                "rates": {
+                    "attemptedRequestsPerSecond": 250.0,
+                    "successfulRequestsPerSecond": 249.866,
+                    "targetAchievementPercent": 100.0,
+                    "runWallTimeMs": 32_010.5,
+                },
+                "successfulLatencyUs": {
+                    "samples": 7_496,
+                    "min": 410,
+                    "p50": 700,
+                    "p90": 900,
+                    "p95": 1_000,
+                    "p99": 1_200,
+                    "p999": 1_500,
+                    "max": 2_000,
+                    "mean": 725.5,
+                },
+            })
+        );
+    }
 
     #[test]
     fn read_only_manifest_does_not_validate_bootstrap_accounts() {
