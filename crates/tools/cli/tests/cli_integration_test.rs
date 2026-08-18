@@ -1403,7 +1403,7 @@ fn config_use_warns_when_environment_profile_remains_active() {
 
 #[cfg(unix)]
 #[test]
-fn node_hogd_dev_binary_json_starts_supervisor() {
+fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
     let data_root = TempDir::new().unwrap();
@@ -1413,6 +1413,8 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     let child = groundhog()
         .arg("--json")
         .arg("node")
+        .arg("--host")
+        .arg("0.0.0.0")
         .arg("--port")
         .arg("0")
         .arg("--hog-devnode-binary")
@@ -1472,10 +1474,16 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .expect("bug: rpc_url string")
         .to_string();
     assert!(rpc_url.starts_with("http://127.0.0.1:"));
+    let rpc_listen_address = payload["data"]["rpc_listen_address"]
+        .as_str()
+        .expect("bug: rpc_listen_address string");
+    assert!(rpc_listen_address.starts_with("0.0.0.0:"));
     let manifest_path = payload["data"]["runtime_manifest"]["path"]
         .as_str()
         .expect("bug: runtime manifest path should be a string");
     assert_split_bootstrap_accounts(std::path::Path::new(manifest_path), "250000001");
+
+    assert_local_runtime_state_rpc_url(config_home.path(), &rpc_url);
 
     let tip = tokio::runtime::Runtime::new()
         .expect("bug: tokio runtime should start")
@@ -1501,6 +1509,13 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         wait_pid_gone(pid, Duration::from_secs(2)),
         "fake hogd-dev pid {pid} still alive after CLI exit",
     );
+}
+
+fn assert_local_runtime_state_rpc_url(config_home: &std::path::Path, rpc_url: &str) {
+    let global_config = std::fs::read_to_string(config_home.join("groundhog/config.toml"))
+        .expect("groundhog node should write local runtime state");
+    assert!(global_config.contains(&format!("rpc_url = \"{rpc_url}\"")));
+    assert!(!global_config.contains("0.0.0.0"));
 }
 
 #[cfg(unix)]

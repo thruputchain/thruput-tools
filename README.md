@@ -52,6 +52,27 @@ From the generated project directory, start the local node in one terminal:
 groundhog node
 ```
 
+When the node runs in a Linux container or VM, bind its public JSON-RPC facade
+to an externally reachable interface and publish the port:
+
+```bash
+# Inside the container or VM
+groundhog node --host 0.0.0.0 --port 9545
+
+# On the host after publishing 9545/tcp
+groundhog config new container-local \
+  --network local \
+  --rpc-url http://127.0.0.1:9545 \
+  --use \
+  --global
+```
+
+The default remains `127.0.0.1`. A non-loopback bind exposes an
+unauthenticated development RPC endpoint, so use it only on a trusted network
+or behind an appropriate firewall. hog-devnode's internal x23 services remain
+bound to loopback. Commands such as `deploy`, `call`, and `balance` can then
+use the `container-local` profile.
+
 By default the node is ephemeral. Pass `--data-dir <dir>` to persist its
 committed chain and recover it on the next launch with the same bootstrap
 options:
