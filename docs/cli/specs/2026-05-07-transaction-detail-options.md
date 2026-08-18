@@ -102,7 +102,7 @@ set aside.
 Confirmed by reading the current code:
 
 - `TxEventLog` (the indexer's per-tx record, `protocol/event.x:47`)
-  retains `proposed_tx_hash`, `exec_result`, and `events`. **No
+  retains `tx_hash`, `exec_result`, and `events`. **No
   `gas_consumed`, no `storage_deltas`, no kConsoleLog output.**
 - `gas_consumed` is computed inside hogexec at the runtime/invocation
   layer (`hogd/hogexec/runtime/runtime.cc:101`) and accumulated by

@@ -56,7 +56,7 @@ pub async fn get_events(
     for identified in &page.events.0 {
         if let Some(event) = parse_emitted_event(&identified.emitted_event) {
             events.push(IdentifiedEvent {
-                tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
+                tx_hash: TxHash(Hex0x(identified.tx_hash)),
                 block_height: identified.block_height.clone(),
                 sequence_number: identified.sequence_number,
                 event,
@@ -65,7 +65,7 @@ pub async fn get_events(
             ctx.metrics
                 .observe_malformed_event_dropped(REASON_PARSE_FAILED);
             tracing::warn!(
-                tx_hash = ?identified.proposed_tx_hash,
+                tx_hash = ?identified.tx_hash,
                 block_height = ?identified.block_height,
                 sequence_number = identified.sequence_number,
                 "dropped malformed event from indexer",

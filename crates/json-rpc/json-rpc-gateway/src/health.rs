@@ -1566,7 +1566,7 @@ mod tests {
         ViewGatewayResult,
     };
     use groundhog_xdr::transaction::{
-        OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
+        OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
     };
     use groundhog_xdr::{
         auth_claim::{AuthClaim, AuthClaim_source_address_claim},
@@ -1636,7 +1636,7 @@ mod tests {
 
         async fn get_transaction_info(
             &self,
-            _tx_hash: SignedTransactionHash,
+            _tx_hash: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             self.0.wait().await;
             Err(ProgramError::msg("released indexer handler"))
@@ -1923,7 +1923,7 @@ mod tests {
 
         async fn schedcoord_lookup_transactions(
             &self,
-            hashes: SignedTransactionHashBatch,
+            hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             Ok(VecM(vec![None; hashes.0.len()]))
         }
@@ -1942,7 +1942,7 @@ mod tests {
 
         async fn get_transaction_info(
             &self,
-            _tx_hash: SignedTransactionHash,
+            _tx_hash: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             Ok(TxInfoResult::Default {
                 outcome: TxInfoOutcome::TxInfoNotFound.0,
@@ -2206,7 +2206,7 @@ mod tests {
 
         async fn get_transaction_info(
             &self,
-            _tx_hash: SignedTransactionHash,
+            _tx_hash: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
@@ -3202,7 +3202,7 @@ mod tests {
             GatewayMetrics::new("test", None).expect("bug: test metrics should initialize"),
         );
 
-        let tx_hash = SignedTransactionHash::from(SHA256Hash::from([0; 32]));
+        let tx_hash = TransactionHash::from(SHA256Hash::from([0; 32]));
         let indexer_calls: Vec<_> = (0..4)
             .map(|_| {
                 let client = indexer.clone();

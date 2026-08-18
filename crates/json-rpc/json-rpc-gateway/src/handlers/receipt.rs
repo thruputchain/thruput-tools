@@ -9,7 +9,7 @@ use groundhog_json_rpc_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_xdr::exec_result::ExecResult;
-use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransactionHash};
+use groundhog_xdr::transaction::{InvocationFrameOutput, TransactionHash};
 use std::{sync::Arc, time::Instant};
 use tokio::{sync::RwLock, task::JoinHandle};
 use xdr_common::VecM;
@@ -115,7 +115,7 @@ pub async fn get_transaction_receipt(
         .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
-    let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
+    let hash = TransactionHash::from(tx_hash.0.0.into_inner());
     let started_at = Instant::now();
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     let rpc_result =
@@ -210,8 +210,8 @@ async fn transaction_is_pending(
         })?;
     let generation = client.generation();
     let lookup_client = client.lookup_client().clone();
-    let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
-    let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
+    let hash = TransactionHash::from(tx_hash.0.0.into_inner());
+    let batch: VecM<TransactionHash> = VecM(vec![hash]);
     let started_at = Instant::now();
     let worker = tokio::spawn(async move {
         let _permit = permit;
@@ -279,7 +279,7 @@ pub async fn get_transaction_status(
     // 2. Check indexer (authoritative).
     let maybe_indexer = ctx.indexer.read().await.clone();
     if let Some(client) = maybe_indexer.as_ref() {
-        let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
+        let hash = TransactionHash::from(tx_hash.0.0.into_inner());
         let started_at = Instant::now();
         let rpc_result = tokio::time::timeout(
             deadline.saturating_duration_since(Instant::now()),
@@ -361,7 +361,7 @@ mod tests {
     use groundhog_xdr::{
         genesis::GenesisConfiguration,
         header::ProposalContext,
-        transaction::{OptSignedTransactionBatch, SignedTransactionHashBatch},
+        transaction::{OptSignedTransactionBatch, TransactionHashBatch},
         types::SHA256Hash,
         validator::ValidatorID,
     };
@@ -390,7 +390,7 @@ mod tests {
 
         async fn get_transaction_info(
             &self,
-            _arg0: SignedTransactionHash,
+            _arg0: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             Ok(TxInfoResult::Default {
                 outcome: TxInfoOutcome::TxInfoNotFound.0,
@@ -521,7 +521,7 @@ mod tests {
 
         async fn schedcoord_lookup_transactions(
             &self,
-            _arg0: SignedTransactionHashBatch,
+            _arg0: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             match &self.mode {
                 FakeSchedulerMode::MempoolMiss => Ok(VecM(vec![None])),

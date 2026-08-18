@@ -702,8 +702,8 @@ async fn reconcile_commit(
 #[cfg(test)]
 mod hash_tests {
     use groundhog_scheduler::{
-        ParallelBatch, ParallelNondeterministicProposalDataBatch,
-        ParallelSignedTransactionHashBatch, ProposalTxs,
+        ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelTransactionHashBatch,
+        ProposalTxs,
     };
     use groundhog_xdr::types::{ExtensionPoint, SHA256Hash};
     use xdrs::{BytesM, VecM};
@@ -714,7 +714,7 @@ mod hash_tests {
     fn proposal_txs_compatibility_hash_matches_hogd_golden_vector() {
         let proposal_txs = ProposalTxs {
             ext: ExtensionPoint::_0,
-            hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+            hash: ParallelTransactionHashBatch::new(ParallelBatch {
                 segment_tokens: VecM(vec![1, 2]),
                 segment_bytes: VecM(vec![4, 8]),
                 xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
@@ -742,7 +742,7 @@ mod hash_tests {
     fn proposal_txs_hash_rejects_segment_count_mismatch() {
         let proposal_txs = ProposalTxs {
             ext: ExtensionPoint::_0,
-            hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+            hash: ParallelTransactionHashBatch::new(ParallelBatch {
                 segment_tokens: VecM(vec![1]),
                 segment_bytes: VecM(vec![]),
                 xdr: BytesM(vec![]),
@@ -764,7 +764,7 @@ mod hash_tests {
     fn proposal_txs_hash_rejects_segment_byte_mismatch() {
         let proposal_txs = ProposalTxs {
             ext: ExtensionPoint::_0,
-            hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+            hash: ParallelTransactionHashBatch::new(ParallelBatch {
                 segment_tokens: VecM(vec![1]),
                 segment_bytes: VecM(vec![2]),
                 xdr: BytesM(vec![0]),
