@@ -7,7 +7,10 @@ we can compare results over time instead of rebuilding one-off shell commands.
 All scenarios start a real `hog-devnode` through `groundhog node`, read
 `data.runtime_manifest.path` from startup JSON, start a standalone
 `hog-gateway --runtime-manifest`, and run `groundhog-bench` against the
-selected target.
+selected target. Smoke runs build the CLI, gateway, and benchmark in debug mode
+for a shorter correctness loop; `gateway-baseline` and `submit-ramp` use release
+mode so their timings are comparable. Set `BENCH_BUILD_PROFILE=debug|release`
+to override the scenario default.
 
 ```bash
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
@@ -21,6 +24,32 @@ forwarded hog-devnode logs on startup failure.
 Set `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>` when the local `hog-devnode` build is
 ahead of the published Rust protocol crates. This only overrides x23 intro
 tokens; generated XDR clients still fail if the wire shape has changed.
+Set `BENCH_REQUEST_TIMEOUT_MS` (default `10000`) and
+`BENCH_MAX_RESPONSE_BYTES` (default `1048576`) to bound each complete request
+and successful JSON-RPC response body. These limits are recorded in persisted
+result configuration so comparisons can reject mismatched runs.
+
+Set `BENCH_RESULTS_DIR` to persist one versioned JSON result per benchmark run.
+Each invocation creates a unique scenario directory beneath this path and
+writes results atomically. Filenames begin with a zero-padded invocation
+sequence so repeated rates remain distinct and ordered:
+
+```bash
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
+  BENCH_SCENARIO=gateway-baseline \
+  BENCH_RESULTS_DIR="$PWD/benchmark-results/gateway-baseline" \
+  scripts/smoke-runtime-manifest-bench.sh
+```
+
+Without `BENCH_RESULTS_DIR`, the benchmark retains its human-readable output.
+Both formats count a request as successful only after receiving a complete,
+matching JSON-RPC 2.0 `result`; transport failures, HTTP failures, malformed or
+mismatched responses, and JSON-RPC `error` responses are reported separately
+in JSON. Persisted results include the scenario and target label, source commit
+and dirty-worktree status, runtime-manifest hash and identity, complete run
+configuration, and successful-response latency sample count.
+Producer metadata also records whether the benchmark binary was built in debug
+or release mode.
 
 ## Scenarios
 
@@ -100,7 +129,7 @@ BENCH_SCENARIO=submit-ramp \
 scripts/smoke-runtime-manifest-bench.sh
 ```
 
-## Current Local Reference
+## Legacy Local Reference
 
 On a local `hog-devnode` runtime manifest from May 22, 2026, the standalone
 gateway submit ramp completed with zero benchmark errors:
@@ -111,9 +140,10 @@ gateway submit ramp completed with zero benchmark errors:
 | 500 rps, 30s | 15,004 | 1,023 us | 1,228 us | 1,762 us | 4,359 us |
 | 1000 rps, 30s | 30,004 | 1,004 us | 1,252 us | 1,668 us | 2,545 us |
 
-These numbers are a sanity baseline, not a performance claim. Treat them as a
-local regression reference for the current development machine and hog-devnode
-build.
+These numbers predate release-mode scenario builds and complete JSON-RPC body
+validation. Keep them as historical context, not as a directly comparable
+baseline. Regenerate this table from persisted JSON results before setting
+regression thresholds.
 
 ## Toward Real Traffic Simulation
 

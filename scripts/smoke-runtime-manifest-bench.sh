@@ -18,14 +18,15 @@
 #   BENCH_WARMUP=0
 #   BENCH_WORKERS=1
 #   BENCH_ACCOUNTS=3
+#   BENCH_REQUEST_TIMEOUT_MS=10000
+#   BENCH_MAX_RESPONSE_BYTES=1048576
+#   BENCH_BUILD_PROFILE=debug|release
+#   BENCH_RESULTS_DIR=/path/to/results
 #   SUBMIT_RAMP_RATES="250 500 1000"
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$REPO_ROOT/target/debug/groundhog"
-GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
-BENCH="$REPO_ROOT/target/debug/groundhog-bench"
 
 BENCH_SCENARIO="${BENCH_SCENARIO:-smoke}"
 NODE_STARTUP_TIMEOUT_SECS="${NODE_STARTUP_TIMEOUT_SECS:-60}"
@@ -34,6 +35,13 @@ BENCH_DURATION="${BENCH_DURATION:-2}"
 BENCH_WARMUP="${BENCH_WARMUP:-0}"
 BENCH_WORKERS="${BENCH_WORKERS:-1}"
 BENCH_ACCOUNTS="${BENCH_ACCOUNTS:-3}"
+BENCH_REQUEST_TIMEOUT_MS="${BENCH_REQUEST_TIMEOUT_MS:-10000}"
+BENCH_MAX_RESPONSE_BYTES="${BENCH_MAX_RESPONSE_BYTES:-1048576}"
+BENCH_BUILD_PROFILE="${BENCH_BUILD_PROFILE:-}"
+BENCH_RESULTS_DIR="${BENCH_RESULTS_DIR:-}"
+BENCH_RUN_DIR=""
+BENCH_RESULT_TMP=""
+BENCH_RESULT_SEQUENCE=0
 
 GATEWAY_BASELINE_CHAIN_RATE="${GATEWAY_BASELINE_CHAIN_RATE:-250}"
 GATEWAY_BASELINE_SUBMIT_RATE="${GATEWAY_BASELINE_SUBMIT_RATE:-100}"
@@ -166,7 +174,7 @@ import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
-match = re.search(r'protocol_commit\[\]\s*=\s*"([0-9a-fA-F]+)"', text)
+match = re.search(r'protocol_commit\[\]\s*=\s*(?:u8)?"([0-9a-fA-F]+)"', text)
 if match:
     print(f"hogp/{match.group(1)[:12]}")
 PY
@@ -199,16 +207,56 @@ collect_descendants() {
     done
 }
 
+benchmark_slug() {
+    printf '%s' "$1" | tr '[:upper:] /' '[:lower:]--'
+}
+
+run_bench_command() {
+    local filename="$1"
+    shift
+
+    if [[ -n "$BENCH_RESULTS_DIR" ]]; then
+        local sequence
+        BENCH_RESULT_SEQUENCE=$((BENCH_RESULT_SEQUENCE + 1))
+        printf -v sequence '%03d' "$BENCH_RESULT_SEQUENCE"
+        local output="$BENCH_RUN_DIR/$sequence-$filename"
+        BENCH_RESULT_TMP="$output.tmp"
+        "$BENCH" "$@" \
+            --request-timeout-ms "$BENCH_REQUEST_TIMEOUT_MS" \
+            --max-response-bytes "$BENCH_MAX_RESPONSE_BYTES" \
+            --json > "$BENCH_RESULT_TMP"
+        python3 - "$BENCH_RESULT_TMP" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    result = json.load(handle)
+if result.get("schemaVersion") != 1 or result.get("kind") != "groundhog-bench-result":
+    raise SystemExit("invalid groundhog-bench result envelope")
+PY
+        mv "$BENCH_RESULT_TMP" "$output"
+        BENCH_RESULT_TMP=""
+        log "Wrote benchmark result: $output"
+    else
+        "$BENCH" "$@" \
+            --request-timeout-ms "$BENCH_REQUEST_TIMEOUT_MS" \
+            --max-response-bytes "$BENCH_MAX_RESPONSE_BYTES"
+    fi
+}
+
 bench_chain_tip() {
     local label="$1"
     local url="$2"
-    local rate="$3"
-    local duration="$4"
-    local warmup="$5"
-    local workers="$6"
+    local manifest="$3"
+    local rate="$4"
+    local duration="$5"
+    local warmup="$6"
+    local workers="$7"
 
     log "Bench $label chainTip: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers"
-    "$BENCH" --url "$url" --method chainTip \
+    run_bench_command "$(benchmark_slug "$label")-chain-tip-${rate}rps.json" \
+        --scenario "$BENCH_SCENARIO" --target-label "$label" \
+        --url "$url" --runtime-manifest "$manifest" --method chainTip \
         --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
 }
 
@@ -223,7 +271,9 @@ bench_send_raw() {
     local accounts="$8"
 
     log "Bench $label sendRawTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
-    "$BENCH" --url "$url" --runtime-manifest "$manifest" --method sendRawTransaction \
+    run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
+        --scenario "$BENCH_SCENARIO" --target-label "$label" \
+        --url "$url" --runtime-manifest "$manifest" --method sendRawTransaction \
         --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
 }
 
@@ -232,7 +282,7 @@ run_bench_pair() {
     local url="$2"
     local manifest="$3"
 
-    bench_chain_tip "$label" "$url" "$BENCH_RATE" "$BENCH_DURATION" "$BENCH_WARMUP" "$BENCH_WORKERS"
+    bench_chain_tip "$label" "$url" "$manifest" "$BENCH_RATE" "$BENCH_DURATION" "$BENCH_WARMUP" "$BENCH_WORKERS"
     bench_send_raw "$label" "$url" "$manifest" "$BENCH_RATE" "$BENCH_DURATION" \
         "$BENCH_WARMUP" "$BENCH_WORKERS" "$BENCH_ACCOUNTS"
 }
@@ -250,7 +300,7 @@ run_gateway_baseline() {
     local gateway_url="$1"
     local manifest="$2"
 
-    bench_chain_tip "standalone gateway baseline" "$gateway_url" \
+    bench_chain_tip "standalone gateway baseline" "$gateway_url" "$manifest" \
         "$GATEWAY_BASELINE_CHAIN_RATE" "$GATEWAY_BASELINE_DURATION" \
         "$GATEWAY_BASELINE_WARMUP" "$GATEWAY_BASELINE_WORKERS"
     bench_send_raw "standalone gateway baseline" "$gateway_url" "$manifest" \
@@ -290,9 +340,52 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
-log "Building CLI, gateway, and bench"
-cargo build -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
+if [[ -z "$BENCH_BUILD_PROFILE" ]]; then
+    if [[ "$BENCH_SCENARIO" == "smoke" ]]; then
+        BENCH_BUILD_PROFILE=debug
+    else
+        BENCH_BUILD_PROFILE=release
+    fi
+fi
+case "$BENCH_BUILD_PROFILE" in
+    debug)
+        BENCH_BUILD_ARGS=()
+        ;;
+    release)
+        BENCH_BUILD_ARGS=(--release)
+        ;;
+    *)
+        die "unknown BENCH_BUILD_PROFILE=$BENCH_BUILD_PROFILE (expected debug or release)"
+        ;;
+esac
+CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog"
+GATEWAY="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/hog-gateway"
+BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog-bench"
+
+unset GROUNDHOG_BENCH_GIT_COMMIT GROUNDHOG_BENCH_GIT_DIRTY
+if GROUNDHOG_BENCH_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"; then
+    export GROUNDHOG_BENCH_GIT_COMMIT
+fi
+if git_status="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal 2>/dev/null)"; then
+    if [[ -n "$git_status" ]]; then
+        GROUNDHOG_BENCH_GIT_DIRTY=true
+    else
+        GROUNDHOG_BENCH_GIT_DIRTY=false
+    fi
+    export GROUNDHOG_BENCH_GIT_DIRTY
+fi
+
+log "Building $BENCH_BUILD_PROFILE CLI, gateway, and bench"
+cargo build "${BENCH_BUILD_ARGS[@]}" \
+    -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
     --manifest-path "$REPO_ROOT/Cargo.toml"
+
+if [[ -n "$BENCH_RESULTS_DIR" ]]; then
+    mkdir -p "$BENCH_RESULTS_DIR"
+    BENCH_RUN_DIR="$BENCH_RESULTS_DIR/${BENCH_SCENARIO}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    mkdir "$BENCH_RUN_DIR"
+    log "Benchmark result directory: $BENCH_RUN_DIR"
+fi
 
 WORK="$(mktemp -d)"
 NODE_PID=""
@@ -300,6 +393,9 @@ GATEWAY_PID=""
 NODE_DESCENDANTS=""
 
 cleanup() {
+    if [[ -n "$BENCH_RESULT_TMP" ]]; then
+        rm -f "$BENCH_RESULT_TMP"
+    fi
     if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
         kill "$GATEWAY_PID" >/dev/null 2>&1 || true
         wait "$GATEWAY_PID" >/dev/null 2>&1 || true
