@@ -816,15 +816,30 @@ mod tests {
     fn config_parses_aws_secrets_manager_key_source() {
         let config: FaucetConfigFile = toml::from_str(&test_config().replace(
             "type = \"environment\"\n        variable = \"GROUNDHOG_FAUCET_SECRET_KEY\"",
-            "type = \"aws_secrets_manager\"\n        secret_id = \"groundhog/devnet/faucet\"\n        region = \"us-west-2\"",
+            "type = \"aws_secrets_manager\"\n        secret_id = \"groundhog/devnet/faucet\"\n        version_id = \"version-1\"\n        region = \"us-west-2\"",
         ))
         .expect("bug: AWS key-source fixture should parse");
 
         assert!(matches!(
             config.airdrop.secret_key_source,
-            FaucetSecretKeySource::AwsSecretsManager { ref secret_id, ref region }
-                if secret_id == "groundhog/devnet/faucet" && region == "us-west-2"
+            FaucetSecretKeySource::AwsSecretsManager {
+                ref secret_id,
+                ref version_id,
+                ref region,
+            } if secret_id == "groundhog/devnet/faucet"
+                && version_id == "version-1"
+                && region == "us-west-2"
         ));
+    }
+
+    #[test]
+    fn config_rejects_aws_secrets_manager_source_without_version() {
+        let result = toml::from_str::<FaucetConfigFile>(&test_config().replace(
+            "type = \"environment\"\n        variable = \"GROUNDHOG_FAUCET_SECRET_KEY\"",
+            "type = \"aws_secrets_manager\"\n        secret_id = \"groundhog/devnet/faucet\"\n        region = \"us-west-2\"",
+        ));
+
+        assert!(result.is_err(), "AWS secret source must pin a version ID");
     }
 
     fn test_config() -> String {
