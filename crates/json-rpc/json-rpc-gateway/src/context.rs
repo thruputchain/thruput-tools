@@ -858,7 +858,7 @@ mod tests {
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
     };
-    use groundhog_xdr::transaction::SignedTransactionHash;
+    use groundhog_xdr::transaction::TransactionHash;
     use groundhog_xdr::view::TransactionViewQuery;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
@@ -953,7 +953,7 @@ mod tests {
 
         async fn get_transaction_info(
             &self,
-            _arg0: SignedTransactionHash,
+            _arg0: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }

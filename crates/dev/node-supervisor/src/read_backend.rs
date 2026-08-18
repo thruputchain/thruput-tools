@@ -39,7 +39,7 @@ use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_c
 use groundhog_xdr::{
     event::TxEmittedEvent,
     exec_result::ExecResult,
-    transaction::{InvocationFrameOutput, SignedTransactionHash},
+    transaction::{InvocationFrameOutput, TransactionHash},
     types::{AddressAndKey, StorageKey, StorageKeyContractData},
 };
 use xdr_common::VecM;
@@ -241,7 +241,7 @@ impl ReadPlane for HogdDevReadBackend {
         tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         within_request_deadline(context, async {
-            let hash = tx_hash_to_signed(tx_hash);
+            let hash = tx_hash_to_wire(tx_hash);
             let result = self
                 .indexer
                 .get_transaction_info(&hash)
@@ -326,14 +326,14 @@ impl ReadPlane for HogdDevReadBackend {
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         within_request_deadline(context, async {
-            let hash = tx_hash_to_signed(tx_hash);
+            let hash = tx_hash_to_wire(tx_hash);
 
         // 1. Check scheduler mempool. Best-effort in that a failure does not
         // abort the indexer lookup, but tracked: `Unknown` asserts the
         // transaction is in neither place, which requires both to have
         // answered.
         let mut mempool_checked = false;
-        let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
+        let batch: VecM<TransactionHash> = VecM(vec![hash]);
         match self.scheduler.schedcoord_lookup_transactions(&batch).await {
             // Only a per-hash slot counts as a mempool answer; an empty
             // batch left the queried transaction unaccounted for.
@@ -426,14 +426,14 @@ impl ReadPlane for HogdDevReadBackend {
             for identified in &page.events.0 {
                 if let Some(event) = parse_emitted_event(&identified.emitted_event) {
                     events.push(IdentifiedEvent {
-                        tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
+                        tx_hash: TxHash(Hex0x(identified.tx_hash)),
                         block_height: identified.block_height.clone(),
                         sequence_number: identified.sequence_number,
                         event,
                     });
                 } else {
                     tracing::warn!(
-                        tx_hash = ?identified.proposed_tx_hash,
+                        tx_hash = ?identified.tx_hash,
                         block_height = ?identified.block_height,
                         sequence_number = identified.sequence_number,
                         "dropped malformed event from hogd-dev indexer",
@@ -672,9 +672,9 @@ async fn get_item_from_db_gateway(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert the RPC-layer `TxHash` to the wire `SignedTransactionHash`.
-fn tx_hash_to_signed(tx_hash: TxHash) -> SignedTransactionHash {
-    SignedTransactionHash::from(tx_hash.0.0.into_inner())
+/// Convert the RPC-layer `TxHash` to the wire `TransactionHash`.
+fn tx_hash_to_wire(tx_hash: TxHash) -> TransactionHash {
+    TransactionHash::from(tx_hash.0.0.into_inner())
 }
 
 /// Map hogd's `ExecResult` (XDR int enum) to the API-types `ExecStatus`.
@@ -786,8 +786,8 @@ mod tests {
     use groundhog_xdr::genesis::GenesisConfiguration;
     use groundhog_xdr::header::ProposalContext;
     use groundhog_xdr::transaction::{
-        Invocation, OptSignedTransactionBatch, SignedTransaction, SignedTransactionHashBatch,
-        Transaction, Uniquifier,
+        Invocation, OptSignedTransactionBatch, SignedTransaction, Transaction,
+        TransactionHashBatch, Uniquifier,
     };
     use groundhog_xdr::types::BlockHeight as IdxBlockHeight;
     use groundhog_xdr::{
@@ -795,7 +795,7 @@ mod tests {
         event::TxEmittedEvent,
         exec_result::ExecResult,
         storage_item::WireStorageItem,
-        transaction::SignedTransactionHash,
+        transaction::TransactionHash,
         types::{ContractAddress, SHA256Hash},
         validator::ValidatorID,
     };
@@ -953,7 +953,7 @@ mod tests {
 
         async fn schedcoord_lookup_transactions(
             &self,
-            hashes: SignedTransactionHashBatch,
+            hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             match self.mode {
                 FakeSchedulerMode::NoPending => {
@@ -1036,7 +1036,7 @@ mod tests {
                 height: IdxBlockHeight::from(CANNED_HEIGHT_A),
                 tx: dummy_proposed_transaction(),
                 events: TxEventLog {
-                    proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
+                    tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                     exec_result: ExecResult::ExecResultOK,
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
@@ -1050,7 +1050,7 @@ mod tests {
                 height: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 tx: dummy_proposed_transaction(),
                 events: TxEventLog {
-                    proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
+                    tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                     exec_result: ExecResult::ExecResultOK,
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
@@ -1067,7 +1067,7 @@ mod tests {
             use groundhog_xdr::types::ContractAddress;
 
             let event1 = IdxIdentifiedEvent {
-                proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
+                tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                 block_height: IdxBlockHeight::from(CANNED_HEIGHT_A),
                 sequence_number: 0,
                 emitted_event: TxEmittedEvent {
@@ -1077,7 +1077,7 @@ mod tests {
                 },
             };
             let event2 = IdxIdentifiedEvent {
-                proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
+                tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                 block_height: IdxBlockHeight::from(CANNED_HEIGHT_A),
                 sequence_number: 1,
                 emitted_event: TxEmittedEvent {
@@ -1087,7 +1087,7 @@ mod tests {
                 },
             };
             let event3 = IdxIdentifiedEvent {
-                proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
+                tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                 block_height: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 sequence_number: 0,
                 emitted_event: TxEmittedEvent {
@@ -1138,7 +1138,7 @@ mod tests {
 
         async fn get_transaction_info(
             &self,
-            arg0: SignedTransactionHash,
+            arg0: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
             if self.mode == FakeIndexerMode::RpcFail {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));

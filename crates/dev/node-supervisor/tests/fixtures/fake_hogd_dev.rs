@@ -28,7 +28,7 @@ use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
     BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ParallelBatch,
     ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
-    ParallelSignedTransactionHashBatch, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
+    ParallelTransactionHashBatch, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
     SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
     SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
@@ -41,7 +41,7 @@ use groundhog_xdr::header::{ProposalContext, ProposalHeader};
 use groundhog_xdr::network::ProtocolCommit;
 use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::transaction::{
-    OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
+    OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
 };
 use groundhog_xdr::types::{
     BlockHeight, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint, NetworkHash,
@@ -845,7 +845,7 @@ fn fake_proposal_header_with_network_hash(
 fn fake_proposal_txs() -> ProposalTxs {
     ProposalTxs {
         ext: ExtensionPoint::_0,
-        hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+        hash: ParallelTransactionHashBatch::new(ParallelBatch {
             segment_tokens: VecM(vec![1, 2]),
             segment_bytes: VecM(vec![4, 8]),
             xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
@@ -1095,7 +1095,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedcoord_lookup_transactions(
         &self,
-        hashes: SignedTransactionHashBatch,
+        hashes: TransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         // One slot per queried hash: nothing is ever pending in the fake,
         // but each hash still gets an explicit per-transaction answer.
@@ -1249,7 +1249,7 @@ enum FakeIndexerMode {
     RuntimeRpcFail,
 }
 
-/// Committed tx set: maps `SignedTransactionHash` bytes to `TxInfo`.
+/// Committed tx set: maps `TransactionHash` bytes to `TxInfo`.
 type CommittedSet = HashMap<[u8; 32], TxInfo>;
 
 /// Canned event pages served by the fake in Normal mode.
@@ -1328,7 +1328,7 @@ impl FakeIndexer {
             height: BlockHeight::from(CANNED_HEIGHT_A),
             tx: Self::dummy_proposed_transaction(),
             events: TxEventLog {
-                proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
+                tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                 exec_result: ExecResult::ExecResultOK,
                 root_output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![]),
@@ -1342,7 +1342,7 @@ impl FakeIndexer {
             height: BlockHeight::from(CANNED_HEIGHT_B),
             tx: Self::dummy_proposed_transaction(),
             events: TxEventLog {
-                proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
+                tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                 exec_result: ExecResult::ExecResultOK,
                 root_output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![]),
@@ -1360,7 +1360,7 @@ impl FakeIndexer {
 
         // Page 1: two events, non-empty cursor pointing to page 2.
         let event1 = IdentifiedEvent {
-            proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
+            tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
             block_height: BlockHeight::from(CANNED_HEIGHT_A),
             sequence_number: 0,
             emitted_event: TxEmittedEvent {
@@ -1370,7 +1370,7 @@ impl FakeIndexer {
             },
         };
         let event2 = IdentifiedEvent {
-            proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
+            tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
             block_height: BlockHeight::from(CANNED_HEIGHT_A),
             sequence_number: 1,
             emitted_event: TxEmittedEvent {
@@ -1382,7 +1382,7 @@ impl FakeIndexer {
 
         // Page 2: one event, empty cursor (stream exhausted).
         let event3 = IdentifiedEvent {
-            proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
+            tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
             block_height: BlockHeight::from(CANNED_HEIGHT_B),
             sequence_number: 0,
             emitted_event: TxEmittedEvent {
@@ -1443,7 +1443,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn get_transaction_info(
         &self,
-        arg0: SignedTransactionHash,
+        arg0: TransactionHash,
     ) -> Result<TxInfoResult, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
@@ -1541,7 +1541,7 @@ mod tests {
         BlockAnchor, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1_Client, IterationOrder,
         TxInfoResult,
     };
-    use groundhog_xdr::transaction::SignedTransactionHash;
+    use groundhog_xdr::transaction::TransactionHash;
     use groundhog_xdr::types::SHA256Hash;
     use rpc_driver::{FixedSerialPool, RpcError};
     use tokio::net::TcpListener;
@@ -1586,7 +1586,7 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Client::new(pool)
     }
 
-    fn known_hash(bytes: [u8; 32]) -> SignedTransactionHash {
+    fn known_hash(bytes: [u8; 32]) -> TransactionHash {
         SHA256Hash::from(bytes)
     }
 
@@ -1756,13 +1756,13 @@ mod tests {
         // Verify first page events reference hash A
         for event in &page1.events.0 {
             assert_eq!(
-                *event.proposed_tx_hash, CANNED_TX_HASH_A,
+                *event.tx_hash, CANNED_TX_HASH_A,
                 "page 1 events should reference tx hash A"
             );
         }
         // Verify second page event references hash B
         assert_eq!(
-            *page2.events.0[0].proposed_tx_hash, CANNED_TX_HASH_B,
+            *page2.events.0[0].tx_hash, CANNED_TX_HASH_B,
             "page 2 event should reference tx hash B"
         );
     }
