@@ -349,13 +349,18 @@ CLI="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog"
 GATEWAY="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/hog-gateway"
 BENCH="$REPO_ROOT/target/$BENCH_BUILD_PROFILE/groundhog-bench"
 
-GROUNDHOG_BENCH_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal 2>/dev/null || true)" ]]; then
-    GROUNDHOG_BENCH_GIT_DIRTY=true
-else
-    GROUNDHOG_BENCH_GIT_DIRTY=false
+unset GROUNDHOG_BENCH_GIT_COMMIT GROUNDHOG_BENCH_GIT_DIRTY
+if GROUNDHOG_BENCH_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)"; then
+    export GROUNDHOG_BENCH_GIT_COMMIT
 fi
-export GROUNDHOG_BENCH_GIT_COMMIT GROUNDHOG_BENCH_GIT_DIRTY
+if git_status="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal 2>/dev/null)"; then
+    if [[ -n "$git_status" ]]; then
+        GROUNDHOG_BENCH_GIT_DIRTY=true
+    else
+        GROUNDHOG_BENCH_GIT_DIRTY=false
+    fi
+    export GROUNDHOG_BENCH_GIT_DIRTY
+fi
 
 log "Building $BENCH_BUILD_PROFILE CLI, gateway, and bench"
 cargo build "${BENCH_BUILD_ARGS[@]}" \

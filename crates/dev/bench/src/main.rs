@@ -1467,6 +1467,29 @@ mod tests {
     }
 
     #[test]
+    fn producer_metadata_preserves_unknown_git_provenance() {
+        let value = serde_json::to_value(ProducerMetadata {
+            name: "groundhog-bench",
+            version: "0.9.2",
+            build_profile: "release",
+            git_commit: None,
+            git_dirty: None,
+        })
+        .expect("bug: producer metadata should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "name": "groundhog-bench",
+                "version": "0.9.2",
+                "buildProfile": "release",
+                "gitCommit": null,
+                "gitDirty": null,
+            })
+        );
+    }
+
+    #[test]
     fn read_only_manifest_does_not_validate_bootstrap_accounts() {
         let mut manifest = manifest();
         manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
