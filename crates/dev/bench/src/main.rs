@@ -13,6 +13,7 @@
 //!   # Against real gateway (load):
 //!   groundhog-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
 
+use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{path::Path, process, sync::Arc};
 
@@ -36,6 +37,8 @@ use tokio::io::AsyncReadExt;
 
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const BENCH_RESULT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,6 +156,8 @@ struct BenchConfiguration {
     accounts: usize,
     transaction_batch_size: usize,
     max_skew_seconds: f64,
+    request_timeout_ms: u64,
+    max_response_bytes: usize,
     runtime_manifest: Option<String>,
 }
 
@@ -201,6 +206,10 @@ enum BenchError {
     InvalidRate,
     #[error("--duration must be >= 1")]
     InvalidDuration,
+    #[error("--request-timeout-ms must be >= 1")]
+    InvalidRequestTimeout,
+    #[error("--max-response-bytes must be >= 1")]
+    InvalidMaxResponseBytes,
     #[error("--accounts must be >= 1 for sendRawTransaction")]
     MissingAccounts,
     #[error(
@@ -317,6 +326,14 @@ struct Cli {
     /// Max accumulated scheduling skew before aborting (seconds).
     #[arg(long, default_value = "1.0")]
     max_skew: f64,
+
+    /// Timeout for each complete HTTP request, including its response body.
+    #[arg(long, default_value_t = DEFAULT_REQUEST_TIMEOUT_MS)]
+    request_timeout_ms: u64,
+
+    /// Maximum accepted JSON-RPC response body size.
+    #[arg(long, default_value_t = DEFAULT_MAX_RESPONSE_BYTES)]
+    max_response_bytes: usize,
 
     /// Stable name for the enclosing scenario, when run by an orchestrator.
     #[arg(long)]
@@ -541,25 +558,78 @@ fn classify_json_rpc_value(value: &serde_json::Value, expected_id: u64) -> Reque
     }
 }
 
+fn append_response_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    max_response_bytes: usize,
+) -> Result<(), RequestErrorKind> {
+    if chunk.len() > max_response_bytes.saturating_sub(body.len()) {
+        return Err(RequestErrorKind::InvalidJsonRpcResponse);
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
 async fn classify_response(
     response: Result<reqwest::Response, reqwest::Error>,
     expected_id: u64,
+    max_response_bytes: usize,
 ) -> RequestOutcome {
-    let response = match response {
+    let mut response = match response {
         Ok(response) => response,
         Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
     };
-    let status = response.status();
-    let body = match response.bytes().await {
-        Ok(body) => body,
-        Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
-    };
-    if !status.is_success() {
+    if !response.status().is_success() {
         return RequestOutcome::Error(RequestErrorKind::HttpStatus);
     }
+
+    let max_response_bytes_u64 = u64::try_from(max_response_bytes).unwrap_or(u64::MAX);
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_response_bytes_u64)
+    {
+        return RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse);
+    }
+
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .unwrap_or_default()
+            .min(max_response_bytes_u64) as usize,
+    );
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
+        };
+        if let Err(kind) = append_response_chunk(&mut body, &chunk, max_response_bytes) {
+            return RequestOutcome::Error(kind);
+        }
+    }
+
     match serde_json::from_slice(&body) {
         Ok(value) => classify_json_rpc_value(&value, expected_id),
         Err(_) => RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse),
+    }
+}
+
+async fn classify_request<F>(
+    request: F,
+    expected_id: u64,
+    request_timeout: Duration,
+    max_response_bytes: usize,
+) -> RequestOutcome
+where
+    F: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+    let request = async {
+        let response = request.await;
+        classify_response(response, expected_id, max_response_bytes).await
+    };
+    match tokio::time::timeout(request_timeout, request).await {
+        Ok(outcome) => outcome,
+        Err(_) => RequestOutcome::Error(RequestErrorKind::Transport),
     }
 }
 
@@ -573,14 +643,21 @@ async fn classify_response(
 /// the connection count before clamping. An HTTP/2 origin (or a
 /// reverse proxy fronting the gateway) would obsolete this heuristic
 /// entirely by making per-connection serialization a non-issue.
-async fn calibrate_rtt(client: &reqwest::Client, url: &str) -> Result<Duration, BenchError> {
+async fn calibrate_rtt(
+    client: &reqwest::Client,
+    url: &str,
+    request_timeout: Duration,
+    max_response_bytes: usize,
+) -> Result<Duration, BenchError> {
     let body = make_request("chainTip", "", 0);
     let mut rtts = Vec::with_capacity(20);
 
     for _ in 0..20 {
         let start = Instant::now();
-        let result = client.post(url).json(&body).send().await;
-        if classify_response(result, 0).await == RequestOutcome::Success {
+        let request = client.post(url).json(&body).send();
+        if classify_request(request, 0, request_timeout, max_response_bytes).await
+            == RequestOutcome::Success
+        {
             rtts.push(start.elapsed());
         }
     }
@@ -614,6 +691,8 @@ struct WorkerConfig {
     total_run_duration: Duration,
     interval: Duration,
     max_skew: Duration,
+    request_timeout: Duration,
+    max_response_bytes: usize,
     num_workers: usize,
     unthrottled: bool,
 }
@@ -743,11 +822,14 @@ async fn run_worker(
         let client = client.clone();
         let url = cfg.url.clone();
         let tx = tx.clone();
+        let request_timeout = cfg.request_timeout;
+        let max_response_bytes = cfg.max_response_bytes;
 
         tokio::spawn(async move {
             let req_start = Instant::now();
-            let result = client.post(&url).json(&body).send().await;
-            let outcome = classify_response(result, tick).await;
+            let request = client.post(&url).json(&body).send();
+            let outcome =
+                classify_request(request, tick, request_timeout, max_response_bytes).await;
             let latency_us = req_start.elapsed().as_micros() as u64;
             drop(permit);
 
@@ -843,11 +925,14 @@ async fn run_unthrottled_worker(
         let client = client.clone();
         let url = cfg.url.clone();
         let tx = tx.clone();
+        let request_timeout = cfg.request_timeout;
+        let max_response_bytes = cfg.max_response_bytes;
 
         tokio::spawn(async move {
             let req_start = Instant::now();
-            let result = client.post(&url).json(&body).send().await;
-            let outcome = classify_response(result, tick).await;
+            let request = client.post(&url).json(&body).send();
+            let outcome =
+                classify_request(request, tick, request_timeout, max_response_bytes).await;
             let latency_us = req_start.elapsed().as_micros() as u64;
             drop(permit);
 
@@ -1004,6 +1089,12 @@ async fn run() -> Result<(), BenchError> {
     if cli.duration == 0 {
         return Err(BenchError::InvalidDuration);
     }
+    if cli.request_timeout_ms == 0 {
+        return Err(BenchError::InvalidRequestTimeout);
+    }
+    if cli.max_response_bytes == 0 {
+        return Err(BenchError::InvalidMaxResponseBytes);
+    }
     validate_method(&cli.method)?;
 
     let loaded_manifest = match &cli.runtime_manifest {
@@ -1024,6 +1115,7 @@ async fn run() -> Result<(), BenchError> {
         Duration::from_secs_f64(1.0 / cli.rate as f64)
     };
     let max_skew = Duration::from_secs_f64(cli.max_skew);
+    let request_timeout = Duration::from_millis(cli.request_timeout_ms);
 
     // --- Transaction pre-generation ---
     let tx_batch = if needs_transactions {
@@ -1050,7 +1142,13 @@ async fn run() -> Result<(), BenchError> {
         .map_err(|source| BenchError::HttpClient { source })?;
 
     eprintln!("Calibrating RTT (via chainTip)...");
-    let median_rtt = calibrate_rtt(&probe_client, &cli.url).await?;
+    let median_rtt = calibrate_rtt(
+        &probe_client,
+        &cli.url,
+        request_timeout,
+        cli.max_response_bytes,
+    )
+    .await?;
     eprintln!("Median RTT: {median_rtt:.1?}");
     drop(probe_client);
 
@@ -1103,6 +1201,8 @@ async fn run() -> Result<(), BenchError> {
         total_run_duration,
         interval,
         max_skew,
+        request_timeout,
+        max_response_bytes: cli.max_response_bytes,
         num_workers: cli.workers,
         unthrottled: cli.unthrottled,
     });
@@ -1200,6 +1300,8 @@ async fn run() -> Result<(), BenchError> {
             accounts: cli.accounts,
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
+            request_timeout_ms: cli.request_timeout_ms,
+            max_response_bytes: cli.max_response_bytes,
             runtime_manifest: cli.runtime_manifest.map(|path| path.display().to_string()),
         },
         calibration: CalibrationMetrics {
@@ -1283,6 +1385,30 @@ mod tests {
     }
 
     #[test]
+    fn response_body_limit_accepts_exact_boundary_and_rejects_overflow() {
+        let mut body = vec![0x01, 0x02];
+
+        append_response_chunk(&mut body, &[0x03, 0x04], 4)
+            .expect("bug: exact response limit should be accepted");
+        assert_eq!(body, vec![0x01, 0x02, 0x03, 0x04]);
+
+        assert_eq!(
+            append_response_chunk(&mut body, &[0x05], 4),
+            Err(RequestErrorKind::InvalidJsonRpcResponse)
+        );
+        assert_eq!(body, vec![0x01, 0x02, 0x03, 0x04]);
+    }
+
+    #[tokio::test]
+    async fn request_timeout_bounds_pending_transport() {
+        let request = std::future::pending::<Result<reqwest::Response, reqwest::Error>>();
+
+        let outcome = classify_request(request, 0, Duration::from_millis(1), 1024).await;
+
+        assert_eq!(outcome, RequestOutcome::Error(RequestErrorKind::Transport));
+    }
+
+    #[test]
     fn error_counts_have_stable_json_field_names() {
         let value = serde_json::to_value(RequestErrorCounts {
             transport: 1,
@@ -1349,6 +1475,8 @@ mod tests {
                 accounts: 10,
                 transaction_batch_size: 0,
                 max_skew_seconds: 1.0,
+                request_timeout_ms: 10_000,
+                max_response_bytes: 1_048_576,
                 runtime_manifest: Some("/tmp/runtime-manifest.json".into()),
             },
             calibration: CalibrationMetrics { median_rtt_us: 800 },
@@ -1429,6 +1557,8 @@ mod tests {
                     "accounts": 10,
                     "transactionBatchSize": 0,
                     "maxSkewSeconds": 1.0,
+                    "requestTimeoutMs": 10_000,
+                    "maxResponseBytes": 1_048_576,
                     "runtimeManifest": "/tmp/runtime-manifest.json",
                 },
                 "calibration": {

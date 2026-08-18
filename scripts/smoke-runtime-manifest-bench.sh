@@ -18,6 +18,8 @@
 #   BENCH_WARMUP=0
 #   BENCH_WORKERS=1
 #   BENCH_ACCOUNTS=3
+#   BENCH_REQUEST_TIMEOUT_MS=10000
+#   BENCH_MAX_RESPONSE_BYTES=1048576
 #   BENCH_BUILD_PROFILE=debug|release
 #   BENCH_RESULTS_DIR=/path/to/results
 #   SUBMIT_RAMP_RATES="250 500 1000"
@@ -33,10 +35,13 @@ BENCH_DURATION="${BENCH_DURATION:-2}"
 BENCH_WARMUP="${BENCH_WARMUP:-0}"
 BENCH_WORKERS="${BENCH_WORKERS:-1}"
 BENCH_ACCOUNTS="${BENCH_ACCOUNTS:-3}"
+BENCH_REQUEST_TIMEOUT_MS="${BENCH_REQUEST_TIMEOUT_MS:-10000}"
+BENCH_MAX_RESPONSE_BYTES="${BENCH_MAX_RESPONSE_BYTES:-1048576}"
 BENCH_BUILD_PROFILE="${BENCH_BUILD_PROFILE:-}"
 BENCH_RESULTS_DIR="${BENCH_RESULTS_DIR:-}"
 BENCH_RUN_DIR=""
 BENCH_RESULT_TMP=""
+BENCH_RESULT_SEQUENCE=0
 
 GATEWAY_BASELINE_CHAIN_RATE="${GATEWAY_BASELINE_CHAIN_RATE:-250}"
 GATEWAY_BASELINE_SUBMIT_RATE="${GATEWAY_BASELINE_SUBMIT_RATE:-100}"
@@ -211,9 +216,15 @@ run_bench_command() {
     shift
 
     if [[ -n "$BENCH_RESULTS_DIR" ]]; then
-        local output="$BENCH_RUN_DIR/$filename"
+        local sequence
+        BENCH_RESULT_SEQUENCE=$((BENCH_RESULT_SEQUENCE + 1))
+        printf -v sequence '%03d' "$BENCH_RESULT_SEQUENCE"
+        local output="$BENCH_RUN_DIR/$sequence-$filename"
         BENCH_RESULT_TMP="$output.tmp"
-        "$BENCH" "$@" --json > "$BENCH_RESULT_TMP"
+        "$BENCH" "$@" \
+            --request-timeout-ms "$BENCH_REQUEST_TIMEOUT_MS" \
+            --max-response-bytes "$BENCH_MAX_RESPONSE_BYTES" \
+            --json > "$BENCH_RESULT_TMP"
         python3 - "$BENCH_RESULT_TMP" <<'PY'
 import json
 import sys
@@ -227,7 +238,9 @@ PY
         BENCH_RESULT_TMP=""
         log "Wrote benchmark result: $output"
     else
-        "$BENCH" "$@"
+        "$BENCH" "$@" \
+            --request-timeout-ms "$BENCH_REQUEST_TIMEOUT_MS" \
+            --max-response-bytes "$BENCH_MAX_RESPONSE_BYTES"
     fi
 }
 

@@ -24,10 +24,15 @@ forwarded hog-devnode logs on startup failure.
 Set `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>` when the local `hog-devnode` build is
 ahead of the published Rust protocol crates. This only overrides x23 intro
 tokens; generated XDR clients still fail if the wire shape has changed.
+Set `BENCH_REQUEST_TIMEOUT_MS` (default `10000`) and
+`BENCH_MAX_RESPONSE_BYTES` (default `1048576`) to bound each complete request
+and successful JSON-RPC response body. These limits are recorded in persisted
+result configuration so comparisons can reject mismatched runs.
 
 Set `BENCH_RESULTS_DIR` to persist one versioned JSON result per benchmark run.
 Each invocation creates a unique scenario directory beneath this path and
-writes results atomically:
+writes results atomically. Filenames begin with a zero-padded invocation
+sequence so repeated rates remain distinct and ordered:
 
 ```bash
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
