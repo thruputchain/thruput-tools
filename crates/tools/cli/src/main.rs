@@ -532,13 +532,16 @@ enum ConfigCommand {
     /// Remove an entire profile from one config layer
     #[command(
         long_about = "Remove an entire profile from one config layer, including its contract \
-                      aliases and wallet bindings. Normal output asks for confirmation; --json \
-                      and --quiet delete without prompting. A matching default profile selection \
+                      aliases and wallet bindings. Interactive use asks for confirmation; pass \
+                      --force to confirm non-interactively. A matching default profile selection \
                       is cleared in the same atomic update."
     )]
     Rm {
         /// Profile to remove
         profile: String,
+        /// Remove the profile without prompting; this cannot be undone
+        #[arg(short = 'f', long)]
+        force: bool,
         /// Remove the profile from global config
         #[arg(long)]
         global: bool,
@@ -690,7 +693,7 @@ enum ChainCommand {
         #[arg(long)]
         input: PathBuf,
         /// Replace populated persistent state
-        #[arg(long)]
+        #[arg(short = 'f', long)]
         force: bool,
     },
 }
@@ -980,10 +983,11 @@ fn main() {
                 ),
                 ConfigCommand::Rm {
                     profile,
+                    force,
                     global,
                     project,
-                } => groundhog_cli::config_cmd::remove(
-                    &cwd, &profile, global, project, cmd_name, &print,
+                } => groundhog_cli::config_cmd::remove_with_force(
+                    &cwd, &profile, force, global, project, cmd_name, &print,
                 ),
                 ConfigCommand::Set {
                     field,
@@ -1534,13 +1538,21 @@ mod tests {
             } if profile == "staging" && network == "devnet"
         ));
 
-        let remove = Cli::parse_from(["groundhog", "config", "rm", "staging", "--project"]);
+        let remove = Cli::parse_from([
+            "groundhog",
+            "config",
+            "rm",
+            "staging",
+            "--project",
+            "--force",
+        ]);
         assert_eq!(remove.command.command_name(), "config.rm");
         assert!(matches!(
             remove.command,
             Command::Config {
                 command: ConfigCommand::Rm {
                     profile,
+                    force: true,
                     global: false,
                     project: true,
                 }

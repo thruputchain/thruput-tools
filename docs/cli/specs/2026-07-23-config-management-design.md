@@ -189,11 +189,12 @@ Remove one complete profile from one config layer:
 
 ```bash
 groundhog config rm staging --global
+groundhog --json config rm staging --global --force
 ```
 
 The command follows the mutation scope rules. Profile existence is relative to the selected layer, so removing a project overlay leaves a same-named global profile intact. A missing target-layer profile fails with `profile_not_found_in_scope`.
 
-Normal human output asks for confirmation and defaults to cancellation. JSON and quiet modes skip the prompt, matching `groundhog keys rm`. If the destination file changes while the prompt is open, deletion fails and asks the user to review and retry. Confirmed deletion removes the complete target-layer profile table, including its scalar fields, contract aliases, wallet bindings, and unknown profile-owned entries. If that layer's `default_profile` names the removed profile, the command clears the selection in the same locked transaction.
+Normal human output asks for confirmation and defaults to cancellation. Non-interactive use, including JSON and quiet modes, fails with `confirmation_required` unless the caller passes `-f` or `--force`, matching `groundhog keys rm`. Force mode never reads stdin. If the destination file changes while the interactive prompt is open, deletion fails and asks the user to review and retry. Confirmed deletion removes the complete target-layer profile table, including its scalar fields, contract aliases, wallet bindings, and unknown profile-owned entries. If that layer's `default_profile` names the removed profile, the command clears the selection in the same locked transaction.
 
 Deletion preserves unrelated profiles, top-level fields, comments, credentials, and runtime state. The JSON report includes the profile, scope, destination path, `changed`, and `clearedDefault`.
 ### `groundhog config set <FIELD> <VALUE>`

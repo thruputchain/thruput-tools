@@ -168,7 +168,7 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     // that forced restore replaced its contents with the archived source state.
     std::fs::write(destination.join("ramdb/0.log"), b"different").unwrap();
     let restored = groundhog()
-        .args(["--json", "chain", "restore", "--force", "--data-dir"])
+        .args(["--json", "chain", "restore", "-f", "--data-dir"])
         .arg(&destination)
         .arg("--input")
         .arg(&archive)
@@ -187,6 +187,21 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     assert_eq!(
         std::fs::read(destination.join("ramdb/0.log")).unwrap(),
         b"ramdb-state"
+    );
+}
+
+#[test]
+fn chain_restore_help_documents_force_alias() {
+    let output = groundhog()
+        .args(["chain", "restore", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("-f, --force")
     );
 }
 
@@ -278,6 +293,27 @@ fn spawn_with_terminal(mut command: Command) -> (std::process::Child, File) {
         .spawn()
         .expect("bug: CLI should spawn with pseudo-terminal");
     (child, master)
+}
+
+#[cfg(unix)]
+fn read_terminal_output(mut terminal: File) -> String {
+    let mut output = Vec::new();
+    match terminal.read_to_end(&mut output) {
+        Ok(_) => {}
+        // Linux PTYs report EIO after the slave closes; bytes read before that
+        // error remain valid output. macOS normally reports EOF instead.
+        Err(error) if error.raw_os_error() == Some(libc::EIO) => {}
+        Err(error) => panic!("failed to read pseudo-terminal output: {error}"),
+    }
+    String::from_utf8(output).expect("bug: CLI terminal output should be UTF-8")
+}
+
+#[cfg(unix)]
+fn terminal_output_reader(terminal: &File) -> thread::JoinHandle<String> {
+    let reader = terminal
+        .try_clone()
+        .expect("bug: pseudo-terminal descriptor should be cloneable");
+    thread::spawn(|| read_terminal_output(reader))
 }
 
 #[cfg(unix)]
@@ -532,6 +568,9 @@ fn config_rm_help_describes_confirmation_and_deleted_contents() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("contract aliases and wallet bindings"));
     assert!(stdout.contains("asks for confirmation"));
+    assert!(stdout.contains("-f, --force"));
+    assert!(stdout.contains("without prompting"));
+    assert!(stdout.contains("cannot be undone"));
     assert!(stdout.contains("default profile selection is cleared"));
     assert!(stdout.contains("--global"));
     assert!(stdout.contains("--project"));
@@ -1111,36 +1150,49 @@ fn config_new_rejects_duplicate_and_invalid_profiles() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn config_rm_cancellation_preserves_profile() {
+fn config_rm_confirmation_preserves_profile_on_no_or_empty() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
-    let contents = "default_profile = \"staging\"\n\n[profile.staging]\nnetwork = \"devnet\"\n";
+    let contents = "default_profile = \"staging\"\n\n[profile.staging]\nnetwork = \"devnet\"\n\n[profile.preview]\nnetwork = \"devnet\"\n";
     write_global_config(&config_home, contents);
-    let mut child = groundhog()
-        .args(["config", "rm", "staging"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .current_dir(tmp.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"n\n").unwrap();
 
-    let output = child.wait_with_output().unwrap();
+    for (profile, answer) in [
+        ("staging", b"n\n".as_slice()),
+        ("preview", b"\n".as_slice()),
+    ] {
+        let mut command = groundhog();
+        command
+            .args(["config", "rm", profile])
+            .env("XDG_CONFIG_HOME", &config_home)
+            .current_dir(tmp.path());
+        let (child, mut terminal) = spawn_with_terminal(command);
+        let output_reader = terminal_output_reader(&terminal);
+        terminal.write_all(answer).unwrap();
+        let output = child.wait_with_output().unwrap();
+        let terminal_output = output_reader
+            .join()
+            .expect("bug: terminal output reader should not panic");
 
-    assert!(output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("Remove profile `staging` from global config?"));
-    assert!(stderr.contains("Cancelled"));
-    assert_eq!(
-        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
-        contents
-    );
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(
+            terminal_output.contains(&format!("Remove profile `{profile}` from global config?")),
+            "terminal output: {terminal_output}"
+        );
+        assert!(
+            terminal_output.contains("Cancelled"),
+            "terminal output: {terminal_output}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+            contents
+        );
+    }
 }
 
+#[cfg(unix)]
 #[test]
 fn config_rm_confirmation_removes_all_profile_data_and_clears_default() {
     let tmp = TempDir::new().unwrap();
@@ -1149,24 +1201,34 @@ fn config_rm_confirmation_removes_all_profile_data_and_clears_default() {
         &config_home,
         "default_profile = \"staging\"\nunknown = true\n\n[profile.staging]\nnetwork = \"devnet\"\n\n[profile.staging.contracts]\ncounter = \"0x1234\"\n",
     );
-    let mut child = groundhog()
+    let mut command = groundhog();
+    command
         .args(["config", "rm", "staging"])
         .env("XDG_CONFIG_HOME", &config_home)
-        .current_dir(tmp.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
+        .current_dir(tmp.path());
+    let (child, mut terminal) = spawn_with_terminal(command);
+    let output_reader = terminal_output_reader(&terminal);
+    terminal.write_all(b"y\n").unwrap();
 
     let output = child.wait_with_output().unwrap();
+    let terminal_output = output_reader
+        .join()
+        .expect("bug: terminal output reader should not panic");
 
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("Removed profile `staging`"));
-    assert!(stderr.contains("Default profile selection cleared"));
+    assert!(
+        terminal_output.contains("Remove profile `staging` from global config?"),
+        "terminal output: {terminal_output}"
+    );
+    assert!(
+        terminal_output.contains("Removed profile `staging`"),
+        "terminal output: {terminal_output}"
+    );
+    assert!(
+        terminal_output.contains("Default profile selection cleared"),
+        "terminal output: {terminal_output}"
+    );
     assert_eq!(
         std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
         "unknown = true\n"
@@ -1174,7 +1236,7 @@ fn config_rm_confirmation_removes_all_profile_data_and_clears_default() {
 }
 
 #[test]
-fn config_rm_json_is_non_interactive_and_reports_stable_result() {
+fn config_rm_force_json_is_non_interactive_and_reports_stable_result() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     write_global_config(
@@ -1183,7 +1245,7 @@ fn config_rm_json_is_non_interactive_and_reports_stable_result() {
     );
 
     let output = groundhog()
-        .args(["--json", "config", "rm", "staging"])
+        .args(["--json", "config", "rm", "--force", "staging"])
         .env("XDG_CONFIG_HOME", &config_home)
         .current_dir(tmp.path())
         .output()
@@ -1207,13 +1269,13 @@ fn config_rm_json_is_non_interactive_and_reports_stable_result() {
 }
 
 #[test]
-fn config_rm_quiet_is_non_interactive() {
+fn config_rm_force_quiet_is_non_interactive() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     write_global_config(&config_home, "[profile.staging]\nnetwork = \"devnet\"\n");
 
     let output = groundhog()
-        .args(["--quiet", "config", "rm", "staging"])
+        .args(["--quiet", "config", "rm", "--force", "staging"])
         .env("XDG_CONFIG_HOME", &config_home)
         .current_dir(tmp.path())
         .output()
@@ -1225,6 +1287,102 @@ fn config_rm_quiet_is_non_interactive() {
     assert_eq!(
         std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
         ""
+    );
+}
+
+#[test]
+fn config_rm_non_tty_input_requires_force() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let contents = "[profile.staging]\nnetwork = \"devnet\"\n";
+    write_global_config(&config_home, contents);
+
+    let mut child = groundhog()
+        .args(["config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--force")
+    );
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        contents
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn config_rm_force_does_not_read_stdin() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.staging]\nnetwork = \"devnet\"\n");
+
+    let child = groundhog()
+        .args(["config", "rm", "-f", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let status = wait_child(child, Duration::from_secs(2));
+
+    assert!(status.success());
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn config_rm_non_interactive_modes_require_force() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let contents = "[profile.staging]\nnetwork = \"devnet\"\n";
+    write_global_config(&config_home, contents);
+
+    let json = groundhog()
+        .args(["--json", "config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!json.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "confirmation_required");
+    assert_eq!(
+        error["error"]["details"]["action"],
+        "remove a configuration profile"
+    );
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        contents
+    );
+
+    let quiet = groundhog()
+        .args(["--quiet", "config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!quiet.status.success());
+    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--force"));
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        contents
     );
 }
 
