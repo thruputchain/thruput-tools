@@ -490,10 +490,10 @@
             "type": "object"
           },
           {
-            "description": "Deterministic execution error (out of gas, stack overflow, etc.).",
+            "description": "Deterministic execution error: the transaction faulted during\nexecution (out-of-bounds access, out of gas, stack overflow, etc.).",
             "properties": {
               "kind": {
-                "description": "Error kind from the execution engine.",
+                "description": "Error kind from the execution engine. `\"fault\"` when the\nnode does not report a finer-grained category (currently\nalways — see `DETERMINISTIC_ERROR_KIND_FAULT`).",
                 "type": "string"
               },
               "result": {

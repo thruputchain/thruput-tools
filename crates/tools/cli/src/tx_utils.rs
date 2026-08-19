@@ -19,6 +19,13 @@ pub fn summarize_exec_status(status: &ExecStatus) -> String {
             message: Some(message),
         } => format!("reverted: {message}"),
         ExecStatus::Reverted { message: None } => "reverted".into(),
+        ExecStatus::DeterministicError { kind }
+            if kind == groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT =>
+        {
+            "failed with a deterministic execution fault (e.g. out-of-bounds access or \
+             out of gas; the node does not report the specific cause)"
+                .into()
+        }
         ExecStatus::DeterministicError { kind } => {
             format!("failed with deterministic execution error ({kind})")
         }
@@ -289,6 +296,29 @@ fn receipt_poll_duration_seconds(attempts: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fault_kind_summarizes_with_bundled_causes() {
+        let summary = summarize_exec_status(&ExecStatus::DeterministicError {
+            kind: groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
+        });
+        assert_eq!(
+            summary,
+            "failed with a deterministic execution fault (e.g. out-of-bounds access or \
+             out of gas; the node does not report the specific cause)"
+        );
+    }
+
+    #[test]
+    fn specific_deterministic_error_kind_summarizes_verbatim() {
+        let summary = summarize_exec_status(&ExecStatus::DeterministicError {
+            kind: "outOfGas".into(),
+        });
+        assert_eq!(
+            summary,
+            "failed with deterministic execution error (outOfGas)"
+        );
+    }
 
     #[test]
     fn unsuccessful_exec_statuses_have_stable_error_codes() {

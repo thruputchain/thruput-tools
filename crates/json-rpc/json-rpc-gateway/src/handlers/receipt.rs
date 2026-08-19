@@ -5,7 +5,7 @@ use groundhog_indexer::indexer::TxInfoResult;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
     hex::HexBytes,
-    receipt::{ExecStatus, TransactionReceipt},
+    receipt::{DETERMINISTIC_ERROR_KIND_FAULT, ExecStatus, TransactionReceipt},
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_xdr::exec_result::ExecResult;
@@ -80,11 +80,11 @@ fn map_exec_result(r: ExecResult) -> ExecStatus {
     } else if r == ExecResult::ExecResultTxRootFrameReverted {
         ExecStatus::Reverted { message: None }
     } else if r == ExecResult::ExecResultTxDeterministicError {
-        // TODO: ExecResult int-enum doesn't carry a sub-type; use "unknown"
-        // until the indexer exposes finer-grained error codes (e.g.
-        // "out_of_gas", "stack_overflow").
+        // ExecResult's int-enum doesn't carry a sub-type; report the shared
+        // fault kind until the indexer exposes finer-grained error codes
+        // (e.g. "out_of_gas", "stack_overflow").
         ExecStatus::DeterministicError {
-            kind: "unknown".into(),
+            kind: DETERMINISTIC_ERROR_KIND_FAULT.into(),
         }
     } else if r == ExecResult::ExecResultTxNonDeterministicError {
         ExecStatus::NonDeterministicError
@@ -370,6 +370,20 @@ mod tests {
     use tokio::sync::{Notify, RwLock};
 
     use super::*;
+
+    #[test]
+    fn deterministic_exec_result_maps_to_fault_kind() {
+        let status = map_exec_result(ExecResult::ExecResultTxDeterministicError);
+        match status {
+            ExecStatus::DeterministicError { kind } => {
+                assert_eq!(
+                    kind,
+                    groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT
+                );
+            }
+            other => panic!("expected DeterministicError, got {other:?}"),
+        }
+    }
     use crate::config::GatewayConfig;
     use crate::context::{
         BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient, connect_optional_scheduler,

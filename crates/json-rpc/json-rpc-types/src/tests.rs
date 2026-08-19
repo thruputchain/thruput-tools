@@ -349,6 +349,16 @@ mod wire_format {
     }
 
     #[test]
+    fn deterministic_error_fault_kind_wire_value() {
+        let s = ExecStatus::DeterministicError {
+            kind: crate::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
+        };
+        let v: Value = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["result"], "deterministicError");
+        assert_eq!(v["kind"], "fault");
+    }
+
+    #[test]
     fn emitted_event_wire_format() {
         let event = EmittedEvent {
             contract_address: zero_address(),

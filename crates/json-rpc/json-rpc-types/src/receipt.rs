@@ -51,6 +51,16 @@ pub struct TransactionReceipt {
     pub abort_data: Option<HexBytes>,
 }
 
+/// `kind` reported for a deterministic execution fault when the node
+/// does not surface a finer-grained category.
+///
+/// hogd's `ExecResult` currently bundles every deterministic failure —
+/// faults such as out-of-bounds memory access, plus out of gas — under
+/// a single variant, so backends report this kind for all of them.
+/// Finer-grained kinds (for example out of gas) may be reported
+/// separately in the future.
+pub const DETERMINISTIC_ERROR_KIND_FAULT: &str = "fault";
+
 /// Execution result. Maps to hogd's `ExecResult` variants.
 /// Richer than EVM's binary status (0 = fail, 1 = success).
 ///
@@ -69,9 +79,12 @@ pub enum ExecStatus {
         message: Option<String>,
     },
 
-    /// Deterministic execution error (out of gas, stack overflow, etc.).
+    /// Deterministic execution error: the transaction faulted during
+    /// execution (out-of-bounds access, out of gas, stack overflow, etc.).
     DeterministicError {
-        /// Error kind from the execution engine.
+        /// Error kind from the execution engine. `"fault"` when the
+        /// node does not report a finer-grained category (currently
+        /// always — see `DETERMINISTIC_ERROR_KIND_FAULT`).
         kind: String,
     },
 

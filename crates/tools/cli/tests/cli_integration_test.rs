@@ -7414,7 +7414,7 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("warning: Call failed with deterministic execution error"));
+    assert!(stderr.contains("warning: Call failed with a deterministic execution fault"));
     assert!(stderr.contains("contract: 0x"));
     assert!(stderr.contains("tx: 0x"));
     assert!(stderr.contains("height: 42"));
@@ -11795,7 +11795,7 @@ fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
         "height": height,
         "status": {
             "result": "deterministicError",
-            "kind": "unknown",
+            "kind": "fault",
         },
         "events": [],
     })
