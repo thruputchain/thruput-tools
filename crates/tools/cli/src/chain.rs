@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use groundhog_build_info::BuildVersion;
 use schemars::JsonSchema;
 use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -15,7 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
-const ARCHIVE_SCHEMA_VERSION: u32 = 1;
+const ARCHIVE_SCHEMA_VERSION: u32 = 2;
+const LEGACY_ARCHIVE_SCHEMA_VERSION: u32 = 1;
 const REPORT_SCHEMA_VERSION: u32 = 1;
 const ARCHIVE_KIND: &str = "groundhog-chain-dump";
 // Files are compressed independently in bounded chunks so restore never has to
@@ -101,7 +103,11 @@ pub fn dump(
         .prefix(".groundhog-chain-dump-")
         .tempfile_in(output_parent)
         .map_err(|error| archive_io(format!("create temporary archive: {error}")))?;
-    let total_bytes = write_archive(temp.as_file_mut(), &files)?;
+    let total_bytes = write_archive(
+        temp.as_file_mut(),
+        &files,
+        groundhog_build_info::build_version!(),
+    )?;
     temp.as_file().sync_all()?;
 
     if overwrite {
@@ -151,7 +157,11 @@ pub fn dump(
 }
 
 // Streams the archive envelope and file records to the destination.
-fn write_archive(file: &mut File, files: &[(String, PathBuf)]) -> Result<u64, CliError> {
+fn write_archive(
+    file: &mut File,
+    files: &[(String, PathBuf)],
+    build_version: BuildVersion,
+) -> Result<u64, CliError> {
     let mut writer = BufWriter::new(file);
     // Write the envelope directly instead of materializing its base64 payloads
     // in a serde_json::Value; large chain dumps remain memory-bounded.
@@ -159,11 +169,13 @@ fn write_archive(file: &mut File, files: &[(String, PathBuf)]) -> Result<u64, Cl
         writer,
         "{{\"schemaVersion\":{ARCHIVE_SCHEMA_VERSION},\"kind\":\"{ARCHIVE_KIND}\",\"producerVersion\":"
     )?;
-    serde_json::to_writer(
-        &mut writer,
-        option_env!("GROUNDHOG_DISTRIBUTION_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
-    )
-    .map_err(|error| archive_io(format!("encode producer version: {error}")))?;
+    serde_json::to_writer(&mut writer, build_version.crate_version())
+        .map_err(|error| archive_io(format!("encode producer version: {error}")))?;
+    if let Some(platform_version) = build_version.platform_version() {
+        writer.write_all(b",\"producerPlatformVersion\":")?;
+        serde_json::to_writer(&mut writer, platform_version)
+            .map_err(|error| archive_io(format!("encode producer platform version: {error}")))?;
+    }
     write!(
         writer,
         ",\"compression\":\"zstd\",\"contentEncoding\":\"base64\",\"chunkSizeBytes\":{CHUNK_SIZE},\"files\":["
@@ -571,7 +583,7 @@ impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
             match key.as_str() {
                 "schemaVersion" => schema = Some(map.next_value::<u32>()?),
                 "kind" => kind = Some(map.next_value::<String>()?),
-                "producerVersion" => {
+                "producerVersion" | "producerPlatformVersion" => {
                     map.next_value::<String>()?;
                 }
                 "compression" => compression = Some(map.next_value::<String>()?),
@@ -581,8 +593,10 @@ impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
                     // The writer emits format metadata before `files`; enforcing
                     // that order lets chunks be decoded only after their codec
                     // and size contract have been validated.
-                    if schema != Some(ARCHIVE_SCHEMA_VERSION)
-                        || kind.as_deref() != Some(ARCHIVE_KIND)
+                    if !matches!(
+                        schema,
+                        Some(LEGACY_ARCHIVE_SCHEMA_VERSION | ARCHIVE_SCHEMA_VERSION)
+                    ) || kind.as_deref() != Some(ARCHIVE_KIND)
                         || compression.as_deref() != Some("zstd")
                         || encoding.as_deref() != Some("base64")
                         || chunk_size != Some(CHUNK_SIZE)
@@ -1074,6 +1088,50 @@ mod tests {
             );
         }
         assert!(!restored.join("runtime").exists());
+    }
+
+    #[test]
+    fn archive_envelope_reports_crate_and_platform_versions() {
+        let source = fixture();
+        let files = collect_archive_files(source.path()).unwrap();
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        write_archive(
+            &mut archive.as_file().try_clone().unwrap(),
+            &files,
+            BuildVersion::new("0.9.6", Some("0.1.23")),
+        )
+        .unwrap();
+
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&fs::read(archive.path()).unwrap()).unwrap();
+        assert_eq!(envelope["schemaVersion"], 2);
+        assert_eq!(envelope["producerVersion"], "0.9.6");
+        assert_eq!(envelope["producerPlatformVersion"], "0.1.23");
+    }
+
+    #[test]
+    fn restore_accepts_legacy_v1_archive() {
+        let source = fixture();
+        let files = collect_archive_files(source.path()).unwrap();
+        let parent = TempDir::new().unwrap();
+        let archive = parent.path().join("chain-v1.json");
+        let mut output = File::create(&archive).unwrap();
+        write_archive(&mut output, &files, BuildVersion::new("0.9.5", None)).unwrap();
+        drop(output);
+
+        let encoded = fs::read_to_string(&archive).unwrap().replacen(
+            &format!("\"schemaVersion\":{ARCHIVE_SCHEMA_VERSION}"),
+            &format!("\"schemaVersion\":{LEGACY_ARCHIVE_SCHEMA_VERSION}"),
+            1,
+        );
+        fs::write(&archive, encoded).unwrap();
+
+        let restored = parent.path().join("restored");
+        restore(&restored, &archive, false, "chain.restore", &Print::quiet()).unwrap();
+        assert_eq!(
+            fs::read(restored.join("ramdb/0.log")).unwrap(),
+            fs::read(source.path().join("ramdb/0.log")).unwrap()
+        );
     }
 
     #[test]

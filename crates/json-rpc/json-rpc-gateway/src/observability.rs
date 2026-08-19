@@ -164,14 +164,16 @@ mod tests {
         health::{GatewayHealth, GatewayHealthSnapshot},
         metrics::GatewayMetrics,
     };
+    use groundhog_build_info::BuildVersion;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn observability_routes_return_expected_statuses() {
         let config = GatewayConfig::default();
-        let health = GatewayHealth::new(&config, "test", None);
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let build_version = BuildVersion::new("test", Some("test-platform"));
+        let health = GatewayHealth::new(&config, build_version, None);
+        let metrics = GatewayMetrics::new(build_version, None).expect("metrics should register");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
             .await
@@ -190,6 +192,11 @@ mod tests {
         let health = request(server.local_addr, "/health").await;
         assert!(
             health.starts_with("HTTP/1.1 503 Service Unavailable"),
+            "{health}"
+        );
+        assert!(health.contains("\"version\":\"test\""), "{health}");
+        assert!(
+            health.contains("\"platform_version\":\"test-platform\""),
             "{health}"
         );
 
@@ -234,7 +241,7 @@ mod tests {
             health_probe_interval_ms: 10,
             ..GatewayConfig::default()
         };
-        let health = GatewayHealth::new(&config, "test", None);
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
         let mut snapshot = GatewayHealthSnapshot::for_test(
             HealthStatus::Ok,
             Some((1, 0)),
@@ -248,7 +255,7 @@ mod tests {
             .expect("test duration should be in range");
         health.update_for_test(snapshot).await;
 
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
             .await

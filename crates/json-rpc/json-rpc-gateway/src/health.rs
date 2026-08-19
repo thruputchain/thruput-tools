@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
 
+use groundhog_build_info::BuildVersion;
 use groundhog_db_gateway::DbGatewayIntroOutcome;
 use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
 use groundhog_json_rpc_types::{
@@ -35,7 +36,7 @@ pub struct GatewayHealth {
     max_chain_tip_age_ms: u64,
     max_snapshot_age_ms: u64,
     scheduler_required: bool,
-    version: &'static str,
+    build_version: BuildVersion,
     commit_hash: Option<&'static str>,
 }
 
@@ -47,13 +48,13 @@ impl GatewayHealth {
     /// freshness before returning the cached value.
     pub fn new(
         config: &GatewayConfig,
-        version: &'static str,
+        build_version: BuildVersion,
         commit_hash: Option<&'static str>,
     ) -> Self {
         Self {
             inner: Arc::new(RwLock::new(HealthSnapshot::starting(
                 config,
-                version,
+                build_version,
                 commit_hash,
             ))),
             #[cfg(test)]
@@ -61,7 +62,7 @@ impl GatewayHealth {
             max_chain_tip_age_ms: config.health_chain_tip_max_age_ms,
             max_snapshot_age_ms: config.health_probe_interval_ms.saturating_mul(3).max(1),
             scheduler_required: backend_required(config, HealthBackend::Scheduler),
-            version,
+            build_version,
             commit_hash,
         }
     }
@@ -123,6 +124,8 @@ pub struct HealthSnapshot {
     executable_path: String,
     status: HealthStatus,
     version: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform_version: Option<&'static str>,
     commit_hash: Option<&'static str>,
     uptime_seconds: u64,
     last_updated_timestamp: String,
@@ -136,7 +139,7 @@ pub struct HealthSnapshot {
 impl HealthSnapshot {
     fn starting(
         config: &GatewayConfig,
-        version: &'static str,
+        build_version: BuildVersion,
         commit_hash: Option<&'static str>,
     ) -> Self {
         let mut backends = BTreeMap::new();
@@ -167,7 +170,8 @@ impl HealthSnapshot {
             pid: std::process::id(),
             executable_path: executable_path(),
             status: HealthStatus::Starting,
-            version,
+            version: build_version.crate_version(),
+            platform_version: build_version.platform_version(),
             commit_hash,
             uptime_seconds: 0,
             last_updated_timestamp: timestamp_now(),
@@ -239,6 +243,7 @@ impl HealthSnapshot {
             executable_path: executable_path(),
             status,
             version: "test",
+            platform_version: None,
             commit_hash: None,
             uptime_seconds: 0,
             last_updated_timestamp: timestamp_now(),
@@ -300,7 +305,7 @@ pub fn spawn_health_probe_with_shutdown(
     health: GatewayHealth,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
-    let version = health.version;
+    let build_version = health.build_version;
     let commit_hash = health.commit_hash;
     tokio::spawn(async move {
         let started_at = Instant::now();
@@ -309,7 +314,7 @@ pub fn spawn_health_probe_with_shutdown(
         let mut last_status = None;
         loop {
             let snapshot = tokio::select! {
-                snapshot = probe_once(&ctx, started_at, version, commit_hash, &mut probe_state) => snapshot,
+                snapshot = probe_once(&ctx, started_at, build_version, commit_hash, &mut probe_state) => snapshot,
                 _ = &mut shutdown => break,
             };
             let status = snapshot.status();
@@ -670,7 +675,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
 async fn probe_once(
     ctx: &GatewayContext,
     started_at: Instant,
-    version: &'static str,
+    build_version: BuildVersion,
     commit_hash: Option<&'static str>,
     state: &mut ProbeState,
 ) -> HealthSnapshot {
@@ -761,7 +766,8 @@ async fn probe_once(
         pid: std::process::id(),
         executable_path: executable_path(),
         status,
-        version,
+        version: build_version.crate_version(),
+        platform_version: build_version.platform_version(),
         commit_hash,
         uptime_seconds: started_at.elapsed().as_secs(),
         last_updated_timestamp: now,
@@ -2580,7 +2586,7 @@ mod tests {
             db_gateway_address: None,
             ..GatewayConfig::default()
         };
-        let snapshot = HealthSnapshot::starting(&config, "test", None);
+        let snapshot = HealthSnapshot::starting(&config, BuildVersion::new("test", None), None);
 
         assert_eq!(snapshot.status(), HealthStatus::Starting);
         let db = snapshot
@@ -2672,7 +2678,7 @@ mod tests {
             backend_connect_timeout_ms: 500,
             ..GatewayConfig::default()
         });
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let metrics = GatewayMetrics::for_tests();
         let ctx = Arc::new(GatewayContext::assemble(
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -2747,7 +2753,7 @@ mod tests {
             health_chain_tip_max_age_ms: 1_000,
             ..GatewayConfig::default()
         });
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let metrics = GatewayMetrics::for_tests();
         let ctx = Arc::new(GatewayContext::assemble(
             Arc::new(RwLock::new(Some(scheduler))),
             Arc::new(RwLock::new(None)),
@@ -2756,7 +2762,7 @@ mod tests {
             config.clone(),
             metrics.clone(),
         ));
-        let health = GatewayHealth::new(&config, "test", None);
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
         let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
         let health_handle =
             spawn_health_probe_with_shutdown(ctx.clone(), health.clone(), health_shutdown_rx);
@@ -2821,7 +2827,7 @@ mod tests {
             scheduler_reconnect_grace_ms: 25,
             ..GatewayConfig::default()
         };
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let metrics = GatewayMetrics::for_tests();
 
         let ctx = GatewayContext::new(config, metrics)
             .await
@@ -2841,7 +2847,7 @@ mod tests {
             .await
             .expect("scheduler connection should succeed")
             .expect("scheduler should be connected");
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let metrics = GatewayMetrics::for_tests();
         let scheduler = Arc::new(RwLock::new(Some(client)));
         let sink =
             SchedulerTipSink::new(scheduler.clone(), metrics.clone(), Duration::from_secs(1));
@@ -2877,7 +2883,7 @@ mod tests {
         let scheduler = Arc::new(RwLock::new(Some(old_client)));
         let sink = Arc::new(SchedulerTipSink::new(
             scheduler.clone(),
-            GatewayMetrics::new("test", None).expect("test metrics should initialize"),
+            GatewayMetrics::for_tests(),
             Duration::from_millis(25),
         ));
         let call = tokio::spawn(async move {
@@ -2920,7 +2926,7 @@ mod tests {
             scheduler_reconnect_grace_ms: 30_000,
             ..GatewayConfig::default()
         });
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let metrics = GatewayMetrics::for_tests();
         let ctx = Arc::new(GatewayContext::assemble(
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -3027,7 +3033,7 @@ mod tests {
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             config.clone(),
-            GatewayMetrics::new("test", None).expect("test metrics should initialize"),
+            GatewayMetrics::for_tests(),
         ));
         let mut reconnects = ReconnectAttempts::default();
         maintain_reconnects(&ctx, &mut reconnects).await;
@@ -3092,7 +3098,7 @@ mod tests {
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             config.clone(),
-            GatewayMetrics::new("test", None).expect("test metrics should initialize"),
+            GatewayMetrics::for_tests(),
         );
         let mut scheduler_state =
             SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
@@ -3116,7 +3122,7 @@ mod tests {
             view_gateway_address: None,
             ..GatewayConfig::default()
         });
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let metrics = GatewayMetrics::for_tests();
         let client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
             .await
             .expect("scheduler connection should succeed")
@@ -3199,7 +3205,7 @@ mod tests {
             Arc::new(RwLock::new(Some(view_gateway.clone()))),
             Arc::new(RwLock::new(Some(db_gateway.clone()))),
             config,
-            GatewayMetrics::new("test", None).expect("bug: test metrics should initialize"),
+            GatewayMetrics::for_tests(),
         );
 
         let tx_hash = TransactionHash::from(SHA256Hash::from([0; 32]));
@@ -3326,8 +3332,8 @@ mod tests {
             scheduler_reconnect_grace_ms: 60_000,
             ..GatewayConfig::default()
         };
-        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
-        let health = GatewayHealth::new(&config, "test", None);
+        let metrics = GatewayMetrics::for_tests();
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
         let ctx = Arc::new(
             GatewayContext::new(config, metrics.clone())
                 .await
@@ -3485,7 +3491,7 @@ mod tests {
             health_probe_interval_ms: 10,
             ..GatewayConfig::default()
         };
-        let health = GatewayHealth::new(&config, "test", None);
+        let health = GatewayHealth::new(&config, BuildVersion::new("test", None), None);
         let mut snapshot = HealthSnapshot::for_test(
             HealthStatus::Ok,
             Some((1, 0)),

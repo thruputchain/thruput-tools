@@ -125,7 +125,7 @@ async fn version_roundtrips_with_camel_case_json_shape() {
     let rpc = GroundhogRpcServer::unified(
         VersionOnlyBackend,
         RpcServerConfig::default(),
-        BuildInfo::new("client-test", Some("abc123")),
+        BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
 
@@ -141,16 +141,18 @@ async fn version_roundtrips_with_camel_case_json_shape() {
         version.wire_format,
         groundhog_json_rpc_api::WIRE_FORMAT_VERSION
     );
-    assert_eq!(version.implementation, "client-test");
-    assert_eq!(version.commit_hash.as_deref(), Some("abc123"));
+    assert_eq!(version.implementation, "test");
+    assert_eq!(version.platform_version.as_deref(), Some("test-platform"));
+    assert_eq!(version.commit_hash.as_deref(), Some("test-commit"));
 
     let json = serde_json::to_value(&version).expect("bug: version info should serialize");
     assert_eq!(
         json["wireFormat"],
         groundhog_json_rpc_api::WIRE_FORMAT_VERSION
     );
-    assert_eq!(json["implementation"], "client-test");
-    assert_eq!(json["commitHash"], "abc123");
+    assert_eq!(json["implementation"], "test");
+    assert_eq!(json["platformVersion"], "test-platform");
+    assert_eq!(json["commitHash"], "test-commit");
     assert_eq!(json["wire_format"], serde_json::Value::Null);
     assert_eq!(json["commit_hash"], serde_json::Value::Null);
 

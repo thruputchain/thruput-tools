@@ -26,16 +26,13 @@ use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
-const DISTRIBUTION_VERSION: &str = match option_env!("GROUNDHOG_DISTRIBUTION_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
 #[command(
     name = "hog-gateway",
-    version = DISTRIBUTION_VERSION,
+    version = BUILD_VERSION.to_string(),
     about = "Groundhog JSON-RPC gateway"
 )]
 struct Cli {
@@ -144,15 +141,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Metrics registry ---
-    let metrics = metrics::GatewayMetrics::new(DISTRIBUTION_VERSION, option_env!("GIT_COMMIT"))?;
+    let metrics = metrics::GatewayMetrics::new(BUILD_VERSION, option_env!("GIT_COMMIT"))?;
     metrics.set_rpc_connections_limit(config.max_connections);
 
     // --- Context (backend connections) ---
     let ctx = Arc::new(GatewayContext::new(config, metrics.clone()).await?);
 
     // --- Observability HTTP server ---
-    let health =
-        health::GatewayHealth::new(&ctx.config, DISTRIBUTION_VERSION, option_env!("GIT_COMMIT"));
+    let health = health::GatewayHealth::new(&ctx.config, BUILD_VERSION, option_env!("GIT_COMMIT"));
     let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
     let health_handle =
         health::spawn_health_probe_with_shutdown(ctx.clone(), health.clone(), health_shutdown_rx);
@@ -191,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_impl = GroundhogRpcServer::unified(
         GatewayBackend::new(ctx.clone()),
         rpc_config,
-        BuildInfo::new(DISTRIBUTION_VERSION, option_env!("GIT_COMMIT")),
+        BuildInfo::from_build_version(BUILD_VERSION, option_env!("GIT_COMMIT")),
     );
     let handle = server.start(api_impl.into_rpc());
 

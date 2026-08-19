@@ -5,16 +5,13 @@ use groundhog_cli::result::CommandResult;
 use serde_json::json;
 use std::path::PathBuf;
 
-const DISTRIBUTION_VERSION: &str = match option_env!("GROUNDHOG_DISTRIBUTION_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
 
 #[derive(Parser)]
 #[command(
     name = "groundhog",
     about = "Groundhog smart contract development tools",
-    version = DISTRIBUTION_VERSION
+    version = BUILD_VERSION.to_string()
 )]
 struct Cli {
     #[command(flatten)]

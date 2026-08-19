@@ -487,10 +487,6 @@ mod tests {
         }
     }
 
-    fn metrics_for_tests() -> GatewayMetrics {
-        GatewayMetrics::new("test", None).expect("metrics should register")
-    }
-
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(15)).await;
     }
@@ -505,7 +501,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(4, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let tip = coalescer.chain_tip(request_context()).await.unwrap();
@@ -519,7 +515,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(4, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
         let context = RpcRequestContext::new(Some(Duration::from_secs(5)));
         let expected = context.deadline().expect("bounded request deadline");
@@ -538,7 +534,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(4, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let result = coalescer
@@ -557,7 +553,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 10),
             &(sink.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         assert!(matches!(
@@ -585,7 +581,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 10),
             &(sink as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
         let waiter = tokio::spawn({
             let coalescer = coalescer.clone();
@@ -615,7 +611,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 100), // strict serial
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // First caller opens a gated RPC.
@@ -657,7 +653,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn_with_deadlines(
             &config_for_tests(1, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::from_millis(10),
@@ -721,7 +717,7 @@ mod tests {
             }],
         ];
 
-        fetch_tip_cohorts(sink.clone(), cohorts, metrics_for_tests()).await;
+        fetch_tip_cohorts(sink.clone(), cohorts, GatewayMetrics::for_tests()).await;
 
         assert_eq!(
             newer_waiter
@@ -750,7 +746,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(2, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let w1 = {
@@ -793,7 +789,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // First caller: its RPC is gated, will get height 10.
@@ -829,7 +825,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 1), // 1 in flight, 1 queue slot
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // First pull: taken out of the channel immediately by the coalescer.
@@ -869,7 +865,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 100),
             &(mock.clone() as Arc<dyn TipSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // Spawn four chain_tip calls back-to-back with no intervening

@@ -176,7 +176,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::always_failing(),
         RpcServerConfig::default(),
-        BuildInfo::new("client-test", None),
+        BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
     let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x33; 32])));
@@ -222,7 +222,7 @@ async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::eventually_committed(),
         RpcServerConfig::default(),
-        BuildInfo::new("client-test", None),
+        BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
     let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
@@ -258,7 +258,7 @@ async fn recent_failure_status_roundtrips_through_client() {
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::always_failing(),
         RpcServerConfig::default(),
-        BuildInfo::new("client-test", None),
+        BuildInfo::for_tests(),
     );
     let handle = server.start(rpc.into_rpc());
 

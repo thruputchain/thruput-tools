@@ -8,6 +8,9 @@ policy.
 
 Workspace crates are grouped by boundary:
 
+- **build-info** — dependency-free crate and packaging-platform version
+  metadata shared by binaries and diagnostic outputs.
+
 `crates/json-rpc/` owns the public RPC surface:
 
 - **json-rpc-types** — shared RPC payloads, error catalog, hex wrappers, runtime
@@ -373,9 +376,10 @@ errors. Bump minor for additive changes such as new methods, optional
 fields, or errors. Bump patch for documentation, description, or
 example refinements only.
 
-The `groundhog_version` RPC exposes `wireFormat`, `implementation`,
-and `commitHash`. SDKs and other consumers may branch on `wireFormat`
-only; `implementation` and `commitHash` are diagnostic fields.
+The `groundhog_version` RPC exposes `wireFormat`, `implementation`, optional
+`platformVersion`, and `commitHash`. SDKs and other consumers may branch on
+`wireFormat` only; the other fields are diagnostic. `implementation` is the
+serving crate version; `platformVersion` is the packaging release when present.
 
 ## CLI Patterns
 

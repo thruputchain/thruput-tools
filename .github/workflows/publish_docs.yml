@@ -16,6 +16,7 @@ on:
         description: 'Space-separated package list (default: the published set)'
         required: false
         default: >-
+          groundhog-build-info
           groundhog-json-rpc-types
           groundhog-open-rpc
           groundhog-open-rpc-macros

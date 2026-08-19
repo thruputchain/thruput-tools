@@ -465,10 +465,6 @@ mod tests {
         }
     }
 
-    fn metrics_for_tests() -> GatewayMetrics {
-        GatewayMetrics::new("test", None).expect("metrics should register")
-    }
-
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(15)).await;
     }
@@ -509,7 +505,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let read = tokio::spawn({
@@ -543,7 +539,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
         let context = RpcRequestContext::new(Some(Duration::from_secs(5)));
         let expected = context.deadline().expect("bounded request deadline");
@@ -568,7 +564,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let result = batcher
@@ -590,7 +586,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let address = address_zero();
@@ -619,7 +615,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // Three concurrent reads land in a single batch (no yields between
@@ -691,7 +687,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn_with_deadlines(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::from_millis(10),
@@ -763,7 +759,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let mut waiters = vec![];

@@ -329,10 +329,6 @@ mod tests {
         }
     }
 
-    fn test_metrics() -> GatewayMetrics {
-        GatewayMetrics::new("test", None).expect("bug: test metrics should register")
-    }
-
     #[tokio::test]
     async fn panicking_processor_releases_inflight_capacity() {
         let processor = Arc::new(PanicOnceProcessor {
@@ -343,7 +339,7 @@ mod tests {
             "test_batcher",
             &test_config(),
             &processor,
-            test_metrics(),
+            GatewayMetrics::for_tests(),
         );
         let (first_tx, first_rx) = oneshot::channel();
         batcher
@@ -372,7 +368,7 @@ mod tests {
             "test_batcher",
             &test_config(),
             &processor,
-            test_metrics(),
+            GatewayMetrics::for_tests(),
         );
         let final_handle = batcher.clone();
         let (reply_tx, mut reply_rx) = oneshot::channel();

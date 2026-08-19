@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/build-info",
     "crates/json-rpc/json-rpc-types",
     "crates/json-rpc/json-rpc-api",
     "crates/json-rpc/json-rpc-server",
@@ -39,6 +40,7 @@ categories = ["development-tools"]
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
+groundhog-build-info = { path = "crates/build-info", version = "=0.9.5", registry = "groundhog" }
 groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.9.5", registry = "groundhog" }
 groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.9.5", registry = "groundhog" }
 groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.9.5", registry = "groundhog" }
@@ -108,7 +110,7 @@ prometheus = { version = "0.14", default-features = false }
 time = { version = "0.3", features = ["formatting"] }
 
 # --- CLI / Config ---
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "string"] }
 toml = "0.8"
 
 # --- Crypto ---

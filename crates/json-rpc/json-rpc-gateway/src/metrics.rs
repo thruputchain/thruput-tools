@@ -8,6 +8,7 @@ use prometheus::{
     Registry, TextEncoder,
 };
 
+use groundhog_build_info::BuildVersion;
 use groundhog_json_rpc_api::WIRE_FORMAT_VERSION;
 
 use crate::{
@@ -125,7 +126,7 @@ impl GatewayMetrics {
     /// names and labels can be bounded independently of other crates.
     #[allow(clippy::too_many_lines)]
     pub fn new(
-        version: &'static str,
+        build_version: BuildVersion,
         commit_hash: Option<&'static str>,
     ) -> prometheus::Result<Self> {
         let registry = Registry::new();
@@ -154,9 +155,14 @@ impl GatewayMetrics {
         let build_info = GaugeVec::new(
             Opts::new(
                 "groundhog_gateway_build_info",
-                "Gateway build metadata. Constant 1 labeled by version, commit hash, and wire format version.",
+                "Gateway build metadata. Constant 1 labeled by crate version, platform version, commit hash, and wire format version.",
             ),
-            &["version", "commit_hash", "wire_format_version"],
+            &[
+                "version",
+                "platform_version",
+                "commit_hash",
+                "wire_format_version",
+            ],
         )?;
         let backend_requests_total = IntCounterVec::new(
             Opts::new(
@@ -302,7 +308,8 @@ impl GatewayMetrics {
 
         build_info
             .with_label_values(&[
-                version,
+                build_version.crate_version(),
+                build_version.platform_version().unwrap_or("unknown"),
                 commit_hash.unwrap_or("unknown"),
                 WIRE_FORMAT_VERSION,
             ])
@@ -333,6 +340,11 @@ impl GatewayMetrics {
             view_timeouts_total,
             malformed_events_dropped_total,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self::new(BuildVersion::new("test", None), None).expect("bug: test metrics should register")
     }
 
     pub(crate) fn observe_backend_request(
@@ -564,9 +576,10 @@ mod tests {
     #[tokio::test]
     async fn core_metrics_render_health_status_backend_and_build_info() {
         let config = GatewayConfig::default();
-        let health = GatewayHealth::new(&config, "test-version", Some("test-commit"));
+        let build_version = BuildVersion::new("test-version", Some("test-platform"));
+        let health = GatewayHealth::new(&config, build_version, Some("test-commit"));
         let snapshot = health.snapshot().await;
-        let metrics = GatewayMetrics::new("test-version", Some("test-commit"))
+        let metrics = GatewayMetrics::new(build_version, Some("test-commit"))
             .expect("metrics should register");
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
@@ -578,7 +591,7 @@ mod tests {
         assert!(body.contains("groundhog_gateway_chain_tip_height NaN"));
         assert!(body.contains("groundhog_gateway_chain_tip_age_seconds NaN"));
         assert!(body.contains(
-            "groundhog_gateway_build_info{commit_hash=\"test-commit\",version=\"test-version\""
+            "groundhog_gateway_build_info{commit_hash=\"test-commit\",platform_version=\"test-platform\",version=\"test-version\""
         ));
         assert!(body.contains(&format!("wire_format_version=\"{WIRE_FORMAT_VERSION}\"")));
     }
@@ -595,7 +608,7 @@ mod tests {
                 (HealthBackend::ViewGateway, true),
             ],
         );
-        let metrics = GatewayMetrics::new("test-version", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
 
@@ -612,7 +625,7 @@ mod tests {
     #[test]
     fn backend_metrics_render_counter_and_pinned_histogram() {
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
-        let metrics = GatewayMetrics::new("test-version", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
 
         for outcome in [
             BackendRequestOutcome::Ok,
@@ -681,7 +694,7 @@ mod tests {
     #[test]
     fn rpc_and_http_metrics_render_bounded_labels() {
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
-        let metrics = GatewayMetrics::new("test-version", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
 
         for method in [
             "groundhog_sendRawTransaction",
@@ -765,7 +778,7 @@ mod tests {
     #[test]
     fn internal_and_domain_metrics_render_bounded_labels() {
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
-        let metrics = GatewayMetrics::new("test-version", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
 
         metrics.observe_internal_batch_size("submit_batcher", 5);
         metrics.observe_internal_batch_rejected("tip_coalescer", REASON_INGRESS_FULL);

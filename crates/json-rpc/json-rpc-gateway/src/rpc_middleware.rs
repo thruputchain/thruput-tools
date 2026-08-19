@@ -240,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn rpc_metrics_service_records_call_and_batch() {
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
         let service = RpcMetricsService::new(MockRpcService, metrics.clone());
 
         service

@@ -17,15 +17,12 @@ use groundhog_sim::validation::validate_manifest;
 use serde::Serialize;
 
 const HOGSIM_COMMAND_JSON_SCHEMA_VERSION: u32 = 1;
-const DISTRIBUTION_VERSION: &str = match option_env!("GROUNDHOG_DISTRIBUTION_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
 
 #[derive(Debug, Parser)]
 #[command(name = "hogsim")]
 #[command(
-    version = DISTRIBUTION_VERSION,
+    version = BUILD_VERSION.to_string(),
     about = "Groundhog stateful simulation and soak-test harness"
 )]
 struct Cli {
