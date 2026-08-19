@@ -168,7 +168,7 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     // that forced restore replaced its contents with the archived source state.
     std::fs::write(destination.join("ramdb/0.log"), b"different").unwrap();
     let restored = groundhog()
-        .args(["--json", "chain", "restore", "--force", "--data-dir"])
+        .args(["--json", "chain", "restore", "-f", "--data-dir"])
         .arg(&destination)
         .arg("--input")
         .arg(&archive)
@@ -187,6 +187,21 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     assert_eq!(
         std::fs::read(destination.join("ramdb/0.log")).unwrap(),
         b"ramdb-state"
+    );
+}
+
+#[test]
+fn chain_restore_help_documents_force_alias() {
+    let output = groundhog()
+        .args(["chain", "restore", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("-f, --force")
     );
 }
 

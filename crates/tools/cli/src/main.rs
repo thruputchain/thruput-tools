@@ -693,7 +693,7 @@ enum ChainCommand {
         #[arg(long)]
         input: PathBuf,
         /// Replace populated persistent state
-        #[arg(long)]
+        #[arg(short = 'f', long)]
         force: bool,
     },
 }
