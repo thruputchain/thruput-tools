@@ -47,7 +47,7 @@ aggregation.
 - Event payload/topic decoding or assertions.
 - Contract mutation workloads that intentionally emit events during scheduled
   load.
-- Committed `.wasm` fixtures.
+- Committed `.rv32a` fixtures.
 
 ## Manifest Shape
 
@@ -57,7 +57,7 @@ aggregation.
     { "name": "events-query", "weight": 1 }
   ],
   "contractArtifacts": [
-    { "name": "fibonacci", "artifact": { "kind": "wasm", "path": "fibonacci.wasm" } }
+    { "name": "fibonacci", "artifact": { "kind": "rv32", "path": "fibonacci.rv32a" } }
   ],
   "eventQueries": [
     {

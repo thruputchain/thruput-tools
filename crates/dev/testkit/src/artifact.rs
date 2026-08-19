@@ -30,8 +30,6 @@ use crate::nonce::NonceNamespace;
 /// Which artifact format a contract binary is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
-    /// A WebAssembly artifact (`.wasm`).
-    Wasm,
     /// A lowered RV32 artifact (`.rv32a`).
     Rv32,
 }
@@ -45,12 +43,8 @@ pub(crate) enum ArtifactSpec {
         path: PathBuf,
         kind: Option<ArtifactKind>,
     },
-    /// Use in-memory bytes with an explicit kind.
-    Bytes {
-        name: String,
-        bytes: Vec<u8>,
-        kind: ArtifactKind,
-    },
+    /// Use in-memory RV32 bytes.
+    Bytes { name: String, bytes: Vec<u8> },
 }
 
 impl ArtifactSpec {
@@ -61,11 +55,10 @@ impl ArtifactSpec {
     }
 }
 
-/// A loaded artifact: its bytes, format, precomputed contract hash, and shared
+/// A loaded artifact: its bytes, precomputed contract hash, and shared
 /// on-network registration state.
 #[derive(Debug)]
 pub(crate) struct ArtifactEntry {
-    kind: ArtifactKind,
     bytes: Vec<u8>,
     hash: SHA256Hash,
     registered: AtomicBool,
@@ -123,7 +116,7 @@ impl ArtifactEntry {
 
     /// Rebuild the contract object for inclusion in `contracts_to_deploy`.
     pub(crate) fn contract(&self) -> Contract {
-        contract_from_bytes(self.kind, self.bytes.clone())
+        contract_from_bytes(self.bytes.clone())
     }
 }
 
@@ -158,16 +151,10 @@ impl Registry {
     }
 }
 
-pub(crate) fn contract_from_bytes(kind: ArtifactKind, bytes: Vec<u8>) -> Contract {
-    let blob = ContractBlob {
-        data: BytesM(bytes),
-    };
-    match kind {
-        ArtifactKind::Wasm => Contract::kWasmi {
-            wasmi_contract: blob,
-        },
-        ArtifactKind::Rv32 => Contract::kRv32 {
-            rv32_contract: blob,
+pub(crate) fn contract_from_bytes(bytes: Vec<u8>) -> Contract {
+    Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: BytesM(bytes),
         },
     }
 }
@@ -178,24 +165,21 @@ pub(crate) fn contract_hash(contract: &Contract) -> Result<SHA256Hash> {
 }
 
 fn load_entry(spec: ArtifactSpec) -> Result<ArtifactEntry> {
-    let (kind, bytes) = match spec {
-        ArtifactSpec::Bytes { bytes, kind, .. } => (kind, bytes),
+    let bytes = match spec {
+        ArtifactSpec::Bytes { bytes, .. } => bytes,
         ArtifactSpec::Path { name, path, kind } => {
-            let kind = match kind {
-                Some(kind) => kind,
-                None => infer_kind(&path)?,
-            };
-            let bytes = std::fs::read(&path).map_err(|source| TestkitError::ArtifactLoad {
+            if kind.is_none() {
+                validate_inferred_kind(&path)?;
+            }
+            std::fs::read(&path).map_err(|source| TestkitError::ArtifactLoad {
                 name,
                 path: path.display().to_string(),
                 detail: source.to_string(),
-            })?;
-            (kind, bytes)
+            })?
         }
     };
-    let hash = contract_hash(&contract_from_bytes(kind, bytes.clone()))?;
+    let hash = contract_hash(&contract_from_bytes(bytes.clone()))?;
     Ok(ArtifactEntry {
-        kind,
         bytes,
         hash,
         registered: AtomicBool::new(false),
@@ -203,10 +187,9 @@ fn load_entry(spec: ArtifactSpec) -> Result<ArtifactEntry> {
     })
 }
 
-fn infer_kind(path: &Path) -> Result<ArtifactKind> {
+fn validate_inferred_kind(path: &Path) -> Result<()> {
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("wasm") => Ok(ArtifactKind::Wasm),
-        Some("rv32a") => Ok(ArtifactKind::Rv32),
+        Some("rv32a") => Ok(()),
         _ => Err(TestkitError::UnknownArtifactExtension {
             path: path.display().to_string(),
         }),
@@ -215,19 +198,63 @@ fn infer_kind(path: &Path) -> Result<ArtifactKind> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+    use groundhog_xdr::contract::Contract;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
     use crate::nonce::NonceNamespace;
 
-    use super::{ArtifactKind, ArtifactSpec, RegistrationOwner, Registry};
+    use super::{
+        ArtifactKind, ArtifactSpec, RegistrationOwner, Registry, contract_from_bytes,
+        validate_inferred_kind,
+    };
+
+    #[test]
+    fn raw_artifact_bytes_build_an_rv32_contract() {
+        let bytes = vec![1, 2, 3];
+        let contract = contract_from_bytes(bytes.clone());
+
+        match contract {
+            Contract::kRv32 { rv32_contract } => assert_eq!(rv32_contract.data.0, bytes),
+            other => panic!("expected RV32 contract, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inferred_artifact_kind_requires_rv32_extension() {
+        assert!(validate_inferred_kind(Path::new("counter.rv32a")).is_ok());
+        assert!(validate_inferred_kind(Path::new("counter.wasm")).is_err());
+        assert!(validate_inferred_kind(Path::new("counter")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inferred_artifact_kind_rejects_non_utf8_extension() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"counter.\xff".to_vec()));
+        assert!(validate_inferred_kind(&path).is_err());
+    }
+
+    #[test]
+    fn explicit_rv32_kind_overrides_filename_extension() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/artifact.rs");
+        let registry = Registry::from_specs(vec![ArtifactSpec::Path {
+            name: "counter".to_owned(),
+            path,
+            kind: Some(ArtifactKind::Rv32),
+        }]);
+
+        assert!(registry.is_ok());
+    }
 
     #[tokio::test]
     async fn registration_resolution_only_clears_the_matching_transaction() {
         let registry = Registry::from_specs(vec![ArtifactSpec::Bytes {
             name: "counter".to_owned(),
             bytes: vec![1, 2, 3],
-            kind: ArtifactKind::Rv32,
         }])
         .expect("bug: in-memory artifact should load");
         let entry = registry.get("counter").expect("bug: artifact exists");

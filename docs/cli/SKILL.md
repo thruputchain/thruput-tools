@@ -11,8 +11,7 @@ description: >
 # Groundhog Contract Development
 
 You are helping a developer write a Groundhog smart contract.
-Groundhog contracts are `no_std` Rust libraries compiled to RV32 by
-default, with an explicit WASM path available when needed. The SDK provides
+Groundhog contracts are `no_std` Rust libraries compiled to RV32. The SDK provides
 storage primitives with specific concurrency semantics. Contract correctness depends heavily on
 choosing the right storage type and write pattern.
 
@@ -55,12 +54,11 @@ tests/
   test.rs             # native integration tests
   integration.rs      # RPC tests run by groundhog test --integration
   test_rv32.rs        # default executor-backed RV32 tests
-  test_wasm.rs        # wasm executor tests
 Cargo.toml
 build.rs              # activates the RPC starter only for groundhog integration runs
 rust-toolchain.toml
 .cargo/
-  config.toml         # host + wasm + rv32 defaults
+  config.toml         # host + rv32 defaults
   contract.toml       # overlay used by groundhog build/test
 ```
 
@@ -222,7 +220,7 @@ impl MyContract {
 The macro generates:
 - a typed client, usually `<ContractType>Client`
 - a client error type, usually `<ContractType>ClientError`
-- entrypoints used by the wasm contract
+- entrypoints used by the deployed contract
 
 For native tests, the important helper comes from
 `sdk::declare_mock_contract!()`: `register_mock_contract(&env)`.
@@ -292,7 +290,6 @@ fn test_initialize_and_deposit() {
 
 - Keep `tests/test_rv32.rs` as the default executor-backed path.
 - Use the scaffolded pattern based on `load_rv32_contract(...)`.
-- Keep `tests/test_wasm.rs` only when explicit WASM coverage is needed.
 - Native tests and executor-backed tests serve different purposes; do not
   replace one with the other.
 

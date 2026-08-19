@@ -569,7 +569,7 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
             "devWallet": {
                 "contentHash": Hex0x(SHA256Hash::from([0x51; 32])),
                 "deployedCodeHash": Hex0x(SHA256Hash::from([0x52; 32])),
-                "artifactHint": "fake-dev-wallet.wasm",
+                "artifactHint": "fake-dev_wallet.rv32a",
                 "deployEntrypoint": "0xadac498222148e4f",
                 "createWalletEntrypoint": "0x6372656174655761",
                 "doActionEntrypoint": "0x646f416374696f6e",

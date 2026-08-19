@@ -52,7 +52,6 @@ pub mod tx_utils;
 pub mod view;
 pub mod view_json;
 pub mod wallet;
-pub mod wasm_instrument;
 pub use error::CliError;
 pub use print::Print;
 

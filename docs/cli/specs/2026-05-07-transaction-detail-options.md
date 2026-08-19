@@ -116,11 +116,11 @@ Confirmed by reading the current code:
   primitives (`hogd/hogdb/block_tx.h`, `invoke_tx.h`,
   `item_lock.h`), **not** historical state-at-height reads. There is
   no obvious API for "give me the state at block N."
-- Per-tx contract execution is single-threaded; the WASM-visible
+- Per-tx contract execution is single-threaded; the contract-visible
   surface is deterministic by protocol design. The non-determinism in
   hogexec (storage-key shuffle in `item_view.cc:348,464`,
   `database_proxy.h:135`; thread-id hash in `dispatch_pool.h:76`) is
-  internal-ordering only and should not affect WASM-visible behavior
+  internal-ordering only and should not affect contract-visible behavior
   or per-tx trace shape. Worth confirming with hogd team before
   committing to replay-based fidelity.
 - M-A (`docs/archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md`)

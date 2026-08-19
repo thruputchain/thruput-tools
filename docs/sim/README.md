@@ -94,8 +94,8 @@ fixtures under `sim-fixtures/` into the script workdir, and passes the
 resulting `target/groundhog`-style artifact root into the ignored local catalog
 smoke.
 The default policy is source-first: keep reusable contracts as source projects,
-compile WASM on demand, and commit `.wasm` files only when exact byte identity
-is the fixture under test.
+compile RV32 artifacts on demand, and commit `.rv32a` files only when exact
+byte identity is the fixture under test.
 
 The catalog also includes heavier local presets that are not part of the fast
 smoke ladder: `local-fibonacci-storage-miss-heavy`,

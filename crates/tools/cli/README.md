@@ -1,7 +1,7 @@
 # groundhog
 
-CLI tools for Groundhog smart contract development. Wraps the
-Rust/RV32 build path, WASM fallback, and test workflow into a single binary.
+CLI tools for Groundhog smart contract development. Wraps the Rust/RV32 build,
+deploy, and test workflow into a single binary.
 
 ## Install
 
@@ -55,7 +55,7 @@ groundhog new my-counter && cd my-counter
 # Build the RV32 contract artifact
 groundhog build
 
-# Run contract's tests against the WASM executor
+# Run contract tests against the RV32 executor
 groundhog test
 
 # Start the hog-devnode-backed local node
@@ -116,16 +116,14 @@ plain `cargo` builds and tests work for the host target:
 | `cargo build` | Build for host (IDE, rust-analyzer) |
 | `cargo test` | Run unit tests on host |
 | `groundhog build` | Cross-compile to RV32 ELF and lower it to `.rv32a` |
-| `groundhog build --target wasm` | Cross-compile to WASM (`--no-default-features --release`) |
 | `groundhog test` | Run executor-backed RV32 tests |
-| `groundhog test --integration` | Start hog-devnode, deploy WASM or RV32, and run `tests/integration.rs` |
+| `groundhog test --integration` | Start hog-devnode, deploy RV32, and run `tests/integration.rs` |
 
 The `dev` feature enables `std` for native compilation.
 `groundhog build` passes `--no-default-features` to disable it
-for WASM. The `.cargo/contract.toml` overlay supplies `build-std`
-for both the WASM and RV32 contract builds; `panic=immediate-abort`
-lives in `.cargo/config.toml` alongside the rest of the target
-rustflags.
+for RV32. The `.cargo/contract.toml` overlay supplies `build-std`;
+`panic=immediate-abort` lives in `.cargo/config.toml` alongside the rest of
+the target rustflags.
 
 ## Commands
 
@@ -183,36 +181,24 @@ groundhog new my-contract --template stub   # minimal template
 
 ### `groundhog build`
 
-Compile the contract to RV32 and lower it to a Groundhog `.rv32a` artifact by
-default, or build the explicit WASM fallback target.
+Compile the contract to RV32 and lower it to a Groundhog `.rv32a` artifact.
 
 ```bash
 groundhog build                # RV32 release artifact
 groundhog build -p counter     # select a Cargo workspace member
-groundhog build --target wasm  # explicit WASM fallback
-groundhog build --target wasm --optimize  # + wasm-opt (requires wasm-opt on PATH)
 groundhog build --profile testnet   # resolve profile from groundhog.toml
 groundhog build -- --verbose   # pass extra args to cargo
 ```
 
-The WASM target outputs the `.wasm` file path and size on success. When spec
-generation is available, it also emits a human-readable `*.spec.json` sidecar
-next to the built WASM. The embedded WASM section remains the source of truth;
-the JSON file is for inspection and external tooling.
-
 The RV32 target uses the built-in `groundhog-rv32-lower` library (v4 dispatch
 lives in the guest, so stripped release builds are valid), then writes
-`target/groundhog/<package>.rv32a` plus `target/groundhog/<package>.rv32.json`
-build metadata.
+`target/groundhog/<package>.rv32a`, build metadata, and `.spec.json` / `.spec.xdr`
+contract-spec sidecars.
 
 In a multi-contract Cargo workspace, keep `groundhog.toml`,
 `rust-toolchain.toml`, and `.cargo/` at the workspace root so members share the
 same profile, toolchain, and target directory. Run `groundhog build -p
 <package>` from that root, or run `groundhog build` from inside one member.
-
-This RV32 path currently emits the deployable artifact and lowerer metadata.
-Contract spec sidecars for RV32 are a cross-repo follow-up; today spec
-sidecars are still produced by the WASM custom-section finalization path.
 
 ### `groundhog test`
 
@@ -235,8 +221,6 @@ groundhog test --show-output                # show captured stdout for passing t
 groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set selected harness thread count
 groundhog test --integration                # local node + RV32 deploy + tests/integration.rs
-groundhog test --integration --target wasm  # local node + WASM deploy + tests/integration.rs
-groundhog test --integration --differential # gate: WASM and RV32 both pass same tests
 ```
 
 `groundhog test` records failing libtest names under the package's Cargo
@@ -249,22 +233,15 @@ single newline-delimited JSON record; successful runs are written to
 stdout with `ok` set to `true` or `false` as appropriate. The
 machine-readable payload is versioned with `data.schemaVersion` and
 includes structured per-run and per-test results rather than only
-aggregated cargo output text. Schema v4 reports the built artifact under
+aggregated cargo output text. Schema v5 reports the built artifact under
 `data.artifact` with `kind` and `path` fields.
 
-`groundhog test --integration` builds the selected artifact (`--target rv32` by
-default, or `--target wasm`), starts an ephemeral hog-devnode local node,
+`groundhog test --integration` builds the RV32 artifact, starts an ephemeral hog-devnode local node,
 deploys the contract with the runtime manifest's lowest-index `local_user`, then runs the `tests/integration.rs` target.
 The test process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
 `GROUNDHOG_PROFILE`, `GROUNDHOG_DEFAULT_KEY`, and `GROUNDHOG_RUNTIME_MANIFEST`
 when the local node advertises a runtime manifest. `--watch` and `--rerun` are
 intentionally deferred for this integration path.
-
-`groundhog test --integration --differential` builds both artifact kinds and
-runs `tests/integration.rs` twice against isolated ephemeral local nodes. The
-command fails unless the WASM and RV32 runs both pass and report matching parsed
-test outcomes. Use this when debugging differences between the default RV32 path
-and the explicit WASM fallback.
 
 If `hog-devnode` is not next to the `groundhog` binary or on `PATH`, point
 the runner at the binary:
@@ -388,7 +365,6 @@ groundhog deploy -p counter
 groundhog deploy --profile testnet
 groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog deploy --artifact target/groundhog/counter.rv32a
-groundhog deploy --target rv32
 groundhog deploy --json
 ```
 

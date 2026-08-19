@@ -25,14 +25,19 @@ pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
         path.to_path_buf()
     };
     let bytes = tokio::fs::read(&path).await?;
-    let result: SimResult = serde_json::from_slice(&bytes)?;
-    if result.schema_version != SIM_RESULT_SCHEMA_VERSION {
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    if let Some(actual) = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|actual| u32::try_from(actual).ok())
+        && actual != SIM_RESULT_SCHEMA_VERSION
+    {
         return Err(SimError::UnsupportedResultSchema {
-            actual: result.schema_version,
+            actual,
             path: path.display().to_string(),
         });
     }
-    Ok(result)
+    Ok(serde_json::from_value(value)?)
 }
 
 /// Identity and availability diff for two run results.
@@ -758,6 +763,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_result_rejects_legacy_wasm_result_by_schema_version() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut value = minimal_result_json(3);
+        value["contracts"] = json!([{"artifactKind": "wasm"}]);
+        tokio::fs::write(file.path(), serde_json::to_vec(&value).unwrap())
+            .await
+            .expect("result should write");
+
+        let error = load_result(file.path())
+            .await
+            .expect_err("legacy result schema should reject before payload decoding");
+
+        assert!(matches!(
+            error,
+            SimError::UnsupportedResultSchema { actual: 3, .. }
+        ));
+    }
+
+    #[tokio::test]
     async fn load_result_accepts_legacy_target_ownership_without_process() {
         let file = NamedTempFile::new().expect("temp file should be created");
         tokio::fs::write(
@@ -1274,8 +1298,8 @@ mod tests {
         b_json["contracts"] = json!([{
             "name": "fibonacci",
             "status": "completed",
-            "artifactKind": "wasm",
-            "artifactPath": "/tmp/fibonacci.wasm",
+            "artifactKind": "rv32",
+            "artifactPath": "/tmp/fibonacci.rv32a",
             "artifactSha256": format!("0x{}", "11".repeat(32)),
             "contractHash": format!("0x{}", "22".repeat(32)),
             "nonce": "123",

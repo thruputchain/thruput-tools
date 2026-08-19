@@ -294,7 +294,7 @@ pub(crate) fn build_type_def_index(
         let name = spec_type_def_name(type_def)?.to_owned();
         if index.insert(name.clone(), type_def).is_some() {
             return Err(CliError::SpecFailed(format!(
-                "embedded contract spec defines `{name}` multiple times"
+                "contract spec defines `{name}` multiple times"
             )));
         }
     }
@@ -412,7 +412,7 @@ fn decode_spec_value_from_reader_with_policy(
             decode_array_value_from_reader(array, reader, type_defs, path, policy)
         }
         _ => Err(CliError::SpecFailed(
-            "embedded contract spec contains an unsupported contract type".into(),
+            "contract spec contains an unsupported contract type".into(),
         )),
     }
 }
@@ -496,7 +496,7 @@ fn spec_type_def_name(type_def: &ContractTypeDef) -> Result<&str, CliError> {
         ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name),
         ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name),
         _ => Err(CliError::SpecFailed(
-            "embedded contract spec contains an unsupported type definition kind".into(),
+            "contract spec contains an unsupported type definition kind".into(),
         )),
     }
 }
@@ -509,7 +509,7 @@ fn resolve_named_type_def<'a>(
     type_defs
         .get(name)
         .copied()
-        .ok_or_else(|| CliError::SpecFailed(format!("embedded contract spec is missing `{name}`")))
+        .ok_or_else(|| CliError::SpecFailed(format!("contract spec is missing `{name}`")))
 }
 
 fn encode_cli_spec_value(
@@ -580,7 +580,7 @@ fn encode_cli_spec_value(
                 encode_union_cli_value(union_def, argument, type_defs, path)
             }
             _ => Err(CliError::SpecFailed(
-                "embedded contract spec contains an unsupported type definition kind".into(),
+                "contract spec contains an unsupported type definition kind".into(),
             )),
         },
         _ => encode_scalar_cli_value(ty, argument, path),
@@ -606,7 +606,7 @@ fn encode_json_spec_value(
         ContractType::Named { named } => encode_named_json_value(named, value, type_defs, path),
         ContractType::Array { array } => encode_array_json_value(array, value, type_defs, path),
         _ => Err(CliError::SpecFailed(
-            "embedded contract spec contains an unsupported contract type".into(),
+            "contract spec contains an unsupported contract type".into(),
         )),
     }
 }
@@ -743,7 +743,7 @@ fn encode_named_json_value(
             encode_union_json_value(union_def, value, type_defs, path)
         }
         _ => Err(CliError::SpecFailed(
-            "embedded contract spec contains an unsupported type definition kind".into(),
+            "contract spec contains an unsupported type definition kind".into(),
         )),
     }
 }
@@ -1090,7 +1090,7 @@ fn encode_union_case(
         }
         _ => {
             return Err(CliError::SpecFailed(format!(
-                "embedded contract spec contains an unsupported union case in `{}`",
+                "contract spec contains an unsupported union case in `{}`",
                 spec_string_text(&union_def.name)?
             )));
         }
@@ -1515,7 +1515,7 @@ fn decode_named_value_from_reader(
             decode_union_value(union_def, reader, type_defs, path, policy)
         }
         _ => Err(CliError::SpecFailed(
-            "embedded contract spec contains an unsupported type definition kind".into(),
+            "contract spec contains an unsupported type definition kind".into(),
         )),
     }
 }
@@ -1683,7 +1683,7 @@ fn decode_union_value(
         }
         _ => {
             return Err(CliError::SpecFailed(format!(
-                "embedded contract spec contains an unsupported union in `{}`",
+                "contract spec contains an unsupported union in `{}`",
                 spec_string_text(&union_def.name)?
             )));
         }

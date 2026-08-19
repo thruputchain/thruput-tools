@@ -288,7 +288,7 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     match &resolved.metadata {
         Some(CallMetadata::Spec(metadata)) => {
             // Keep the legacy machine-readable value stable even though specs
-            // may now come from an RV32 sidecar as well as embedded WASM.
+            // comes from the RV32 spec sidecar.
             json!({
                 "source": "embedded_spec",
                 "interface": {
@@ -476,7 +476,7 @@ pub(crate) fn resolve_call(
             metadata: Some(CallMetadata::Local(metadata)),
         }),
         None => Err(CliError::Other(
-            "cannot resolve the contract method from the local project or embedded contract spec. \
+            "cannot resolve the contract method from the local project or contract spec. \
              Run `groundhog build` from inside the project that defines the contract, or pass an \
              explicit 0x-prefixed 8-byte entrypoint ID."
                 .into(),
@@ -541,7 +541,7 @@ fn resolve_spec_method(
             .collect::<Vec<_>>()
             .join(", ");
         return Err(CliError::Other(format!(
-            "method `{method}` matches multiple interfaces in the embedded contract spec: \
+            "method `{method}` matches multiple interfaces in the contract spec: \
              {descriptions}"
         )));
     }
@@ -552,7 +552,7 @@ fn resolve_spec_method(
         .expect("bug: interface match count should be non-zero");
     if methods.len() > 1 {
         return Err(CliError::SpecFailed(format!(
-            "embedded contract spec defines `{}` v{}::{method} multiple times",
+            "contract spec defines `{}` v{}::{method} multiple times",
             matched.interface_name, matched.interface_version
         )));
     }
@@ -1630,22 +1630,24 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let wasm = custom_target.join("groundhog").join("demo_contract.wasm");
-        std::fs::create_dir_all(wasm.parent().expect("bug: wasm parent should exist"))
+        let rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+        std::fs::create_dir_all(rv32.parent().expect("bug: rv32 parent should exist"))
             .expect("bug: custom target dir should be created");
+        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
         std::fs::write(
-            &wasm,
-            wasm_with_embedded_spec(&sample_multi_interface_contract_spec()),
+            rv32.with_extension("spec.xdr"),
+            xdrs::txs::encode(&sample_multi_interface_contract_spec())
+                .expect("bug: spec should encode"),
         )
-        .expect("bug: wasm fixture should be written");
+        .expect("bug: rv32 spec sidecar should be written");
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
         let err = resolve_spec_method(&project_root, "get", &artifacts)
-            .expect_err("bug: ambiguous embedded interface matches should fail");
+            .expect_err("bug: ambiguous sidecar interface matches should fail");
         assert_eq!(
             err.to_string(),
-            "method `get` matches multiple interfaces in the embedded contract spec: Counter \
+            "method `get` matches multiple interfaces in the contract spec: Counter \
              v0.1.0, Other v0.1.0"
         );
     }
@@ -2053,39 +2055,6 @@ mod tests {
 
     fn spec_string_bytes(value: &str) -> ContractSpecString {
         value.try_into().expect("bug: test string should fit")
-    }
-
-    fn wasm_with_embedded_spec(spec: &ContractSpec) -> Vec<u8> {
-        wasm_with_custom_section(
-            groundhog_spec_tool::FINAL_SECTION_NAME,
-            &xdrs::txs::encode(spec).expect("bug: contract spec fixture should encode"),
-        )
-    }
-
-    fn wasm_with_custom_section(name: &str, data: &[u8]) -> Vec<u8> {
-        let mut payload = Vec::new();
-        encode_uleb128(name.len(), &mut payload);
-        payload.extend_from_slice(name.as_bytes());
-        payload.extend_from_slice(data);
-
-        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00];
-        encode_uleb128(payload.len(), &mut wasm);
-        wasm.extend_from_slice(&payload);
-        wasm
-    }
-
-    fn encode_uleb128(mut value: usize, out: &mut Vec<u8>) {
-        loop {
-            let mut byte = u8::try_from(value & 0x7f).expect("bug: uleb128 byte should fit");
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80;
-            }
-            out.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
     }
 
     struct CurrentDirGuard {

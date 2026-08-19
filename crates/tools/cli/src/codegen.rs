@@ -191,7 +191,7 @@ fn emit_inline_struct_fields<'a>(
 /// Generate a complete, self-contained TypeScript binding file from a
 /// contract spec.
 ///
-/// `source_name` is the human-readable origin (e.g. a WASM file name)
+/// `source_name` is the human-readable origin (for example, a spec sidecar)
 /// embedded in the header comment.
 pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<String, CliError> {
     let mut out = String::new();
@@ -2154,7 +2154,7 @@ export type Result =
 
     #[test]
     fn spec_literal_includes_events() {
-        let output = generate_ts_bindings(&spec_with_events(), "counter.wasm").unwrap();
+        let output = generate_ts_bindings(&spec_with_events(), "counter.spec.xdr").unwrap();
         assert!(
             output.contains("events: ["),
             "spec literal missing events array:\n{output}"
@@ -2178,7 +2178,7 @@ export type Result =
 
     #[test]
     fn generates_event_types_and_decoders() {
-        let output = generate_ts_bindings(&spec_with_events(), "counter.wasm").unwrap();
+        let output = generate_ts_bindings(&spec_with_events(), "counter.spec.xdr").unwrap();
 
         assert!(
             output.contains("export interface PingEvent extends DecodedContractEvent<"),
@@ -2235,7 +2235,7 @@ export type Result =
 
     #[test]
     fn event_only_binding_defines_spec_string_helper() {
-        let output = generate_ts_bindings(&spec_with_events(), "counter.wasm").unwrap();
+        let output = generate_ts_bindings(&spec_with_events(), "counter.spec.xdr").unwrap();
 
         assert!(output.contains("const s = contractSpecString;"));
         assert!(output.contains("name: s(\"Counter\")"));
@@ -2243,7 +2243,7 @@ export type Result =
 
     #[test]
     fn no_event_section_without_events() {
-        let output = generate_ts_bindings(&counter_spec(), "counter.wasm").unwrap();
+        let output = generate_ts_bindings(&counter_spec(), "counter.spec.xdr").unwrap();
         assert!(
             !output.contains("decodeEvent"),
             "unexpected decodeEvent:\n{output}"
@@ -2262,7 +2262,7 @@ export type Result =
         let mut event = ping_event_def();
         event.name = spec_string("CounterEvent");
         spec.events = vec![event].try_into().unwrap();
-        let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
             "generated TypeScript value name \"CounterEvent\" collides between event \"CounterEvent\" and generated \"CounterEvent\" event union"
         ));
@@ -2279,7 +2279,7 @@ export type Result =
         }]
         .try_into()
         .unwrap();
-        let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
             "generated TypeScript value name \"PingEvent\" collides between struct type definition \"PingEvent\" and event \"PingEvent\""
         ));
@@ -2303,7 +2303,7 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("getBalance"));
     }
 
@@ -2352,7 +2352,7 @@ export type Result =
             events: vec![].try_into().unwrap(),
         };
 
-        let output = generate_ts_bindings(&spec, "token.wasm").unwrap();
+        let output = generate_ts_bindings(&spec, "token.spec.xdr").unwrap();
         assert!(output.contains("export const ERC20 = {"));
         assert!(output.contains("export const ERC20Metadata = {"));
         assert!(output.contains("  initialize: defineContractMethod<"));
@@ -2384,7 +2384,7 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("ownerId"));
     }
 
@@ -2400,7 +2400,7 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("fromHex"));
     }
 
@@ -2408,7 +2408,7 @@ export type Result =
     fn interface_name_colliding_with_event_decoder_errors() {
         let spec = counter_spec_with_interface_name("decodeEvent", vec![], true);
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("decodeEvent"));
     }
 
@@ -2429,7 +2429,7 @@ export type Result =
         .try_into()
         .unwrap();
 
-        let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
             "generated TypeScript value name \"Uint8Array\" collides between TypeScript standard library and struct type definition \"Uint8Array\""
         ));
@@ -2442,7 +2442,7 @@ export type Result =
         event.name = spec_string("Record");
         spec.events = vec![event].try_into().unwrap();
 
-        let error = generate_ts_bindings(&spec, "events.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "events.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
             "generated TypeScript value name \"Record\" collides between TypeScript standard library and event \"Record\""
         ));
@@ -2452,7 +2452,7 @@ export type Result =
     fn invalid_interface_name_errors() {
         let spec = counter_spec_with_interface_name("erc20.v1", vec![], false);
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("erc20.v1"));
     }
 
@@ -2461,7 +2461,7 @@ export type Result =
         for name in ["eval", "arguments"] {
             let spec = counter_spec_with_interface_name(name, vec![], false);
 
-            let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+            let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
             assert!(error.to_string().contains(name));
         }
     }
@@ -2482,7 +2482,7 @@ export type Result =
             false,
         );
 
-        let output = generate_ts_bindings(&spec, "counter.wasm").unwrap();
+        let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
         assert!(output.contains("export interface CounterSymbolArgs"));
         assert!(output.contains("  return: string;"));
         assert!(output.contains("  symbol: defineContractMethod<"));
@@ -2493,7 +2493,7 @@ export type Result =
         for name in ["any", "bigint", "infer", "keyof", "string", "unknown"] {
             let spec = counter_spec_with_interface_name(name, vec![], false);
 
-            let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+            let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
             assert!(error.to_string().contains(name));
         }
     }
@@ -2509,7 +2509,7 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("transfer-from"));
     }
 
@@ -2524,7 +2524,7 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("__proto__"));
     }
 
@@ -2544,7 +2544,7 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(err.to_string().contains("owner-id"));
     }
 
@@ -2606,11 +2606,11 @@ export type Result =
     #[test]
     fn generates_full_binding_for_simple_contract() {
         let spec = counter_spec();
-        let output = generate_ts_bindings(&spec, "counter.wasm").unwrap();
+        let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
 
         // Header
         assert!(output.contains("DO NOT EDIT"));
-        assert!(output.contains("counter.wasm"));
+        assert!(output.contains("counter.spec.xdr"));
         assert!(output.contains("Counter interface v0.1.0"));
 
         // Imports
@@ -2740,7 +2740,7 @@ export type Result =
     #[test]
     fn generates_erc20_bindings() {
         let spec = erc20_spec();
-        let output = generate_ts_bindings(&spec, "erc20.wasm").unwrap();
+        let output = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
 
         // Entrypoint hashes
         assert!(
@@ -2908,7 +2908,7 @@ export type Result =
     #[test]
     fn generates_recursive_type_bindings() {
         let spec = recursive_type_spec();
-        let output = generate_ts_bindings(&spec, "recursive.wasm").unwrap();
+        let output = generate_ts_bindings(&spec, "recursive.spec.xdr").unwrap();
 
         // Tree struct emitted as TypeScript interface
         assert!(
@@ -3101,7 +3101,7 @@ export type Result =
         .try_into()
         .unwrap();
 
-        let output = generate_ts_bindings(&spec, "events.wasm").unwrap();
+        let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
         assert!(output.contains("\"owner-address\": ContractAddress"));
         assert!(output.contains("\"id\": FixedBytes<32>"));
         assert!(output.contains("\"owner-address\"?: ContractEventFilterValue<ContractAddress>"));
@@ -3130,7 +3130,7 @@ export type Result =
             events: vec![first, second].try_into().unwrap(),
         };
 
-        let error = generate_ts_bindings(&spec, "events.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "events.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
             "events \"First\" and \"Second\" have duplicate signature 0xabababababababababababababababababababababababababababababababab"
         ));
@@ -3162,7 +3162,7 @@ export type Result =
             events: vec![].try_into().unwrap(),
         };
 
-        let error = generate_ts_bindings(&spec, "erc20.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap_err();
         assert!(error.to_string().contains("interface \"ERC20\""));
         assert!(
             error
@@ -3189,7 +3189,7 @@ export type Result =
             false,
         );
 
-        let error = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(
             error
                 .to_string()
@@ -3224,15 +3224,15 @@ export type Result =
             "export interface Escaped { \"quoted\\\" field\": boolean; }"
         );
 
-        let output = generate_ts_bindings(&counter_spec(), "line1\nline2.wasm").unwrap();
-        assert!(output.starts_with("// Generated from line1\\nline2.wasm"));
+        let output = generate_ts_bindings(&counter_spec(), "line1\nline2.spec.xdr").unwrap();
+        assert!(output.starts_with("// Generated from line1\\nline2.spec.xdr"));
     }
 
     #[test]
     fn generation_is_deterministic() {
         let spec = erc20_spec();
-        let first = generate_ts_bindings(&spec, "erc20.wasm").unwrap();
-        let second = generate_ts_bindings(&spec, "erc20.wasm").unwrap();
+        let first = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
+        let second = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
         assert_eq!(first, second);
     }
 
@@ -3364,10 +3364,10 @@ export type Result =
     #[test]
     fn generated_bindings_match_snapshots() {
         for (name, source_name, spec) in [
-            ("erc20", "erc20.wasm", erc20_spec()),
+            ("erc20", "erc20.spec.xdr", erc20_spec()),
             (
                 "recursive_type",
-                "recursive_type.wasm",
+                "recursive_type.spec.xdr",
                 recursive_type_spec(),
             ),
             (

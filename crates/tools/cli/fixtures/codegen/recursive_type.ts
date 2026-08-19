@@ -1,4 +1,4 @@
-// Generated from recursive_type.wasm - RecursiveTypeContract interface v0.1.0
+// Generated from recursive_type.spec.xdr - RecursiveTypeContract interface v0.1.0
 // DO NOT EDIT. Re-run codegen to update.
 
 import { contractEntrypointID } from "@groundhogchain/protocol";

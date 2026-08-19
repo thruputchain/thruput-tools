@@ -64,7 +64,6 @@ pub(crate) struct SubmittedDeploy {
 pub fn run(
     artifact_path: Option<&Path>,
     package: Option<&str>,
-    target: ArtifactKind,
     dry_run: bool,
     wallet: Option<&str>,
     artifacts: &ArtifactOptions,
@@ -77,22 +76,13 @@ pub fn run(
         Some(wallet) => prepare_deploy_with_wallet(
             artifact_path,
             package,
-            target,
             artifacts,
             Some(wallet),
             profile,
             overrides,
             print,
         )?,
-        None => prepare_deploy(
-            artifact_path,
-            package,
-            target,
-            artifacts,
-            profile,
-            overrides,
-            print,
-        )?,
+        None => prepare_deploy(artifact_path, package, artifacts, profile, overrides, print)?,
     };
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
@@ -361,7 +351,6 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
 pub(crate) fn prepare_deploy(
     artifact_path: Option<&Path>,
     package: Option<&str>,
-    target: ArtifactKind,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
@@ -370,7 +359,6 @@ pub(crate) fn prepare_deploy(
     prepare_deploy_with_wallet(
         artifact_path,
         package,
-        target,
         artifacts,
         None,
         profile,
@@ -383,7 +371,6 @@ pub(crate) fn prepare_deploy(
 fn prepare_deploy_with_wallet(
     artifact_path: Option<&Path>,
     package: Option<&str>,
-    target: ArtifactKind,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
     profile: Option<&str>,
@@ -408,7 +395,7 @@ fn prepare_deploy_with_wallet(
         )
     } else {
         let resolved_artifact =
-            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package, target)?;
+            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package)?;
         warn_if_stale(
             &resolved_artifact.artifact,
             &resolved_artifact.package_root,
@@ -430,7 +417,6 @@ fn prepare_deploy_with_wallet(
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.
 pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     artifact_path: &Path,
-    artifact_kind: ArtifactKind,
     rpc_url: &str,
     key_name: &str,
     runtime_manifest: Option<PathBuf>,
@@ -453,7 +439,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     };
     prepare_deploy_transaction(
         ResolvedArtifact {
-            kind: artifact_kind,
+            kind: ArtifactKind::Rv32,
             path: artifact_path.to_path_buf(),
         },
         artifact_bytes,
@@ -482,9 +468,6 @@ fn prepare_deploy_transaction(
         data: xdr_common::BytesM(artifact_bytes),
     };
     let contract = match artifact.kind {
-        ArtifactKind::Wasm => groundhog_xdr::contract::Contract::kWasmi {
-            wasmi_contract: blob,
-        },
         ArtifactKind::Rv32 => groundhog_xdr::contract::Contract::kRv32 {
             rv32_contract: blob,
         },
@@ -569,13 +552,15 @@ fn warn_if_stale(
         return;
     }
     if newest_source_mtime(&src_dir).is_some_and(|t| t > artifact_mtime) {
-        print.warn(format_args!(
-            "source files are newer than the {} artifact — run `groundhog build -p {} --target {}` to avoid deploying stale code",
-            artifact.kind.as_str(),
-            package_name,
-            artifact.kind.as_str()
-        ));
+        print.warn(stale_artifact_warning(artifact.kind, package_name));
     }
+}
+
+fn stale_artifact_warning(kind: ArtifactKind, package_name: &str) -> String {
+    format!(
+        "source files are newer than the {} artifact — run `groundhog build -p {package_name}` to avoid deploying stale code",
+        kind.as_str()
+    )
 }
 
 fn newest_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
@@ -628,6 +613,7 @@ mod tests {
     use super::{
         DeployAddressSource, PreparedDeploy, command_error_for_deploy_receipt,
         deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, resolve_deployed_address,
+        stale_artifact_warning,
     };
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
     use groundhog_json_rpc_types::{
@@ -652,6 +638,14 @@ mod tests {
         let input = "cd".repeat(32);
         let bytes = hex_to_32_bytes(&input).expect("bug: valid unprefixed hex should parse");
         assert_eq!(bytes, [0xcd; 32]);
+    }
+
+    #[test]
+    fn stale_artifact_warning_uses_current_build_command() {
+        let warning = stale_artifact_warning(ArtifactKind::Rv32, "demo-contract");
+
+        assert!(warning.contains("groundhog build -p demo-contract"));
+        assert!(!warning.contains("--target"));
     }
 
     #[test]
@@ -743,7 +737,7 @@ mod tests {
             wallet_name: Some("-alice".into()),
             wallet_address: format!("0x{}", "11".repeat(32)),
             artifact: crate::artifacts::ResolvedArtifact {
-                kind: ArtifactKind::Wasm,
+                kind: ArtifactKind::Rv32,
                 path: std::path::PathBuf::new(),
             },
             artifact_bytes_len: 0,
@@ -781,22 +775,21 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let expected_wasm = custom_target.join("groundhog").join("demo_contract.wasm");
+        let expected_rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
         std::fs::create_dir_all(
-            expected_wasm
+            expected_rv32
                 .parent()
-                .expect("bug: wasm parent should exist"),
+                .expect("bug: rv32 parent should exist"),
         )
         .expect("bug: custom target dir should be created");
-        std::fs::write(&expected_wasm, b"\0asm").expect("bug: wasm fixture should be written");
+        std::fs::write(&expected_rv32, b"rv32").expect("bug: rv32 fixture should be written");
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let resolved =
-            resolve_groundhog_artifact(&project_root, &artifacts, None, ArtifactKind::Wasm)
-                .expect("bug: wasm should resolve from explicit target dir");
+        let resolved = resolve_groundhog_artifact(&project_root, &artifacts, None)
+            .expect("bug: rv32 should resolve from explicit target dir");
 
-        assert_eq!(resolved.artifact.path, expected_wasm);
+        assert_eq!(resolved.artifact.path, expected_rv32);
         assert_eq!(resolved.package_name, "demo-contract");
         assert_eq!(resolved.package_root, project_root);
     }
@@ -812,7 +805,7 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let err = resolve_groundhog_artifact(&project_root, &artifacts, None, ArtifactKind::Rv32)
+        let err = resolve_groundhog_artifact(&project_root, &artifacts, None)
             .expect_err("bug: missing rv32 artifact should error");
 
         assert!(

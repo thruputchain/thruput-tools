@@ -63,7 +63,6 @@ groundhog-trace = { version = "0.21.2", registry = "groundhog" }
 xdrs = { version = "0.8.4", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.8.4", registry = "groundhog" }
 rpc_driver = { version = "0.10.1", registry = "groundhog" }
-groundhog-wasm-meter = { version = "0.8.0", registry = "groundhog" }
 # from the sdk crate:
 groundhog-spec-tool = { version = "0.19.6", registry = "groundhog" }
 groundhog-contract-util = { version = "0.19.6", registry = "groundhog" }

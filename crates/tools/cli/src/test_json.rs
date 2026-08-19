@@ -10,7 +10,7 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 4;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 5;
 
 /// Structured machine-readable report for `groundhog test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,7 +35,7 @@ pub struct TestReport {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TestArtifactInfo {
-    /// Artifact runtime kind, currently `wasm` or `rv32`.
+    /// Artifact runtime kind.
     pub kind: ArtifactKind,
     /// Path to the built artifact used by this test run.
     pub path: PathBuf,
@@ -57,7 +57,6 @@ impl TestArtifactInfo {
 #[non_exhaustive]
 pub enum TestMode {
     #[default]
-    Wasm,
     Rv32,
     Integration,
 }
@@ -169,7 +168,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_mode_deserializes_as_wasm_default() {
+    fn missing_mode_deserializes_as_rv32_default() {
         let json = serde_json::json!({
             "schemaVersion": 3,
             "projectRoot": "/project",
@@ -182,8 +181,8 @@ mod tests {
                 "source": null
             },
             "artifact": {
-                "kind": "wasm",
-                "path": "/project/target/demo.wasm"
+                "kind": "rv32",
+                "path": "/project/target/demo.rv32a"
             },
             "success": true,
             "summary": {
@@ -211,21 +210,29 @@ mod tests {
 
         let report: TestReport = serde_json::from_value(json).expect("v3 report should parse");
 
-        assert_eq!(report.mode, TestMode::Wasm);
+        assert_eq!(report.mode, TestMode::Rv32);
         assert_eq!(report.schema_version, 3);
-        assert_eq!(report.artifact.kind, ArtifactKind::Wasm);
+        assert_eq!(report.artifact.kind, ArtifactKind::Rv32);
         assert_eq!(
             report.artifact.path,
-            PathBuf::from("/project/target/demo.wasm")
+            PathBuf::from("/project/target/demo.rv32a")
         );
         assert!(report.integration.is_none());
+    }
+
+    #[test]
+    fn legacy_wasm_mode_and_artifact_kind_are_rejected() {
+        serde_json::from_value::<TestMode>(serde_json::json!("wasm"))
+            .expect_err("bug: removed WASM mode must not deserialize");
+        serde_json::from_value::<ArtifactKind>(serde_json::json!("wasm"))
+            .expect_err("bug: removed WASM artifact kind must not deserialize");
     }
 
     #[test]
     fn old_reports_without_artifact_fail_deserialization() {
         let json = serde_json::json!({
             "schemaVersion": 2,
-            "mode": "wasm",
+            "mode": "rv32",
             "projectRoot": "/project",
             "profile": {
                 "name": "default",
@@ -235,7 +242,7 @@ mod tests {
                 "contracts": {},
                 "source": null
             },
-            "wasm": "/project/target/demo.wasm",
+            "rv32": "/project/target/demo.rv32a",
             "success": true,
             "summary": {
                 "source": "empty",

@@ -14,6 +14,7 @@
 # Optional environment:
 #   GROUNDHOG_BINARY=/path/to/groundhog
 #   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
+#   ARTIFACT_ROOT=/path/to/prebuilt/target/groundhog
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   KEEP_WORKDIR=1
 
@@ -63,9 +64,6 @@ if matches:
 DEVNODE_BINARY="$(expand_user_path "$GROUNDHOG_DEVNODE_BINARY")"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
-EXAMPLES_ROOT="$(find_examples_root)"
-[[ -n "$EXAMPLES_ROOT" ]] || die "set GROUNDHOG_EXAMPLES_ROOT to a groundhog-examples checkout with the caller-counter fixture"
-
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-testkit-local.XXXXXX")"
 cleanup() {
     if [[ "${KEEP_WORKDIR:-0}" != "1" ]]; then
@@ -76,19 +74,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -n "${GROUNDHOG_BINARY:-}" ]]; then
-    GROUNDHOG_BINARY="$(expand_user_path "${GROUNDHOG_BINARY}")"
-    log "using groundhog binary: $GROUNDHOG_BINARY"
-else
-    log "building groundhog"
-    cargo build -p groundhog-cli
-    GROUNDHOG_BINARY="$REPO_ROOT/target/debug/groundhog"
-fi
-[[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
-
 if [[ -n "${ARTIFACT_ROOT:-}" ]]; then
+    ARTIFACT_ROOT="$(expand_user_path "$ARTIFACT_ROOT")"
     log "using artifact root: $ARTIFACT_ROOT"
 else
+    EXAMPLES_ROOT="$(find_examples_root)"
+    [[ -n "$EXAMPLES_ROOT" ]] || die "set GROUNDHOG_EXAMPLES_ROOT or provide a prebuilt ARTIFACT_ROOT"
+    if [[ -n "${GROUNDHOG_BINARY:-}" ]]; then
+        GROUNDHOG_BINARY="$(expand_user_path "${GROUNDHOG_BINARY}")"
+        log "using groundhog binary: $GROUNDHOG_BINARY"
+    else
+        log "building groundhog"
+        cargo build -p groundhog-cli
+        GROUNDHOG_BINARY="$REPO_ROOT/target/debug/groundhog"
+    fi
+    [[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
+
     EXAMPLES_TARGET="$WORKDIR/groundhog-examples-target"
     log "building groundhog-examples caller-counter fixture"
     (

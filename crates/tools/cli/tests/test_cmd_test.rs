@@ -5,6 +5,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+mod support;
+
+fn write_rv32_build_fixture(project_root: &Path) -> (PathBuf, PathBuf) {
+    fs::create_dir_all(project_root.join(".cargo")).unwrap();
+    fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
+    fs::write(
+        project_root.join(".cargo/config.toml"),
+        "[target.riscv32im-unknown-none-elf]\n\
+         rustflags = [\"-C\", \"link-arg=-Tgroundhog-rv32.ld\"]\n",
+    )
+    .unwrap();
+    let fixture = project_root.join("fixture.elf");
+    fs::write(&fixture, support::minimal_rv32_elf()).unwrap();
+    let raw_elf = project_root.join("target/riscv32im-unknown-none-elf/release/demo_contract");
+    (fixture, raw_elf)
+}
+
 /// Verify that `test_cmd::run` fails when run outside
 /// a cargo project (cargo metadata fails).
 #[test]
@@ -57,16 +74,7 @@ fn test_rejects_conflicting_target_dir_passthrough() {
     );
     fs::write(
         &cargo,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nexit 0\n",
-            metadata_json,
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
-                .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display()
-        ),
+        format!("#!/bin/sh\nprintf '%s' '{metadata_json}'\n"),
     )
     .unwrap();
 
@@ -178,16 +186,7 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
     );
     fs::write(
         &cargo,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nexit 0\n",
-            metadata_json,
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
-                .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display()
-        ),
+        format!("#!/bin/sh\nprintf '%s' '{metadata_json}'\n"),
     )
     .unwrap();
 
@@ -222,15 +221,14 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
 
 #[test]
 #[serial]
-fn test_failed_wasm_tests_update_rerun_cache() {
+fn test_failed_rv32_tests_update_rerun_cache() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
-    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    let (elf_fixture, raw_elf) = write_rv32_build_fixture(tmp.path());
     fs::write(
         tmp.path().join("groundhog.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
@@ -249,14 +247,11 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nif [ \"$1\" = \"test\" ]; then\n  printf 'running 1 test\\n'\n  printf 'test tests::fails ... FAILED\\n'\n  exit 101\nfi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  /bin/cp '{}' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"test\" ]; then\n  printf 'running 1 test\\n'\n  printf 'test tests::fails ... FAILED\\n'\n  exit 101\nfi\nexit 0\n",
             metadata_json,
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
-                .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display()
+            raw_elf.parent().unwrap().display(),
+            elf_fixture.display(),
+            raw_elf.display()
         ),
     )
     .unwrap();
@@ -275,10 +270,7 @@ fn test_failed_wasm_tests_update_rerun_cache() {
 
     let err = groundhog_cli::test_cmd::run_with_options(
         Some("demo-contract"),
-        &groundhog_cli::test_cmd::TestOptions {
-            target: groundhog_cli::build::BuildTarget::Wasm,
-            ..groundhog_cli::test_cmd::TestOptions::default()
-        },
+        &groundhog_cli::test_cmd::TestOptions::default(),
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
@@ -293,7 +285,7 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     );
     let cache_path = tmp
         .path()
-        .join("target/groundhog/test-failures/demo-contract-wasm.json");
+        .join("target/groundhog/test-failures/demo-contract-rv32.json");
     let cache = fs::read_to_string(cache_path).unwrap();
     assert!(cache.contains("\"package\": \"demo-contract\""));
     assert!(cache.contains("\"tests::fails\""));
@@ -313,8 +305,7 @@ fn test_cargo_test_invocation_omits_host_target() {
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
-    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    let (elf_fixture, raw_elf) = write_rv32_build_fixture(tmp.path());
     fs::write(
         tmp.path().join("groundhog.toml"),
         "default_profile = \"default\"\n\n[profile.default]\n",
@@ -334,14 +325,11 @@ fn test_cargo_test_invocation_omits_host_target() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nif [ \"$1\" = \"test\" ]; then\n  printf '%s\\n' \"$@\" > '{}'\n  printf 'running 1 test\\ntest tests::passes ... ok\\n'\n  exit 0\nfi\nexit 0\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  /bin/cp '{}' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"test\" ]; then\n  printf '%s\\n' \"$@\" > '{}'\n  printf 'running 1 test\\ntest tests::passes ... ok\\n'\n  exit 0\nfi\nexit 0\n",
             metadata_json,
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
-                .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display(),
+            raw_elf.parent().unwrap().display(),
+            elf_fixture.display(),
+            raw_elf.display(),
             args_log.display()
         ),
     )
@@ -361,10 +349,7 @@ fn test_cargo_test_invocation_omits_host_target() {
 
     groundhog_cli::test_cmd::run_with_options(
         Some("demo-contract"),
-        &groundhog_cli::test_cmd::TestOptions {
-            target: groundhog_cli::build::BuildTarget::Wasm,
-            ..groundhog_cli::test_cmd::TestOptions::default()
-        },
+        &groundhog_cli::test_cmd::TestOptions::default(),
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
@@ -384,8 +369,8 @@ fn test_cargo_test_invocation_omits_host_target() {
         "expected a --test target, got: {args:?}"
     );
     assert!(
-        args.contains(&"test_wasm"),
-        "expected test_wasm target, got: {args:?}"
+        args.contains(&"test_rv32"),
+        "expected test_rv32 target, got: {args:?}"
     );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };

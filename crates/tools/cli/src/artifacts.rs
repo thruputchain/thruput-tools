@@ -15,8 +15,6 @@ pub struct ArtifactOptions {
 /// Contract artifact runtime kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
-    /// WebAssembly artifact emitted as `.wasm`.
-    Wasm,
     /// Lowered RV32 artifact emitted as `.rv32a`.
     Rv32,
 }
@@ -25,14 +23,12 @@ impl ArtifactKind {
     /// Return the stable wire spelling used in CLI JSON and messages.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Wasm => "wasm",
             Self::Rv32 => "rv32",
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value {
-            "wasm" => Some(Self::Wasm),
             "rv32" => Some(Self::Rv32),
             _ => None,
         }
@@ -56,8 +52,7 @@ impl<'de> Deserialize<'de> for ArtifactKind {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).ok_or_else(|| {
             serde::de::Error::custom(format!(
-                "unknown artifact kind `{value}`, expected `{}` or `{}`",
-                Self::Wasm.as_str(),
+                "unknown artifact kind `{value}`, expected `{}`",
                 Self::Rv32.as_str()
             ))
         })
@@ -76,7 +71,7 @@ impl JsonSchema for ArtifactKind {
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
             "type": "string",
-            "enum": [ArtifactKind::Wasm.as_str(), ArtifactKind::Rv32.as_str()],
+            "enum": [ArtifactKind::Rv32.as_str()],
             "description": "Contract artifact runtime kind."
         })
     }
@@ -128,25 +123,11 @@ impl ArtifactOptions {
     }
 }
 
-/// Return the raw Cargo-produced WASM output path for a package in the given target directory.
-pub fn cargo_wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
-    target_dir
-        .join("wasm32-unknown-unknown/release")
-        .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
-}
-
 /// Return the raw Cargo-produced RV32 ELF output path for a package in the given target directory.
 pub fn cargo_rv32_elf_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
     target_dir
         .join("riscv32im-unknown-none-elf/release")
         .join(crate::scaffold::to_snake(package_name))
-}
-
-/// Return the Groundhog-owned processed WASM output path for a package in the given target directory.
-pub fn groundhog_wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
-    target_dir
-        .join("groundhog")
-        .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
 }
 
 /// Return the Groundhog-owned RV32 artifact output path for a package in the given target directory.
@@ -164,22 +145,9 @@ pub fn groundhog_rv32_metadata_output_path(target_dir: &Path, package_name: &str
     ))
 }
 
-/// Return the Groundhog-owned processed artifact output path for a package.
-pub fn groundhog_artifact_output_path(
-    target_dir: &Path,
-    package_name: &str,
-    kind: ArtifactKind,
-) -> PathBuf {
-    match kind {
-        ArtifactKind::Wasm => groundhog_wasm_output_path(target_dir, package_name),
-        ArtifactKind::Rv32 => groundhog_rv32_output_path(target_dir, package_name),
-    }
-}
-
 /// Infer artifact kind from a path extension.
 pub fn infer_artifact_kind(path: &Path) -> Result<ArtifactKind, CliError> {
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("wasm") => Ok(ArtifactKind::Wasm),
         Some("rv32a") => Ok(ArtifactKind::Rv32),
         _ => Err(CliError::UnsupportedArtifactExtension(
             path.display().to_string(),
@@ -192,15 +160,14 @@ pub fn resolve_groundhog_artifact(
     cwd: &Path,
     artifacts: &ArtifactOptions,
     package: Option<&str>,
-    kind: ArtifactKind,
 ) -> Result<ResolvedPackageArtifact, CliError> {
     let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = crate::build::resolve_package(&metadata, package, cwd)?;
-    let path = groundhog_artifact_output_path(&metadata.target_directory, pkg_name, kind);
+    let path = groundhog_rv32_output_path(&metadata.target_directory, pkg_name);
 
     if !path.try_exists()? {
         return Err(CliError::ArtifactNotFound {
-            kind: kind.as_str(),
+            kind: ArtifactKind::Rv32.as_str(),
             path: path.display().to_string(),
         });
     }
@@ -213,19 +180,13 @@ pub fn resolve_groundhog_artifact(
         .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
 
     Ok(ResolvedPackageArtifact {
-        artifact: ResolvedArtifact { kind, path },
+        artifact: ResolvedArtifact {
+            kind: ArtifactKind::Rv32,
+            path,
+        },
         package_name: pkg_name.to_owned(),
         package_root,
     })
-}
-
-/// Resolve a Groundhog-owned build artifact for the package implied by `cwd`.
-pub fn resolve_groundhog_artifact_path(
-    cwd: &Path,
-    artifacts: &ArtifactOptions,
-    kind: ArtifactKind,
-) -> Result<PathBuf, CliError> {
-    resolve_groundhog_artifact(cwd, artifacts, None, kind).map(|resolved| resolved.artifact.path)
 }
 
 /// Ensure passthrough cargo arguments do not override the CLI target directory.
@@ -321,24 +282,14 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactKind, ArtifactOptions, cargo_rv32_elf_output_path, cargo_wasm_output_path,
-        ensure_no_target_dir_passthrough_conflicts, groundhog_artifact_output_path,
-        groundhog_rv32_metadata_output_path, groundhog_rv32_output_path,
-        groundhog_wasm_output_path, infer_artifact_kind,
+        ArtifactKind, ArtifactOptions, cargo_rv32_elf_output_path,
+        ensure_no_target_dir_passthrough_conflicts, groundhog_rv32_metadata_output_path,
+        groundhog_rv32_output_path, infer_artifact_kind,
     };
     use crate::CliError;
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::TempDir;
-
-    #[test]
-    fn cargo_wasm_output_path_uses_cargo_layout() {
-        let path = cargo_wasm_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract");
-        assert_eq!(
-            path,
-            PathBuf::from("/tmp/out/wasm32-unknown-unknown/release/demo_contract.wasm")
-        );
-    }
 
     #[test]
     fn cargo_rv32_elf_output_path_uses_cargo_layout() {
@@ -348,12 +299,6 @@ mod tests {
             path,
             PathBuf::from("/tmp/out/riscv32im-unknown-none-elf/release/demo_contract_rv32")
         );
-    }
-
-    #[test]
-    fn groundhog_wasm_output_path_uses_flat_groundhog_layout() {
-        let path = groundhog_wasm_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract");
-        assert_eq!(path, PathBuf::from("/tmp/out/groundhog/demo_contract.wasm"));
     }
 
     #[test]
@@ -375,26 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn groundhog_artifact_output_path_uses_kind_extension() {
-        let target_dir = PathBuf::from("/tmp/out");
-
-        assert_eq!(
-            groundhog_artifact_output_path(&target_dir, "demo-contract", ArtifactKind::Wasm),
-            PathBuf::from("/tmp/out/groundhog/demo_contract.wasm")
-        );
-        assert_eq!(
-            groundhog_artifact_output_path(&target_dir, "demo-contract", ArtifactKind::Rv32),
-            PathBuf::from("/tmp/out/groundhog/demo_contract.rv32a")
-        );
-    }
-
-    #[test]
     fn infer_artifact_kind_uses_extension() {
-        assert_eq!(
-            infer_artifact_kind(PathBuf::from("contract.wasm").as_path())
-                .expect("bug: wasm should infer"),
-            ArtifactKind::Wasm
-        );
         assert_eq!(
             infer_artifact_kind(PathBuf::from("contract.rv32a").as_path())
                 .expect("bug: rv32 should infer"),
@@ -411,8 +337,8 @@ mod tests {
     #[test]
     fn artifact_kind_serde_and_schema_use_wire_strings() {
         assert_eq!(
-            serde_json::to_value(ArtifactKind::Wasm).expect("bug: wasm should serialize"),
-            serde_json::json!("wasm")
+            serde_json::to_value(ArtifactKind::Rv32).expect("bug: rv32 should serialize"),
+            serde_json::json!("rv32")
         );
         assert_eq!(
             serde_json::from_value::<ArtifactKind>(serde_json::json!("rv32"))
@@ -423,7 +349,7 @@ mod tests {
 
         let schema = serde_json::to_value(schemars::schema_for!(ArtifactKind))
             .expect("bug: artifact schema should serialize");
-        assert_eq!(schema["enum"], serde_json::json!(["wasm", "rv32"]));
+        assert_eq!(schema["enum"], serde_json::json!(["rv32"]));
     }
 
     #[test]

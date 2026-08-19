@@ -336,7 +336,7 @@ mod tests {
         let dir = tempdir().expect("temp dir should create");
         std::fs::write(dir.path().join("one.json"), "{}").expect("scenario should write");
         let mut entry = entry("one", "one.json", ["contract"]);
-        entry["contracts"][0]["artifact"] = json!(" fibonacci.wasm ");
+        entry["contracts"][0]["artifact"] = json!(" fibonacci.rv32a ");
         let catalog: ScenarioCatalog = serde_json::from_value(json!({
             "schemaVersion": 1,
             "kind": "groundhog-sim-scenario-catalog",
@@ -379,7 +379,7 @@ mod tests {
             "tags": tags.as_slice(),
             "requiresContracts": tags.contains(&"contract"),
             "contracts": if tags.contains(&"contract") {
-                json!([{"name": "fibonacci", "source": "groundhog-examples/fibonacci", "artifact": "fibonacci.wasm"}])
+                json!([{"name": "fibonacci", "source": "groundhog-examples/fibonacci", "artifact": "fibonacci.rv32a"}])
             } else {
                 json!([])
             },

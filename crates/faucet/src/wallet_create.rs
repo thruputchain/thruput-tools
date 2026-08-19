@@ -838,7 +838,8 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
         let artifact_bytes = tokio::fs::read(&self.wallet_artifact_path)
             .await
             .map_err(|error| WalletCreateError::LoadWalletArtifact(error.to_string()))?;
-        let contract = dev_wallet_contract(&self.wallet_artifact_path, artifact_bytes);
+        let contract = dev_wallet_contract(&self.wallet_artifact_path, artifact_bytes)
+            .map_err(|error| WalletCreateError::LoadWalletArtifact(error.to_string()))?;
         let block_expiry_height = self.block_expiry_height().await?;
         let create_calldata =
             create_wallet_calldata(&deploy_nonce, &self.wallet_contract_hash, owner_public_key)

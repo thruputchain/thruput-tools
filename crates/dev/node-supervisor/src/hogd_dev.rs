@@ -3099,7 +3099,7 @@ mod tests {
                 "devWallet":{{
                   "contentHash":"0x{}",
                   "deployedCodeHash":"0x{}",
-                  "artifactHint":"./dev-wallet.wasm",
+                  "artifactHint":"./dev_wallet.rv32a",
                   "deployEntrypoint":"0xadac498222148e4f",
                   "createWalletEntrypoint":"0x6372656174655761",
                   "doActionEntrypoint":"0x646f416374696f6e"

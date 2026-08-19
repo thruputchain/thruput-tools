@@ -1,4 +1,4 @@
-// Generated from erc20.wasm - ERC20 interface v0.1.0
+// Generated from erc20.spec.xdr - ERC20 interface v0.1.0
 // DO NOT EDIT. Re-run codegen to update.
 
 import type { ContractAddress } from "@groundhogchain/protocol";

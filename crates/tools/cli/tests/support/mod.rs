@@ -56,6 +56,49 @@ pub fn minimal_rv32_elf_with_section(section_name: &str, section_data: &[u8]) ->
     minimal_rv32_elf_with_optional_section(Some((section_name, section_data)))
 }
 
+/// Minimal raw contract spec with one anchored interface and one method.
+#[must_use]
+#[allow(dead_code)]
+pub fn minimal_contract_spec_raw() -> Vec<u8> {
+    fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {
+        value.try_into().expect("bug: test spec string should fit")
+    }
+
+    let fragments = [
+        groundhog_spec_tool::SpecFragment::SpecInterface {
+            interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
+                interface_name: spec_string("Counter"),
+                interface_version: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                emits: vec![].try_into().unwrap(),
+            },
+        },
+        groundhog_spec_tool::SpecFragment::InterfaceAnchor {
+            interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
+                interface_name: spec_string("Counter"),
+                interface_version: spec_string("0.1.0"),
+            },
+        },
+        groundhog_spec_tool::SpecFragment::SpecMethod {
+            method_fragment: groundhog_spec_tool::SpecMethodFragment {
+                interface_name: spec_string("Counter"),
+                interface_version: spec_string("0.1.0"),
+                method: groundhog_spec_tool::ContractSpecMethod {
+                    name: spec_string("get"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: groundhog_spec_tool::ContractType::U64,
+                },
+            },
+        },
+    ];
+
+    let mut bytes = Vec::new();
+    for fragment in &fragments {
+        bytes.extend(xdrs::txs::encode(fragment).expect("bug: test spec fragment should encode"));
+    }
+    bytes
+}
+
 #[allow(clippy::too_many_lines)]
 fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u8> {
     const SHT_PROGBITS: u32 = 1;

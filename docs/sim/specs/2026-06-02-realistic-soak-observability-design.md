@@ -488,8 +488,8 @@ traffic and can surface fairness/isolation issues.
 
 The manifest already accepts multiple `contractArtifacts`, `contractCalls`,
 `viewCalls`, `storageReads`, and `eventQueries`; no scenario uses more than one
-`wasm`. This slice is scenario + selection work plus a small additive schema for
-target weights.
+contract artifact. This slice is scenario + selection work plus a small
+additive schema for target weights.
 
 **Files:**
 - Modify: `crates/dev/sim/src/manifest.rs` — add optional per-call/per-query
@@ -560,7 +560,7 @@ fast local smokes expensive.
   load, which is this phase's wedge. If local network chaos becomes a priority,
   evaluate `turmoil` for Rust in-process network/filesystem hardship before
   reaching for cluster-level tools.
-- A WASM or trait-registry **workload extension API.** The closed enum is still
+- A trait-registry **workload extension API.** The closed enum is still
   the right size; corpus targeting is data, not a new extension surface.
 - **PID guessing for existing targets.** A future provider can accept an
   explicit PID/process group or exporter URL, but this phase does not infer one.

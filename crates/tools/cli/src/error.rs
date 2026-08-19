@@ -9,8 +9,6 @@ use crate::terminal::{render_shell_arg, terminal_safe};
 pub enum CliError {
     #[error("cargo not found on PATH")]
     CargoNotFound,
-    #[error("wasm-opt not found on PATH")]
-    WasmOptNotFound,
     #[error("`.cargo/contract.toml` not found in {0}")]
     ContractTomlNotFound(String),
     #[error("package `{0}` not found in workspace")]
@@ -19,13 +17,11 @@ pub enum CliError {
     PackageRequired,
     #[error("cargo metadata failed: {0}")]
     CargoMetadataFailed(String),
-    #[error("expected WASM artifact not found at {0}")]
-    WasmNotFound(String),
     #[error("expected RV32 ELF not found at {0}")]
     Rv32ElfNotFound(String),
     #[error("expected {kind} artifact not found at {path}")]
     ArtifactNotFound { kind: &'static str, path: String },
-    #[error("unsupported artifact extension for {0}; expected .wasm or .rv32a")]
+    #[error("unsupported artifact extension for {0}; expected .rv32a")]
     UnsupportedArtifactExtension(String),
     #[error("target dir conflicts with CLI passthrough args or config")]
     TargetDirConflict,
@@ -91,14 +87,8 @@ pub enum CliError {
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
     UnsupportedOs(String),
-    #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
-    WasmOptFailed(String),
     #[error("RV32 lowering failed: {0}")]
     Rv32LowerFailed(#[from] groundhog_rv32_lower::LowerError),
-    #[error("WASM instrumentation failed: {0}")]
-    WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
-    #[error("WASM verification failed after instrumentation: {0}")]
-    WasmVerifyFailed(String),
     #[error("contract spec finalization failed: {0}")]
     SpecFailed(String),
     /// The contract's raw spec wire format is one this build cannot read.
@@ -129,8 +119,6 @@ pub enum CliError {
     IntegrationTestNotFound(String),
     #[error("invalid test options: {0}")]
     InvalidTestOptions(String),
-    #[error("invalid build options: {0}")]
-    InvalidBuildOptions(String),
     #[error(
         "`{0}` is set in the environment, so cargo would ignore the project's \
          `.cargo/config.toml` target rustflags (Groundhog linker and codegen flags) and \
@@ -415,12 +403,10 @@ impl CliError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::CargoNotFound => "cargo_not_found",
-            Self::WasmOptNotFound => "wasm_opt_not_found",
             Self::ContractTomlNotFound(_) => "contract_toml_not_found",
             Self::PackageNotFound(_) => "package_not_found",
             Self::PackageRequired => "package_required",
             Self::CargoMetadataFailed(_) => "cargo_metadata_failed",
-            Self::WasmNotFound(_) => "wasm_not_found",
             Self::Rv32ElfNotFound(_) => "rv32_elf_not_found",
             Self::ArtifactNotFound { .. } => "artifact_not_found",
             Self::UnsupportedArtifactExtension(_) => "unsupported_artifact_extension",
@@ -446,10 +432,7 @@ impl CliError {
             Self::ConfigChangedDuringConfirmation { .. } => "config_changed_during_confirmation",
             Self::CredentialsEmpty => "credentials_empty",
             Self::UnsupportedOs(_) => "unsupported_os",
-            Self::WasmOptFailed(_) => "wasm_opt_failed",
             Self::Rv32LowerFailed(_) => "rv32_lower_failed",
-            Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
-            Self::WasmVerifyFailed(_) => "wasm_verify_failed",
             Self::SpecFailed(_) => "spec_failed",
             Self::RawSpecFormat(_) => "raw_spec_format",
             Self::KeyExists(_) => "key_exists",
@@ -461,7 +444,6 @@ impl CliError {
             Self::NotImplemented => "not_implemented",
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
-            Self::InvalidBuildOptions(_) => "invalid_build_options",
             Self::EnvRustflagsSet(_) => "env_rustflags_set",
             Self::Rv32LinkerScriptNotConfigured { .. } => "rv32_linker_script_not_configured",
             Self::StatusHasWarnings => "status_has_warnings",
@@ -542,12 +524,8 @@ impl CliError {
             Self::CargoNotFound => Some(Cow::Borrowed(
                 "install Rust and ensure `cargo` is on your PATH",
             )),
-            Self::WasmOptNotFound => Some(Cow::Borrowed(
-                "install Binaryen (`brew install binaryen`), or \
-                 rerun without `--optimize`",
-            )),
             Self::ContractTomlNotFound(_) => Some(Cow::Borrowed(
-                "every contract build (wasm and rv32) runs as \
+                "every contract build runs as \
                  `cargo --config .cargo/contract.toml`; create that file \
                  containing `[unstable]` and \
                  `build-std = [\"core\", \"alloc\"]`, or run `groundhog new` \
@@ -568,20 +546,16 @@ impl CliError {
                 "ensure `cargo` is on PATH and you are inside \
                  a Cargo project or workspace",
             )),
-            Self::WasmNotFound(_) => Some(Cow::Borrowed(
-                "run `groundhog build` first, or check that the crate \
-                 does not use a custom [lib] name in Cargo.toml",
-            )),
             Self::Rv32ElfNotFound(_) => Some(Cow::Borrowed(
                 "check that the package builds a binary for \
                  riscv32im-unknown-none-elf and that its binary name matches \
                  the package name",
             )),
             Self::ArtifactNotFound { kind, .. } => Some(Cow::Owned(format!(
-                "run `groundhog build --target {kind}` first, or pass `--artifact <path>`"
+                "run `groundhog build` first to produce the {kind} artifact, or pass `--artifact <path>`"
             ))),
             Self::UnsupportedArtifactExtension(_) => {
-                Some(Cow::Borrowed("pass a `.wasm` or `.rv32a` artifact path"))
+                Some(Cow::Borrowed("pass a `.rv32a` artifact path"))
             }
             Self::TargetDirConflict => Some(Cow::Borrowed(
                 "remove `--target-dir` from passthrough args or \
@@ -709,7 +683,7 @@ impl CliError {
                 "use `--account` by itself, or use `--from` and `--to` separately or together",
             )),
             Self::InvalidEventSpec { .. } => Some(Cow::Borrowed(
-                "pass a trusted local `.wasm` or `.xdr` artifact containing a valid contract event spec",
+                "pass a trusted local `.xdr` sidecar containing a valid contract event spec",
             )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
@@ -794,7 +768,7 @@ impl CliError {
                 "use either positional method arguments or `--calldata`, not both",
             )),
             Self::CodegenFailed(_) => Some(Cow::Borrowed(
-                "check that the file contains a valid embedded contract spec",
+                "check that the file contains a valid contract spec",
             )),
             Self::ChainDataDirLocked(_) => Some(Cow::Borrowed(
                 "stop the node using this data directory and retry",
@@ -873,10 +847,6 @@ impl CliError {
                 "`groundhog test` currently supports macOS and \
                  Linux host targets",
             )),
-            Self::WasmOptFailed(_) => Some(Cow::Borrowed(
-                "see the wasm-opt error above; the WASM binary \
-                 may be invalid or malformed",
-            )),
             Self::Rv32LowerFailed(error) => Some(Cow::Borrowed(match error {
                 groundhog_rv32_lower::LowerError::CodeTooLarge { .. } => {
                     "the contract's code section exceeds the current artifact \
@@ -899,13 +869,6 @@ impl CliError {
                      nonzero entry point; see the lower error above"
                 }
             })),
-            Self::WasmInstrumentFailed(_) => {
-                Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
-            }
-            Self::WasmVerifyFailed(_) => Some(Cow::Borrowed(
-                "this is a bug — please report this instrument→verify \
-                 failure to the Groundhog team",
-            )),
             Self::SpecFailed(_) => Some(Cow::Borrowed(
                 "check that your contract uses `#[contract]` and \
                  `#[contracttype]` attributes correctly",
@@ -934,9 +897,6 @@ impl CliError {
             )),
             Self::InvalidTestOptions(_) => Some(Cow::Borrowed(
                 "remove the conflicting `groundhog test` option and rerun the command",
-            )),
-            Self::InvalidBuildOptions(_) => Some(Cow::Borrowed(
-                "remove the unsupported `groundhog build` option for the selected target",
             )),
             Self::EnvRustflagsSet(var) => Some(Cow::Owned(format!(
                 "unset it for this build (e.g. `env -u {var} groundhog build`); to add extra \

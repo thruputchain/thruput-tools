@@ -461,7 +461,7 @@ loading the private key.
   `env!("CARGO_BIN_EXE_groundhog")`.
 - The `build` and `test` CLI commands cannot be fully
   integration-tested without the SDK crate registry. Unit tests cover
-  helpers such as `find_project` and `wasm_output_path`.
+  helpers such as `find_project` and RV32 artifact-path construction.
 
 ### Snapshot testing for generated artifacts
 
@@ -525,12 +525,12 @@ history retains the design context for anything not currently active.
 - `docs/cli/roadmap.md` — CLI backlog, sequencing, and completion state.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — cross-team
   hogd-dev subprocess contract.
-- `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — deferred
-  note for possible future bundled wasm-opt work.
 - `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
   transaction detail / receipt response shape.
 - `docs/cli/specs/2026-06-25-remote-devnet-faucet-design.md` —
   remote devnet network UX, faucet funding, and wallet-create flow.
+- `docs/cli/specs/2026-08-17-wasm-removal-design.md` — WASM removal
+  audit and slice plan for the tooling workspace.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — gateway architecture.
 - `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
@@ -562,7 +562,7 @@ history retains the design context for anything not currently active.
 
 ## Context
 
-- Groundhog is an L1 blockchain (SCP consensus, WASM execution, NNInt
+- Groundhog is an L1 blockchain (SCP consensus, RV32 execution, NNInt
   storage). Instant finality, no forks, no gas fees.
 - Transaction lifecycle is simpler than Ethereum/Substrate: Pending →
   Committed (or Invalid/Expired). No reorgs, no "included but not
@@ -570,7 +570,7 @@ history retains the design context for anything not currently active.
 - The hogd indexer (C++, RocksDB) already has working query APIs. The
   gateway's job is putting a standard JSON-RPC interface in front of
   them.
-- The CLI wraps the Rust/WASM build workflow and will integrate with
+- The CLI wraps the Rust/RV32 build workflow and integrates with
   the gateway client for deploy, call, and status commands.
 - Submission through chuckd's current wallet stub is not a target
   architecture. If a `chuckd` backend remains configurable, it should

@@ -1116,7 +1116,7 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
                 "devWallet": {
                     "contentHash": format!("0x{}", "51".repeat(32)),
                     "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                    "artifactHint": "dev-wallet.wasm",
+                    "artifactHint": "dev_wallet.rv32a",
                     "deployEntrypoint": "0x6465706c6f794e77",
                     "createWalletEntrypoint": "0x6372656174655761",
                     "doActionEntrypoint": "0x646f416374696f6e"

@@ -1,12 +1,12 @@
 # groundhog-rv32-lower
 
 Turn a freestanding `riscv32im-unknown-none-elf` contract binary into a
-Groundhog **v4 RV32 artifact** (`.rv32a`).
+Groundhog **v5 RV32 artifact** (`.rv32a`).
 
-This is the `wasm-opt` analog for the rv32 build path. It is a focused lowerer
-with two entrypoints: a standalone `rv32-lower` binary for scripts and interop
-checks, and a library API used by `groundhog build --target rv32`. The artifact
-format has exactly one Rust implementation.
+This focused lowerer validates the contract ELF and emits the canonical RV32
+artifact format. It has two entrypoints: a standalone `rv32-lower` binary for
+scripts and interop checks, and a library API used by `groundhog build`. The
+artifact format has exactly one Rust implementation.
 
 ## Usage
 
@@ -19,7 +19,7 @@ rv32-lower --elf target/riscv32im-unknown-none-elf/release/<contract>-rv32 \
            --out <contract>.rv32a
 ```
 
-`groundhog build --target rv32` invokes the same lowerer in-process through the
+`groundhog build` invokes the same lowerer in-process through the
 library API; use the binary directly when you need a scriptable lower-level
 tool.
 
@@ -32,7 +32,7 @@ rv32-lower --elf <elf> --out <contract>.rv32a --metadata <contract>.json \
            --build-flags release
 ```
 
-The sidecar includes `artifact_format_fingerprint`, the pinned v4 format
+The sidecar includes `artifact_format_fingerprint`, the pinned v5 format
 contract digest that hogd cross-checks against its C++ runtime constants. To
 print that value without lowering an ELF:
 
@@ -55,14 +55,14 @@ The lowerer:
    alloc sections, no relocations, …) and materializes the code plus the
    initial-memory high-water prefix. v4 dispatch lives in the guest, so no
    symbol scanning is needed and stripped release builds are valid inputs.
-3. Packs the v4 header + sections, hashes each section, and self-verifies.
+3. Packs the v5 header + sections, hashes each section, and self-verifies.
 
 ## Library
 
 The crate is also a library (`groundhog_rv32_lower`):
 
 - `lower(&[u8]) -> Result<Lowered>` — the whole pipeline.
-- `groundhog-rv32-artifact` — the v4 format crate: constants, writer, and
+- `groundhog-rv32-artifact` — the v5 format crate: constants, writer, and
   `verify_artifact`. **This crate is the single Rust source of truth for the
   on-disk format** and mirrors hogd's `hogd/hogexec/runtime/rv32/artifact.h`.
 - `elf` — a minimal, dependency-free ELF32-LE-RISC-V reader.
@@ -97,8 +97,8 @@ It is **published to the private `groundhog` registry** and consumable two ways:
   puts `rv32-lower` on `$PATH`; hogd's smoke tests and other scripts can call it
   directly;
 - **as a library** — add `groundhog-rv32-lower` (registry `groundhog`) as a
-  dependency and call `lower()` / `metadata` directly. `groundhog build --target
-  rv32` uses this path. Add
+  dependency and call `lower()` / `metadata` directly. `groundhog build` uses
+  this path. Add
   `groundhog-rv32-artifact` for direct access to format constants, writer, and
   validator APIs.
 

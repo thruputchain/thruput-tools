@@ -41,7 +41,6 @@ zeroize = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-rv32-artifact = { workspace = true }
 groundhog-rv32-lower = { workspace = true }
-groundhog-wasm-meter = { workspace = true }
 groundhog-contract-spec = { workspace = true }
 groundhog-erc20-if = { workspace = true }
 sdk = { workspace = true }

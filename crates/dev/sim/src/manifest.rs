@@ -281,7 +281,6 @@ pub enum EntrypointSpecError {
 #[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
 pub enum ContractArtifactKind {
-    Wasm,
     Rv32,
 }
 
@@ -640,6 +639,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_wasm_contract_artifact_kind() {
+        let err = serde_json::from_value::<SimulationManifest>(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "legacy-artifact",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
+            "workloads": [{"name": "view-call", "weight": 1}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}]
+        }))
+        .expect_err("legacy WASM artifact kind should be rejected");
+
+        assert!(err.to_string().contains("unknown variant `wasm`"));
+    }
+
+    #[test]
     fn event_query_defaults_match_first_page_at_end() {
         let manifest: SimulationManifest = serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -649,7 +665,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
             "workloads": [{"name": "events-query", "weight": 1}],
-            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "rv32", "path": "fibonacci.rv32a"}}],
             "eventQueries": [{"name": "fib-events", "contract": "fibonacci"}]
         }))
         .expect("minimal event query should parse");
@@ -673,7 +689,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
             "workloads": [{"name": "contract-call", "weight": 1}],
-            "contractArtifacts": [{"name": "events", "artifact": {"kind": "wasm", "path": "events.wasm"}}],
+            "contractArtifacts": [{"name": "events", "artifact": {"kind": "rv32", "path": "events.rv32a"}}],
             "contractCalls": [{
                 "name": "events-store-value",
                 "contract": "events",

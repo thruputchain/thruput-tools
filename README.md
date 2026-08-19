@@ -99,11 +99,8 @@ groundhog call my-counter get
 The integration path manages its own ephemeral local node:
 
 ```bash
-# one-command local-node integration path; add --target wasm for WASM artifacts
+# one-command local-node integration path
 groundhog test --integration
-
-# differential gate: WASM and RV32 must both pass the same tests
-groundhog test --integration --differential
 ```
 
 `groundhog node` is script-safe: human status or startup JSON goes to stdout;
@@ -112,17 +109,12 @@ child logs stay on stderr. Use `-v` / `--verbose` for normal debugging and
 humans and `data.chain_state` (`fresh` or `recovered`) in JSON.
 
 `groundhog test --integration` uses that same local-node path without a
-separate terminal: it builds the selected artifact (`--target rv32` by default,
-or `--target wasm`), starts an ephemeral hog-devnode node, deploys with
-`dev-0`, runs `tests/integration.rs`, then shuts the node down. The test
+separate terminal: it builds the RV32 artifact, starts an ephemeral hog-devnode
+node, deploys with the lowest-index `local_user` (`dev-1` in the default
+manifest), runs `tests/integration.rs`, then shuts the node down. The test
 process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
-`GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-0`, and
+`GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-1`, and
 `GROUNDHOG_RUNTIME_MANIFEST`.
-
-`groundhog test --integration --differential` is the differential gate: it
-builds both WASM and RV32 artifacts, runs the same integration target against
-isolated ephemeral nodes, and fails unless both runs pass with matching parsed
-test outcomes.
 
 For gateway and benchmark runs, `hog-devnode` also writes a runtime manifest
 describing live x23 endpoints, bootstrapped dev wallets, and funding. The

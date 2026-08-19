@@ -36,7 +36,7 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     ui.render_intro();
 
     if report.environment.cargo && usable_default_key.is_some() && has_credentials {
-        report_ready(project_start, &report, usable_default_key, &mut ui)?;
+        report_ready(project_start, usable_default_key, &mut ui)?;
         return Ok(());
     }
 
@@ -45,7 +45,7 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     }
 
     ui.begin_step(InitStep::Environment);
-    handle_environment_step(&report, &mut ui);
+    handle_environment_step(&mut ui);
     ui.finish_step(InitStep::Environment, StepState::Done);
 
     ui.begin_step(InitStep::Profiles);
@@ -74,7 +74,6 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
 
 fn report_ready(
     project_start: &Path,
-    report: &crate::checks::StatusReport,
     usable_default_key: Option<&crate::checks::KeySummary>,
     ui: &mut InitUi<'_>,
 ) -> Result<(), CliError> {
@@ -84,36 +83,11 @@ fn report_ready(
         NextSteps::Status,
     );
 
-    if !report.environment.wasm_opt {
-        ui.note("wasm-opt not installed, optional for `build --optimize`");
-    }
-    if matches!(
-        report.environment.wasm_target,
-        crate::checks::WasmTargetStatus::Missing
-    ) {
-        ui.note("WASM target will install automatically on first build");
-    }
     Ok(())
 }
 
-fn handle_environment_step(report: &crate::checks::StatusReport, ui: &mut InitUi<'_>) {
+fn handle_environment_step(ui: &mut InitUi<'_>) {
     ui.success("Cargo available");
-
-    match report.environment.wasm_target {
-        crate::checks::WasmTargetStatus::Installed => {
-            ui.success("WASM target installed");
-        }
-        crate::checks::WasmTargetStatus::Missing => {
-            ui.note("WASM target will install automatically on first build");
-        }
-        crate::checks::WasmTargetStatus::Unknown => {
-            ui.note("Could not verify the WASM target (rustup unavailable)");
-        }
-    }
-
-    if !report.environment.wasm_opt {
-        ui.note("wasm-opt not installed, optional for `build --optimize`");
-    }
 }
 
 fn handle_profile_step(project_start: &Path, ui: &mut InitUi<'_>) -> Result<(), CliError> {

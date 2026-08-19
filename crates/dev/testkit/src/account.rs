@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
 use crate::artifact::{
-    ArtifactEntry, ArtifactKind, PendingRegistration as ArtifactPendingRegistration,
-    RegistrationOwner, contract_from_bytes, contract_hash,
+    ArtifactEntry, PendingRegistration as ArtifactPendingRegistration, RegistrationOwner,
+    contract_from_bytes, contract_hash,
 };
 use crate::error::{Result, TestkitError};
 use crate::manifest::DevAccount;
@@ -232,9 +232,8 @@ impl Account {
         &mut self,
         network: &Network,
         artifact: &[u8],
-        kind: ArtifactKind,
     ) -> Result<SubmittedDeploy> {
-        let contract = contract_from_bytes(kind, artifact.to_vec());
+        let contract = contract_from_bytes(artifact.to_vec());
         let hash = contract_hash(&contract)?;
         let submitted = self
             .build_deploy(network, hash, Some(contract))?

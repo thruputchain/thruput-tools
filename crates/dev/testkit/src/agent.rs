@@ -310,11 +310,9 @@ impl AgentContext {
     pub async fn submit_deploy(
         &mut self,
         artifact: &[u8],
-        kind: ArtifactKind,
+        _kind: ArtifactKind,
     ) -> Result<SubmittedDeploy> {
-        self.account
-            .submit_deploy(&self.network, artifact, kind)
-            .await
+        self.account.submit_deploy(&self.network, artifact).await
     }
 
     /// Call a deployed contract method from this agent's account, awaiting the

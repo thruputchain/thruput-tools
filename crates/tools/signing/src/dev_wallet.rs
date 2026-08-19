@@ -20,20 +20,22 @@ pub fn create_wallet_calldata(
 }
 
 /// Build a dev-wallet contract value from an artifact path and bytes.
-pub fn dev_wallet_contract(artifact_path: &Path, artifact_bytes: Vec<u8>) -> Contract {
-    let blob = ContractBlob {
-        data: BytesM(artifact_bytes),
-    };
+pub fn dev_wallet_contract(
+    artifact_path: &Path,
+    artifact_bytes: Vec<u8>,
+) -> Result<Contract, SigningError> {
     match artifact_path
         .extension()
         .and_then(|extension| extension.to_str())
     {
-        Some("rv32a") => Contract::kRv32 {
-            rv32_contract: blob,
-        },
-        _ => Contract::kWasmi {
-            wasmi_contract: blob,
-        },
+        Some("rv32a") => Ok(Contract::kRv32 {
+            rv32_contract: ContractBlob {
+                data: BytesM(artifact_bytes),
+            },
+        }),
+        _ => Err(SigningError::UnsupportedDevWalletArtifact(
+            artifact_path.to_path_buf(),
+        )),
     }
 }
 
@@ -65,8 +67,35 @@ mod tests {
 
     #[test]
     fn dev_wallet_contract_uses_rv32_variant_for_rv32a_artifacts() {
-        let contract = dev_wallet_contract(Path::new("dev_wallet.rv32a"), vec![1, 2, 3]);
+        let contract = dev_wallet_contract(Path::new("dev_wallet.rv32a"), vec![1, 2, 3])
+            .expect("bug: RV32 dev-wallet artifact should be accepted");
 
         assert!(matches!(contract, Contract::kRv32 { .. }));
+    }
+
+    fn assert_rejected_artifact(path: &Path) {
+        let error = dev_wallet_contract(path, vec![1, 2, 3]).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SigningError::UnsupportedDevWalletArtifact(error_path) if error_path == path
+        ));
+    }
+
+    #[test]
+    fn dev_wallet_contract_rejects_unknown_or_missing_artifact_extension() {
+        assert_rejected_artifact(Path::new("contracts/dev_wallet.bin"));
+        assert_rejected_artifact(Path::new("contracts/dev_wallet"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dev_wallet_contract_rejects_non_utf8_artifact_extension() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(
+            b"contracts/dev_wallet.\xff".to_vec(),
+        ));
+        assert_rejected_artifact(&path);
     }
 }

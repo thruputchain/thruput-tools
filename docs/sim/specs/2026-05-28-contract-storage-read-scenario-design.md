@@ -44,7 +44,7 @@ contract and expects absence.
 - Multiple storage-read selection policies; Slice I uses the first configured
   entry, matching Slice G `view-call` selection.
 - Storage assertions beyond per-read `expectPresent`.
-- Committed `.wasm` fixtures.
+- Committed `.rv32a` fixtures.
 - `events-query` execution.
 
 ## Manifest Shape
@@ -55,7 +55,7 @@ contract and expects absence.
     { "name": "storage-read", "weight": 1 }
   ],
   "contractArtifacts": [
-    { "name": "fibonacci", "artifact": { "kind": "wasm", "path": "fibonacci.wasm" } }
+    { "name": "fibonacci", "artifact": { "kind": "rv32", "path": "fibonacci.rv32a" } }
   ],
   "storageReads": [
     {

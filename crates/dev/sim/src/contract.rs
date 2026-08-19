@@ -26,8 +26,8 @@ use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, SimRpcClient,
 };
 use crate::manifest::{
-    ContractArtifactKind, ContractArtifactSpec, EntrypointSpec, EventQueryAnchorSpec,
-    EventQueryOrderSpec, SimulationManifest,
+    ContractArtifactSpec, EntrypointSpec, EventQueryAnchorSpec, EventQueryOrderSpec,
+    SimulationManifest,
 };
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
 use crate::util::{json_string, sha256_hex};
@@ -238,7 +238,6 @@ where
     };
 
     let prepared = match prepare_deploy(
-        input.artifact.artifact.kind,
         &artifact_path,
         actor,
         input.deploy_entrypoint,
@@ -341,7 +340,6 @@ struct PreparedDeploy {
 }
 
 fn prepare_deploy(
-    artifact_kind: ContractArtifactKind,
     artifact_path: &Path,
     actor: &ActorState,
     deploy_entrypoint: ContractEntrypointID,
@@ -352,13 +350,8 @@ fn prepare_deploy(
     let blob = ContractBlob {
         data: BytesM(artifact_bytes),
     };
-    let contract = match artifact_kind {
-        ContractArtifactKind::Wasm => Contract::kWasmi {
-            wasmi_contract: blob,
-        },
-        ContractArtifactKind::Rv32 => Contract::kRv32 {
-            rv32_contract: blob,
-        },
+    let contract = Contract::kRv32 {
+        rv32_contract: blob,
     };
     let contract_xdr = xdrs::txs::encode(&contract)
         .map_err(|error| SimError::Executor(format!("failed to encode contract XDR: {error}")))?;
@@ -734,8 +727,9 @@ mod tests {
 
     use crate::event::EventWriter;
     use crate::manifest::{
-        EntrypointSpec, EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase,
-        SymbolicEntrypointSpec, ViewCallSpec, WorkloadKind, WorkloadSpec,
+        ContractArtifactKind, EntrypointSpec, EventQueryAnchorSpec, EventQueryOrderSpec,
+        EventQuerySpec, LoadPhase, SymbolicEntrypointSpec, ViewCallSpec, WorkloadKind,
+        WorkloadSpec,
     };
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
@@ -797,30 +791,36 @@ mod tests {
         }
     }
 
+    fn opaque_rv32_artifact() -> NamedTempFile {
+        let artifact = NamedTempFile::new().expect("rv32 temp should create");
+        std::fs::write(artifact.path(), b"opaque rv32 artifact")
+            .expect("rv32 fixture should write");
+        artifact
+    }
+
     #[test]
     fn resolves_relative_artifact_against_override_root() {
         let scenario = Path::new("/repo/examples/sim/demo.json");
         let root = Path::new("/tmp/artifacts");
 
-        let path = resolve_artifact_path(scenario, Some(root), Path::new("fibonacci.wasm"));
+        let path = resolve_artifact_path(scenario, Some(root), Path::new("fibonacci.rv32a"));
 
-        assert_eq!(path, PathBuf::from("/tmp/artifacts/fibonacci.wasm"));
+        assert_eq!(path, PathBuf::from("/tmp/artifacts/fibonacci.rv32a"));
     }
 
     #[test]
     fn resolves_relative_artifact_against_scenario_dir_without_override() {
         let scenario = Path::new("/repo/examples/sim/demo.json");
 
-        let path = resolve_artifact_path(scenario, None, Path::new("fibonacci.wasm"));
+        let path = resolve_artifact_path(scenario, None, Path::new("fibonacci.rv32a"));
 
-        assert_eq!(path, PathBuf::from("/repo/examples/sim/fibonacci.wasm"));
+        assert_eq!(path, PathBuf::from("/repo/examples/sim/fibonacci.rv32a"));
     }
 
     #[tokio::test]
     async fn deploy_contract_records_success_and_consumes_setup_nonce() {
-        let wasm = NamedTempFile::new().expect("wasm temp should create");
-        std::fs::write(wasm.path(), b"\0asm").expect("wasm fixture should write");
-        let manifest = manifest(wasm.path());
+        let rv32 = opaque_rv32_artifact();
+        let manifest = manifest(rv32.path());
         let file = NamedTempFile::new().expect("event temp should create");
         let mut event_writer = EventWriter::create(file.path())
             .await
@@ -901,14 +901,13 @@ mod tests {
 
     #[tokio::test]
     async fn deploy_contract_corpus_records_each_artifact() {
-        let wasm = NamedTempFile::new().expect("wasm temp should create");
-        std::fs::write(wasm.path(), b"\0asm").expect("wasm fixture should write");
-        let mut manifest = manifest(wasm.path());
+        let rv32 = opaque_rv32_artifact();
+        let mut manifest = manifest(rv32.path());
         manifest.contract_artifacts.push(ContractArtifactSpec {
             name: "events".into(),
             artifact: crate::manifest::ContractArtifactRef {
-                kind: ContractArtifactKind::Wasm,
-                path: wasm.path().to_path_buf(),
+                kind: ContractArtifactKind::Rv32,
+                path: rv32.path().to_path_buf(),
             },
         });
         let file = NamedTempFile::new().expect("event temp should create");
@@ -961,9 +960,8 @@ mod tests {
 
     #[tokio::test]
     async fn deploy_contract_failure_preserves_post_submit_fields() {
-        let wasm = NamedTempFile::new().expect("wasm temp should create");
-        std::fs::write(wasm.path(), b"\0asm").expect("wasm fixture should write");
-        let manifest = manifest(wasm.path());
+        let rv32 = opaque_rv32_artifact();
+        let manifest = manifest(rv32.path());
         let file = NamedTempFile::new().expect("event temp should create");
         let mut event_writer = EventWriter::create(file.path())
             .await
@@ -1015,14 +1013,8 @@ mod tests {
         let deploy_entrypoint =
             ContractEntrypointID::from([0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]);
 
-        let prepared = prepare_deploy(
-            ContractArtifactKind::Rv32,
-            rv32.path(),
-            &actors[0],
-            deploy_entrypoint,
-            42,
-        )
-        .expect("rv32 deploy should prepare");
+        let prepared = prepare_deploy(rv32.path(), &actors[0], deploy_entrypoint, 42)
+            .expect("rv32 deploy should prepare");
         let tx_bytes =
             hex::decode(prepared.tx_hex.trim_start_matches("0x")).expect("signed tx should be hex");
         let signed_tx: SignedTransaction =
@@ -1069,7 +1061,7 @@ mod tests {
                 "devWallet": {
                     "contentHash": prefixed_hex(0x33),
                     "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "dev-wallet.rv32a",
+                    "artifactHint": "dev_wallet.rv32a",
                     "deployEntrypoint": "0xf969542572bd6860",
                     "createWalletEntrypoint": "0x78b187d37f222827",
                     "doActionEntrypoint": "0xa0fff94c64fbaf3c"
@@ -1121,7 +1113,7 @@ mod tests {
             contract_artifacts: vec![ContractArtifactSpec {
                 name: "fibonacci".into(),
                 artifact: crate::manifest::ContractArtifactRef {
-                    kind: ContractArtifactKind::Wasm,
+                    kind: ContractArtifactKind::Rv32,
                     path: artifact_path.to_path_buf(),
                 },
             }],

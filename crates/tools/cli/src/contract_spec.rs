@@ -5,7 +5,7 @@ use groundhog_contract_spec::{ContractSpec, ContractSpecInterface};
 use crate::codec::spec_string_text;
 use crate::{CliError, Print};
 
-/// One registered interface in the embedded contract spec.
+/// One registered interface in the contract spec.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InterfaceSpec {
     pub interface_name: String,
@@ -30,68 +30,48 @@ pub fn load_contract_spec_from_xdr(bytes: &[u8]) -> Result<ContractSpec, CliErro
 
 /// Load a contract spec from a file, dispatching by extension.
 ///
-/// - `.wasm` — extracts the embedded spec custom section (returns `None`
-///   when there is no spec).
 /// - `.xdr` — XDR-decodes the file contents and returns `Some`.
+/// - `.rv32a` — returns a targeted error naming the adjacent `.spec.xdr` sidecar.
 /// - Anything else — returns an error.
 pub fn load_contract_spec_from_file(path: &Path) -> Result<Option<ContractSpec>, CliError> {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("wasm") => load_contract_spec(path),
         Some("xdr") => {
             let bytes = std::fs::read(path)?;
             Ok(Some(load_contract_spec_from_xdr(&bytes)?))
         }
+        Some("rv32a") => Err(CliError::SpecFailed(format!(
+            "RV32 artifacts do not embed contract specs; pass the sidecar at {}",
+            spec_xdr_sidecar_path(path).display(),
+        ))),
         _ => Err(CliError::SpecFailed(format!(
-            "unsupported file extension for contract spec: {}",
+            "unsupported file extension for contract spec: {}; expected .xdr",
             path.display(),
         ))),
     }
 }
 
-/// Load the canonical contract spec from the built WASM.
-///
-/// Spec model types come from `groundhog_contract_spec`; this module uses
-/// `groundhog_spec_tool` only to extract or render them from compiled WASM.
-pub fn load_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError> {
-    load_embedded_contract_spec(wasm)
-}
-
 /// Load the contract spec produced by the default build for a Cargo package.
 ///
-/// RV32 is the default build target and stores its finalized spec in an XDR
-/// sidecar because the lowered `.rv32a` artifact has no embedded-spec section.
-/// When both targets have been built, use the most recently written artifact
-/// and prefer RV32 on timestamp ties. An RV32 sidecar is current only when it
-/// is at least as new as its artifact. This keeps the default RV32 workflow
-/// while respecting a later explicit `--target wasm` build.
+/// RV32 stores its finalized spec in an XDR sidecar because the lowered
+/// `.rv32a` artifact has no embedded-spec section. The sidecar is current only
+/// when it is at least as new as the artifact.
 pub fn load_built_contract_spec(
     target_dir: &Path,
     package_name: &str,
 ) -> Result<Option<ContractSpec>, CliError> {
     let rv32 = crate::artifacts::groundhog_rv32_output_path(target_dir, package_name);
     let rv32_spec = spec_xdr_sidecar_path(&rv32);
-    let wasm = crate::artifacts::groundhog_wasm_output_path(target_dir, package_name);
-
-    let rv32_modified = file_modified(&rv32)?;
-    let wasm_modified = file_modified(&wasm)?;
-
-    match (rv32_modified, wasm_modified) {
-        (Some(rv32_modified), Some(wasm_modified)) if wasm_modified > rv32_modified => {
-            load_contract_spec(&wasm)
-        }
-        (Some(rv32_modified), _) => {
-            let Some(rv32_spec_modified) = file_modified(&rv32_spec)? else {
-                return Ok(None);
-            };
-            if rv32_spec_modified < rv32_modified {
-                return Ok(None);
-            }
-            let bytes = std::fs::read(&rv32_spec)?;
-            load_contract_spec_from_xdr(&bytes).map(Some)
-        }
-        (None, Some(_)) => load_contract_spec(&wasm),
-        (None, None) => Ok(None),
+    let Some(rv32_modified) = file_modified(&rv32)? else {
+        return Ok(None);
+    };
+    let Some(rv32_spec_modified) = file_modified(&rv32_spec)? else {
+        return Ok(None);
+    };
+    if rv32_spec_modified < rv32_modified {
+        return Ok(None);
     }
+    let bytes = std::fs::read(&rv32_spec)?;
+    load_contract_spec_from_xdr(&bytes).map(Some)
 }
 
 fn file_modified(path: &Path) -> Result<Option<std::time::SystemTime>, CliError> {
@@ -100,25 +80,6 @@ fn file_modified(path: &Path) -> Result<Option<std::time::SystemTime>, CliError>
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
     }
-}
-
-/// Load the embedded `groundhogspecv0` custom section from a WASM file.
-fn load_embedded_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError> {
-    let bytes = match std::fs::read(wasm) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    load_embedded_contract_spec_from_bytes(&bytes)
-}
-
-/// Extract the embedded `groundhogspecv0` custom section from raw WASM bytes.
-pub(crate) fn load_embedded_contract_spec_from_bytes(
-    bytes: &[u8],
-) -> Result<Option<ContractSpec>, CliError> {
-    let rewritten = groundhog_spec_tool::rewrite::rewrite_wasm_with_spec(bytes)
-        .map_err(|e| CliError::SpecFailed(format!("failed to read wasm contract spec: {e}")))?;
-    Ok(rewritten.spec)
 }
 
 fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
@@ -201,15 +162,7 @@ fn canonicalize_rv32_raw_fragments(
     }
 }
 
-/// Load only the registered interface ids from a built contract artifact.
-pub fn load_registered_interfaces(wasm: &Path) -> Result<Option<Vec<InterfaceSpec>>, CliError> {
-    match load_contract_spec(wasm)? {
-        Some(spec) => Ok(Some(registered_interfaces(&spec)?)),
-        None => Ok(None),
-    }
-}
-
-/// Load registered interfaces from the built RV32 or WASM contract spec.
+/// Load registered interfaces from the built RV32 contract spec.
 pub fn load_built_registered_interfaces(
     target_dir: &Path,
     package_name: &str,
@@ -266,39 +219,6 @@ pub struct FinalizedSpec {
     pub json_path: PathBuf,
     /// Path to the `.spec.xdr` sidecar.
     pub xdr_path: PathBuf,
-}
-
-/// Finalize the contract spec embedded in the WASM binary.
-///
-/// Rewrites the WASM in-place (replacing raw spec fragments with a
-/// canonical `groundhogspecv0` section) and writes `.spec.json` and
-/// `.spec.xdr` sidecars alongside the WASM.
-///
-/// The WASM is rewritten before the sidecar files are written. If a
-/// sidecar write fails, a re-run is safe because
-/// `rewrite_wasm_with_spec` can extract the spec from an
-/// already-canonical WASM.
-///
-/// Returns `Some(FinalizedSpec)` on success, or `None` when the
-/// contract contains no spec fragments.
-pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<FinalizedSpec>, CliError> {
-    use groundhog_spec_tool::rewrite::rewrite_wasm_with_spec;
-
-    let bytes = std::fs::read(wasm)
-        .map_err(|e| CliError::Other(format!("failed to read wasm for spec finalization: {e}")))?;
-
-    let rewritten =
-        rewrite_wasm_with_spec(&bytes).map_err(|e| CliError::SpecFailed(e.to_string()))?;
-
-    std::fs::write(wasm, &rewritten.wasm)
-        .map_err(|e| CliError::Other(format!("failed to write rewritten wasm: {e}")))?;
-
-    let Some(spec) = rewritten.spec else {
-        print.warn("no contract spec found — skipping .spec.json");
-        return Ok(None);
-    };
-
-    write_spec_sidecars(wasm, spec, print).map(Some)
 }
 
 /// Finalize raw contract spec fragments emitted into an RV32 ELF and write sidecars
@@ -379,15 +299,25 @@ mod tests {
 
     use super::{
         InterfaceSpec, canonicalize_rv32_raw_fragments, find_method_interfaces,
-        load_built_contract_spec, load_contract_spec, load_contract_spec_from_file,
-        load_contract_spec_from_xdr, load_embedded_contract_spec_from_bytes, registered_interfaces,
-        remove_spec_sidecars, spec_json_sidecar_path, spec_xdr_sidecar_path,
+        load_built_contract_spec, load_contract_spec_from_file, load_contract_spec_from_xdr,
+        registered_interfaces, remove_spec_sidecars, spec_json_sidecar_path, spec_xdr_sidecar_path,
     };
 
     #[test]
     fn spec_json_sidecar_path_replaces_artifact_extension() {
         let path = spec_json_sidecar_path(Path::new("/tmp/demo.rv32a"));
         assert_eq!(path, Path::new("/tmp/demo.spec.json"));
+    }
+
+    #[test]
+    fn rv32_artifact_spec_error_points_to_xdr_sidecar() {
+        let error = load_contract_spec_from_file(Path::new("/tmp/demo.rv32a"))
+            .expect_err("bug: an RV32 artifact is not itself a contract spec");
+
+        assert!(
+            error.to_string().contains("/tmp/demo.spec.xdr"),
+            "expected sidecar path in error, got: {error}"
+        );
     }
 
     #[test]
@@ -408,63 +338,12 @@ mod tests {
     }
 
     #[test]
-    fn loads_embedded_contract_spec_from_wasm_bytes() {
-        let spec = sample_contract_spec();
-        let wasm = wasm_with_custom_section(
-            groundhog_spec_tool::FINAL_SECTION_NAME,
-            &xdrs::txs::encode(&spec).expect("bug: spec should encode"),
-        );
-
-        let loaded = load_embedded_contract_spec_from_bytes(&wasm)
-            .expect("bug: embedded spec should load")
-            .expect("bug: embedded spec should exist");
-        assert_eq!(loaded, spec);
-    }
-
-    #[test]
-    fn loads_contract_spec_from_embedded_wasm_file() {
-        let spec = sample_contract_spec();
-        let dir = tempfile::tempdir().expect("bug: temp dir should be created");
-        let wasm = dir.path().join("demo.wasm");
-        std::fs::write(
-            &wasm,
-            wasm_with_custom_section(
-                groundhog_spec_tool::FINAL_SECTION_NAME,
-                &xdrs::txs::encode(&spec).expect("bug: spec should encode"),
-            ),
-        )
-        .expect("bug: wasm fixture should be written");
-
-        let loaded = load_contract_spec(&wasm)
-            .expect("bug: embedded spec file should load")
-            .expect("bug: embedded spec file should exist");
-        assert_eq!(loaded, spec);
-    }
-
-    #[test]
-    fn built_contract_spec_uses_latest_artifact_and_prefers_rv32_on_ties() {
+    fn built_contract_spec_loads_current_rv32_sidecar() {
         let rv32_spec = sample_contract_spec();
-        let wasm_spec = sample_multi_interface_contract_spec();
         let dir = tempfile::tempdir().expect("bug: temp dir should be created");
         let target_dir = dir.path();
         let output_dir = target_dir.join("groundhog");
         std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
-        let wasm = output_dir.join("demo_contract.wasm");
-        std::fs::write(
-            &wasm,
-            wasm_with_custom_section(
-                groundhog_spec_tool::FINAL_SECTION_NAME,
-                &xdrs::txs::encode(&wasm_spec).expect("bug: wasm spec should encode"),
-            ),
-        )
-        .expect("bug: wasm fixture should be written");
-        set_modified(&wasm, 20);
-
-        let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: wasm fallback should load")
-            .expect("bug: wasm fallback spec should exist");
-        assert_eq!(loaded, wasm_spec);
-
         let rv32 = output_dir.join("demo_contract.rv32a");
         std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
         set_modified(&rv32, 10);
@@ -477,22 +356,8 @@ mod tests {
         set_modified(&rv32_spec_path, 10);
 
         let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: newer wasm spec should load")
-            .expect("bug: newer wasm spec should exist");
-        assert_eq!(loaded, wasm_spec);
-
-        set_modified(&rv32, 30);
-        set_modified(&rv32_spec_path, 30);
-
-        let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: newer rv32 sidecar should load")
-            .expect("bug: newer rv32 sidecar spec should exist");
-        assert_eq!(loaded, rv32_spec);
-
-        set_modified(&wasm, 30);
-        let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: tied rv32 sidecar should load")
-            .expect("bug: tied rv32 sidecar spec should exist");
+            .expect("bug: current rv32 sidecar should load")
+            .expect("bug: current rv32 sidecar spec should exist");
         assert_eq!(loaded, rv32_spec);
     }
 
@@ -515,33 +380,6 @@ mod tests {
 
         let loaded = load_built_contract_spec(target_dir, "demo-contract")
             .expect("bug: stale sidecar lookup should not error");
-
-        assert!(loaded.is_none());
-    }
-
-    #[test]
-    fn built_contract_spec_does_not_use_older_wasm_for_spec_less_rv32() {
-        let dir = tempfile::tempdir().expect("bug: temp dir should be created");
-        let target_dir = dir.path();
-        let output_dir = target_dir.join("groundhog");
-        std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
-        let wasm = output_dir.join("demo_contract.wasm");
-        std::fs::write(
-            &wasm,
-            wasm_with_custom_section(
-                groundhog_spec_tool::FINAL_SECTION_NAME,
-                &xdrs::txs::encode(&sample_contract_spec()).expect("bug: spec should encode"),
-            ),
-        )
-        .expect("bug: wasm fixture should be written");
-        set_modified(&wasm, 10);
-        let rv32 = output_dir.join("demo_contract.rv32a");
-        std::fs::write(&rv32, b"new spec-less rv32 fixture")
-            .expect("bug: rv32 fixture should be written");
-        set_modified(&rv32, 20);
-
-        let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: spec-less rv32 lookup should not error");
 
         assert!(loaded.is_none());
     }
@@ -716,32 +554,6 @@ mod tests {
 
     fn spec_string_bytes(value: &str) -> groundhog_spec_tool::ContractSpecString {
         value.try_into().expect("bug: test string should fit")
-    }
-
-    fn wasm_with_custom_section(name: &str, data: &[u8]) -> Vec<u8> {
-        let mut payload = Vec::new();
-        encode_uleb128(name.len(), &mut payload);
-        payload.extend_from_slice(name.as_bytes());
-        payload.extend_from_slice(data);
-
-        let mut wasm = vec![0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, 0x00];
-        encode_uleb128(payload.len(), &mut wasm);
-        wasm.extend_from_slice(&payload);
-        wasm
-    }
-
-    fn encode_uleb128(mut value: usize, out: &mut Vec<u8>) {
-        loop {
-            let mut byte = u8::try_from(value & 0x7f).expect("bug: uleb128 byte should fit");
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80;
-            }
-            out.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
     }
 
     #[test]

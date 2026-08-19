@@ -68,9 +68,6 @@ jobs:
           path: actions
           ref: main
 
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-
       - name: Build and publish docs
         uses: ./actions/cargo-doc
         with:
