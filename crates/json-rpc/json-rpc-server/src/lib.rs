@@ -11,6 +11,8 @@ pub mod error;
 pub mod server;
 pub mod tx;
 
+pub use groundhog_build_info::{BuildVersion, build_version};
+
 pub use backend::{
     ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, ValidatedTransaction, ViewPlane,
 };

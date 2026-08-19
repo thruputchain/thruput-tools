@@ -11,7 +11,12 @@ pub struct BuildVersion {
 
 impl BuildVersion {
     /// Create build-version metadata from its two independent dimensions.
+    /// An empty platform version is treated as unavailable.
     pub const fn new(crate_version: &'static str, platform_version: Option<&'static str>) -> Self {
+        let platform_version = match platform_version {
+            Some(value) if value.is_empty() => None,
+            value => value,
+        };
         Self {
             crate_version,
             platform_version,
@@ -66,5 +71,13 @@ mod tests {
     #[test]
     fn display_omits_platform_for_unbundled_builds() {
         assert_eq!(BuildVersion::new("0.9.6", None).to_string(), "0.9.6");
+    }
+
+    #[test]
+    fn empty_platform_version_is_unavailable() {
+        let version = BuildVersion::new("0.9.6", Some(""));
+
+        assert_eq!(version.platform_version(), None);
+        assert_eq!(version.to_string(), "0.9.6");
     }
 }

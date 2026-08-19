@@ -4,7 +4,6 @@ use std::{future::Future, sync::Arc};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 
-use groundhog_build_info::BuildVersion;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -21,8 +20,8 @@ use groundhog_json_rpc_types::{
 };
 
 use crate::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError, SubmitPlane,
-    ViewPlane, tx::validate_raw_transaction,
+    BuildVersion, ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError,
+    SubmitPlane, ViewPlane, tx::validate_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -67,7 +66,8 @@ pub struct BuildInfo {
 }
 
 impl BuildInfo {
-    /// Create build metadata for the binary serving this RPC endpoint.
+    /// Create legacy-compatible build metadata without a packaging-platform release.
+    /// New binary compositions should use [`Self::from_build_version`].
     pub const fn new(
         implementation_version: &'static str,
         commit_hash: Option<&'static str>,

@@ -471,7 +471,7 @@ where
         view,
         RpcServerConfig::default().with_view_gas_limit(options.view_gas_limit),
         BuildInfo::from_build_version(
-            groundhog_build_info::build_version!(),
+            groundhog_json_rpc_server::build_version!(),
             option_env!("GIT_COMMIT"),
         ),
     );

@@ -173,7 +173,8 @@ mod tests {
         let config = GatewayConfig::default();
         let build_version = BuildVersion::new("test", Some("test-platform"));
         let health = GatewayHealth::new(&config, build_version, None);
-        let metrics = GatewayMetrics::new(build_version, None).expect("metrics should register");
+        let metrics =
+            GatewayMetrics::new(build_version, None).expect("bug: metrics should register");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
             .await
