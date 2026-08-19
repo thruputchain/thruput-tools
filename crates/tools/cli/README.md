@@ -630,12 +630,14 @@ groundhog config get staging --sources
 ```
 
 Delete a profile with `config rm`. Normal output asks for confirmation and
-defaults to cancellation. `--json` and `--quiet` skip the prompt and delete
-immediately. Deletion removes the entire selected-layer profile, including its
+defaults to cancellation. Non-interactive use, including `--json` and
+`--quiet`, requires `-f` or `--force`; output formatting alone never authorizes
+deletion. Deletion removes the entire selected-layer profile, including its
 contract aliases and wallet bindings, and clears a matching layer default.
 
 ```bash
 groundhog config rm staging --global
+groundhog --json config rm staging --global --force
 groundhog --json config profiles
 ```
 
