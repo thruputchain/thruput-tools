@@ -364,7 +364,6 @@ fn build_rejects_missing_active_profile_before_compiling() {
     fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
     fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
     let fake_bin = tmp.path().join("bin");
-    fs::create_dir_all(&fake_bin).unwrap();
     let compile_marker = tmp.path().join("compiled");
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
@@ -372,22 +371,12 @@ fn build_rejects_missing_active_profile_before_compiling() {
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
     );
-    let cargo = fake_bin.join("cargo");
-    fs::write(
-        &cargo,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/touch '{}'\n",
-            compile_marker.display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&cargo).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&cargo, permissions).unwrap();
-    }
+    write_fake_cargo_with_metadata(
+        &fake_bin,
+        &metadata_json,
+        CONFIG_GET_GROUNDHOG_SCRIPT,
+        &format!(": > '{}'", compile_marker.display()),
+    );
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
