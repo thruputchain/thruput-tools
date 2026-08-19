@@ -476,6 +476,9 @@ enum KeysCommand {
     Rm {
         /// Key name to remove
         name: String,
+        /// Remove the key without prompting; this cannot be undone
+        #[arg(short = 'f', long)]
+        force: bool,
     },
 }
 
@@ -1294,7 +1297,9 @@ fn main() {
             }
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
-            KeysCommand::Rm { name } => groundhog_cli::keys::remove(&name, cmd_name, &print),
+            KeysCommand::Rm { name, force } => {
+                groundhog_cli::keys::remove_with_force(&name, force, cmd_name, &print)
+            }
         },
         Command::Wallet { command } => match command {
             WalletCommand::Ls { profile } => {

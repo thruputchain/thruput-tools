@@ -50,9 +50,11 @@ fn remove_nonexistent_key_fails() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    // remove() prompts in non-quiet non-json mode, so use quiet
     let result = groundhog_cli::keys::remove("nonexistent", "keys.rm", &quiet());
-    assert!(result.is_err());
+    assert!(matches!(
+        result,
+        Err(groundhog_cli::CliError::KeyNotFound(name)) if name == "nonexistent"
+    ));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

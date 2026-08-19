@@ -136,14 +136,34 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
 }
 
 /// Remove a stored signing key.
+///
+/// JSON and quiet callers retain the legacy non-interactive behavior. New CLI
+/// dispatch should use [`remove_with_force`] so deletion authority is explicit.
 pub fn remove(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    let legacy_non_interactive_bypass = print.is_json() || print.is_quiet();
+    remove_with_force(name, legacy_non_interactive_bypass, cmd, print)
+}
+
+/// Remove a stored signing key, optionally bypassing confirmation.
+pub fn remove_with_force(
+    name: &str,
+    force: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {
         return Err(CliError::KeyNotFound(name.to_string()));
     }
 
-    if !print.is_json() && !print.is_quiet() {
+    if !force && !print.can_prompt() {
+        return Err(CliError::ConfirmationRequired {
+            action: crate::error::REMOVE_KEY_CONFIRMATION_ACTION,
+        });
+    }
+
+    if !force {
         print.prompt(format_args!(
             "Remove key `{name}`? This cannot be undone. [y/N] "
         ))?;
