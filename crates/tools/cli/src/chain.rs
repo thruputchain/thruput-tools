@@ -1059,6 +1059,16 @@ mod tests {
         temp
     }
 
+    fn replace_archive_schema(path: &Path, from: u32, to: u32) {
+        let encoded = fs::read_to_string(path).unwrap();
+        let current = format!("\"schemaVersion\":{from}");
+        let replacement = format!("\"schemaVersion\":{to}");
+        assert_eq!(encoded.matches(&current).count(), 1);
+
+        let encoded = encoded.replacen(&current, &replacement, 1);
+        fs::write(path, encoded).unwrap();
+    }
+
     #[test]
     // Verifies that every persistent file survives a dump-and-restore cycle unchanged.
     fn dump_and_restore_round_trip() {
@@ -1119,18 +1129,49 @@ mod tests {
         write_archive(&mut output, &files, BuildVersion::new("0.9.5", None)).unwrap();
         drop(output);
 
-        let encoded = fs::read_to_string(&archive).unwrap().replacen(
-            &format!("\"schemaVersion\":{ARCHIVE_SCHEMA_VERSION}"),
-            &format!("\"schemaVersion\":{LEGACY_ARCHIVE_SCHEMA_VERSION}"),
-            1,
+        replace_archive_schema(
+            &archive,
+            ARCHIVE_SCHEMA_VERSION,
+            LEGACY_ARCHIVE_SCHEMA_VERSION,
         );
-        fs::write(&archive, encoded).unwrap();
 
         let restored = parent.path().join("restored");
         restore(&restored, &archive, false, "chain.restore", &Print::quiet()).unwrap();
         assert_eq!(
             fs::read(restored.join("ramdb/0.log")).unwrap(),
             fs::read(source.path().join("ramdb/0.log")).unwrap()
+        );
+    }
+
+    #[test]
+    fn restore_rejects_unsupported_schema_version() {
+        let source = fixture();
+        let files = collect_archive_files(source.path()).unwrap();
+        let parent = TempDir::new().unwrap();
+        let archive = parent.path().join("chain-v3.json");
+        let mut output = File::create(&archive).unwrap();
+        write_archive(&mut output, &files, BuildVersion::new("0.9.6", None)).unwrap();
+        drop(output);
+
+        replace_archive_schema(&archive, ARCHIVE_SCHEMA_VERSION, ARCHIVE_SCHEMA_VERSION + 1);
+
+        let error = restore(
+            &parent.path().join("restored"),
+            &archive,
+            false,
+            "chain.restore",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CliError::ChainArchiveInvalid { message, .. }
+                    if message.contains(
+                        "archive metadata must precede files and match the supported format"
+                    )
+            ),
+            "unexpected error: {error:?}"
         );
     }
 
