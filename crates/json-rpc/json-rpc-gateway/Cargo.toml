@@ -23,6 +23,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+groundhog-build-info = { workspace = true }
 groundhog-json-rpc-api = { workspace = true }
 groundhog-json-rpc-types = { workspace = true }
 groundhog-json-rpc-server = { workspace = true }

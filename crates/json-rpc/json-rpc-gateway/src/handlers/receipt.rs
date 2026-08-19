@@ -618,7 +618,7 @@ mod tests {
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             Arc::new(GatewayConfig::default()),
-            GatewayMetrics::new("test", None).expect("bug: test metrics should register"),
+            GatewayMetrics::for_tests(),
         )
     }
 

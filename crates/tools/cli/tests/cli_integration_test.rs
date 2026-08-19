@@ -399,8 +399,7 @@ fn version_flag_works() {
     let output = groundhog().arg("--version").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let expected =
-        option_env!("GROUNDHOG_DISTRIBUTION_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+    let expected = groundhog_build_info::build_version!();
     assert_eq!(stdout, format!("groundhog {expected}\n"));
 }
 

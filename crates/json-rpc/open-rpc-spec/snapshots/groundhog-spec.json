@@ -1055,6 +1055,13 @@
             "description": "Diagnostic-only implementation version of the binary serving this RPC endpoint.\nConsumers must not branch on this field.",
             "type": "string"
           },
+          "platformVersion": {
+            "description": "Platform release this binary was packaged for, when available.\nConsumers must not branch on this field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "wireFormat": {
             "description": "Wire-format `SemVer` of the `OpenRPC` spec this node implements.",
             "type": "string"
@@ -1130,7 +1137,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "3.0.0"
+    "version": "3.1.0"
   },
   "methods": [
     {

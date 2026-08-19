@@ -243,7 +243,9 @@ Current and historical design notes for the JSON-RPC surface:
 The OpenRPC artifact uses its own SemVer in `info.version`, sourced from
 `groundhog_json_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
 version. SDKs should pin on `wireFormat` from `groundhog_version`;
-workspace releases identify builds, not the JSON-RPC contract.
+`implementation` identifies the serving crate build and optional
+`platformVersion` identifies the packaging release. These diagnostic versions
+do not define the JSON-RPC contract.
 
 ### Mini-Glossary
 
@@ -270,6 +272,8 @@ this repo's docs:
 
 Workspace crates are grouped by boundary:
 
+- [`crates/build-info/`](crates/build-info/) — shared crate and packaging-platform
+  version metadata for binaries and diagnostic outputs.
 - [`crates/json-rpc/`](crates/json-rpc/) — public JSON-RPC API surface,
   gateway, typed client, shared server implementation, and OpenRPC spec
   generation.
@@ -285,6 +289,7 @@ Workspace crates are grouped by boundary:
 
 | Group | Crate | Description |
 |-------|-------|-------------|
+| Shared | [`build-info`](crates/build-info/) | Crate and packaging-platform version metadata |
 | JSON-RPC | [`json-rpc-types`](crates/json-rpc/json-rpc-types/) | Shared JSON-RPC types, including the error catalog |
 | JSON-RPC | [`json-rpc-api`](crates/json-rpc/json-rpc-api/) | Shared jsonrpsee trait definitions |
 | JSON-RPC | [`json-rpc-server`](crates/json-rpc/json-rpc-server/) | Shared server-side JSON-RPC implementation and validation |

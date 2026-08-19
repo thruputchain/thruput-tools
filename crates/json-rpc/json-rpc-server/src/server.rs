@@ -20,8 +20,8 @@ use groundhog_json_rpc_types::{
 };
 
 use crate::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError, SubmitPlane,
-    ViewPlane, tx::validate_raw_transaction,
+    BuildVersion, ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError,
+    SubmitPlane, ViewPlane, tx::validate_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -61,24 +61,42 @@ struct TipProbeState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildInfo {
     implementation_version: &'static str,
+    platform_version: Option<&'static str>,
     commit_hash: Option<&'static str>,
 }
 
 impl BuildInfo {
-    /// Create build metadata for the binary serving this RPC endpoint.
+    /// Create legacy-compatible build metadata without a packaging-platform release.
+    /// New binary compositions should use [`Self::from_build_version`].
     pub const fn new(
         implementation_version: &'static str,
         commit_hash: Option<&'static str>,
     ) -> Self {
         Self {
             implementation_version,
+            platform_version: None,
+            commit_hash,
+        }
+    }
+
+    /// Create build metadata with separate crate and packaging-platform versions.
+    pub const fn from_build_version(
+        build_version: BuildVersion,
+        commit_hash: Option<&'static str>,
+    ) -> Self {
+        Self {
+            implementation_version: build_version.crate_version(),
+            platform_version: build_version.platform_version(),
             commit_hash,
         }
     }
 
     /// Build metadata suitable for unit tests and in-process fixtures.
     pub const fn for_tests() -> Self {
-        Self::new("test", Some("test-commit"))
+        Self::from_build_version(
+            BuildVersion::new("test", Some("test-platform")),
+            Some("test-commit"),
+        )
     }
 }
 
@@ -373,7 +391,8 @@ where
                 WIRE_FORMAT_VERSION,
                 self.build_info.implementation_version,
                 self.build_info.commit_hash,
-            ))
+            )
+            .with_platform_version(self.build_info.platform_version))
         })
         .await
     }
@@ -1324,7 +1343,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let server = GroundhogRpcServer::unified(
             mock.clone(),
             RpcServerConfig::default(),
-            BuildInfo::new("9.8.7", Some("abc123")),
+            BuildInfo::from_build_version(
+                BuildVersion::new("9.8.7", Some("1.2.3")),
+                Some("abc123"),
+            ),
         );
 
         let version = server
@@ -1334,6 +1356,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(version.wire_format, WIRE_FORMAT_VERSION);
         assert_eq!(version.implementation, "9.8.7");
+        assert_eq!(version.platform_version.as_deref(), Some("1.2.3"));
         assert_eq!(version.commit_hash.as_deref(), Some("abc123"));
         assert!(mock.submitted.lock().await.is_empty());
         assert_eq!(*mock.event_calls.lock().await, 0);

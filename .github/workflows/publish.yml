@@ -11,6 +11,7 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
   PUBLISH_PACKAGES: >-
+    groundhog-build-info
     groundhog-json-rpc-types
     groundhog-open-rpc
     groundhog-open-rpc-macros

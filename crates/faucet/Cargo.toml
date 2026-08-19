@@ -25,6 +25,7 @@ aws-sdk-secretsmanager = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 ed25519-dalek = { workspace = true }
+groundhog-build-info = { workspace = true }
 groundhog-json-rpc-client = { workspace = true }
 groundhog-json-rpc-types = { workspace = true }
 groundhog-signing = { workspace = true }

@@ -1401,6 +1401,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-build-info"
+version = "0.9.6"
+
+[[package]]
 name = "groundhog-cli"
 version = "0.9.6"
 dependencies = [
@@ -1408,6 +1412,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "getrandom 0.2.17",
+ "groundhog-build-info",
  "groundhog-contract-spec",
  "groundhog-contract-util",
  "groundhog-erc20-if",
@@ -1523,6 +1528,7 @@ dependencies = [
  "axum",
  "clap",
  "ed25519-dalek",
+ "groundhog-build-info",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-signing",
@@ -1580,6 +1586,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "groundhog-build-info",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
@@ -1612,6 +1619,7 @@ name = "groundhog-json-rpc-server"
 version = "0.9.6"
 dependencies = [
  "async-trait",
+ "groundhog-build-info",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-types",
  "groundhog-xdr",
@@ -1740,6 +1748,7 @@ name = "groundhog-rv32-lower"
 version = "0.9.6"
 dependencies = [
  "clap",
+ "groundhog-build-info",
  "groundhog-rv32-artifact",
  "groundhog-spec-tool",
  "serde_json",
@@ -1780,6 +1789,7 @@ name = "groundhog-sim"
 version = "0.9.6"
 dependencies = [
  "clap",
+ "groundhog-build-info",
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",

@@ -164,7 +164,7 @@ mod tests {
             request_timeout_ms: 1,
             ..GatewayConfig::default()
         };
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
         let mut service = http_middleware(&config, metrics.clone()).service(service_fn(
             |_request: Request<Body>| async move {
                 tokio::time::sleep(Duration::from_millis(50)).await;

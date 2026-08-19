@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn gateway_return_maps_to_public_view_response() {
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
         let topic0 = [10; 32];
         let topic1 = [11; 32];
         let data = vec![12, 13, 14];
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn gateway_service_failures_map_to_backend_errors() {
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
         assert!(matches!(
             view_response_from_gateway_result(ViewGatewayResult::ViewGatewayAbandoned, &metrics),
             Err(GatewayError::BackendUnavailable(_))
@@ -394,7 +394,7 @@ mod tests {
             .expect("bug: fake ViewGateway should connect");
         let client = ViewGateway_ViewGateway1_Client::new(std::sync::Arc::new(socket));
         let query = view_query_from_request(request(None), 123).expect("query maps");
-        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
+        let metrics = GatewayMetrics::for_tests();
 
         let result = view_response_from_client(
             &client,

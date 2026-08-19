@@ -13,7 +13,7 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://groundhog.dev/crates/api/v1/crates/
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
-  GROUNDHOG_DISTRIBUTION_VERSION: "0.1.23"
+  PLATFORM_RELEASE_VERSION: "0.1.23"
   RELEASE_CRATES: >-
     groundhog-cli
     groundhog-rv32-lower
@@ -49,6 +49,17 @@ jobs:
         with:
           cache: rust
 
+      - name: Read crate version
+        run: |
+          crate_id=$(cargo pkgid --locked -p groundhog-cli)
+          crate_version=${crate_id##*[@#]}
+          test -n "$crate_version"
+          if [ -z "$PLATFORM_RELEASE_VERSION" ]; then
+            echo "PLATFORM_RELEASE_VERSION must not be empty"
+            exit 1
+          fi
+          echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
+
       - name: Verify native Linux architecture
         run: test "$(uname -m)" = "${{ matrix.machine }}"
 
@@ -70,40 +81,66 @@ jobs:
           fi
 
           VERSION="${TAG#v}"
+          if [ "$CRATE_VERSION" != "$VERSION" ]; then
+            echo "Release tag version $VERSION does not match workspace crate version $CRATE_VERSION"
+            exit 1
+          fi
           for crate in $RELEASE_CRATES; do
             cargo info "${crate}@${VERSION}" --registry groundhog >/dev/null
             echo "OK: ${crate}@${VERSION} exists in the groundhog registry"
           done
 
-      - name: Build hog-gateway
-        run: cargo build --locked --release -p groundhog-json-rpc-gateway --bin hog-gateway
+      - name: Verify platform-release version wiring
+        if: github.event_name == 'pull_request' && matrix.architecture == 'x86_64'
+        run: |
+          export GROUNDHOG_DISTRIBUTION_VERSION="$PLATFORM_RELEASE_VERSION"
+          cargo build --locked --release \
+            -p groundhog-json-rpc-gateway \
+            -p groundhog-cli \
+            -p groundhog-rv32-lower \
+            -p groundhog-sim \
+            -p groundhog-faucet \
+            --bins
 
-      - name: Build groundhog CLI
-        run: cargo build --locked --release -p groundhog-cli --bin groundhog
+          expected_version="$CRATE_VERSION (platform $PLATFORM_RELEASE_VERSION)"
+          for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
+            test "$(target/release/$app --version)" = "$app $expected_version"
+          done
 
-      - name: Build rv32-lower
-        run: cargo build --locked --release -p groundhog-rv32-lower --bin rv32-lower
+      - name: Build release binaries
+        run: |
+          expected_version="$CRATE_VERSION"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # A runner-inherited value must not label ordinary PR artifacts as platform releases.
+            unset GROUNDHOG_DISTRIBUTION_VERSION
+          else
+            export GROUNDHOG_DISTRIBUTION_VERSION="$PLATFORM_RELEASE_VERSION"
+            expected_version="$expected_version (platform $PLATFORM_RELEASE_VERSION)"
+          fi
+          echo "EXPECTED_BINARY_VERSION=$expected_version" >> "$GITHUB_ENV"
 
-      - name: Build hogsim
-        run: cargo build --locked --release -p groundhog-sim --bin hogsim
-
-      - name: Build groundhog-faucet
-        run: cargo build --locked --release -p groundhog-faucet --bin groundhog-faucet
+          cargo build --locked --release \
+            -p groundhog-json-rpc-gateway \
+            -p groundhog-cli \
+            -p groundhog-rv32-lower \
+            -p groundhog-sim \
+            -p groundhog-faucet \
+            --bins
 
       - name: Verify hog-gateway
-        run: test "$(target/release/hog-gateway --version)" = "hog-gateway ${GROUNDHOG_DISTRIBUTION_VERSION}"
+        run: test "$(target/release/hog-gateway --version)" = "hog-gateway ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify groundhog CLI
-        run: test "$(target/release/groundhog --version)" = "groundhog ${GROUNDHOG_DISTRIBUTION_VERSION}"
+        run: test "$(target/release/groundhog --version)" = "groundhog ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify rv32-lower
-        run: test "$(target/release/rv32-lower --version)" = "rv32-lower ${GROUNDHOG_DISTRIBUTION_VERSION}"
+        run: test "$(target/release/rv32-lower --version)" = "rv32-lower ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify hogsim
-        run: test "$(target/release/hogsim --version)" = "hogsim ${GROUNDHOG_DISTRIBUTION_VERSION}"
+        run: test "$(target/release/hogsim --version)" = "hogsim ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify groundhog-faucet
-        run: test "$(target/release/groundhog-faucet --version)" = "groundhog-faucet ${GROUNDHOG_DISTRIBUTION_VERSION}"
+        run: test "$(target/release/groundhog-faucet --version)" = "groundhog-faucet ${EXPECTED_BINARY_VERSION}"
 
       - name: Prepare artifacts
         run: |

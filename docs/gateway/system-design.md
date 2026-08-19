@@ -435,7 +435,7 @@ remain a later phase.
 | `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | In OpenRPC; gateway handler is not wired yet |
 | `groundhog_getStorageAt(address, key) → StorageItemRead` | DbGateway | Requires `db_gateway` endpoint |
 | `groundhog_view(request) → ViewResponse` | ViewGateway | Requires `view_gateway` endpoint |
-| `groundhog_version() → VersionInfo` | gateway build metadata | Reports wire-format and implementation versions |
+| `groundhog_version() → VersionInfo` | gateway build metadata | Reports wire-format, crate implementation, and optional platform-release versions |
 
 Plus `rpc.discover` for free from jsonrpsee's OpenRPC generation.
 

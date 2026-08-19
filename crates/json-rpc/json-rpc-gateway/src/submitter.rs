@@ -486,10 +486,6 @@ mod tests {
         }
     }
 
-    fn metrics_for_tests() -> GatewayMetrics {
-        GatewayMetrics::new("test", None).expect("metrics should register")
-    }
-
     /// A small "settle" delay to let spawned tasks make progress.
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(15)).await;
@@ -505,7 +501,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         submitter
@@ -522,7 +518,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn_with_deadlines(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
             Duration::from_secs(5),
             Duration::from_secs(4),
             Duration::from_secs(1),
@@ -544,7 +540,7 @@ mod tests {
     #[tokio::test]
     async fn expired_submission_is_not_dispatched_and_is_counted() {
         let mock = MockSink::arc();
-        let metrics = metrics_for_tests();
+        let metrics = GatewayMetrics::for_tests();
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
@@ -576,7 +572,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1000, 100), // strict serial batches
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // First tx starts a gated batch of 1.
@@ -624,7 +620,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn_with_deadlines(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::from_millis(10),
@@ -693,7 +689,7 @@ mod tests {
         let newer_gate = mock.queue_gate();
         let processor = SubmitProcessor {
             sink: mock.clone(),
-            metrics: metrics_for_tests(),
+            metrics: GatewayMetrics::for_tests(),
             max_deadline_skew: Duration::from_millis(10),
         };
         let (old_reply, old_waiter) = oneshot::channel();
@@ -740,7 +736,7 @@ mod tests {
         });
         let processor = SubmitProcessor {
             sink: sink.clone(),
-            metrics: metrics_for_tests(),
+            metrics: GatewayMetrics::for_tests(),
             max_deadline_skew: Duration::from_millis(10),
         };
         let (old_reply, old_waiter) = oneshot::channel();
@@ -784,7 +780,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 2, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let w1 = {
@@ -838,7 +834,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 4, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         let first = {
@@ -881,7 +877,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1, 1), // 1 in flight, max batch 1, 1 queue slot
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // First item is pulled from mpsc and starts the gated batch.
@@ -928,7 +924,7 @@ mod tests {
     async fn accepted_submission_is_counted_if_caller_cancels() {
         let mock = MockSink::arc();
         let gate = mock.queue_gate();
-        let metrics = metrics_for_tests();
+        let metrics = GatewayMetrics::for_tests();
 
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1000, 100),
@@ -964,7 +960,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
         );
 
         // Spawn four submissions back-to-back with no intervening yield.
@@ -1028,7 +1024,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn_with_deadlines(
             &config_for_tests(1, 1, 1, 10),
             &(mock.clone() as Arc<dyn SubmitSink>),
-            metrics_for_tests(),
+            GatewayMetrics::for_tests(),
             Duration::from_millis(25),
             Duration::from_millis(25),
             Duration::from_millis(1),
