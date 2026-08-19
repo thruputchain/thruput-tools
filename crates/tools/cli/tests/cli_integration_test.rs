@@ -1,6 +1,10 @@
 use std::fmt::Write as _;
+#[cfg(unix)]
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
@@ -241,6 +245,39 @@ fn wait_child(mut child: std::process::Child, timeout: Duration) -> ExitStatus {
         }
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal(mut command: Command) -> (std::process::Child, File) {
+    let mut master_fd = -1;
+    let mut slave_fd = -1;
+    // SAFETY: openpty initializes both file descriptors on success. Each is
+    // immediately wrapped in an owned File exactly once.
+    let result = unsafe {
+        libc::openpty(
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(result, 0, "failed to allocate pseudo-terminal");
+    // SAFETY: openpty returned unique, valid descriptors owned by this process.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: openpty returned unique, valid descriptors owned by this process.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    let slave_stdin = slave
+        .try_clone()
+        .expect("bug: pseudo-terminal descriptor should be cloneable");
+    command
+        .stdin(Stdio::from(slave_stdin))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(slave));
+    let child = command
+        .spawn()
+        .expect("bug: CLI should spawn with pseudo-terminal");
+    (child, master)
 }
 
 #[cfg(unix)]
@@ -7600,6 +7637,7 @@ fn keys_json_flow_works() {
         .arg("--json")
         .arg("keys")
         .arg("rm")
+        .arg("--force")
         .arg("alice")
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7608,6 +7646,149 @@ fn keys_json_flow_works() {
     let removed_json: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
     assert_eq!(removed_json["command"], "keys.rm");
     assert_eq!(removed_json["data"]["cleared_default"], true);
+}
+
+#[test]
+fn keys_rm_help_documents_force() {
+    let output = groundhog().args(["keys", "rm", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("-f, --force"));
+    assert!(stdout.contains("without prompting"));
+    assert!(stdout.contains("cannot be undone"));
+}
+
+#[cfg(unix)]
+#[test]
+fn keys_rm_confirmation_accepts_yes_and_preserves_on_no_or_empty() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    for name in ["alice", "bob", "carol"] {
+        let generated = groundhog()
+            .args(["keys", "generate", name])
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(generated.status.success());
+    }
+
+    let mut command = groundhog();
+    command
+        .args(["keys", "rm", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home);
+    let (confirmed, mut terminal) = spawn_with_terminal(command);
+    terminal.write_all(b"y\n").unwrap();
+    let confirmed = confirmed.wait_with_output().unwrap();
+    assert!(confirmed.status.success());
+    assert!(!config_home.join("groundhog/keys/alice.json").exists());
+
+    for (name, answer) in [("bob", b"n\n".as_slice()), ("carol", b"\n".as_slice())] {
+        let mut command = groundhog();
+        command
+            .args(["keys", "rm", name])
+            .env("XDG_CONFIG_HOME", &config_home);
+        let (declined, mut terminal) = spawn_with_terminal(command);
+        terminal.write_all(answer).unwrap();
+        let declined = declined.wait_with_output().unwrap();
+        assert!(declined.status.success());
+        assert!(
+            config_home
+                .join(format!("groundhog/keys/{name}.json"))
+                .exists()
+        );
+    }
+}
+
+#[test]
+fn keys_rm_non_tty_input_requires_force() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let generated = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let key_path = config_home.join("groundhog/keys/alice.json");
+
+    let mut child = groundhog()
+        .args(["keys", "rm", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--force")
+    );
+    assert!(key_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn keys_rm_force_does_not_read_stdin() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let generated = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+
+    let child = groundhog()
+        .args(["keys", "rm", "-f", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let status = wait_child(child, Duration::from_secs(2));
+
+    assert!(status.success());
+    assert!(!config_home.join("groundhog/keys/alice.json").exists());
+}
+
+#[test]
+fn keys_rm_non_interactive_modes_require_force() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let generated = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let key_path = config_home.join("groundhog/keys/alice.json");
+
+    let json = groundhog()
+        .args(["--json", "keys", "rm", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!json.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "confirmation_required");
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    assert!(key_path.exists());
+
+    let quiet = groundhog()
+        .args(["--quiet", "keys", "rm", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!quiet.status.success());
+    assert!(String::from_utf8(quiet.stderr).unwrap().contains("--force"));
+    assert!(key_path.exists());
 }
 
 #[test]

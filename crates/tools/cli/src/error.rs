@@ -4,6 +4,8 @@ use thiserror::Error;
 
 use crate::terminal::{render_shell_arg, terminal_safe};
 
+pub(crate) const REMOVE_KEY_CONFIRMATION_ACTION: &str = "remove a stored signing key";
+
 /// All errors returned by CLI commands.
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -397,6 +399,14 @@ pub enum CliError {
     Other(String),
 }
 
+fn confirmation_required_flag(action: &str) -> &'static str {
+    if action == REMOVE_KEY_CONFIRMATION_ACTION {
+        "--force"
+    } else {
+        "--yes"
+    }
+}
+
 impl CliError {
     /// Stable machine-readable error code.
     #[allow(clippy::too_many_lines)]
@@ -627,9 +637,12 @@ impl CliError {
             Self::ProfileConfigInvalid { .. } => Some(Cow::Borrowed(
                 "update the selected profile in project or global config, or choose a profile that matches the requested command",
             )),
-            Self::ConfirmationRequired { .. } => Some(Cow::Borrowed(
-                "review the warning and rerun with `--yes` to confirm non-interactively",
-            )),
+            Self::ConfirmationRequired { action } => {
+                let required_flag = confirmation_required_flag(action);
+                Some(Cow::Owned(format!(
+                    "review the warning and rerun with `{required_flag}` to confirm non-interactively"
+                )))
+            }
             Self::FaucetService {
                 retry_after_seconds: Some(_),
                 ..
@@ -994,7 +1007,7 @@ impl CliError {
             })),
             Self::ConfirmationRequired { action } => Some(json!({
                 "action": action,
-                "requiredFlag": "--yes",
+                "requiredFlag": confirmation_required_flag(action),
             })),
             Self::FaucetService {
                 url,
