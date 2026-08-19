@@ -361,7 +361,7 @@ mod tests {
                     "devWallet": {
                         "contentHash": prefixed_hex(0x51),
                         "deployedCodeHash": prefixed_hex(0x52),
-                        "artifactHint": "./dev-wallet.wasm",
+                        "artifactHint": "./dev_wallet.rv32a",
                         "deployEntrypoint": "0xadac498222148e4f",
                         "createWalletEntrypoint": "0x6372656174655761",
                         "doActionEntrypoint": "0x646f416374696f6e",
@@ -483,7 +483,7 @@ mod tests {
                 dev_wallet: RuntimeManifestDevWallet {
                     content_hash: hash(0x51),
                     deployed_code_hash: hash(0x52),
-                    artifact_hint: "./dev-wallet.wasm".into(),
+                    artifact_hint: "./dev_wallet.rv32a".into(),
                     deploy_entrypoint: "0xadac498222148e4f".into(),
                     create_wallet_entrypoint: "0x6372656174655761".into(),
                     do_action_entrypoint: "0x646f416374696f6e".into(),

@@ -20,12 +20,18 @@ static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Write the `.cargo/contract.toml` overlay every contract build requires at
 /// the cargo workspace root.
 ///
-/// `groundhog build` passes it as `--config` for both the wasm and rv32
-/// targets, so its absence refuses the build before cargo runs. Contents are
+/// `groundhog build` passes it as `--config`, so its absence refuses the build
+/// before cargo runs. Contents are
 /// irrelevant here — only the fake cargo on `PATH` ever reads them.
 fn write_contract_toml(workspace_root: &std::path::Path) {
     std::fs::create_dir_all(workspace_root.join(".cargo")).unwrap();
     std::fs::write(workspace_root.join(".cargo/contract.toml"), "").unwrap();
+}
+
+fn write_opaque_rv32_artifact(root: &std::path::Path) -> std::path::PathBuf {
+    let path = root.join("test.rv32a");
+    std::fs::write(&path, b"rv32-artifact").unwrap();
+    path
 }
 
 fn groundhog() -> Command {
@@ -1668,7 +1674,8 @@ fn new_creates_project() {
     assert!(dir.join("src/implementation.rs").exists());
     assert!(dir.join("tests/integration.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
-    assert!(dir.join("tests/test_wasm.rs").exists());
+    assert!(dir.join("tests/test_rv32.rs").exists());
+    assert!(!dir.join("tests/test_wasm.rs").exists());
     assert!(dir.join(".cargo/config.toml").exists());
     assert!(dir.join(".cargo/contract.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
@@ -2078,8 +2085,8 @@ fn status_json_outputs_structured_payload() {
     assert!(stdout["data"]["environment"]["rv32_target"].is_string());
     assert!(stdout["data"]["environment"]["devnode"]["reachable"].is_boolean());
     assert!(stdout["data"]["environment"]["dev_wallet_artifact"]["valid"].is_boolean());
-    assert!(stdout["data"]["environment"]["wasm_target"].is_string());
-    assert!(stdout["data"]["environment"]["wasm_opt"].is_boolean());
+    assert!(stdout["data"]["environment"].get("wasm_target").is_none());
+    assert!(stdout["data"]["environment"].get("wasm_opt").is_none());
     assert!(
         !stdout["data"]["credentials"]["executor_credentials"]
             .as_bool()
@@ -2402,40 +2409,27 @@ fn build_json_failure_is_structured() {
 }
 
 #[test]
-fn build_rv32_json_rejects_wasm_only_options_before_metadata() {
+fn build_rejects_removed_target_and_optimize_flags() {
     let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .args(["--json", "build", "--target", "rv32", "--optimize"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
+    for args in [
+        &["build", "--target", "wasm"][..],
+        &["build", "--optimize"][..],
+    ] {
+        let output = groundhog()
+            .args(args)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "build");
-    assert_eq!(stderr["error"]["code"], "invalid_build_options");
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument"),
+            "expected clap to reject {args:?}, got: {stderr}"
+        );
+    }
 }
-
-#[test]
-fn build_rv32_json_rejects_bindings_before_metadata() {
-    let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .args(["--json", "build", "--target", "rv32", "--bindings", "ts"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "build");
-    assert_eq!(stderr["error"]["code"], "invalid_build_options");
-}
-
-#[cfg(unix)]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn build_default_json_success_reports_rv32_artifact_paths() {
@@ -2464,8 +2458,16 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
     let metadata = target_dir
         .join("groundhog")
         .join("demo_contract_rv32.rv32.json");
+    let bindings = target_dir.join("groundhog").join("demo_contract_rv32.ts");
     let elf_fixture = tmp.path().join("fixture.elf");
-    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    std::fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(
+            groundhog_spec_tool::RAW_SECTION_NAME,
+            &support::minimal_contract_spec_raw(),
+        ),
+    )
+    .unwrap();
     let metadata_json = serde_json::json!({
         "workspace_root": tmp.path(),
         "target_directory": target_dir,
@@ -2506,7 +2508,14 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
     std::fs::set_permissions(&cargo, perms).unwrap();
 
     let output = groundhog()
-        .args(["--json", "build", "-p", "demo-contract-rv32"])
+        .args([
+            "--json",
+            "build",
+            "--bindings",
+            "ts",
+            "-p",
+            "demo-contract-rv32",
+        ])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .output()
@@ -2529,6 +2538,15 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
     assert_eq!(stdout["data"]["elf"], raw_elf.display().to_string());
     assert_eq!(stdout["data"]["rv32"], rv32.display().to_string());
     assert_eq!(stdout["data"]["metadata"], metadata.display().to_string());
+    assert_eq!(
+        stdout["data"]["bindings_ts"],
+        bindings.display().to_string()
+    );
+    assert!(
+        std::fs::read_to_string(bindings)
+            .unwrap()
+            .contains("Counter")
+    );
     // v4 stores only the high-water prefix, so the artifact is well under 64 KiB.
     assert!(stdout["data"]["size_bytes"].as_u64().unwrap() < 64 * 1024);
 }
@@ -2592,14 +2610,7 @@ fn build_rv32_json_reports_lowerer_failure_details() {
     std::fs::set_permissions(&cargo, perms).unwrap();
 
     let output = groundhog()
-        .args([
-            "--json",
-            "build",
-            "--target",
-            "rv32",
-            "-p",
-            "demo-contract-rv32",
-        ])
+        .args(["--json", "build", "-p", "demo-contract-rv32"])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .output()
@@ -2630,8 +2641,10 @@ fn build_help_mentions_target_dir() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--target <TARGET>"));
-    assert!(stdout.contains("rv32"));
+    assert!(stdout.contains("--bindings <BINDINGS>"));
+    assert!(stdout.contains("RV32"));
+    assert!(!stdout.contains("--target <TARGET>"));
+    assert!(!stdout.contains("--optimize"));
 }
 
 #[test]
@@ -2641,11 +2654,11 @@ fn test_help_mentions_target_dir() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--target <TARGET>"));
     assert!(stdout.contains("rv32"));
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
-    assert!(stdout.contains("--differential"));
+    assert!(!stdout.contains("--target <TARGET>"));
+    assert!(!stdout.contains("--differential"));
     assert!(stdout.contains("-v, --verbose"));
     assert!(stdout.contains("RUST_LOG"));
     assert!(stdout.contains("hog-devnode"));
@@ -2700,6 +2713,18 @@ fn deploy_help_mentions_target_dir_and_dry_run() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
     assert!(stdout.contains("--dry-run"));
+    assert!(!stdout.contains("--target <TARGET>"));
+}
+
+#[test]
+fn deploy_rejects_removed_target_flag() {
+    let output = groundhog()
+        .args(["deploy", "--target", "wasm"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--target'"));
 }
 
 #[test]
@@ -2712,6 +2737,25 @@ fn call_help_mentions_target_dir() {
     assert!(stdout.contains("--dry-run"));
     assert!(stdout.contains("0x-prefixed 8-byte entrypoint ID"));
     assert!(stdout.contains("raw hex calldata"));
+}
+
+#[test]
+fn codegen_rv32_artifact_points_to_spec_sidecar() {
+    let tmp = TempDir::new().unwrap();
+    let artifact = tmp.path().join("counter.rv32a");
+    std::fs::write(&artifact, b"rv32-artifact").unwrap();
+
+    let output = groundhog()
+        .args(["codegen", "ts", artifact.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&tmp.path().join("counter.spec.xdr").display().to_string()),
+        "expected adjacent sidecar path, got: {stderr}"
+    );
 }
 
 #[test]
@@ -2833,100 +2877,6 @@ fn test_integration_rejects_watch() {
             .expect("bug: hint should be present")
             .contains("conflicting")
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn test_integration_reports_local_node_startup_failure() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let hogd_dev = fake_hogd_dev_binary();
-    let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    std::fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
-    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
-    std::fs::write(tmp.path().join("tests/integration.rs"), "").unwrap();
-
-    let fake_bin = tmp.path().join("bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    let metadata_json = serde_json::json!({
-        "workspace_root": tmp.path(),
-        "target_directory": tmp.path().join("target"),
-        "packages": [{
-            "name": "demo-contract",
-            "manifest_path": tmp.path().join("Cargo.toml"),
-        }],
-    })
-    .to_string();
-    std::fs::write(
-        &cargo,
-        format!(
-            concat!(
-                "#!/bin/sh\n",
-                "if [ \"$1\" = \"metadata\" ]; then\n",
-                "  printf '%s' \"$GROUNDHOG_TEST_METADATA_JSON\"\n",
-                "  exit 0\n",
-                "fi\n",
-                "if [ \"$1\" = \"--config\" ]; then\n",
-                "  shift 2\n",
-                "fi\n",
-                "if [ \"$1\" = \"build\" ]; then\n",
-                "  for arg in \"$@\"; do\n",
-                "    if [ \"$arg\" = \"--nocapture\" ]; then\n",
-                "      exit 88\n",
-                "    fi\n",
-                "  done\n",
-                "  /bin/mkdir -p '{}'\n",
-                "  printf '\\000asm\\001\\000\\000\\000' > '{}'\n",
-                "  exit 0\n",
-                "fi\n",
-                "exit 0\n",
-            ),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
-                .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display()
-        ),
-    )
-    .unwrap();
-    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&cargo, perms).unwrap();
-
-    let output = groundhog()
-        .args([
-            "--json",
-            "test",
-            "--integration",
-            "--target",
-            "wasm",
-            "-p",
-            "demo-contract",
-            "--",
-            "--nocapture",
-        ])
-        .current_dir(tmp.path())
-        .env("PATH", &fake_bin)
-        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
-        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
-        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "test");
-    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
 }
 
 #[cfg(unix)]
@@ -3118,8 +3068,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    let schema_version = groundhog_cli::test_json::TEST_JSON_SCHEMA_VERSION;
-    assert_eq!(stdout["data"]["schemaVersion"], schema_version);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["mode"], "rv32");
     assert_rv32_test_artifact(&stdout["data"]);
     assert!(stdout["data"]["projectRoot"].as_str().is_some());
@@ -3250,101 +3199,27 @@ fn assert_rv32_test_artifact(data: &serde_json::Value) {
     );
 }
 
-#[cfg(unix)]
 #[test]
-fn test_json_wasm_target_emits_wasm_report() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn test_rejects_removed_target_and_differential_flags() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
-    std::fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    for args in [
+        vec!["test", "--target", "wasm"],
+        vec!["test", "--integration", "--differential"],
+    ] {
+        let output = groundhog()
+            .args(&args)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
 
-    let fake_bin = tmp.path().join("bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    let metadata_json = serde_json::json!({
-        "workspace_root": tmp.path(),
-        "target_directory": tmp.path().join("target"),
-        "packages": [{
-            "name": "demo-contract",
-            "manifest_path": tmp.path().join("Cargo.toml"),
-        }],
-    })
-    .to_string();
-    std::fs::write(
-        &cargo,
-        format!(
-            concat!(
-                "#!/bin/sh\n",
-                "if [ \"$1\" = \"metadata\" ]; then\n",
-                "  printf '%s' '{}'\n",
-                "  exit 0\n",
-                "fi\n",
-                "if [ \"$1\" = \"--config\" ]; then\n",
-                "  shift 2\n",
-                "fi\n",
-                "if [ \"$1\" = \"build\" ]; then\n",
-                "  /bin/mkdir -p '{}'\n",
-                "  printf '\\000asm\\001\\000\\000\\000' > '{}'\n",
-                "  exit 0\n",
-                "fi\n",
-                "if [ \"$1\" = \"test\" ]; then\n",
-                "  printf 'running 1 test\\n'\n",
-                "  printf 'test tests::ok ... ok\\n'\n",
-                "  printf 'test result: ok. 1 passed; 0 failed; 0 ignored; ",
-                "0 measured; 0 filtered out; finished in 0.01s\\n'\n",
-                "  exit 0\n",
-                "fi\n",
-                "exit 0\n",
-            ),
-            metadata_json,
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
-                .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display()
-        ),
-    )
-    .unwrap();
-    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&cargo, perms).unwrap();
-
-    let output = groundhog()
-        .args(["--json", "test", "--target", "wasm", "-p", "demo-contract"])
-        .current_dir(tmp.path())
-        .env("PATH", &fake_bin)
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    assert!(
-        output.stderr.is_empty(),
-        "expected empty stderr, got: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["data"]["mode"], "wasm");
-    assert_wasm_test_artifact(&stdout["data"]);
-}
-
-fn assert_wasm_test_artifact(data: &serde_json::Value) {
-    assert_eq!(data["artifact"]["kind"], "wasm");
-    assert!(
-        data["artifact"]["path"]
-            .as_str()
-            .unwrap()
-            .ends_with("target/groundhog/demo_contract.wasm")
-    );
-    assert!(data.get("wasm").is_none());
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument"),
+            "expected clap to reject {args:?}, got: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -3604,9 +3479,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     .unwrap();
     std::fs::write(project.join("groundhog.toml"), config).unwrap();
 
-    // Write a minimal WASM file for the deploy to read.
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    // The deploy path treats the selected RV32 artifact as opaque bytes.
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -3616,7 +3490,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
             "--wallet",
             "trading",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -3643,12 +3517,12 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["rpc_url"], rpc_url);
-    assert_eq!(stdout["data"]["artifact_kind"], "wasm");
+    assert_eq!(stdout["data"]["artifact_kind"], "rv32");
     assert_eq!(
         stdout["data"]["artifact_path"].as_str().unwrap(),
-        wasm_path.to_string_lossy()
+        rv32_path.to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifact_bytes"], 8);
+    assert_eq!(stdout["data"]["artifact_bytes"], 13);
     assert!(
         stdout["data"]["predicted_address"]
             .as_str()
@@ -3663,7 +3537,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     );
     assert_eq!(
         signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
-        "wasm"
+        "rv32"
     );
     let signed_tx = decode_signed_tx(stdout["data"]["signed_tx"].as_str().unwrap());
     assert_eq!(
@@ -3686,8 +3560,7 @@ fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
     let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
     add_faucet_to_default_profile(&project, &faucet_url);
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -3695,7 +3568,7 @@ fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -3732,7 +3605,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) =
         spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
-    std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
+    std::fs::write(project.join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
@@ -3799,7 +3672,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     );
     assert_eq!(
         std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
-        std::fs::canonicalize(project.join("dev-wallet.wasm")).unwrap()
+        std::fs::canonicalize(project.join("dev_wallet.rv32a")).unwrap()
     );
     assert!(stdout["data"].get("signed_prefund_tx").is_none());
     assert!(stdout["data"].get("signed_tx").is_none());
@@ -3816,7 +3689,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) =
         spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
-    std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
+    std::fs::write(project.join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
@@ -5356,8 +5229,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let rv32_path = tmp.path().join("test.rv32a");
-    std::fs::write(&rv32_path, b"rv32-artifact").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5472,8 +5344,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5481,7 +5352,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .output()
@@ -5522,8 +5393,7 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5531,7 +5401,7 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -5574,8 +5444,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5583,7 +5452,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
@@ -5629,8 +5498,7 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5642,7 +5510,7 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
             "--runtime-manifest",
             cli_manifest.to_str().unwrap(),
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
@@ -5683,8 +5551,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5692,7 +5559,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("GROUNDHOG_RUNTIME_MANIFEST", "   ")
@@ -5734,8 +5601,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5743,7 +5609,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .output()
@@ -5777,8 +5643,7 @@ fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5786,7 +5651,7 @@ fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .output()
@@ -5826,8 +5691,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5835,7 +5699,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .output()
@@ -5865,8 +5729,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
     )
     .unwrap();
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
@@ -5874,7 +5737,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
             "deploy",
             "--dry-run",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -5905,16 +5768,15 @@ fn deploy_live_json_submits_and_returns_receipt() {
     let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    // Write a minimal WASM file for the deploy to read.
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    // The deploy path treats the selected RV32 artifact as opaque bytes.
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
             "--json",
             "deploy",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -5970,14 +5832,13 @@ fn deploy_live_json_fails_with_receipt_context() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
         .args([
             "--json",
             "deploy",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -6018,14 +5879,13 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
         .args([
             "--json",
             "deploy",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -6073,10 +5933,9 @@ fn deploy_live_human_reports_selected_wallet_funding_commands() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
-        .args(["deploy", "--artifact", wasm_path.to_str().unwrap()])
+        .args(["deploy", "--artifact", rv32_path.to_str().unwrap()])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -6106,10 +5965,9 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
     );
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
-        .args(["deploy", "--artifact", wasm_path.to_str().unwrap()])
+        .args(["deploy", "--artifact", rv32_path.to_str().unwrap()])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -6138,15 +5996,14 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
         spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
     write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
-    let wasm_path = tmp.path().join("test.wasm");
-    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
         .args([
             "--json",
             "deploy",
             "--artifact",
-            wasm_path.to_str().unwrap(),
+            rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
@@ -9226,23 +9083,32 @@ fn events_spec_rejects_option_and_artifact_failures_before_rpc() {
     let contract = format!("0x{}", "83".repeat(32));
     std::fs::write(tmp.path().join("malformed.spec.xdr"), [0xff]).unwrap();
     std::fs::write(tmp.path().join("unsupported.spec.json"), b"{}").unwrap();
-    std::fs::write(
-        tmp.path().join("no-spec.wasm"),
-        [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
-    )
-    .unwrap();
+    std::fs::write(tmp.path().join("no-spec.rv32a"), b"rv32-artifact").unwrap();
     let cases = [
-        (vec!["--event", "PingEvent"], "invalid_event_options"),
-        (vec!["--spec", "missing.spec.xdr"], "invalid_event_spec"),
-        (vec!["--spec", "malformed.spec.xdr"], "invalid_event_spec"),
+        (vec!["--event", "PingEvent"], "invalid_event_options", None),
+        (
+            vec!["--spec", "missing.spec.xdr"],
+            "invalid_event_spec",
+            None,
+        ),
+        (
+            vec!["--spec", "malformed.spec.xdr"],
+            "invalid_event_spec",
+            None,
+        ),
         (
             vec!["--spec", "unsupported.spec.json"],
             "invalid_event_spec",
+            None,
         ),
-        (vec!["--spec", "no-spec.wasm"], "invalid_event_spec"),
+        (
+            vec!["--spec", "no-spec.rv32a"],
+            "invalid_event_spec",
+            Some("no-spec.spec.xdr"),
+        ),
     ];
 
-    for (options, code) in cases {
+    for (options, code, expected_message) in cases {
         let (rpc_url, rpc_server) = spawn_no_request_rpc();
         let output = groundhog()
             .args(["--json", "events", "list", &contract, "--rpc-url", &rpc_url])
@@ -9254,6 +9120,14 @@ fn events_spec_rejects_option_and_artifact_failures_before_rpc() {
         assert!(!output.status.success());
         let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(stderr["error"]["code"], code);
+        if let Some(expected) = expected_message {
+            assert!(
+                stderr["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(expected)),
+                "expected `{expected}` in: {stderr}"
+            );
+        }
     }
 
     let spec_path = write_event_spec(&tmp);
@@ -11511,7 +11385,7 @@ fn write_runtime_manifest_with_seed(
             "devWallet": {
                 "contentHash": format!("0x{}", "51".repeat(32)),
                 "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                "artifactHint": "./dev-wallet.wasm",
+                "artifactHint": "./dev_wallet.rv32a",
                 "deployEntrypoint": "0x6465706c6f794e77",
                 "createWalletEntrypoint": "0x6372656174655761",
                 "doActionEntrypoint": "0x646f416374696f6e"

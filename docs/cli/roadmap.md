@@ -68,7 +68,7 @@ Implementation status:
   pass: it resolves selectors, encodes calldata, fetches tip-derived
   expiry, signs the transaction, and returns the prepared invocation
   without broadcasting it.
-- `groundhog deploy --dry-run` resolves the WASM artifact, builds and
+- `groundhog deploy --dry-run` resolves the RV32 artifact, builds and
   signs the deploy transaction, computes the predicted contract address,
   and returns all of that without broadcasting.
 - `groundhog storage` now exposes the public `groundhog_getStorageAt`
@@ -90,8 +90,8 @@ Implementation status:
   configured runtime manifest (`GROUNDHOG_RUNTIME_MANIFEST` or
   `profile.<name>.runtime_manifest`). The former local-only dev-account RPC
   has been removed from the OpenRPC surface.
-- `groundhog test --json` now emits a stable machine-readable report for both
-  WASM and integration modes, including explicit `mode` and integration-node
+- `groundhog test --json` now emits a stable machine-readable report for RV32
+  and integration modes, including explicit `mode` and integration-node
   metadata for `groundhog test --integration --json`.
 - The legacy native-exec local-node backend (`crates/dev-node`) was
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
@@ -247,7 +247,7 @@ Maintenance rules:
     2. *Protocol skew.* Even sdk 0.13.0's xdr 0.9.3 protocol
        (`hogp/e4a1ca88f0ca`) doesn't match the running hogd-dev
        (`hogp/830b7810ee93` at the time; `hogp/020ed23d4e2f` currently).
-       A WASM compiled against the wrong
+       A contract compiled against the wrong
        protocol deploys cleanly but every call reverts with
        `deterministicError {kind: "unknown"}`. That protocol skew is
        resolved for default scaffolds by the `sdk 0.14.0` publish and
@@ -289,7 +289,7 @@ Maintenance rules:
 - [x] `groundhog test --skip`
 - [x] `groundhog test --rerun`
 - [x] `groundhog test --watch`
-- [x] Machine-readable `groundhog test --json` output for WASM and integration
+- [x] Machine-readable `groundhog test --json` output for RV32 and integration
 - [ ] Better human test output controls
 - [ ] Storage cost reporting
 - [ ] `groundhog inspect`
@@ -316,7 +316,7 @@ Goal: make the current CLI trustworthy and easier to adopt.
 1. **Actionable error messages**
    - Add hints for common failures:
    - missing `cargo`
-   - missing `wasm-opt`
+   - missing RV32 toolchain components
    - not in a Groundhog project
    - missing mock-executor FFI download credentials
 
@@ -465,7 +465,7 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
      path, persistence-aware integration runs, and multi-contract orchestration.
 
 2. **Output controls**
-   - Shipped: machine-readable `groundhog test --json` output for WASM and
+   - Shipped: machine-readable `groundhog test --json` output for RV32 and
      integration modes.
    - Remaining follow-ups: human verbosity levels and better event/log display.
 
@@ -543,61 +543,25 @@ parked until a real hogd-owned dev method needs them.
   `TransactionReceipt.return_data` / `abort_data`; deployed-address resolution,
   CLI details, and simulator deployment records consume the fields.
 
-**RV32 default runtime pivot:**
+**RV32-only contract tooling:**
 
 Historical task plan:
 [RV32 default execution plan](../archive/cli/2026-06-12-rv32-default-execution-plan.md).
 
-Current shipped pieces are enough to build, inspect, deploy, and integration-test
-RV32 artifacts as the default deploy/test artifact:
+The tooling surface now builds, inspects, deploys, and integration-tests RV32
+artifacts exclusively:
 
-- `groundhog build --target rv32` compiles
+- `groundhog build` compiles
   `riscv32im-unknown-none-elf`, lowers through the in-process RV32 lowerer,
   writes `target/groundhog/<contract>.rv32a`, and finalizes contract-spec
   sidecars from the ELF/artifact pair.
 - Fresh scaffolds include the RV32 bin wrapper required by that build path.
-- The default command surface chooses RV32: `groundhog build` defaults
-  to `--target rv32`; `groundhog deploy` auto-resolves RV32 unless
-  `--target wasm` or `--artifact <path>` is provided; `groundhog test
-  --integration` defaults to `--target rv32` unless `--target wasm` is
-  provided; `groundhog test --json` reports artifact kind/path metadata.
-- CLI deploy transaction construction is artifact-aware and branches to
-  `Contract::kWasmi` or `Contract::kRv32`. `groundhog test --integration
-  --target rv32` builds and deploys RV32 against a hogd runtime with gas v3 /
-  artifact v4 support. `hogsim` manifests and deployment records now carry
-  artifact kind/path/hash metadata and sim deploy branches to `Contract::kWasmi`
-  or `Contract::kRv32`.
-- `groundhog test --integration --differential` builds WASM and RV32 artifacts,
-  runs the same `tests/integration.rs` target against isolated local nodes started
-  without `--data-dir`, and fails unless both runs pass with matching parsed test
-  outcomes.
-
-Minimal sequence to flip the default without papering over WASM assumptions:
-
-1. Shipped in the CLI branch: shared deploy artifact model/resolver with
-   explicit kind (`wasm` or `rv32`), `deploy --artifact`, `deploy --target`, and
-   deploy transaction construction branching to `Contract::kWasmi` or
-   `Contract::kRv32`.
-2. Shipped in the stacked CLI branch: `groundhog test --json` schema v3 reports
-   artifact metadata instead of the top-level `wasm` field.
-3. Shipped in hogd #2640: `hog-devnode` executes deployed `kRv32` contracts
-   with gas table v3, artifact format v4, and canonical UNIMP support. Keep
-   WASM as an explicit fallback target for differential debugging rather than
-   deleting it.
-4. Shipped in this branch: `groundhog test --integration --target rv32` builds
-   and deploys RV32 through the shared artifact model, while host integration
-   tests stay unchanged except for artifact metadata in the report.
-5. Intentionally break and migrate `hogsim` manifests/results from `wasm`-only
-   fields to an artifact kind/path/hash shape, then update scenario docs and
-   fixtures in the same change.  No compatibility shim is needed before we have
-   external users.
-6. Shipped in this branch: `groundhog test --integration --differential` is the
-   repeatable gate that builds WASM and RV32 artifacts, deploys both on isolated
-   local nodes, runs the same integration tests, and requires matching parsed
-   outcomes.
-7. Shipped in PR7: after the differential gate plus integration-test and sim
-   smoke passed with RV32, `groundhog build` defaults to RV32 and CLI help names
-   WASM as the explicit fallback for differential debugging.
+- `groundhog deploy` accepts `.rv32a` artifacts and constructs
+  `Contract::kRv32` deployments.
+- `groundhog test --integration` builds and deploys RV32 against the local hogd
+  runtime; `groundhog test --json` reports schema version 5.
+- `hogsim` manifests and deployment records carry RV32 artifact path/hash
+  metadata, and the testkit registry accepts RV32 artifacts only.
 
 Defaulting to RV32 also means older `hog-devnode` binaries that cannot execute
 `kRv32` will fail at runtime.  Because there are no external CLI users yet,

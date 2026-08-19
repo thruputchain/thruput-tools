@@ -69,8 +69,8 @@ schema change under `schemaVersion: 2`.
     {
       "name": "fibonacci",
       "artifact": {
-        "kind": "wasm",
-        "path": "fibonacci.wasm"
+        "kind": "rv32",
+        "path": "fibonacci.rv32a"
       }
     }
   ],
@@ -94,7 +94,7 @@ schema change under `schemaVersion: 2`.
 ```
 
 - `contractArtifacts[].name` is a stable manifest-local identifier.
-- `contractArtifacts[].artifact.kind` is `wasm` or `rv32`.
+- `contractArtifacts[].artifact.kind` is `rv32`.
 - `contractArtifacts[].artifact.path` is resolved relative to
   `--contract-artifact-root` when supplied, otherwise relative to the scenario
   file directory.
@@ -125,8 +125,7 @@ by `groundhog view` and `groundhog call`.
 Deployment runs once per declared artifact, before the generated schedule starts.
 
 1. Load and hash the contract artifact.
-2. Wrap it as a `groundhog_xdr::contract::Contract::kWasmi` or
-   `Contract::kRv32` blob based on artifact kind.
+2. Wrap it as a `groundhog_xdr::contract::Contract::kRv32` blob.
 3. Compute the contract hash as `sha256(xdr_encode(contract))`.
 4. Set `tx_nonce = actor0.current_nonce()`.
 5. Set `deploy_address_nonce = sha256(tx_nonce.to_le_bytes())`.
@@ -225,7 +224,7 @@ build, `nonce` and `deployAddressNonce`; after submit, `txHash`; after receipt,
 Pre-load artifact failures therefore produce a failed record with `name`,
 `status: "failed"`, optional `artifactPath`, and `error`, but no hashes or nonce.
 
-- `artifactKind` is `wasm` or `rv32`.
+- `artifactKind` is `rv32`.
 - `artifactPath` is the resolved absolute or run-working-directory path used by the
   simulator, not the manifest-relative string.
 - `artifactSha256`, `contractHash`, `txHash`, and `address` are `0x`-prefixed hex.
@@ -245,8 +244,8 @@ Example started event:
   "kind": "contract-deploy-started",
   "name": "fibonacci",
   "status": "started",
-  "artifactKind": "wasm",
-  "artifactPath": "/tmp/.../fibonacci.wasm",
+  "artifactKind": "rv32",
+  "artifactPath": "/tmp/.../fibonacci.rv32a",
   "artifactSha256": "0x...",
   "contractHash": "0x...",
   "nonce": "123",
@@ -262,8 +261,8 @@ Example completed event:
   "kind": "contract-deploy-completed",
   "name": "fibonacci",
   "status": "completed",
-  "artifactKind": "wasm",
-  "artifactPath": "/tmp/.../fibonacci.wasm",
+  "artifactKind": "rv32",
+  "artifactPath": "/tmp/.../fibonacci.rv32a",
   "artifactSha256": "0x...",
   "contractHash": "0x...",
   "nonce": "123",
@@ -283,8 +282,8 @@ Example failed event:
   "kind": "contract-deploy-failed",
   "name": "fibonacci",
   "status": "failed",
-  "artifactKind": "wasm",
-  "artifactPath": "/tmp/.../fibonacci.wasm",
+  "artifactKind": "rv32",
+  "artifactPath": "/tmp/.../fibonacci.rv32a",
   "artifactSha256": "0x...",
   "contractHash": "0x...",
   "nonce": "123",
@@ -307,7 +306,7 @@ Add `examples/sim/local-fibonacci-view-smoke.json`:
 - bootstrap accounts: `1`
 - duration: short local smoke, around 3s
 - workload: `view-call`
-- contract artifact: `fibonacci.wasm`
+- contract artifact: `fibonacci.rv32a`
 - view call: `fibonacci.compute(10)`
 - expected return data: CXS-encoded `55`
 - assertions: low `maxErrorRate`, view gateway required through existing

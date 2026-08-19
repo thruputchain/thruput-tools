@@ -1421,7 +1421,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "read-after-write", "weight": 1}],
-            "contractArtifacts": [{"name": "caller-counter", "artifact": {"kind": "wasm", "path": "caller-counter.wasm"}}],
+            "contractArtifacts": [{"name": "caller-counter", "artifact": {"kind": "rv32", "path": "caller-counter.rv32a"}}],
             "readAfterWrite": [{
                 "name": "counter-roundtrip",
                 "contract": "caller-counter",
@@ -1801,7 +1801,7 @@ mod tests {
                 "devWallet": {
                     "contentHash": prefixed_hex(0x51),
                     "deployedCodeHash": prefixed_hex(0x52),
-                    "artifactHint": "./dev-wallet.wasm",
+                    "artifactHint": "./dev_wallet.rv32a",
                     "deployEntrypoint": "0xadac498222148e4f",
                     "createWalletEntrypoint": "0x6372656174655761",
                     "doActionEntrypoint": "0x646f416374696f6e"

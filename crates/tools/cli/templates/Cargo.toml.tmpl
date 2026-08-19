@@ -9,9 +9,9 @@ doctest = false
 test = false
 
 # RV32 ELF bin wrapper. The name must stay the snake-case package name:
-# `groundhog build --target rv32` looks for the ELF at `release/<snake_name>`.
-# `required-features` keeps host `cargo build` / `cargo test` and explicit WASM
-# entrypoint builds from building this no_std binary.
+# `groundhog build` looks for the ELF at `release/<snake_name>`.
+# `required-features` keeps host `cargo build` / `cargo test` from building
+# this no_std binary.
 [[bin]]
 name = "{{PROJECT_NAME_SNAKE}}"
 path = "src/main.rs"
@@ -29,7 +29,7 @@ groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 [dependencies]
 sdk = { version = "0.19.0", registry = "groundhog" }
 
-[target.'cfg(not(any(target_arch = "wasm32", target_arch = "riscv32")))'.dependencies]
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies]
 groundhog-json-rpc-client = { version = "0.7.0", registry = "groundhog", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 

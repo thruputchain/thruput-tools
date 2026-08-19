@@ -1418,7 +1418,6 @@ dependencies = [
  "groundhog-rv32-lower",
  "groundhog-signing",
  "groundhog-spec-tool",
- "groundhog-wasm-meter",
  "groundhog-xdr",
  "hex",
  "jsonrpsee",
@@ -1880,16 +1879,6 @@ dependencies = [
  "groundhog-contract-spec",
  "groundhog-macros",
  "xdrs",
-]
-
-[[package]]
-name = "groundhog-wasm-meter"
-version = "0.8.1"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "a2d027a3b193a374ae5ead85ec75c87a09f810792fc8bb9efd6d3c0059db75ee"
-dependencies = [
- "wasm-encoder",
- "wasmparser",
 ]
 
 [[package]]

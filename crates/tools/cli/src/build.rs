@@ -1,4 +1,4 @@
-use crate::artifacts::{self, ArtifactOptions};
+use crate::artifacts::{self, ArtifactKind, ArtifactOptions};
 use crate::{CliError, Print};
 use serde::Serialize;
 use serde_json::json;
@@ -6,24 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub(crate) const WASM_TARGET_TRIPLE: &str = "wasm32-unknown-unknown";
 pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum BuildTarget {
-    Wasm,
-    Rv32,
-}
-
-impl BuildTarget {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Wasm => "wasm",
-            Self::Rv32 => "rv32",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
@@ -36,40 +19,15 @@ pub struct BuildResult {
     pub package_root: PathBuf,
     #[serde(skip_serializing)]
     pub target_directory: PathBuf,
-    pub wasm: PathBuf,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub spec_json: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub spec_xdr: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bindings_ts: Option<PathBuf>,
-    pub size_bytes: u64,
-    pub optimized: bool,
-    pub profile: crate::config::ResolvedProfile,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub cargo_stdout: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub cargo_stderr: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Rv32BuildResult {
-    pub project_name: String,
-    pub project_root: PathBuf,
-    /// Manifest directory of the built package. In a single-package project
-    /// this equals `project_root`; in a workspace it is the member's own
-    /// directory.
-    #[serde(skip_serializing)]
-    pub package_root: PathBuf,
-    #[serde(skip_serializing)]
-    pub target_directory: PathBuf,
     pub elf: PathBuf,
     pub rv32: PathBuf,
     pub metadata: PathBuf,
     pub spec_json: Option<PathBuf>,
     pub spec_xdr: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bindings_ts: Option<PathBuf>,
     pub size_bytes: u64,
-    pub target: BuildTarget,
+    pub target: ArtifactKind,
     pub profile: crate::config::ResolvedProfile,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub cargo_stdout: String,
@@ -77,227 +35,44 @@ pub struct Rv32BuildResult {
     pub cargo_stderr: String,
 }
 
-/// Build the contract to WASM via `cargo build` with
-/// cross-compilation to `wasm32-unknown-unknown`.
-#[allow(clippy::too_many_arguments)]
+/// Build the contract to an RV32 artifact.
 pub fn run(
     package: Option<&str>,
-    target: BuildTarget,
-    optimize: bool,
     bindings: &[String],
     stack_size: Option<u32>,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
-    cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    if target == BuildTarget::Rv32 {
-        if optimize {
-            return Err(CliError::InvalidBuildOptions(
-                "`--optimize` is only supported for the WASM build target".into(),
-            ));
-        }
-        if !bindings.is_empty() {
-            return Err(CliError::InvalidBuildOptions(
-                "`--bindings` is only supported for the WASM build target".into(),
-            ));
-        }
-        let result = build_rv32_project(
-            package,
-            cargo_args,
-            artifacts,
-            explicit_profile,
-            stack_size,
-            print,
-        )?;
-        print.json(&crate::result::CommandResult::new(
-            cmd,
-            json!({
-                "project_name": result.project_name,
-                "project_root": result.project_root,
-                "target": result.target,
-                "elf": result.elf,
-                "rv32": result.rv32,
-                "metadata": result.metadata,
-                "spec_json": result.spec_json,
-                "spec_xdr": result.spec_xdr,
-                "size_bytes": result.size_bytes,
-                "profile": result.profile,
-                "cargo_stdout": result.cargo_stdout,
-                "cargo_stderr": result.cargo_stderr,
-            }),
-        ))?;
-        return Ok(());
-    }
-
-    if stack_size.is_some() {
-        return Err(CliError::InvalidBuildOptions(
-            "`--stack-size` is only supported for the RV32 build target".into(),
-        ));
-    }
-    let result = build_project(
+    let result = build_rv32_project(
         package,
-        optimize,
         cargo_args,
         artifacts,
         explicit_profile,
+        stack_size,
         bindings,
         print,
     )?;
     print.json(&crate::result::CommandResult::new(
-        cmd,
+        "build",
         json!({
             "project_name": result.project_name,
             "project_root": result.project_root,
-            "target": BuildTarget::Wasm,
-            "wasm": result.wasm,
-            "size_bytes": result.size_bytes,
-            "optimized": result.optimized,
-            "profile": result.profile,
-            "cargo_stdout": result.cargo_stdout,
-            "cargo_stderr": result.cargo_stderr,
+            "target": result.target,
+            "elf": result.elf,
+            "rv32": result.rv32,
+            "metadata": result.metadata,
             "spec_json": result.spec_json,
             "spec_xdr": result.spec_xdr,
             "bindings_ts": result.bindings_ts,
+            "size_bytes": result.size_bytes,
+            "profile": result.profile,
+            "cargo_stdout": result.cargo_stdout,
+            "cargo_stderr": result.cargo_stderr,
         }),
     ))?;
     Ok(())
-}
-
-/// Build the current project and return the artifact metadata without
-/// printing a final command payload.
-#[allow(clippy::too_many_lines)]
-pub fn build_project(
-    package: Option<&str>,
-    optimize: bool,
-    cargo_args: &[String],
-    artifacts: &ArtifactOptions,
-    explicit_profile: Option<&str>,
-    bindings: &[String],
-    print: &Print,
-) -> Result<BuildResult, CliError> {
-    ensure_no_env_rustflags()?;
-    crate::require_cargo()?;
-
-    let cwd = std::env::current_dir()?;
-    let metadata = cargo_metadata_with_artifacts(artifacts)?;
-    let pkg_name = resolve_package(&metadata, package, &cwd)?;
-    check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
-
-    // The built package's own directory. Equals `workspace_root` for a
-    // single-package project, but is the member directory in a workspace —
-    // which is where its `tests/` live.
-    let package_root = metadata
-        .packages
-        .iter()
-        .find(|p| p.name == pkg_name)
-        .and_then(|p| p.manifest_path.parent())
-        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
-
-    let contract_toml = require_contract_toml(&metadata.workspace_root)?;
-
-    if optimize {
-        which::which("wasm-opt").map_err(|_| CliError::WasmOptNotFound)?;
-    }
-
-    let mut cmd = wasm_build_command(
-        &metadata.workspace_root,
-        &contract_toml,
-        pkg_name,
-        cargo_args,
-    );
-
-    artifacts::ensure_no_target_dir_passthrough_conflicts(
-        artifacts,
-        &metadata.workspace_root,
-        cargo_args,
-    )?;
-    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
-    print.status(format_args!("Compiling {pkg_name} to WASM..."));
-    artifacts.apply_to_command(&mut cmd);
-
-    for arg in cargo_args {
-        cmd.arg(arg);
-    }
-
-    let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
-
-    let raw_wasm = artifacts::cargo_wasm_output_path(&metadata.target_directory, pkg_name);
-    if !raw_wasm.try_exists()? {
-        return Err(CliError::WasmNotFound(raw_wasm.display().to_string()));
-    }
-
-    let wasm = artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
-    if let Some(parent) = wasm.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::copy(&raw_wasm, &wasm)?;
-
-    if optimize {
-        print.status("Optimizing with wasm-opt...");
-        let output = Command::new("wasm-opt")
-            .arg("-mvp")
-            .arg("--enable-bulk-memory")
-            .arg("--enable-sign-ext")
-            .arg("--enable-mutable-globals")
-            .arg("--enable-simd")
-            .arg("-Oz")
-            .arg(&wasm)
-            .arg("-o")
-            .arg(&wasm)
-            .output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(CliError::WasmOptFailed(stderr));
-        }
-    }
-
-    print.status("Checking for contract spec...");
-    let finalized = crate::contract_spec::finalize_spec(&wasm, print)?;
-    let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
-    let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
-
-    let bindings_ts = if bindings.iter().any(|b| b == "ts") {
-        if let Some(ref finalized) = finalized {
-            let ts_path = wasm.with_extension("ts");
-            let source_name = wasm
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
-            let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
-            fs::write(&ts_path, ts.as_bytes())?;
-            print.status(format_args!("Wrote {}", ts_path.display()));
-            Some(ts_path)
-        } else {
-            print.warn("no contract spec found — skipping TypeScript bindings");
-            None
-        }
-    } else {
-        None
-    };
-
-    print.status("Instrumenting WASM...");
-    crate::wasm_instrument::instrument(&wasm)?;
-
-    let size = fs::metadata(&wasm)?.len();
-    print.status(format_args!("Built {} ({size} bytes)", wasm.display()));
-
-    Ok(BuildResult {
-        project_name: pkg_name.to_string(),
-        project_root: metadata.workspace_root,
-        package_root,
-        target_directory: metadata.target_directory,
-        wasm,
-        size_bytes: size,
-        optimized: optimize,
-        spec_json,
-        spec_xdr,
-        bindings_ts,
-        profile,
-        cargo_stdout,
-        cargo_stderr,
-    })
 }
 
 /// Refuse to build when the environment carries a rustflags override.
@@ -314,39 +89,6 @@ fn ensure_no_env_rustflags() -> Result<(), CliError> {
         }
     }
     Ok(())
-}
-
-/// Assemble the cargo invocation for the wasm contract build.
-///
-/// The build is scoped to the cdylib target with `--lib`: older project RV32
-/// bin wrappers may satisfy `required-features = ["entrypoints"]` here and
-/// would otherwise be built for wasm too — its output filename collides with
-/// the cdylib's, and under lto=true/codegen-units=1 building the bin perturbs
-/// the cdylib codegen (and thus gas). Cargo rejects a repeated `--lib`, so
-/// one supplied via passthrough args is honored instead.
-fn wasm_build_command(
-    workspace_root: &Path,
-    contract_toml: &Path,
-    pkg_name: &str,
-    cargo_args: &[String],
-) -> Command {
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(workspace_root)
-        .arg("--config")
-        .arg(contract_toml)
-        .arg("build")
-        .arg("--release")
-        .arg("--no-default-features")
-        .arg("--features")
-        .arg("entrypoints")
-        .arg("--target")
-        .arg(WASM_TARGET_TRIPLE)
-        .arg("-p")
-        .arg(pkg_name);
-    if !cargo_args.iter().any(|arg| arg == "--lib") {
-        cmd.arg("--lib");
-    }
-    cmd
 }
 
 /// Parse and validate a `--stack-size` value: bytes as decimal, `0x` hex, or a
@@ -398,8 +140,9 @@ pub fn build_rv32_project(
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
     stack_size: Option<u32>,
+    bindings: &[String],
     print: &Print,
-) -> Result<Rv32BuildResult, CliError> {
+) -> Result<BuildResult, CliError> {
     ensure_no_env_rustflags()?;
     crate::require_cargo()?;
 
@@ -521,11 +264,29 @@ pub fn build_rv32_project(
     let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
     let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
     let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
+    let bindings_ts = if bindings.iter().any(|binding| binding == "ts") {
+        if let Some(ref finalized) = finalized {
+            let ts_path = rv32.with_extension("ts");
+            let source_name = rv32
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown");
+            let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
+            fs::write(&ts_path, ts.as_bytes())?;
+            print.status(format_args!("Wrote {}", ts_path.display()));
+            Some(ts_path)
+        } else {
+            print.warn("no contract spec found — skipping TypeScript bindings");
+            None
+        }
+    } else {
+        None
+    };
 
     let size = fs::metadata(&rv32)?.len();
     print.status(format_args!("Built {} ({size} bytes)", rv32.display()));
 
-    Ok(Rv32BuildResult {
+    Ok(BuildResult {
         project_name: pkg_name.to_string(),
         project_root: metadata.workspace_root,
         package_root,
@@ -535,8 +296,9 @@ pub fn build_rv32_project(
         metadata: lower_metadata,
         spec_json,
         spec_xdr,
+        bindings_ts,
         size_bytes: size,
-        target: BuildTarget::Rv32,
+        target: ArtifactKind::Rv32,
         profile,
         cargo_stdout,
         cargo_stderr,

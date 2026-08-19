@@ -185,7 +185,7 @@ mod tests {
                 "profile": "local-dev",
                 "devWallet": {
                     "profile": "hog-devnode-default",
-                    "artifactHint": "./dev-wallet.wasm",
+                    "artifactHint": "./dev_wallet.rv32a",
                     "contentHash": prefixed_hex(0x51),
                     "deployEntrypoint": "0xadac498222148e4f",
                     "doActionEntrypoint": "0x646f416374696f6e",
@@ -260,7 +260,7 @@ mod tests {
             profile: "local-dev".into(),
             dev_wallet: BootstrapManifestDevWallet {
                 profile: "hog-devnode-default".into(),
-                artifact_hint: Some("./dev-wallet.wasm".into()),
+                artifact_hint: Some("./dev_wallet.rv32a".into()),
                 content_hash: Some(hash(0x51)),
                 deploy_entrypoint: Some("0xadac498222148e4f".into()),
                 do_action_entrypoint: Some("0x646f416374696f6e".into()),

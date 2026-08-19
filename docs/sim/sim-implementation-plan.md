@@ -577,7 +577,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   `read-after-write` workload kind + validation + the `ReadAfterWriteState`
   machine (`NeedsReconcile`/`Known(u64)`) landed with unit tests. Contract setup
   moved to L3 (it is consumed by the executor; standalone it would be dead code).
-  `.wasm` artifact build + live caller-identity check deferred to the L4 smoke.
+  `.rv32a` artifact build + live caller-identity check deferred to the L4 smoke.
 - [x] Slice L3: contract setup (`PreparedReadAfterWrite`) plus executor
   reconcile -> write -> await -> read -> assert, additive artifacts, and the
   `read-after-write-mismatch` error class. Rebases actor state when the write is
@@ -586,7 +586,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   CXS `u64` via `xdrs::cxs::decode`. Six mock-client executor tests cover the
   transition matrix; clippy/fmt/tests green.
 - [x] Slice L4: read-after-write catalog scenario + smoke coverage (builds the
-  `caller-counter` `.wasm`, runs the live `groundhog_view` caller-identity
+  `caller-counter` `.rv32a`, runs the live `groundhog_view` caller-identity
   check) + docs. The live smoke confirmed four advancing round-trips
   (expected/observed 1/1..4/4, all matched) and surfaced a real hogd
   ViewGateway staleness bug (public views were pinned at an old committed

@@ -283,7 +283,7 @@ pub enum TestkitError {
     },
 
     /// A file artifact had an extension the harness does not recognize.
-    #[error("cannot infer artifact kind from `{path}` (expected .wasm or .rv32a)")]
+    #[error("cannot infer artifact kind from `{path}` (expected .rv32a)")]
     UnknownArtifactExtension {
         /// The path whose extension was unrecognized.
         path: String,

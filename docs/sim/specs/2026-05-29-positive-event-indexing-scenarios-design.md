@@ -92,7 +92,7 @@ No `result.json` schema bump is required. Per-workload metrics are keyed by
 
 ## Scenarios
 
-The local scenario builds `fibonacci.wasm` from `groundhog-examples`, deploys
+The local scenario builds `fibonacci.rv32a` from `groundhog-examples`, deploys
 it, runs a mix of `contract-call` and `events-query`, and keeps
 `eventQueries[].expectMinEvents` at `0` so early pre-emission queries do not
 fail the run. The gated smoke asserts at least one later `events-query` record

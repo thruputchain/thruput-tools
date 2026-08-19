@@ -8,23 +8,21 @@ use tempfile::TempDir;
 mod support;
 
 /// Minimal stand-in for the `.cargo/config.toml` that `groundhog new`
-/// scaffolds: both Groundhog target rustflags tables, which is what the
+/// scaffolds: the Groundhog RV32 target rustflags table, which is what the
 /// workspace-config guard requires at the cargo workspace root.
 fn write_scaffold_cargo_config(project_root: &Path) {
     fs::create_dir_all(project_root.join(".cargo")).unwrap();
     fs::write(
         project_root.join(".cargo/config.toml"),
-        "[target.wasm32-unknown-unknown]\n\
-         rustflags = [\"-C\", \"link-args=-zstack-size=30000\"]\n\n\
-         [target.riscv32im-unknown-none-elf]\n\
+        "[target.riscv32im-unknown-none-elf]\n\
          rustflags = [\"-C\", \"link-arg=-Tgroundhog-rv32.ld\"]\n",
     )
     .unwrap();
 }
 
 /// The `.cargo/contract.toml` overlay every contract build now requires at the
-/// cargo workspace root: `groundhog build` passes it as `--config` for both the
-/// wasm and rv32 targets, so its absence refuses the build before cargo runs.
+/// cargo workspace root: `groundhog build` passes it as `--config`, so its
+/// absence refuses the build before cargo runs.
 /// Contents are irrelevant to these tests — only the fake cargo sees them.
 fn write_contract_toml(workspace_root: &Path) {
     fs::create_dir_all(workspace_root.join(".cargo")).unwrap();
@@ -223,11 +221,11 @@ fn build_rejects_conflicting_target_dir_passthrough() {
 
     let artifacts =
         groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::build::build_project(
+    let err = groundhog_cli::build::build_rv32_project(
         Some("demo-contract"),
-        false,
         &["--target-dir".into(), "nested".into()],
         &artifacts,
+        None,
         None,
         &[],
         &groundhog_cli::Print::quiet(),
@@ -274,11 +272,11 @@ fn build_prefers_metadata_failure_over_redundant_target_dir_precheck() {
 
     let artifacts =
         groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::build::build_project(
+    let err = groundhog_cli::build::build_rv32_project(
         Some("demo-contract"),
-        false,
         &["--target-dir".into(), "nested".into()],
         &artifacts,
+        None,
         None,
         &[],
         &groundhog_cli::Print::quiet(),
@@ -337,11 +335,11 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
 
     let artifacts =
         groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
-    let err = groundhog_cli::build::build_project(
+    let err = groundhog_cli::build::build_rv32_project(
         Some("demo-contract"),
-        false,
         &["--config".into(), "target-config.toml".into()],
         &artifacts,
+        None,
         None,
         &[],
         &groundhog_cli::Print::quiet(),
@@ -352,87 +350,6 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
         matches!(err, groundhog_cli::CliError::TargetDirConflict),
         "expected TargetDirConflict, got: {err:?}"
     );
-}
-
-#[test]
-#[serial]
-fn build_project_reports_groundhog_processed_wasm_path() {
-    let tmp = TempDir::new().unwrap();
-    let project_root =
-        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
-    write_active_profile(&project_root);
-    fs::write(
-        project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(project_root.join(".cargo")).unwrap();
-    fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
-    fs::create_dir_all(project_root.join("src")).unwrap();
-    fs::write(project_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
-
-    let target_dir = project_root.join("target");
-    let raw_wasm = target_dir
-        .join("wasm32-unknown-unknown/release")
-        .join("demo_contract.wasm");
-    let processed_wasm = target_dir.join("groundhog").join("demo_contract.wasm");
-    let cargo_args_log = project_root.join("cargo-args.log");
-    let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
-        project_root.display(),
-        target_dir.display(),
-        project_root.join("Cargo.toml").display()
-    );
-
-    let fake_bin = project_root.join("bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    fs::write(
-        &cargo,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
-            cargo_args_log.display(),
-            raw_wasm
-                .parent()
-                .expect("bug: raw wasm parent should exist")
-                .display(),
-            raw_wasm.display()
-        ),
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&cargo).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&cargo, perms).unwrap();
-    }
-
-    let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
-
-    let result = groundhog_cli::build::build_project(
-        Some("demo-contract"),
-        false,
-        &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
-        None,
-        &[],
-        &groundhog_cli::Print::quiet(),
-    )
-    .expect("bug: build should succeed");
-
-    assert_eq!(result.wasm, processed_wasm);
-    assert!(processed_wasm.exists());
-    assert_eq!(fs::read(&raw_wasm).unwrap(), b"\0asm\x01\0\0\0");
-
-    // `--lib` keeps the wasm build scoped to the cdylib target so a project's
-    // RV32 bin wrapper is neither built for wasm (output filename collision
-    // with the cdylib) nor allowed to perturb the cdylib codegen under
-    // lto=true/codegen-units=1.
-    let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
-    assert!(cargo_args.contains("--lib"), "cargo args: {cargo_args}");
 }
 
 #[test]
@@ -475,11 +392,11 @@ fn build_rejects_missing_active_profile_before_compiling() {
     let _path = PathGuard::set(fake_bin.as_os_str());
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
-    let error = groundhog_cli::build::build_project(
+    let error = groundhog_cli::build::build_rv32_project(
         Some("demo-contract"),
-        false,
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
         None,
         &[],
         &groundhog_cli::Print::quiet(),
@@ -489,99 +406,6 @@ fn build_rejects_missing_active_profile_before_compiling() {
     assert_eq!(error.code(), "no_active_profile");
     assert!(!compile_marker.exists());
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
-}
-
-#[test]
-#[serial]
-fn build_project_recopies_raw_wasm_before_reprocessing_on_repeated_runs() {
-    let tmp = TempDir::new().unwrap();
-    let project_root =
-        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
-    write_active_profile(&project_root);
-    fs::write(
-        project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-    fs::create_dir_all(project_root.join(".cargo")).unwrap();
-    fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
-    fs::create_dir_all(project_root.join("src")).unwrap();
-    fs::write(project_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
-
-    let target_dir = project_root.join("target");
-    let raw_wasm = target_dir
-        .join("wasm32-unknown-unknown/release")
-        .join("demo_contract.wasm");
-    let processed_wasm = target_dir.join("groundhog").join("demo_contract.wasm");
-    let raw_bytes = b"\0asm\x01\0\0\0";
-    let corrupted_processed = b"not wasm";
-    let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
-        project_root.display(),
-        target_dir.display(),
-        project_root.join("Cargo.toml").display()
-    );
-
-    let fake_bin = project_root.join("bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let cargo = fake_bin.join("cargo");
-    fs::write(
-        &cargo,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
-            raw_wasm
-                .parent()
-                .expect("bug: raw wasm parent should exist")
-                .display(),
-            raw_wasm.display()
-        ),
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&cargo).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&cargo, perms).unwrap();
-    }
-
-    let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
-
-    groundhog_cli::build::build_project(
-        Some("demo-contract"),
-        false,
-        &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
-        None,
-        &[],
-        &groundhog_cli::Print::quiet(),
-    )
-    .expect("bug: first build should succeed");
-    let first_processed = fs::read(&processed_wasm).unwrap();
-
-    fs::write(&processed_wasm, corrupted_processed).unwrap();
-
-    let result = groundhog_cli::build::build_project(
-        Some("demo-contract"),
-        false,
-        &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
-        None,
-        &[],
-        &groundhog_cli::Print::quiet(),
-    )
-    .expect("bug: second build should succeed");
-
-    assert_eq!(result.wasm, processed_wasm);
-    assert_eq!(fs::read(&raw_wasm).unwrap(), raw_bytes);
-    let rebuilt_processed = fs::read(&processed_wasm).unwrap();
-    assert_ne!(rebuilt_processed, corrupted_processed);
-    // Both runs start from the same raw bytes, so the processed output should
-    // be byte-for-byte identical. That also verifies the pipeline stays
-    // deterministic for identical input.
-    assert_eq!(rebuilt_processed, first_processed);
 }
 
 #[test]
@@ -694,6 +518,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect("bug: rv32 build should succeed");
@@ -741,8 +566,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert!(cargo_args.contains("-p demo-contract-rv32"));
     assert!(cargo_args.contains("--bin demo_contract_rv32"));
     assert!(cargo_args.contains("--locked"));
-    // The rv32 build must include the bin target; only the wasm build is
-    // scoped with --lib.
+    // The RV32 build must include the contract's bin target.
     assert!(!cargo_args.contains("--lib"), "cargo args: {cargo_args}");
     assert_eq!(metadata["target_triple"], "riscv32im-unknown-none-elf");
     // The sidecar records the overlay by its workspace-relative path: it
@@ -821,6 +645,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
         Some(0x6000),
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect("bug: rv32 build with --stack-size should succeed");
@@ -846,33 +671,6 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         "cargo --config .cargo/contract.toml rustc --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
     );
 }
-
-#[test]
-fn build_run_rejects_stack_size_for_wasm_target() {
-    let err = groundhog_cli::build::run(
-        None,
-        groundhog_cli::build::BuildTarget::Wasm,
-        false,
-        &[],
-        Some(4096),
-        &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
-        None,
-        "build",
-        &groundhog_cli::Print::quiet(),
-    )
-    .expect_err("wasm target should reject --stack-size");
-    assert!(matches!(
-        err,
-        groundhog_cli::CliError::InvalidBuildOptions(_)
-    ));
-}
-
-/// A user-level `RUSTFLAGS` makes cargo ignore the project's
-/// `.cargo/config.toml` target rustflags entirely, so the guard must refuse
-/// to build before cargo runs. The empty temp dir would otherwise fail with
-/// a cargo-metadata error, so seeing the rustflags error proves the guard
-/// fires first.
 #[test]
 fn build_rejects_env_rustflags_before_running_cargo() {
     let tmp = TempDir::new().unwrap();
@@ -927,7 +725,7 @@ fn build_rv32_rejects_env_rustflags() {
     let tmp = TempDir::new().unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
-        .args(["build", "--target", "rv32"])
+        .arg("build")
         .current_dir(tmp.path())
         .env("RUSTFLAGS", "-C opt-level=2")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -1055,7 +853,7 @@ fn build_rv32_refuses_missing_linker_script_naming_member_leftover() {
         &member,
         &fake_bin,
         &cargo_home,
-        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+        &["build", "-p", "demo-contract-rv32"],
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1096,7 +894,7 @@ fn build_rv32_warns_on_custom_linker_script_and_proceeds() {
         &member,
         &fake_bin,
         &cargo_home,
-        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+        &["build", "-p", "demo-contract-rv32"],
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1129,7 +927,7 @@ fn build_rv32_warns_on_non_nightly_toolchain_and_proceeds() {
         &member,
         &fake_bin,
         &cargo_home,
-        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+        &["build", "-p", "demo-contract-rv32"],
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1169,7 +967,7 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
         &member,
         &fake_bin,
         &cargo_home,
-        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+        &["build", "-p", "demo-contract-rv32"],
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1180,10 +978,10 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     );
 }
 
-/// The rv32 compile needs `build-std` for the same reason the wasm one does:
-/// `-C panic=immediate-abort` is incompatible with the prebuilt `core`. That
-/// only reaches cargo through the `.cargo/contract.toml` overlay, and only
-/// when `--config` precedes the subcommand.
+/// The RV32 compile needs `build-std` because `-C panic=immediate-abort` is
+/// incompatible with the prebuilt `core`. That only reaches cargo through the
+/// `.cargo/contract.toml` overlay, and only when `--config` precedes the
+/// subcommand.
 #[test]
 fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
     let tmp = TempDir::new().unwrap();
@@ -1208,7 +1006,7 @@ fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
         &member,
         &fake_bin,
         &cargo_home,
-        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+        &["build", "-p", "demo-contract-rv32"],
     );
 
     let cargo_args = fs::read_to_string(&cargo_args_log).unwrap();
@@ -1238,7 +1036,7 @@ fn build_rv32_refuses_a_missing_contract_toml() {
         &member,
         &fake_bin,
         &cargo_home,
-        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+        &["build", "-p", "demo-contract-rv32"],
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1306,7 +1104,7 @@ impl Drop for PathGuard {
 
 /// `--show-cargo-commands` traces the cargo build invocation to stderr.
 ///
-/// Drives the real binary (rather than `build_project`) so the global-flag
+/// Drives the real binary (rather than `build_rv32_project`) so the global-flag
 /// wiring through `run_cargo` is exercised end to end. Env/cwd are set on the
 /// child so no process-global state is mutated.
 #[test]
@@ -1320,15 +1118,17 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
-    fs::create_dir_all(project_root.join(".cargo")).unwrap();
-    fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
+    write_scaffold_cargo_config(&project_root);
+    write_contract_toml(&project_root);
     fs::create_dir_all(project_root.join("src")).unwrap();
     fs::write(project_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
 
     let target_dir = project_root.join("target");
-    let raw_wasm = target_dir
-        .join("wasm32-unknown-unknown/release")
-        .join("demo_contract.wasm");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -1342,12 +1142,13 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
-            raw_wasm
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$1\" = \"config\" ]; then\n  printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n  exit 0\nfi\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            raw_elf
                 .parent()
-                .expect("bug: raw wasm parent should exist")
+                .expect("bug: raw ELF parent should exist")
                 .display(),
-            raw_wasm.display()
+            elf_fixture.display(),
+            raw_elf.display()
         ),
     )
     .unwrap();
@@ -1370,14 +1171,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
     };
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
-        .args([
-            "--show-cargo-commands",
-            "build",
-            "--target",
-            "wasm",
-            "-p",
-            "demo-contract",
-        ])
+        .args(["--show-cargo-commands", "build", "-p", "demo-contract"])
         .current_dir(&project_root)
         .env("PATH", path)
         .output()
@@ -1390,7 +1184,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
         "expected traced cargo command on stderr, got: {stderr}"
     );
     assert!(
-        stderr.contains("wasm32-unknown-unknown"),
+        stderr.contains("riscv32im-unknown-none-elf"),
         "expected target triple in trace, got: {stderr}"
     );
 }
@@ -1547,6 +1341,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect_err("a raw spec format this build cannot read must refuse the build");
@@ -1635,6 +1430,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect_err("the fake cargo produces no ELF, so the build fails downstream");

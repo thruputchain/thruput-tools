@@ -18,15 +18,12 @@ use std::time::{Duration, SystemTime};
 const FAILURE_CACHE_VERSION: u8 = 1;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
-const WASM_TEST_TARGET: &str = "test_wasm";
 const RV32_TEST_TARGET: &str = "test_rv32";
 const INTEGRATION_TEST_TARGET: &str = "integration";
 
 /// Explicit controls for the selected local test harness invocation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TestOptions {
-    /// Contract artifact target to build and run for local tests.
-    pub target: crate::build::BuildTarget,
     /// Run only tests whose names contain this substring.
     pub match_test: Option<String>,
     /// Number of local test harness threads to use.
@@ -41,22 +38,8 @@ pub struct TestOptions {
     pub harness: TestHarnessOptions,
 }
 
-impl Default for TestOptions {
-    fn default() -> Self {
-        Self {
-            target: crate::build::BuildTarget::Rv32,
-            match_test: None,
-            test_threads: None,
-            skip: Vec::new(),
-            rerun: false,
-            watch: false,
-            harness: TestHarnessOptions::default(),
-        }
-    }
-}
-
 /// Options for the `groundhog test --integration` orchestration path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IntegrationTestOptions {
     /// Override the x23 protocol token used when launching the ephemeral
     /// hog-devnode node (mirrors `groundhog node --hogd-protocol`). Useful
@@ -64,26 +47,9 @@ pub struct IntegrationTestOptions {
     /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
     /// environment variable.
     pub hogd_protocol: Option<String>,
-    /// Contract artifact target to build, deploy, and report for the
-    /// integration run.
-    pub target: crate::build::BuildTarget,
-    /// Run the integration target once with WASM and once with RV32 and require
-    /// both observable test outcomes to match.
-    pub differential: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
     /// running the ephemeral integration node.
     pub verbose: bool,
-}
-
-impl Default for IntegrationTestOptions {
-    fn default() -> Self {
-        Self {
-            hogd_protocol: None,
-            target: crate::build::BuildTarget::Rv32,
-            differential: false,
-            verbose: false,
-        }
-    }
 }
 
 /// Environment fallback for the integration node's protocol override.
@@ -92,7 +58,7 @@ const HOGD_PROTOCOL_ENV: &str = "GROUNDHOG_HOGD_PROTOCOL";
 /// Boolean controls forwarded to the selected libtest harness.
 #[derive(Debug, Clone, Default)]
 pub struct TestHarnessOptions {
-    /// Stop the WASM test harness after the first test failure.
+    /// Stop the test harness after the first test failure.
     pub fail_fast: bool,
     /// Show captured stdout for successful tests.
     pub show_output: bool,
@@ -155,46 +121,6 @@ struct WatchContext {
 struct IntegrationRun {
     report: TestReport,
     failed_code: Option<i32>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct IntegrationDifferentialReport {
-    schema_version: u32,
-    mode: &'static str,
-    success: bool,
-    same_test_outcomes: bool,
-    wasm: TestReport,
-    rv32: TestReport,
-}
-
-impl IntegrationDifferentialReport {
-    fn new(wasm: IntegrationRun, rv32: IntegrationRun) -> Self {
-        let same_test_outcomes = test_outcomes(&wasm.report) == test_outcomes(&rv32.report);
-        let success = wasm.report.success && rv32.report.success && same_test_outcomes;
-        Self {
-            schema_version: TEST_JSON_SCHEMA_VERSION,
-            mode: "integration-differential",
-            success,
-            same_test_outcomes,
-            wasm: wasm.report,
-            rv32: rv32.report,
-        }
-    }
-}
-
-fn test_outcomes(report: &TestReport) -> Vec<(String, TestCaseStatus)> {
-    let mut outcomes: Vec<_> = report
-        .runs
-        .iter()
-        .flat_map(|run| {
-            run.tests
-                .iter()
-                .map(|case| (case.name.clone(), case.status))
-        })
-        .collect();
-    outcomes.sort_by(|a, b| a.0.cmp(&b.0));
-    outcomes
 }
 
 struct IntegrationBuild {
@@ -297,19 +223,6 @@ pub fn run_integration_with_options(
         ));
     }
 
-    if integration.differential {
-        return run_integration_differential_with_dev_nodes(
-            package,
-            options,
-            integration,
-            cargo_args,
-            artifacts,
-            explicit_profile,
-            cmd,
-            print,
-        );
-    }
-
     run_integration_with_dev_node(
         package,
         options,
@@ -323,7 +236,7 @@ pub fn run_integration_with_options(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_integration_differential_with_dev_nodes(
+fn run_integration_with_dev_node(
     package: Option<&str>,
     options: &TestOptions,
     integration: &IntegrationTestOptions,
@@ -333,48 +246,7 @@ fn run_integration_differential_with_dev_nodes(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status("Running WASM/RV32 differential integration gate...");
-    let wasm = run_integration_target_with_dev_node(
-        package,
-        crate::build::BuildTarget::Wasm,
-        options,
-        integration,
-        cargo_args,
-        artifacts,
-        explicit_profile,
-        print,
-    )?;
-    let rv32 = run_integration_target_with_dev_node(
-        package,
-        crate::build::BuildTarget::Rv32,
-        options,
-        integration,
-        cargo_args,
-        artifacts,
-        explicit_profile,
-        print,
-    )?;
-    let warnings = wasm.1.into_iter().chain(rv32.1).collect::<Vec<_>>();
-    finish_integration_differential_run(
-        &IntegrationDifferentialReport::new(wasm.0, rv32.0),
-        cmd,
-        print,
-        warnings,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_integration_target_with_dev_node(
-    package: Option<&str>,
-    target: crate::build::BuildTarget,
-    options: &TestOptions,
-    integration: &IntegrationTestOptions,
-    cargo_args: &[String],
-    artifacts: &ArtifactOptions,
-    explicit_profile: Option<&str>,
-    print: &Print,
-) -> Result<(IntegrationRun, Vec<crate::checks::Finding>), CliError> {
-    let build = build_integration_artifact(package, target, artifacts, explicit_profile, print)?;
+    let build = build_integration_artifact(package, artifacts, explicit_profile, print)?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
         &build.project_root,
@@ -424,63 +296,17 @@ fn run_integration_target_with_dev_node(
     );
     let stop_result = rt.block_on(started.stop());
 
-    match (result, stop_result) {
-        (Ok(run), Ok(_)) => Ok((run, Vec::new())),
-        (Ok(run), Err(error)) => {
-            let warning = local_node_shutdown_warning(
-                if run.failed_code.is_some() {
-                    "integration test failure"
-                } else {
-                    "successful integration test run"
-                },
-                &error,
-            );
-            print.warn(&warning.message);
-            Ok((run, vec![warning]))
-        }
-        (Err(error), Ok(_)) => Err(error),
-        (Err(error), Err(stop_error)) => {
-            print.warn(format_args!(
-                "local node shutdown failed after integration test error: {stop_error}"
-            ));
-            Err(error)
-        }
-    }
+    handle_integration_outcome(result, stop_result, cmd, print)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_integration_with_dev_node(
-    package: Option<&str>,
-    options: &TestOptions,
-    integration: &IntegrationTestOptions,
-    cargo_args: &[String],
-    artifacts: &ArtifactOptions,
-    explicit_profile: Option<&str>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    let (run, warnings) = run_integration_target_with_dev_node(
-        package,
-        integration.target,
-        options,
-        integration,
-        cargo_args,
-        artifacts,
-        explicit_profile,
-        print,
-    )?;
-    finish_integration_run(&run, cmd, print, warnings)
-}
-
-#[cfg(test)]
-fn handle_integration_outcome(
+fn handle_integration_outcome<T>(
     result: Result<IntegrationRun, CliError>,
-    stop_result: Result<(), CliError>,
+    stop_result: Result<T, CliError>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     match (result, stop_result) {
-        (Ok(run), Ok(())) => finish_integration_run(&run, cmd, print, Vec::new()),
+        (Ok(run), Ok(_)) => finish_integration_run(&run, cmd, print, Vec::new()),
         (Ok(run), Err(error)) => {
             let warning = local_node_shutdown_warning(
                 if run.failed_code.is_some() {
@@ -493,7 +319,7 @@ fn handle_integration_outcome(
             print.warn(&warning.message);
             finish_integration_run(&run, cmd, print, vec![warning])
         }
-        (Err(error), Ok(())) => Err(error),
+        (Err(error), Ok(_)) => Err(error),
         (Err(error), Err(stop_error)) => {
             print.warn(format_args!(
                 "local node shutdown failed after integration test error: {stop_error}"
@@ -531,7 +357,6 @@ fn run_integration_against_node(
     ));
     let prepared = crate::deploy::prepare_deploy_for_rpc_with_manifest(
         &build.artifact.path,
-        build.artifact.kind,
         rpc_url,
         default_key,
         runtime_manifest.clone(),
@@ -629,60 +454,32 @@ fn run_integration_against_node(
 
 fn build_integration_artifact(
     package: Option<&str>,
-    target: crate::build::BuildTarget,
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
     print: &Print,
 ) -> Result<IntegrationBuild, CliError> {
-    match target {
-        crate::build::BuildTarget::Wasm => {
-            let build = crate::build::build_project(
-                package,
-                false,
-                &[],
-                artifacts,
-                explicit_profile,
-                &[],
-                print,
-            )?;
-            let test_features = integration_test_features(&build.package_root);
-            Ok(IntegrationBuild {
-                project_name: build.project_name,
-                project_root: build.project_root,
-                package_root: build.package_root,
-                target_directory: build.target_directory,
-                profile: build.profile,
-                test_features,
-                artifact: ResolvedArtifact {
-                    kind: ArtifactKind::Wasm,
-                    path: build.wasm,
-                },
-            })
-        }
-        crate::build::BuildTarget::Rv32 => {
-            let build = crate::build::build_rv32_project(
-                package,
-                &[],
-                artifacts,
-                explicit_profile,
-                None,
-                print,
-            )?;
-            let test_features = integration_test_features(&build.package_root);
-            Ok(IntegrationBuild {
-                project_name: build.project_name,
-                project_root: build.project_root,
-                package_root: build.package_root,
-                target_directory: build.target_directory,
-                profile: build.profile,
-                test_features,
-                artifact: ResolvedArtifact {
-                    kind: ArtifactKind::Rv32,
-                    path: build.rv32,
-                },
-            })
-        }
-    }
+    let build = crate::build::build_rv32_project(
+        package,
+        &[],
+        artifacts,
+        explicit_profile,
+        None,
+        &[],
+        print,
+    )?;
+    let test_features = integration_test_features(&build.package_root);
+    Ok(IntegrationBuild {
+        project_name: build.project_name,
+        project_root: build.project_root,
+        package_root: build.package_root,
+        target_directory: build.target_directory,
+        profile: build.profile,
+        test_features,
+        artifact: ResolvedArtifact {
+            kind: ArtifactKind::Rv32,
+            path: build.rv32,
+        },
+    })
 }
 
 fn integration_test_features(package_root: &Path) -> &'static str {
@@ -727,33 +524,6 @@ fn finish_integration_run(
     } else {
         print.json(&CommandResult::with_warnings(cmd, warnings, &run.report))?;
     }
-    Ok(())
-}
-
-fn finish_integration_differential_run(
-    report: &IntegrationDifferentialReport,
-    cmd: &'static str,
-    print: &Print,
-    warnings: Vec<crate::checks::Finding>,
-) -> Result<(), CliError> {
-    if !report.success {
-        if print.is_json() {
-            print.json(&CommandResult::failure_with_warnings(
-                cmd, warnings, &report,
-            ))?;
-            return Err(CliError::CommandReportedFailure);
-        }
-        return Err(CliError::Other(
-            "WASM/RV32 differential integration gate failed".into(),
-        ));
-    }
-
-    if warnings.is_empty() {
-        print.json(&CommandResult::new(cmd, &report))?;
-    } else {
-        print.json(&CommandResult::with_warnings(cmd, warnings, &report))?;
-    }
-    print.status("WASM/RV32 differential integration gate passed.");
     Ok(())
 }
 
@@ -843,7 +613,7 @@ fn run_watch(
         wait_for_watch_change(&watch, &mut snapshot, WATCH_POLL_INTERVAL, WATCH_DEBOUNCE)?;
         print.status(format_args!(
             "Change detected; rerunning {} tests...",
-            options.target.as_str()
+            ArtifactKind::Rv32.as_str()
         ));
     }
 }
@@ -864,10 +634,8 @@ fn run_once_with_options(
         cargo_args,
     )?;
 
-    // Build the selected contract artifact (validates project root,
-    // checks for cargo on PATH, etc.).
-    let build =
-        build_local_test_artifact(package, options.target, artifacts, explicit_profile, print)?;
+    // Build the contract artifact (validates project root, checks for cargo on PATH, etc.).
+    let build = build_local_test_artifact(package, artifacts, explicit_profile, print)?;
 
     let root = build.project_root.clone();
     let profile = build.profile.clone();
@@ -900,7 +668,7 @@ fn run_once_with_options(
     let context = TestCommandContext {
         root: &root,
         project_name: &build.project_name,
-        test_target: test_target_for(options.target),
+        test_target: RV32_TEST_TARGET,
         features: "dev",
         env: &env,
         env_remove: &credential_environment.remove,
@@ -938,7 +706,7 @@ fn run_once_with_options(
         &executed_tests,
         &failed_tests,
         options.watch,
-        test_mode_for(options.target),
+        TestMode::Rv32,
         None,
     );
 
@@ -956,54 +724,29 @@ fn run_once_with_options(
 
 fn build_local_test_artifact(
     package: Option<&str>,
-    target: crate::build::BuildTarget,
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
     print: &Print,
 ) -> Result<LocalTestBuild, CliError> {
-    match target {
-        crate::build::BuildTarget::Wasm => {
-            let build = crate::build::build_project(
-                package,
-                false,
-                &[],
-                artifacts,
-                explicit_profile,
-                &[],
-                print,
-            )?;
-            Ok(LocalTestBuild {
-                project_name: build.project_name,
-                project_root: build.project_root,
-                target_directory: build.target_directory,
-                profile: build.profile,
-                artifact: ResolvedArtifact {
-                    kind: ArtifactKind::Wasm,
-                    path: build.wasm,
-                },
-            })
-        }
-        crate::build::BuildTarget::Rv32 => {
-            let build = crate::build::build_rv32_project(
-                package,
-                &[],
-                artifacts,
-                explicit_profile,
-                None,
-                print,
-            )?;
-            Ok(LocalTestBuild {
-                project_name: build.project_name,
-                project_root: build.project_root,
-                target_directory: build.target_directory,
-                profile: build.profile,
-                artifact: ResolvedArtifact {
-                    kind: ArtifactKind::Rv32,
-                    path: build.rv32,
-                },
-            })
-        }
-    }
+    let build = crate::build::build_rv32_project(
+        package,
+        &[],
+        artifacts,
+        explicit_profile,
+        None,
+        &[],
+        print,
+    )?;
+    Ok(LocalTestBuild {
+        project_name: build.project_name,
+        project_root: build.project_root,
+        target_directory: build.target_directory,
+        profile: build.profile,
+        artifact: ResolvedArtifact {
+            kind: ArtifactKind::Rv32,
+            path: build.rv32,
+        },
+    })
 }
 
 fn initial_watch_context(artifacts: &ArtifactOptions) -> Result<WatchContext, CliError> {
@@ -1215,7 +958,7 @@ fn finish_empty_rerun(
         &[],
         &[],
         watch_enabled,
-        test_mode_for_artifact(build.artifact.kind),
+        TestMode::Rv32,
         None,
     );
     print.json(&CommandResult::new(cmd, &report))?;
@@ -1226,34 +969,13 @@ fn print_test_status(options: &TestOptions, rerun_count: usize, print: &Print) {
     if options.rerun {
         print.status(format_args!(
             "Rerunning {rerun_count} failed {} test(s) (abort semantics)...",
-            options.target.as_str()
+            ArtifactKind::Rv32.as_str()
         ));
     } else {
         print.status(format_args!(
             "Running {} tests (abort semantics)...",
-            options.target.as_str()
+            ArtifactKind::Rv32.as_str()
         ));
-    }
-}
-
-fn test_target_for(target: crate::build::BuildTarget) -> &'static str {
-    match target {
-        crate::build::BuildTarget::Wasm => WASM_TEST_TARGET,
-        crate::build::BuildTarget::Rv32 => RV32_TEST_TARGET,
-    }
-}
-
-fn test_mode_for(target: crate::build::BuildTarget) -> TestMode {
-    match target {
-        crate::build::BuildTarget::Wasm => TestMode::Wasm,
-        crate::build::BuildTarget::Rv32 => TestMode::Rv32,
-    }
-}
-
-fn test_mode_for_artifact(kind: ArtifactKind) -> TestMode {
-    match kind {
-        ArtifactKind::Wasm => TestMode::Wasm,
-        ArtifactKind::Rv32 => TestMode::Rv32,
     }
 }
 
@@ -1609,7 +1331,7 @@ fn test_command(root: &Path, project_name: &str, test_target: &str, features: &s
         .arg("--features")
         .arg(features)
         .arg("--");
-    if test_target == WASM_TEST_TARGET || test_target == RV32_TEST_TARGET {
+    if test_target == RV32_TEST_TARGET {
         cargo_cmd.arg("--include-ignored");
     }
     cargo_cmd
@@ -1865,7 +1587,7 @@ mod tests {
     use super::{
         ArtifactKind, FAILURE_CACHE_VERSION, FailureCache, INTEGRATION_TEST_TARGET,
         IntegrationTestOptions, RV32_TEST_TARGET, SelectedFilter, TestHarnessOptions, TestOptions,
-        TestRunOutput, WASM_TEST_TARGET, WatchContext, aggregate_summary, apply_harness_options,
+        TestRunOutput, WatchContext, aggregate_summary, apply_harness_options,
         apply_test_environment, build_target_override_warning, combined_output,
         derive_summary_from_cases, extract_failed_tests, failure_cache_path, filter_cached_tests,
         integration_test_features, next_cached_failures, parse_summary_line, parse_test_case_line,
@@ -1955,17 +1677,16 @@ mod tests {
     fn integration_report_serializes_mode_and_node_metadata() {
         let run = integration_run(
             true,
-            crate::artifacts::ArtifactKind::Wasm,
-            std::path::Path::new("/project/target/demo.wasm"),
+            crate::artifacts::ArtifactKind::Rv32,
+            std::path::Path::new("/project/target/demo.rv32a"),
         );
 
         let json = serde_json::to_value(&run.report).expect("bug: report should serialize");
 
         assert_eq!(json["schemaVersion"], TEST_JSON_SCHEMA_VERSION);
         assert_eq!(json["mode"], "integration");
-        assert_eq!(json["artifact"]["kind"], "wasm");
-        assert_eq!(json["artifact"]["path"], "/project/target/demo.wasm");
-        assert!(json.get("wasm").is_none());
+        assert_eq!(json["artifact"]["kind"], "rv32");
+        assert_eq!(json["artifact"]["path"], "/project/target/demo.rv32a");
         assert_eq!(json["integration"]["rpcUrl"], "http://127.0.0.1:1234");
         assert_eq!(json["integration"]["defaultKey"], "dev-0");
         assert_eq!(
@@ -1976,105 +1697,7 @@ mod tests {
     }
 
     #[test]
-    fn integration_report_serializes_rv32_artifact_metadata() {
-        let run = integration_run(
-            true,
-            crate::artifacts::ArtifactKind::Rv32,
-            std::path::Path::new("/project/target/demo.rv32a"),
-        );
-
-        let json = serde_json::to_value(&run.report).expect("bug: report should serialize");
-
-        assert_eq!(json["mode"], "integration");
-        assert_eq!(json["artifact"]["kind"], "rv32");
-        assert_eq!(json["artifact"]["path"], "/project/target/demo.rv32a");
-        assert!(json.get("wasm").is_none());
-    }
-
-    #[test]
-    fn differential_report_requires_matching_wasm_and_rv32_outcomes() {
-        let wasm = integration_run(
-            true,
-            crate::artifacts::ArtifactKind::Wasm,
-            std::path::Path::new("/project/target/demo.wasm"),
-        );
-        let rv32 = integration_run(
-            true,
-            crate::artifacts::ArtifactKind::Rv32,
-            std::path::Path::new("/project/target/demo.rv32a"),
-        );
-
-        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
-        let json = serde_json::to_value(&report).expect("bug: report should serialize");
-
-        assert!(report.success);
-        assert!(report.same_test_outcomes);
-        assert_eq!(json["schemaVersion"], TEST_JSON_SCHEMA_VERSION);
-        assert_eq!(json["mode"], "integration-differential");
-        assert_eq!(json["wasm"]["artifact"]["kind"], "wasm");
-        assert_eq!(json["rv32"]["artifact"]["kind"], "rv32");
-    }
-
-    #[test]
-    fn differential_report_fails_when_test_outcomes_differ() {
-        let wasm = integration_run(
-            true,
-            crate::artifacts::ArtifactKind::Wasm,
-            std::path::Path::new("/project/target/demo.wasm"),
-        );
-        let rv32 = integration_run(
-            false,
-            crate::artifacts::ArtifactKind::Rv32,
-            std::path::Path::new("/project/target/demo.rv32a"),
-        );
-
-        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
-
-        assert!(!report.success);
-        assert!(!report.same_test_outcomes);
-    }
-
-    #[test]
-    fn differential_report_ignores_test_output_order() {
-        let mut wasm = integration_run(
-            true,
-            crate::artifacts::ArtifactKind::Wasm,
-            std::path::Path::new("/project/target/demo.wasm"),
-        );
-        let mut rv32 = integration_run(
-            true,
-            crate::artifacts::ArtifactKind::Rv32,
-            std::path::Path::new("/project/target/demo.rv32a"),
-        );
-        wasm.report.runs[0].tests = vec![
-            TestCase {
-                name: "tests::first".into(),
-                status: TestCaseStatus::Passed,
-            },
-            TestCase {
-                name: "tests::second".into(),
-                status: TestCaseStatus::Passed,
-            },
-        ];
-        rv32.report.runs[0].tests = vec![
-            TestCase {
-                name: "tests::second".into(),
-                status: TestCaseStatus::Passed,
-            },
-            TestCase {
-                name: "tests::first".into(),
-                status: TestCaseStatus::Passed,
-            },
-        ];
-
-        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
-
-        assert!(report.success);
-        assert!(report.same_test_outcomes);
-    }
-
-    #[test]
-    fn wasm_report_serializes_mode_without_integration_metadata() {
+    fn rv32_report_serializes_mode_without_integration_metadata() {
         let profile = crate::config::ResolvedProfile {
             name: "default".into(),
             network: None,
@@ -2094,8 +1717,8 @@ mod tests {
             std::path::Path::new("/project"),
             &profile,
             TestArtifactInfo::new(
-                crate::artifacts::ArtifactKind::Wasm,
-                std::path::Path::new("/project/target/demo.wasm"),
+                crate::artifacts::ArtifactKind::Rv32,
+                std::path::Path::new("/project/target/demo.rv32a"),
             ),
             &[],
             false,
@@ -2105,16 +1728,15 @@ mod tests {
             &[],
             &[],
             false,
-            TestMode::Wasm,
+            TestMode::Rv32,
             None,
         );
 
         let json = serde_json::to_value(&report).expect("bug: report should serialize");
 
-        assert_eq!(json["mode"], "wasm");
-        assert_eq!(json["artifact"]["kind"], "wasm");
-        assert_eq!(json["artifact"]["path"], "/project/target/demo.wasm");
-        assert!(json.get("wasm").is_none());
+        assert_eq!(json["mode"], "rv32");
+        assert_eq!(json["artifact"]["kind"], "rv32");
+        assert_eq!(json["artifact"]["path"], "/project/target/demo.rv32a");
         assert!(json.get("integration").is_none());
     }
 
@@ -2187,11 +1809,6 @@ mod tests {
             args.windows(2)
                 .any(|window| window[0] == "--test" && window[1] == "integration")
         );
-        assert!(
-            !args
-                .windows(2)
-                .any(|window| window[0] == "--test" && window[1] == WASM_TEST_TARGET)
-        );
         assert!(!args.iter().any(|arg| arg == "--include-ignored"));
         assert!(
             args.iter()
@@ -2234,26 +1851,6 @@ mod tests {
     }
 
     #[test]
-    fn wasm_command_includes_ignored_tests() {
-        let command = test_command(
-            std::path::Path::new("/project"),
-            "demo",
-            WASM_TEST_TARGET,
-            "dev",
-        );
-
-        let args: Vec<_> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert!(
-            args.windows(2)
-                .any(|window| window[0] == "--test" && window[1] == WASM_TEST_TARGET)
-        );
-        assert!(args.iter().any(|arg| arg == "--include-ignored"));
-    }
-
-    #[test]
     fn rv32_command_selects_rv32_target_and_includes_ignored_tests() {
         let command = test_command(
             std::path::Path::new("/project"),
@@ -2278,7 +1875,7 @@ mod tests {
         let command = test_command(
             std::path::Path::new("/project"),
             "demo",
-            WASM_TEST_TARGET,
+            RV32_TEST_TARGET,
             "dev",
         );
 
@@ -2422,11 +2019,11 @@ mod tests {
 
     #[test]
     fn integration_outcome_emits_report_when_tests_pass_and_shutdown_fails() {
-        super::handle_integration_outcome(
+        super::handle_integration_outcome::<()>(
             Ok(integration_run(
                 true,
-                crate::artifacts::ArtifactKind::Wasm,
-                std::path::Path::new("/project/target/demo.wasm"),
+                crate::artifacts::ArtifactKind::Rv32,
+                std::path::Path::new("/project/target/demo.rv32a"),
             )),
             Err(CliError::NodeSupervisor("stop failed".into())),
             "test",
@@ -2437,11 +2034,11 @@ mod tests {
 
     #[test]
     fn integration_outcome_preserves_failed_tests_when_shutdown_fails() {
-        let err = super::handle_integration_outcome(
+        let err = super::handle_integration_outcome::<()>(
             Ok(integration_run(
                 false,
-                crate::artifacts::ArtifactKind::Wasm,
-                std::path::Path::new("/project/target/demo.wasm"),
+                crate::artifacts::ArtifactKind::Rv32,
+                std::path::Path::new("/project/target/demo.rv32a"),
             )),
             Err(CliError::NodeSupervisor("stop failed".into())),
             "test",
@@ -2456,8 +2053,8 @@ mod tests {
         let err = super::handle_integration_outcome(
             Ok(integration_run(
                 false,
-                crate::artifacts::ArtifactKind::Wasm,
-                std::path::Path::new("/project/target/demo.wasm"),
+                crate::artifacts::ArtifactKind::Rv32,
+                std::path::Path::new("/project/target/demo.rv32a"),
             )),
             Ok(()),
             "test",
@@ -2509,7 +2106,6 @@ mod tests {
                 show_output: true,
                 no_capture: true,
             },
-            ..TestOptions::default()
         };
 
         apply_harness_options(

@@ -41,9 +41,6 @@ pub enum RustTargetStatus {
     Unknown,
 }
 
-/// Backwards-compatible name for the existing WASM status API.
-pub type WasmTargetStatus = RustTargetStatus;
-
 /// Active Rust toolchain and required component status.
 #[derive(Debug, Serialize)]
 pub struct RustToolchainStatus {
@@ -88,8 +85,6 @@ pub struct EnvironmentStatus {
     pub rv32_target: RustTargetStatus,
     pub devnode: DevnodeStatus,
     pub dev_wallet_artifact: DevWalletArtifactStatus,
-    pub wasm_target: RustTargetStatus,
-    pub wasm_opt: bool,
     pub registry_configured: bool,
     pub cargo_config_path: PathBuf,
 }
@@ -183,10 +178,9 @@ fn is_zero(val: &usize) -> bool {
 /// Check the local toolchain and registry configuration.
 pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliError> {
     let cargo = which::which("cargo").is_ok();
-    let (rust_toolchain, rv32_target, wasm_target) = detect_rust_environment(project_start);
+    let (rust_toolchain, rv32_target) = detect_rust_environment(project_start);
     let devnode = check_devnode();
     let dev_wallet_artifact = check_dev_wallet_artifact(&devnode);
-    let wasm_opt = which::which("wasm-opt").is_ok();
     let cargo_config_path = crate::auth::cargo_config_path()?;
 
     let registry_configured = match std::fs::read_to_string(&cargo_config_path) {
@@ -201,8 +195,6 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
         rv32_target,
         devnode,
         dev_wallet_artifact,
-        wasm_target,
-        wasm_opt,
         registry_configured,
         cargo_config_path,
     })
@@ -592,9 +584,7 @@ fn add_rust_toolchain_findings(
     }
 }
 
-fn detect_rust_environment(
-    project_start: &Path,
-) -> (RustToolchainStatus, RustTargetStatus, RustTargetStatus) {
+fn detect_rust_environment(project_start: &Path) -> (RustToolchainStatus, RustTargetStatus) {
     let (installed, default) = match installed_rust_toolchains() {
         Ok(toolchains) => toolchains,
         Err(error) => {
@@ -620,7 +610,6 @@ fn detect_rust_environment(
                 error: Some(format!("Rust toolchain `{requested}` is not installed")),
             },
             RustTargetStatus::Unknown,
-            RustTargetStatus::Unknown,
         );
     };
 
@@ -630,11 +619,6 @@ fn detect_rust_environment(
         .as_deref()
         .map_or(RustTargetStatus::Unknown, |installed| {
             rust_target_status(installed, crate::build::RV32_TARGET_TRIPLE)
-        });
-    let wasm_target = targets
-        .as_deref()
-        .map_or(RustTargetStatus::Unknown, |installed| {
-            rust_target_status(installed, crate::build::WASM_TARGET_TRIPLE)
         });
     let rust_src = components
         .as_deref()
@@ -654,14 +638,13 @@ fn detect_rust_environment(
             error: (!probe_errors.is_empty()).then(|| probe_errors.join("; ")),
         },
         rv32_target,
-        wasm_target,
     )
 }
 
 fn unavailable_rust_environment(
     name: Option<String>,
     error: String,
-) -> (RustToolchainStatus, RustTargetStatus, RustTargetStatus) {
+) -> (RustToolchainStatus, RustTargetStatus) {
     (
         RustToolchainStatus {
             available: false,
@@ -669,7 +652,6 @@ fn unavailable_rust_environment(
             rust_src: RustTargetStatus::Unknown,
             error: Some(error),
         },
-        RustTargetStatus::Unknown,
         RustTargetStatus::Unknown,
     )
 }
@@ -1458,8 +1440,6 @@ mod tests {
                     sha256: Some("abc123".into()),
                     error: None,
                 },
-                wasm_target: WasmTargetStatus::Installed,
-                wasm_opt: true,
                 registry_configured: true,
                 cargo_config_path: PathBuf::from("/tmp"),
             },
@@ -1492,10 +1472,6 @@ mod tests {
         assert_eq!(
             rust_target_status(installed, crate::build::RV32_TARGET_TRIPLE),
             RustTargetStatus::Installed
-        );
-        assert_eq!(
-            rust_target_status(installed, crate::build::WASM_TARGET_TRIPLE),
-            RustTargetStatus::Missing
         );
     }
 
@@ -1572,8 +1548,6 @@ mod tests {
                 sha256: Some("abc123".into()),
                 error: None,
             },
-            wasm_target: RustTargetStatus::Unknown,
-            wasm_opt: false,
             registry_configured: true,
             cargo_config_path: PathBuf::from("/tmp/config.toml"),
         };
@@ -1925,8 +1899,6 @@ mod tests {
                     sha256: Some("abc123".into()),
                     error: None,
                 },
-                wasm_target: WasmTargetStatus::Installed,
-                wasm_opt: true,
                 registry_configured: true,
                 cargo_config_path: PathBuf::from("/tmp"),
             },

@@ -61,9 +61,6 @@ jobs:
           path: actions
           ref: 6661fedc744b057368d7ecb0127aece0aa12b426
 
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-
       - name: dry run
         uses: ./actions/cargo-publish-dry-run
         with:

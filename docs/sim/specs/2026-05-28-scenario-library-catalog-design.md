@@ -31,7 +31,7 @@ workload execution, target lifecycle, or result semantics.
 
 - Moving existing scenario manifests into subdirectories.
 - Automatically running scenarios from catalog metadata.
-- Keeping committed `.wasm` fixtures for normal smoke/soak scenarios.
+- Keeping committed `.rv32a` fixtures for normal smoke/soak scenarios.
 - Contract build orchestration beyond the existing smoke script.
 - Baseline refresh or result promotion workflows.
 
@@ -46,7 +46,7 @@ workload execution, target lifecycle, or result semantics.
       "id": "local-fibonacci-view-smoke",
       "path": "local-fibonacci-view-smoke.json",
       "title": "Fibonacci Deploy + View Smoke",
-      "summary": "Deploys fibonacci.wasm then calls compute(10) through groundhog_view.",
+      "summary": "Deploys fibonacci.rv32a then calls compute(10) through groundhog_view.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "contract", "view-call", "smoke"],
@@ -55,7 +55,7 @@ workload execution, target lifecycle, or result semantics.
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "scripts/smoke-sim-scenarios.sh"
@@ -78,9 +78,9 @@ Default to source-first contract scenarios:
 
 - Keep reusable contracts in `groundhog-examples` or a future contract fixtures
   workspace.
-- Build WASM artifacts into a temporary target directory in scripts.
+- Build RV32 artifacts into a temporary target directory in scripts.
 - Pass the build output with `hogsim run --contract-artifact-root`.
-- Commit `.wasm` only for a fixture where exact byte identity is the test
+- Commit `.rv32a` only for a fixture where exact byte identity is the test
   subject.
 
 ## Verification

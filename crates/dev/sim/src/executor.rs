@@ -6644,7 +6644,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "storage-read", "weight": 1}],
-            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "rv32", "path": "fibonacci.rv32a"}}],
             "storageReads": [{
                 "name": "fib-zero-key",
                 "contract": "fibonacci",
@@ -6664,7 +6664,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "contract-call", "weight": 1}],
-            "contractArtifacts": [{"name": "events", "artifact": {"kind": "wasm", "path": "events.wasm"}}],
+            "contractArtifacts": [{"name": "events", "artifact": {"kind": "rv32", "path": "events.rv32a"}}],
             "contractCalls": [{
                 "name": "events-store-value",
                 "contract": "events",
@@ -6684,7 +6684,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "events-query", "weight": 1}],
-            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "rv32", "path": "fibonacci.rv32a"}}],
             "eventQueries": [{
                 "name": "fib-events",
                 "contract": "fibonacci",
@@ -6872,7 +6872,7 @@ mod tests {
                 "devWallet": {
                     "contentHash": prefixed_hex(0x33),
                     "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "./dev-wallet.wasm",
+                    "artifactHint": "./dev_wallet.rv32a",
                     "deployEntrypoint": "0xadac498222148e4f",
                     "createWalletEntrypoint": "0x6372656174655761",
                     "doActionEntrypoint": "0x646f416374696f6e"
@@ -7007,7 +7007,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "read-after-write", "weight": 1}],
-            "contractArtifacts": [{"name": "caller-counter", "artifact": {"kind": "wasm", "path": "caller-counter.wasm"}}],
+            "contractArtifacts": [{"name": "caller-counter", "artifact": {"kind": "rv32", "path": "caller-counter.rv32a"}}],
             "readAfterWrite": [{
                 "name": "counter-roundtrip",
                 "contract": "caller-counter",

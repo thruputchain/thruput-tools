@@ -37,7 +37,7 @@ impl ScenarioBuilder {
     }
 
     /// Register a contract artifact loaded from a file, inferring its kind from
-    /// the extension (`.wasm` or `.rv32a`). The file is read and validated at
+    /// the `.rv32a` extension. The file is read and validated at
     /// [`ScenarioBuilder::build`]. Agents deploy it by name.
     #[must_use]
     pub fn artifact(mut self, name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
@@ -72,12 +72,11 @@ impl ScenarioBuilder {
         mut self,
         name: impl Into<String>,
         bytes: impl Into<Vec<u8>>,
-        kind: ArtifactKind,
+        _kind: ArtifactKind,
     ) -> Self {
         self.artifacts.push(ArtifactSpec::Bytes {
             name: name.into(),
             bytes: bytes.into(),
-            kind,
         });
         self
     }

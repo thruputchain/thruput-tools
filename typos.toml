@@ -3,7 +3,6 @@ extend-exclude = [
     ".git",
     "target",
     "Cargo.lock",
-    "*.wasm",
 ]
 
 [default.extend-words]

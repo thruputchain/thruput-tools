@@ -1286,7 +1286,8 @@ fn load_dev_wallet_contract(
         artifact_hint,
     )?;
     let artifact_bytes = std::fs::read(&artifact_path)?;
-    let contract = dev_wallet_contract(&artifact_path, artifact_bytes);
+    let contract = dev_wallet_contract(&artifact_path, artifact_bytes)
+        .map_err(|error| CliError::Other(error.to_string()))?;
     let contract_hash = wallet_contract_hash(&contract)
         .map_err(|error| CliError::Other(format!("failed to hash wallet contract: {error}")))?;
     Ok((artifact_path, contract, contract_hash))
@@ -1510,7 +1511,7 @@ mod tests {
                     "devWallet": {
                         "contentHash": format!("0x{}", "51".repeat(32)),
                         "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                        "artifactHint": "dev-wallet.wasm",
+                        "artifactHint": "dev_wallet.rv32a",
                         "deployEntrypoint": "0x6465706c6f794e77",
                         "createWalletEntrypoint": "0x6372656174655761",
                         "doActionEntrypoint": "0x646f416374696f6e"
@@ -1701,7 +1702,7 @@ mod tests {
         std::fs::write(&config, "").expect("bug: config should be written");
         let contracts = tmp.path().join("contracts");
         std::fs::create_dir(&contracts).expect("bug: contracts dir should be created");
-        let artifact = contracts.join("dev_wallet.wasm");
+        let artifact = contracts.join("dev_wallet.rv32a");
         std::fs::write(&artifact, []).expect("bug: artifact should be written");
 
         let resolved = resolve_dev_wallet_artifact_path(
@@ -1709,7 +1710,7 @@ mod tests {
             std::path::Path::new("/tmp/runtime-manifest.json"),
             None,
             Some(&config),
-            "contracts/dev_wallet.wasm",
+            "contracts/dev_wallet.rv32a",
         )
         .expect("bug: profile-root artifact should resolve");
         assert_eq!(resolved, artifact);

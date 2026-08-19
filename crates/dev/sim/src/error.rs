@@ -21,6 +21,8 @@ pub enum SimError {
     Io(#[from] std::io::Error),
     #[error("failed to parse or write JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("unsupported contract artifact extension for {path}; expected .rv32a")]
+    UnsupportedContractArtifactExtension { path: std::path::PathBuf },
     #[error(
         "execution does not yet support these workloads: {0}. Supported workloads are \
          chain-tip, wallet-submit-smoke, receipt-poll, contract-call, view-call, \

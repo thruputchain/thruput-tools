@@ -14,7 +14,7 @@ use crate::CliError;
 use crate::codec::{
     TypeDefIndex, build_type_def_index, decode_event_spec_value_from_reader, spec_string_text,
 };
-use crate::contract_spec::{load_contract_spec_from_xdr, load_embedded_contract_spec_from_bytes};
+use crate::contract_spec::load_contract_spec_from_xdr;
 use crate::events_json::{
     DecodedEventReport, EventDecodeStatus, EventListItemReport, EventSpecReport, EventSpecSource,
 };
@@ -117,14 +117,16 @@ impl ValidatedEventSpec {
 }
 
 fn load_bounded_spec(path: &Path) -> Result<ContractSpec, String> {
-    let bytes = read_bounded(path)?;
-
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("xdr") => load_contract_spec_from_xdr(&bytes).map_err(|error| error.to_string()),
-        Some("wasm") => load_embedded_contract_spec_from_bytes(&bytes)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "WASM artifact does not contain a contract spec".into()),
-        _ => Err("unsupported file extension; expected .wasm or .xdr".into()),
+        Some("xdr") => {
+            let bytes = read_bounded(path)?;
+            load_contract_spec_from_xdr(&bytes).map_err(|error| error.to_string())
+        }
+        Some("rv32a") => Err(format!(
+            "RV32 artifacts do not embed contract specs; pass the sidecar at {}",
+            path.with_extension("spec.xdr").display(),
+        )),
+        _ => Err("unsupported file extension; expected .xdr".into()),
     }
 }
 

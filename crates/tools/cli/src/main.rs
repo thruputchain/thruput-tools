@@ -64,30 +64,6 @@ impl From<RpcTargetArgs> for groundhog_cli::config::ProfileOverrides {
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
-enum BuildTargetArg {
-    Wasm,
-    Rv32,
-}
-
-impl From<BuildTargetArg> for groundhog_cli::build::BuildTarget {
-    fn from(value: BuildTargetArg) -> Self {
-        match value {
-            BuildTargetArg::Wasm => Self::Wasm,
-            BuildTargetArg::Rv32 => Self::Rv32,
-        }
-    }
-}
-
-impl From<BuildTargetArg> for groundhog_cli::artifacts::ArtifactKind {
-    fn from(value: BuildTargetArg) -> Self {
-        match value {
-            BuildTargetArg::Wasm => Self::Wasm,
-            BuildTargetArg::Rv32 => Self::Rv32,
-        }
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy)]
 enum NodeBlockDriverArg {
     Instant,
     Interval,
@@ -151,23 +127,13 @@ enum Command {
     },
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
-                      wasm32-unknown-unknown or \
-                      riscv32im-unknown-none-elf via cargo. \
-                      Must be run inside a Groundhog \
-                      project.\n\n\
-                      --optimize requires wasm-opt \
-                      (install via `brew install binaryen`). \
-                      --target rv32 uses the built-in RV32 lowerer.")]
+                      riscv32im-unknown-none-elf via cargo, then lower the ELF \
+                      to a Groundhog RV32 artifact. Must be run inside a \
+                      Groundhog project.")]
     Build {
         /// Package to build (required in workspaces)
         #[arg(short, long)]
         package: Option<String>,
-        /// Contract artifact target
-        #[arg(long, value_enum, default_value_t = BuildTargetArg::Rv32)]
-        target: BuildTargetArg,
-        /// Run wasm-opt after compilation (requires wasm-opt)
-        #[arg(long)]
-        optimize: bool,
         /// Generate typed bindings after build (e.g. `ts`)
         #[arg(long)]
         bindings: Vec<String>,
@@ -185,18 +151,13 @@ enum Command {
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
-    /// Build and test the contract under RV32, WASM, or local-node execution
+    /// Build and test the contract under RV32 or local-node execution
     #[command(
-        long_about = "Builds the contract to the selected local test target \
-                       (--target rv32 by default, or --target wasm), then runs \
-                       test_rv32 or test_wasm on the host. With \
+        long_about = "Builds the contract to RV32, then runs test_rv32 on the host. With \
                        --integration, starts an ephemeral hog-devnode \
-                       local node, deploys the selected artifact \
-                       (--target rv32 by default, or --target wasm), and \
+                       local node, deploys the RV32 artifact, and \
                        runs the integration test target with RPC environment \
-                       variables. With --integration --differential, runs the \
-                       same integration target against WASM and RV32 artifacts \
-                       on isolated local nodes. With --json, emits a structured report \
+                       variables. With --json, emits a structured report \
                        with mode, artifact metadata, summary, per-test cases, \
                        and integration node metadata when applicable.",
         after_help = "Logging:\n  With --integration, local-node supervisor info logs \
@@ -238,12 +199,6 @@ enum Command {
         /// Run tests/integration.rs against an ephemeral hog-devnode local node
         #[arg(long)]
         integration: bool,
-        /// Contract artifact target to test
-        #[arg(long, value_enum)]
-        target: Option<BuildTargetArg>,
-        /// Run integration tests against both WASM and RV32 artifacts
-        #[arg(long, requires = "integration", conflicts_with = "target")]
-        differential: bool,
         /// Show local-node supervisor and forwarded hog-devnode diagnostics
         ///
         /// Only used with --integration. Logs are written to stderr.
@@ -269,12 +224,9 @@ enum Command {
         /// Package to deploy (required at a workspace root)
         #[arg(short, long, conflicts_with = "artifact")]
         package: Option<String>,
-        /// Path to compiled .wasm or .rv32a (default: auto-detect)
+        /// Path to compiled .rv32a (default: auto-detect)
         #[arg(long)]
         artifact: Option<PathBuf>,
-        /// Artifact target to auto-detect when --artifact is omitted
-        #[arg(long, value_enum, conflicts_with = "artifact")]
-        target: Option<BuildTargetArg>,
         /// Build and sign the deploy transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -291,8 +243,8 @@ enum Command {
     },
     /// Submit a transaction that calls a deployed contract method
     #[command(long_about = "Submit a signed transaction that calls a deployed \
-                      contract method. Named methods use local or embedded \
-                      contract metadata when available. Without metadata, \
+                      contract method. Named methods use local or built \
+                      contract-spec metadata when available. Without metadata, \
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and one raw hex calldata argument.")]
     Call {
@@ -365,8 +317,8 @@ enum Command {
     },
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
-                      groundhog_view. Named methods use local or embedded \
-                      contract metadata when available. Without metadata, \
+                      groundhog_view. Named methods use local or built \
+                      contract-spec metadata when available. Without metadata, \
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and raw calldata.")]
     View {
@@ -707,7 +659,7 @@ enum WalletCommand {
 enum CodegenCommand {
     /// Generate TypeScript bindings
     Ts {
-        /// Path to .wasm or .spec.xdr file
+        /// Path to a .spec.xdr file
         source: std::path::PathBuf,
         /// Output file path (default: stdout)
         #[arg(long, short)]
@@ -821,7 +773,7 @@ enum EventsCommand {
         /// Opaque cursor returned by a previous page
         #[arg(long)]
         cursor: Option<String>,
-        /// Trusted local .wasm or .xdr artifact used to decode matching events
+        /// Trusted local .xdr sidecar used to decode matching events
         #[arg(long)]
         spec: Option<PathBuf>,
         /// Case-sensitive event name declared by --spec
@@ -1060,8 +1012,6 @@ fn main() {
             }),
         Command::Build {
             package,
-            target,
-            optimize,
             bindings,
             stack_size,
             profile,
@@ -1076,14 +1026,11 @@ fn main() {
                 );
                 groundhog_cli::build::run(
                     package.as_deref(),
-                    target.into(),
-                    optimize,
                     &bindings,
                     stack_size,
                     &cargo_args,
                     &artifacts,
                     profile.as_deref(),
-                    cmd_name,
                     &print,
                 )
             }),
@@ -1098,8 +1045,6 @@ fn main() {
             rerun,
             watch,
             integration,
-            target,
-            differential,
             verbose,
             hogd_protocol,
             profile,
@@ -1113,7 +1058,6 @@ fn main() {
                     &cwd,
                 );
                 let options = groundhog_cli::test_cmd::TestOptions {
-                    target: target.unwrap_or(BuildTargetArg::Rv32).into(),
                     match_test,
                     test_threads,
                     skip,
@@ -1131,8 +1075,6 @@ fn main() {
                         &options,
                         &groundhog_cli::test_cmd::IntegrationTestOptions {
                             hogd_protocol,
-                            target: options.target,
-                            differential,
                             verbose,
                         },
                         &cargo_args,
@@ -1156,7 +1098,6 @@ fn main() {
         Command::Deploy {
             package,
             artifact,
-            target,
             dry_run,
             wallet,
             profile,
@@ -1172,7 +1113,6 @@ fn main() {
                 groundhog_cli::deploy::run(
                     artifact.as_deref(),
                     package.as_deref(),
-                    target.unwrap_or(BuildTargetArg::Rv32).into(),
                     dry_run,
                     wallet.as_deref(),
                     &artifacts,

@@ -227,7 +227,7 @@ mod tests {
                 "devWallet": {
                     "contentHash": prefixed_hex(0x33),
                     "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "./dev-wallet.wasm",
+                    "artifactHint": "./dev_wallet.rv32a",
                     "deployEntrypoint": "0xadac498222148e4f",
                     "createWalletEntrypoint": "0x6372656174655761",
                     "doActionEntrypoint": "0x646f416374696f6e"

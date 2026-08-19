@@ -14,7 +14,6 @@ Expose the public event index through focused CLI commands:
 
 ```bash
 groundhog events list counter
-groundhog events list counter --spec ./counter.wasm
 groundhog events list counter --spec ./counter.spec.xdr --event Incremented
 groundhog token transfers token --account alice
 ```
@@ -97,11 +96,7 @@ Important limits:
 - cursor contents are server-owned and may encode the original order and anchor.
 
 
-The CLI already resolves saved wallets, contract aliases, direct addresses, and manifest-backed `dev-N` addresses. It also loads a contract spec from:
-
-- a `.wasm` artifact with finalized or raw embedded contract-spec sections, canonicalized through the existing spec tool;
-
-- an XDR-encoded file whose extension is `.xdr`, including `.spec.xdr` sidecars.
+The CLI already resolves saved wallets, contract aliases, direct addresses, and manifest-backed `dev-N` addresses. It loads a contract spec from an XDR-encoded file whose extension is `.xdr`, including `.spec.xdr` sidecars.
 
 
 The current loader does not consume `.spec.json` sidecars. This design does not add a second JSON spec parser.
@@ -149,7 +144,6 @@ groundhog events list 0xabcd... --limit 25
 groundhog events list counter --topic0 0x0123...
 groundhog events list counter --topic1 0xabcd... --topic1 0xef01...
 groundhog events list counter --cursor 0x0123...
-groundhog events list counter --spec ./target/counter.wasm
 groundhog events list counter --spec ./target/counter.spec.xdr --event Incremented
 ```
 
@@ -159,7 +153,7 @@ Options:
 --topic0 <TOPIC>       Repeat for OR within topic position 0
 --topic1 <TOPIC>       Repeat for OR within topic position 1
 --topic2 <TOPIC>       Repeat for OR within topic position 2
---spec <PATH>          Decode matching events with a .wasm or .xdr contract spec
+--spec <PATH>          Decode matching events with a .xdr contract spec
 --event <NAME>         Select one event declared by --spec
 --limit <COUNT>
 --cursor <OPAQUE_HEX>
@@ -208,9 +202,9 @@ Spec decoding
 
 Without `--spec`, every item contains raw event data and provenance plus the final v1 decode placeholders: `decodeStatus: "notRequested"` and `decoded: null`.
 
-With `--spec`, open, size-check, load, and validate the contract spec before RPC access. A `.wasm` file must contain finalized or raw embedded spec sections accepted by the existing canonicalizing loader. A `.xdr` file must decode as a `ContractSpec`. Check file existence separately because the current WASM loader returns the same `None` result for a missing file and an artifact without a spec. Missing specs, malformed files, and unsupported extensions fail the command before the event request.
+With `--spec`, open, size-check, load, and validate the contract spec before RPC access. The `.xdr` file must decode as a `ContractSpec`. Missing specs, malformed files, and unsupported extensions fail the command before the event request.
 
-`--spec` accepts a trusted local developer artifact, such as output from `groundhog build` or trusted CI. It is not a hardened parser for arbitrary downloaded or uploaded files in v1. Read at most 16 MiB before parsing, dispatch only `.wasm` and `.xdr`, and reuse the CLI's existing owned contract-spec loaders and canonicalization semantics. Loading a WASM artifact parses spec sections but never instantiates or executes the module.
+`--spec` accepts a trusted local developer sidecar, such as output from `groundhog build` or trusted CI. It is not a hardened parser for arbitrary downloaded or uploaded files in v1. Read at most 16 MiB before parsing, accept only `.xdr`, and reuse the CLI's existing owned contract-spec loader.
 
 After loading, perform complete event-focused structural validation before RPC. Reject cycles, ambiguous definitions, unresolved event-reachable types, unsupported event shapes, more than 4,096 spec definitions/members, more than 64 event-reachable type levels, and validation graphs requiring more than 65,536 type visits. While decoding one returned event, cap materialized values at 4,096 and reject expansions before allocating their output containers. These post-load checks protect event decoding and output but do not harden the initial owned XDR decode itself.
 
@@ -571,8 +565,6 @@ Covered conditions include:
 
 - missing, unreadable, unsupported, or malformed contract spec;
 
-- a `.wasm` artifact with no embedded contract spec;
-
 - duplicate event names or signatures, ambiguous nested members, unresolved types, or cyclic reachable types in a supplied spec;
 
 - unknown `--event` name;
@@ -637,9 +629,7 @@ Important edge cases:
 ## Security considerations
 - Never read or print private keys or seed material; these commands are read-only.
 
-- Treat contract specs as explicitly selected, trusted local developer artifacts. Cap file reads, validate loaded event structures and decode expansion, document the remaining hostile-file denial-of-service risk, and never execute code from a `.wasm` artifact.
-
-- Loading `.wasm` parses the module and canonicalizes accepted raw or finalized spec sections through the existing spec tool. It must not instantiate the module, run constructors, invoke exports, or perform network-dependent build steps.
+- Treat contract specs as explicitly selected, trusted local developer sidecars. Cap file reads, validate loaded event structures and decode expansion, and document the remaining hostile-file denial-of-service risk.
 
 - Do not claim that a supplied spec is authentic or belongs to the queried contract. Human and JSON output must identify it as user-supplied decoding metadata.
 
@@ -678,7 +668,7 @@ Expected areas:
 
 - existing broad target resolution shared with `balance` and `tx list`;
 
-- size-limited contract-spec loading from `.wasm` and `.xdr`, reusing existing owned loaders and canonicalization semantics for trusted local artifacts;
+- size-limited contract-spec loading from `.xdr` sidecars, reusing the existing owned loader for trusted local artifacts;
 
 - the existing CXS contract-value decoder, exposed through the smallest helper needed to decode event payload fields;
 
@@ -711,7 +701,7 @@ No gateway, RPC API, indexer, or protocol change is expected. Hermetic binary te
 Phase 1 emits the final schema-version-1 placeholders: page-level `spec: null` and item-level `decodeStatus: "notRequested"` plus `decoded: null`. Phase 2 fills these fields without changing the v1 shape.
 
 ### Phase 2: custom spec decoding
-- `--spec` loading from `.wasm` and `.xdr`;
+- `--spec` loading from `.xdr`;
 
 - signature matching and strict payload decoding;
 
@@ -779,7 +769,7 @@ Each phase should pass automated review and a human output gate before the next 
 
 - limit, topic-count, cursor-hex, per-record protocol bounds, and over-limit response validation;
 
-- size-limited `.wasm` and `.xdr` spec loading, missing embedded specs, unsupported extensions, malformed specs, and post-load validation boundaries;
+- size-limited `.xdr` spec loading, unsupported extensions, malformed specs, and post-load validation boundaries;
 
 - duplicate event names and signatures, ambiguous nested type members, and cyclic reachable types;
 
@@ -818,7 +808,7 @@ Use mock RPC fixtures to cover:
 
 - non-empty raw event pages and indexer metadata;
 
-- custom spec decoding from WASM and XDR fixtures;
+- custom spec decoding from XDR fixtures;
 
 - selected-event filtering and conflicting arguments;
 
@@ -845,7 +835,7 @@ Run these through the ignored external-devnode smoke path:
 
 - list its raw events newest-first;
 
-- decode the same events with its WASM or XDR spec;
+- decode the same events with its XDR spec sidecar;
 
 - select one named event and verify server-side topic-0 filtering;
 

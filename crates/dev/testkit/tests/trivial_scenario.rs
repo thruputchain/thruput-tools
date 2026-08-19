@@ -79,7 +79,7 @@ async fn offline_chain_verbs_report_offline() {
     scenario
         .run_agents([Agent::new("solo", |mut ctx| async move {
             let err = ctx
-                .deploy(b"not-a-real-artifact", ArtifactKind::Wasm)
+                .deploy(b"not-a-real-artifact", ArtifactKind::Rv32)
                 .await
                 .expect_err("deploy against an offline target must fail");
             assert!(matches!(err, TestkitError::Offline { .. }));
@@ -242,7 +242,7 @@ async fn registry_exposes_hash_and_registration_state() {
         .artifact_bytes(
             "counter",
             b"fake-contract-bytes".to_vec(),
-            ArtifactKind::Wasm,
+            ArtifactKind::Rv32,
         )
         .build()
         .await
@@ -273,7 +273,7 @@ async fn registry_exposes_hash_and_registration_state() {
 async fn duplicate_artifact_name_fails_build() {
     let result = Scenario::builder("dupe")
         .network(NetworkConfig::offline(1))
-        .artifact_bytes("c", b"a".to_vec(), ArtifactKind::Wasm)
+        .artifact_bytes("c", b"a".to_vec(), ArtifactKind::Rv32)
         .artifact_bytes("c", b"b".to_vec(), ArtifactKind::Rv32)
         .build()
         .await;

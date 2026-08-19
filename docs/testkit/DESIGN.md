@@ -209,7 +209,7 @@ A scenario declares contracts by name on the builder; each is read and hashed at
 name):
 
 - `.artifact(name, path)` — load from a file, inferring the kind from the
-  extension (`.wasm` / `.rv32a`);
+  `.rv32a` extension;
 - `.artifact_with_kind(name, path, kind)` — explicit kind;
 - `.artifact_bytes(name, bytes, kind)` — embedded bytes (e.g. `include_bytes!`).
 

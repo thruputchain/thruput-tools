@@ -103,18 +103,12 @@ fn prepare_provision_plan(
         inputs.scenario_path,
         inputs.contract_artifact_root,
     )?;
-    let wallet_artifact_kind = spec
-        .dev_wallet_artifact_kind
-        .unwrap_or_else(|| infer_dev_wallet_artifact_kind(&artifact_path));
+    validate_dev_wallet_artifact_extension(spec.dev_wallet_artifact_kind, &artifact_path)?;
     let expected_artifact_sha256 = json_string(
         &inputs.runtime_manifest.bootstrap.dev_wallet.content_hash,
         "bootstrap.devWallet.contentHash",
     )?;
-    let wallet_contract = load_dev_wallet_contract(
-        &artifact_path,
-        wallet_artifact_kind,
-        &expected_artifact_sha256,
-    )?;
+    let wallet_contract = load_dev_wallet_contract(&artifact_path, &expected_artifact_sha256)?;
     let wallet_contract_hash = contract_hash(&wallet_contract)?;
     let create_wallet_entrypoint = inputs
         .runtime_manifest
@@ -614,11 +608,7 @@ fn push_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-fn load_dev_wallet_contract(
-    path: &Path,
-    artifact_kind: ContractArtifactKind,
-    expected_sha256: &str,
-) -> Result<Contract, SimError> {
+fn load_dev_wallet_contract(path: &Path, expected_sha256: &str) -> Result<Contract, SimError> {
     let bytes = std::fs::read(path)?;
     let actual_sha256 = sha256_hex(&bytes);
     if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
@@ -630,20 +620,23 @@ fn load_dev_wallet_contract(
     let blob = ContractBlob {
         data: BytesM(bytes),
     };
-    match artifact_kind {
-        ContractArtifactKind::Rv32 => Ok(Contract::kRv32 {
-            rv32_contract: blob,
-        }),
-        ContractArtifactKind::Wasm => Ok(Contract::kWasmi {
-            wasmi_contract: blob,
-        }),
-    }
+    Ok(Contract::kRv32 {
+        rv32_contract: blob,
+    })
 }
 
-fn infer_dev_wallet_artifact_kind(path: &Path) -> ContractArtifactKind {
+fn validate_dev_wallet_artifact_extension(
+    explicit_kind: Option<ContractArtifactKind>,
+    path: &Path,
+) -> Result<(), SimError> {
+    if explicit_kind.is_some() {
+        return Ok(());
+    }
     match path.extension().and_then(|extension| extension.to_str()) {
-        Some("rv32a") => ContractArtifactKind::Rv32,
-        _ => ContractArtifactKind::Wasm,
+        Some("rv32a") => Ok(()),
+        _ => Err(SimError::UnsupportedContractArtifactExtension {
+            path: path.to_path_buf(),
+        }),
     }
 }
 
@@ -748,8 +741,10 @@ mod tests {
     use super::{
         ProvisionPlan, actor_provision_event, hog_transfer_entrypoint, load_dev_wallet_contract,
         next_unused_account_index, parse_hog_amount, resolve_dev_wallet_artifact,
+        validate_dev_wallet_artifact_extension,
     };
     use crate::actor::ActorState;
+    use crate::error::SimError;
     use crate::manifest::{ActorProvisioningSpec, ContractArtifactKind};
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
@@ -778,7 +773,7 @@ mod tests {
         let scenario_dir = temp.path().join("scenarios");
         std::fs::create_dir_all(runtime_dir.join("contracts")).expect("runtime dirs should create");
         std::fs::create_dir_all(&scenario_dir).expect("scenario dir should create");
-        let artifact = runtime_dir.join("contracts/dev-wallet.wasm");
+        let artifact = runtime_dir.join("contracts/dev_wallet.rv32a");
         std::fs::write(&artifact, b"wallet").expect("artifact should write");
 
         let resolved = resolve_dev_wallet_artifact(
@@ -788,7 +783,7 @@ mod tests {
                 dev_wallet_artifact_kind: None,
                 airdrop_hog: None,
             },
-            &runtime_manifest("contracts/dev-wallet.wasm"),
+            &runtime_manifest("contracts/dev_wallet.rv32a"),
             &runtime_dir.join("runtime-manifest.json"),
             &scenario_dir.join("scenario.json"),
             None,
@@ -805,17 +800,17 @@ mod tests {
         let scenario_dir = temp.path().join("scenarios");
         std::fs::create_dir_all(&runtime_dir).expect("runtime dir should create");
         std::fs::create_dir_all(&scenario_dir).expect("scenario dir should create");
-        let artifact = scenario_dir.join("dev-wallet.wasm");
+        let artifact = scenario_dir.join("dev_wallet.rv32a");
         std::fs::write(&artifact, b"wallet").expect("artifact should write");
 
         let resolved = resolve_dev_wallet_artifact(
             &ActorProvisioningSpec {
                 enabled: true,
-                dev_wallet_artifact: Some("dev-wallet.wasm".into()),
+                dev_wallet_artifact: Some("dev_wallet.rv32a".into()),
                 dev_wallet_artifact_kind: None,
                 airdrop_hog: None,
             },
-            &runtime_manifest("missing-runtime-wallet.wasm"),
+            &runtime_manifest("missing-runtime-wallet.rv32a"),
             &runtime_dir.join("runtime-manifest.json"),
             &scenario_dir.join("scenario.json"),
             None,
@@ -826,31 +821,67 @@ mod tests {
     }
 
     #[test]
-    fn explicit_artifact_kind_overrides_wallet_filename_suffix() {
+    fn loads_rv32_dev_wallet_contract() {
         let temp = tempfile::tempdir().expect("tempdir should create");
-        let artifact = temp.path().join("dev-wallet.bin");
+        let artifact = temp.path().join("dev_wallet.rv32a");
         std::fs::write(&artifact, b"rv32 wallet").expect("artifact should write");
         let expected_sha256 = sha256_hex(b"rv32 wallet");
 
-        let contract =
-            load_dev_wallet_contract(&artifact, ContractArtifactKind::Rv32, &expected_sha256)
-                .expect("rv32 artifact should load");
+        let contract = load_dev_wallet_contract(&artifact, &expected_sha256)
+            .expect("rv32 artifact should load");
 
         assert!(matches!(contract, Contract::kRv32 { .. }));
     }
 
     #[test]
+    fn dev_wallet_artifact_inference_requires_rv32_extension() {
+        assert!(
+            validate_dev_wallet_artifact_extension(None, std::path::Path::new("dev_wallet.rv32a"))
+                .is_ok()
+        );
+
+        for path in [
+            std::path::Path::new("dev_wallet.bin"),
+            std::path::Path::new("dev_wallet"),
+        ] {
+            let error = validate_dev_wallet_artifact_extension(None, path).unwrap_err();
+            assert!(matches!(
+                error,
+                SimError::UnsupportedContractArtifactExtension { path: error_path }
+                    if error_path == path
+            ));
+        }
+    }
+
+    #[test]
+    fn explicit_rv32_dev_wallet_kind_overrides_filename_extension() {
+        assert!(
+            validate_dev_wallet_artifact_extension(
+                Some(ContractArtifactKind::Rv32),
+                std::path::Path::new("dev_wallet.bin")
+            )
+            .is_ok()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inferred_dev_wallet_rejects_non_utf8_extension() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path =
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"dev_wallet.\xff".to_vec()));
+        assert!(validate_dev_wallet_artifact_extension(None, &path).is_err());
+    }
+
+    #[test]
     fn rejects_dev_wallet_artifact_that_does_not_match_runtime_manifest() {
         let temp = tempfile::tempdir().expect("tempdir should create");
-        let artifact = temp.path().join("dev-wallet.wasm");
+        let artifact = temp.path().join("dev_wallet.rv32a");
         std::fs::write(&artifact, b"different wallet").expect("artifact should write");
 
-        let error = load_dev_wallet_contract(
-            &artifact,
-            ContractArtifactKind::Wasm,
-            &sha256_hex(b"advertised wallet"),
-        )
-        .expect_err("mismatched artifact should fail");
+        let error = load_dev_wallet_contract(&artifact, &sha256_hex(b"advertised wallet"))
+            .expect_err("mismatched artifact should fail");
 
         assert!(error.to_string().contains("SHA-256 mismatch"));
     }

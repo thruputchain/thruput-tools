@@ -156,7 +156,7 @@ Good split:
 ### `groundhog test --integration`
 
 The CLI already ships a short, deterministic, single-actor integration
-harness in `crates/tools/cli/src/test_cmd.rs`. It builds the project to WASM,
+harness in `crates/tools/cli/src/test_cmd.rs`. It builds the project to RV32,
 starts an ephemeral `hogd-dev` on a random port, deploys with the lowest-index
 `local_user`, runs
 native libtest with `rpc_url`, `contract_address`, and `runtime_manifest`
@@ -427,9 +427,8 @@ Plausible evolution paths, in rough order of cost:
 
 - a trait-based registry of workloads compiled into the crate, with
   third-party crates adding workload modules through a builder;
-- a WASM-driven workload hook that sits naturally alongside Groundhog's
-  execution model and lets contract authors ship custom workloads with
-  their projects.
+- a versioned out-of-process workload adapter for custom workloads that should
+  not be compiled into the simulator.
 
 The closed-enum start is deliberate. It should not be locked in.
 

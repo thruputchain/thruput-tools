@@ -194,8 +194,11 @@ protocol and competitive context.
 
 ## Slices
 
-Each slice is independently mergeable and independently verifiable. Slice 6 is
-the only one that depends on another repo.
+The slices are independently verifiable, with one implementation constraint:
+slices 1 and 3 land together because the CLI test harness consumes the
+`BuildTarget` and WASM build helpers removed by slice 1. They remain separate
+tracking slices because they describe distinct public contracts. Slice 6 is the
+only slice that depends on another repo.
 
 ### Slice 1: CLI build path
 
@@ -320,6 +323,8 @@ Scope:
   this with slice 6 — the artifact it classifies is hogd's dev wallet.
 - Sweep `.wasm` fixtures in `validation.rs`, `executor.rs`, `event.rs`,
   `compare.rs`, `run.rs`, `catalog.rs`, and `main.rs`.
+- Bump `result.json` schema version from 3 to 4 because
+  `contracts[].artifactKind` no longer accepts `wasm`.
 - Update example manifests, `docs/sim/README.md`, and
   `docs/sim/sim-design.md` (including the `test_cmd.rs` description at line 159
   and the WASM-driven workload hook note at line 430).
@@ -398,19 +403,21 @@ Acceptance:
 - CI is green with no WASM target or `binaryen` install. If the clippy or test
   job fails without the wasm32 target, that assumption was wrong and the step
   goes back with a comment explaining what needs it.
-- `rg -i wasm` across the repo returns only: `docs/archive/**`,
-  `json-rpc-types/src/dev.rs`'s hogd syscall code name, and `Cargo.lock` /
-  `pnpm-lock.yaml` transitive entries.
+- `rg -i wasm` across the repo returns only: this removal design,
+  `docs/archive/**`, intentional regression tests that reject the removed
+  inputs, protocol-owned `Contract::kWasmi` / hogd syscall identifiers, the
+  factual NEAR comparison row, and `Cargo.lock` / `pnpm-lock.yaml` transitive
+  entries.
 - No living doc describes a WASM build, test, or deploy path.
 
 ## Ordering
 
-Slices 1 and 2 are coupled — slice 1's `checks.rs` change feeds slice 2's
-scaffold expectations — so the order is 1, then 2, then 3. Slices 4 and 5 are
+Slices 1 and 3 form one implementation and review gate. Slice 2 follows because
+slice 1's `checks.rs` change feeds its scaffold expectations. Slices 4 and 5 are
 independent of each other and of 1 through 3, so they can run in parallel. Slice
-7 lands last so the docs describe the finished state. Slice 6 lands whenever
-hogd PR #3465 merges; if it merges early, run it before slice 4 so the
-simulator's extension-inference default only changes once.
+7 lands last so the docs describe the finished state. Slice 6 lands after hogd
+PR #3465 merges; if it lands before slice 4, run it first so the simulator's
+extension-inference default only changes once.
 
 ## Verification
 
@@ -432,11 +439,9 @@ GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-testkit-local.sh
 ```
 
-## Open Questions
+## Resolved Questions
 
-- Does anything in CI actually need `wasm32-unknown-unknown` for the workspace
-  clippy and test jobs? Resolve by removing the steps and reading the result,
-  not by reasoning about it.
-- Does the SDK remove `load_wasm_contract` in step with hogd, and does that
-  change the RV32 host-test harness the scaffold's `test_rv32.rs` uses? Affects
-  slice 2 only if the RV32 harness signature moves at the same time.
+- Workspace clippy and test jobs do not need the removed contract target; the
+  CI and publish setup was deleted in slice 7.
+- The fresh scaffold's RV32 host-test harness still builds and runs after the
+  template cleanup, so no SDK compatibility shim was needed in slice 2.

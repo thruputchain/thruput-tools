@@ -702,7 +702,7 @@ mod tests {
             contracts: vec![ScenarioContractRef {
                 name: "fibonacci".into(),
                 source: "groundhog-examples/fibonacci".into(),
-                artifact: "fibonacci.wasm".into(),
+                artifact: "fibonacci.rv32a".into(),
             }],
             runner: "scripts/smoke-sim-scenarios.sh".into(),
         };
