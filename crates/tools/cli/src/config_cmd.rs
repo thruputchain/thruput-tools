@@ -87,6 +87,9 @@ pub fn new_profile(
 }
 
 /// Remove an entire profile from a selected config layer.
+///
+/// JSON and quiet callers retain the legacy non-interactive behavior. New CLI
+/// dispatch should use [`remove_with_force`] so deletion authority is explicit.
 pub fn remove(
     start: &Path,
     profile: &str,
@@ -95,8 +98,37 @@ pub fn remove(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let report = if !print.is_json() && !print.is_quiet() {
+    let legacy_non_interactive_bypass = print.is_json() || print.is_quiet();
+    remove_with_force(
+        start,
+        profile,
+        legacy_non_interactive_bypass,
+        global,
+        project,
+        cmd,
+        print,
+    )
+}
+
+/// Remove an entire profile, optionally bypassing confirmation.
+pub fn remove_with_force(
+    start: &Path,
+    profile: &str,
+    force: bool,
+    global: bool,
+    project: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let report = if force {
+        remove_profile(start, profile, global, project)?
+    } else {
         let confirmation = prepare_profile_removal(start, profile, global, project)?;
+        if !print.can_prompt() {
+            return Err(CliError::ConfirmationRequired {
+                action: crate::error::REMOVE_PROFILE_CONFIRMATION_ACTION,
+            });
+        }
         print.prompt(format_args!(
             "Remove profile `{}` from {} config? This deletes all profile data and cannot be undone. [y/N] ",
             terminal_safe(profile.trim()),
@@ -112,8 +144,6 @@ pub fn remove(
             return Ok(());
         }
         remove_confirmed_profile(confirmation)?
-    } else {
-        remove_profile(start, profile, global, project)?
     };
     render_remove_profile(&report, print);
     print.json(&CommandResult::new(cmd, report))
@@ -664,6 +694,20 @@ fn safe_option_label(value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_remove_keeps_json_and_quiet_non_interactive_bypass() {
+        for (mode, print) in [("json", Print::new(false, true)), ("quiet", Print::quiet())] {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let config = tmp.path().join("groundhog.toml");
+            std::fs::write(&config, "[profile.staging]\nnetwork = \"devnet\"\n").unwrap();
+
+            remove(tmp.path(), "staging", false, true, "config.rm", &print)
+                .unwrap_or_else(|error| panic!("legacy {mode} removal should succeed: {error}"));
+
+            assert_eq!(std::fs::read_to_string(config).unwrap(), "");
+        }
+    }
 
     #[test]
     fn plain_profile_markers_preserve_active_and_invalid_state() {

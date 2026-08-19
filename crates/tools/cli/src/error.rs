@@ -5,6 +5,7 @@ use thiserror::Error;
 use crate::terminal::{render_shell_arg, terminal_safe};
 
 pub(crate) const REMOVE_KEY_CONFIRMATION_ACTION: &str = "remove a stored signing key";
+pub(crate) const REMOVE_PROFILE_CONFIRMATION_ACTION: &str = "remove a configuration profile";
 
 /// All errors returned by CLI commands.
 #[derive(Error, Debug)]
@@ -400,7 +401,10 @@ pub enum CliError {
 }
 
 fn confirmation_required_flag(action: &str) -> &'static str {
-    if action == REMOVE_KEY_CONFIRMATION_ACTION {
+    if matches!(
+        action,
+        REMOVE_KEY_CONFIRMATION_ACTION | REMOVE_PROFILE_CONFIRMATION_ACTION
+    ) {
         "--force"
     } else {
         "--yes"
