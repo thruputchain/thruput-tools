@@ -24,7 +24,6 @@ jobs:
         check:
           - advisories
           - sources
-    continue-on-error: ${{ matrix.check == 'advisories' }}
     permissions:
       contents: read
     steps:
@@ -32,6 +31,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Check dependency policy
+        continue-on-error: ${{ matrix.check == 'advisories' }}
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           arguments: --all-features --locked
