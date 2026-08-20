@@ -1,3 +1,4 @@
+use crate::keys_json::{ExportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KeysExportReport};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use getrandom::getrandom;
@@ -7,18 +8,24 @@ use serde_json::json;
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_KEY_NAME: &str = "default";
 const DEFAULT_KEY_ID: u32 = 0;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct KeyFile {
     version: u32,
     scheme: String,
     keypair_hex: String,
     #[serde(default)]
     public_key_hex: Option<String>,
+}
+
+impl Drop for KeyFile {
+    fn drop(&mut self) {
+        self.keypair_hex.zeroize();
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +113,34 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
     for key in keys {
         let marker = if key.is_default { "*" } else { " " };
         println!("{marker} {} {}", key.name, key.address);
+    }
+
+    Ok(())
+}
+
+/// Export a stored private key for use with a client signer.
+pub fn export(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    validate_key_name(name)?;
+    let path = key_path(name)?;
+    if !path.exists() {
+        return Err(CliError::KeyNotFound(name.to_string()));
+    }
+
+    let keypair_bytes = load_stored_keypair_bytes(name)?;
+    LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))?;
+    let report = KeysExportReport {
+        schema_version: KEYS_EXPORT_JSON_SCHEMA_VERSION,
+        key: ExportedKey {
+            name: name.to_string(),
+            scheme: "ed25519".into(),
+            private_key: hex_prefixed(&keypair_bytes[..32]),
+        },
+    };
+
+    if print.is_json() {
+        print.json(&CommandResult::new(cmd, &report))?;
+    } else {
+        println!("{}", report.key.private_key);
     }
 
     Ok(())
@@ -229,8 +264,9 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         public_key_hex: Some(hex::encode(public_bytes)),
     };
 
-    let contents =
-        serde_json::to_vec_pretty(&keyfile).map_err(|e| CliError::Other(e.to_string()))?;
+    let contents = Zeroizing::new(
+        serde_json::to_vec_pretty(&keyfile).map_err(|e| CliError::Other(e.to_string()))?,
+    );
 
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create_new(true).truncate(true);
@@ -249,9 +285,7 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
 
 fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
     let path = key_path(name)?;
-    let contents = fs::read_to_string(&path)?;
-    let keyfile: KeyFile =
-        serde_json::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
+    let keyfile = read_keyfile(name)?;
 
     if keyfile.scheme != "ed25519" {
         return Err(CliError::Other(format!(
@@ -292,10 +326,12 @@ pub fn load_local_signer(name: &str) -> Result<LocalSigner, CliError> {
         return crate::dev_keys::load_dev_signer(name);
     }
 
-    let contents = fs::read_to_string(key_path(name)?)?;
-    let keyfile: KeyFile =
-        serde_json::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
+    let keypair_bytes = load_stored_keypair_bytes(name)?;
+    LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))
+}
 
+fn load_stored_keypair_bytes(name: &str) -> Result<Zeroizing<[u8; 64]>, CliError> {
+    let keyfile = read_keyfile(name)?;
     if keyfile.scheme != "ed25519" {
         return Err(CliError::Other(format!(
             "unsupported key scheme: {}",
@@ -303,8 +339,12 @@ pub fn load_local_signer(name: &str) -> Result<LocalSigner, CliError> {
         )));
     }
 
-    let keypair_bytes = zeroize::Zeroizing::new(parse_hex_64(&keyfile.keypair_hex)?);
-    LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))
+    Ok(Zeroizing::new(parse_hex_64(&keyfile.keypair_hex)?))
+}
+
+fn read_keyfile(name: &str) -> Result<KeyFile, CliError> {
+    let contents = Zeroizing::new(fs::read_to_string(key_path(name)?)?);
+    serde_json::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))
 }
 
 fn load_all_keys() -> Result<Vec<KeyInfo>, CliError> {

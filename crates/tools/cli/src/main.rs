@@ -467,6 +467,14 @@ enum KeysCommand {
     },
     /// List stored keys
     Ls,
+    /// Export a private key for client use
+    #[command(
+        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private key is written to stdout as lowercase, 0x-prefixed hex. Treat it as a secret: do not expose it in logs, CI output, or committed files."
+    )]
+    Export {
+        /// Key name to export
+        name: String,
+    },
     /// Set the default signing key
     Use {
         /// Key name to use as default
@@ -910,6 +918,7 @@ impl KeysCommand {
         match self {
             Self::Generate { .. } => "keys.generate",
             Self::Ls => "keys.ls",
+            Self::Export { .. } => "keys.export",
             Self::Use { .. } => "keys.use",
             Self::Rm { .. } => "keys.rm",
         }
@@ -1300,6 +1309,7 @@ fn main() {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
             }
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
+            KeysCommand::Export { name } => groundhog_cli::keys::export(&name, cmd_name, &print),
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
             KeysCommand::Rm { name, force } => {
                 groundhog_cli::keys::remove_with_force(&name, force, cmd_name, &print)

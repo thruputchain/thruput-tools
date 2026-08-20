@@ -28,6 +28,7 @@ pub(crate) mod faucet_client;
 pub(crate) mod hog;
 pub mod init;
 pub mod keys;
+pub(crate) mod keys_json;
 pub(crate) mod network_descriptor;
 pub mod new;
 pub mod node;
