@@ -688,7 +688,7 @@ fn map_exec_result(r: ExecResult) -> ExecStatus {
         ExecStatus::Reverted { message: None }
     } else if r == ExecResult::ExecResultTxDeterministicError {
         ExecStatus::DeterministicError {
-            kind: "unknown".into(),
+            kind: groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
         }
     } else if r == ExecResult::ExecResultTxNonDeterministicError {
         ExecStatus::NonDeterministicError
@@ -806,6 +806,22 @@ mod tests {
     use crate::rpc_backend::HogdDevSchedulerBackend;
 
     use super::HogdDevReadBackend;
+
+    #[test]
+    fn deterministic_exec_result_maps_to_fault_kind() {
+        let status = super::map_exec_result(
+            groundhog_xdr::exec_result::ExecResult::ExecResultTxDeterministicError,
+        );
+        match status {
+            groundhog_json_rpc_types::receipt::ExecStatus::DeterministicError { kind } => {
+                assert_eq!(
+                    kind,
+                    groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT
+                );
+            }
+            other => panic!("expected DeterministicError, got {other:?}"),
+        }
+    }
 
     // These constants mirror the fake_hogd_dev fixture. Defined here so the
     // unit tests in this file have no dependency on the example binary's types.
