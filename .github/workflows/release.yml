@@ -29,12 +29,25 @@ jobs:
         include:
           - architecture: x86_64
             machine: x86_64
+            platform: linux
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-chuckd-rs-linux
+            artifact_name: groundhog-rpc-x86_64-release-artifacts
+            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
           - architecture: arm64
             machine: aarch64
+            platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
+            artifact_name: groundhog-rpc-arm64-release-artifacts
+            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+          - architecture: arm64
+            machine: arm64
+            platform: macos
+            release_target: aarch64-apple-darwin
+            runner: namespace-profile-hogd-arm64-macos
+            artifact_name: groundhog-rpc-macos-arm64-release-artifacts
+            release_apps: groundhog
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -60,7 +73,7 @@ jobs:
           fi
           echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
 
-      - name: Verify native Linux architecture
+      - name: Verify native architecture
         run: test "$(uname -m)" = "${{ matrix.machine }}"
 
       - name: Verify publish-driven release
@@ -108,7 +121,11 @@ jobs:
           done
 
       - name: Build release binaries
+        env:
+          RELEASE_APPS: ${{ matrix.release_apps }}
         run: |
+          set -euo pipefail
+
           expected_version="$CRATE_VERSION"
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # A runner-inherited value must not label ordinary PR artifacts as platform releases.
@@ -119,37 +136,71 @@ jobs:
           fi
           echo "EXPECTED_BINARY_VERSION=$expected_version" >> "$GITHUB_ENV"
 
-          cargo build --locked --release \
-            -p groundhog-json-rpc-gateway \
-            -p groundhog-cli \
-            -p groundhog-rv32-lower \
-            -p groundhog-sim \
-            -p groundhog-faucet \
-            --bins
+          package_args=()
+          for app in $RELEASE_APPS; do
+            case "$app" in
+              hog-gateway) package_args+=(-p groundhog-json-rpc-gateway) ;;
+              groundhog) package_args+=(-p groundhog-cli) ;;
+              rv32-lower) package_args+=(-p groundhog-rv32-lower) ;;
+              hogsim) package_args+=(-p groundhog-sim) ;;
+              groundhog-faucet) package_args+=(-p groundhog-faucet) ;;
+              *)
+                echo "unsupported release app: $app" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          cargo build --locked --release "${package_args[@]}" --bins
 
       - name: Verify hog-gateway
+        if: matrix.platform == 'linux'
         run: test "$(target/release/hog-gateway --version)" = "hog-gateway ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify groundhog CLI
         run: test "$(target/release/groundhog --version)" = "groundhog ${EXPECTED_BINARY_VERSION}"
 
+      - name: Verify macOS CLI portability
+        if: matrix.platform == 'macos'
+        run: |
+          set -euo pipefail
+
+          file target/release/groundhog | grep -q 'Mach-O 64-bit executable arm64'
+          codesign --verify --strict --verbose=4 target/release/groundhog
+
+          unexpected_deps=$(
+            otool -L target/release/groundhog \
+              | tail -n +2 \
+              | awk '$1 !~ /^\/System\/Library\// && $1 !~ /^\/usr\/lib\// { print $1 }'
+          )
+          if [ -n "$unexpected_deps" ]; then
+            echo "groundhog has non-system macOS dependencies:" >&2
+            echo "$unexpected_deps" >&2
+            exit 1
+          fi
+
       - name: Verify rv32-lower
+        if: matrix.platform == 'linux'
         run: test "$(target/release/rv32-lower --version)" = "rv32-lower ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify hogsim
+        if: matrix.platform == 'linux'
         run: test "$(target/release/hogsim --version)" = "hogsim ${EXPECTED_BINARY_VERSION}"
 
       - name: Verify groundhog-faucet
+        if: matrix.platform == 'linux'
         run: test "$(target/release/groundhog-faucet --version)" = "groundhog-faucet ${EXPECTED_BINARY_VERSION}"
 
       - name: Prepare artifacts
+        env:
+          RELEASE_APPS: ${{ matrix.release_apps }}
         run: |
           set -euo pipefail
 
           mkdir -p artifacts package
           release_ref=${GITHUB_REF_NAME//\//-}
 
-          for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
+          for app in $RELEASE_APPS; do
             archive_base="${app}-${release_ref}-${{ matrix.release_target }}"
             package_dir="package/${archive_base}"
             mkdir -p "$package_dir"
@@ -159,10 +210,10 @@ jobs:
             tar -czf "artifacts/${archive_base}.tar.gz" -C package "$archive_base"
           done
 
-      - name: Upload Linux artifacts
+      - name: Upload release artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: groundhog-rpc-${{ matrix.architecture }}-release-artifacts
+          name: ${{ matrix.artifact_name }}
           path: artifacts/*.tar.gz
 
   publish:
@@ -184,12 +235,18 @@ jobs:
           name: groundhog-rpc-arm64-release-artifacts
           path: artifacts/
 
+      - name: Download macOS ARM64 artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: groundhog-rpc-macos-arm64-release-artifacts
+          path: artifacts/
+
       - name: Generate aggregate checksums
         run: |
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 10
+          test "${#archives[@]}" -eq 11
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done
