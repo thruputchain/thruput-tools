@@ -1287,6 +1287,19 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Path to a checked-in `hog-devnode` stand-in under `fixtures/devnode`.
+    ///
+    /// These stubs are committed rather than written during the test:
+    /// `fs::write` holds a descriptor open for writing, children forked from
+    /// other test threads inherit it, and executing a file that any process
+    /// still holds open for writing fails with `ETXTBSY`.
+    #[cfg(unix)]
+    fn devnode_fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/devnode")
+            .join(name)
+    }
+
     #[test]
     fn default_wallet_check_reports_missing_binding() {
         let profile = crate::config::ResolvedProfile {
@@ -1572,12 +1585,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn devnode_version_probe_accepts_the_current_binary_name() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let binary = tmp.path().join("hog-devnode");
-        std::fs::write(&binary, "#!/bin/sh\nprintf 'hog-devnode 0.1.12\\n'\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let binary = devnode_fixture("version.sh");
 
         assert_eq!(
             probe_devnode_version(&binary).unwrap().as_deref(),
@@ -1588,12 +1596,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn devnode_version_probe_times_out_and_reaps_the_child() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let binary = tmp.path().join("hog-devnode");
-        std::fs::write(&binary, "#!/bin/sh\nwhile :; do :; done\n").unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let binary = devnode_fixture("hang.sh");
         let started = std::time::Instant::now();
 
         let error =
@@ -1624,16 +1627,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn devnode_version_probe_does_not_wait_for_descendant_output_handles() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let binary = tmp.path().join("hog-devnode");
-        std::fs::write(
-            &binary,
-            "#!/bin/sh\nsleep 2 &\nprintf 'hog-devnode 0.1.12\\n'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let binary = devnode_fixture("orphan.sh");
         let started = std::time::Instant::now();
 
         let version =
@@ -1647,16 +1641,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn devnode_version_probe_rejects_excessive_output() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let binary = tmp.path().join("hog-devnode");
-        std::fs::write(
-            &binary,
-            "#!/bin/sh\nwhile :; do printf '0123456789abcdef0123456789abcdef\\n'; done\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let binary = devnode_fixture("flood.sh");
 
         let error = probe_devnode_version_with_timeout(&binary, std::time::Duration::from_secs(5))
             .unwrap_err();
