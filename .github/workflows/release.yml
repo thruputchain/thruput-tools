@@ -153,13 +153,6 @@ jobs:
 
           cargo build --locked --release "${package_args[@]}" --bins
 
-      - name: Verify hog-gateway
-        if: matrix.platform == 'linux'
-        run: test "$(target/release/hog-gateway --version)" = "hog-gateway ${EXPECTED_BINARY_VERSION}"
-
-      - name: Verify groundhog CLI
-        run: test "$(target/release/groundhog --version)" = "groundhog ${EXPECTED_BINARY_VERSION}"
-
       - name: Verify macOS CLI portability
         if: matrix.platform == 'macos'
         run: |
@@ -179,19 +172,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify rv32-lower
-        if: matrix.platform == 'linux'
-        run: test "$(target/release/rv32-lower --version)" = "rv32-lower ${EXPECTED_BINARY_VERSION}"
-
-      - name: Verify hogsim
-        if: matrix.platform == 'linux'
-        run: test "$(target/release/hogsim --version)" = "hogsim ${EXPECTED_BINARY_VERSION}"
-
-      - name: Verify groundhog-faucet
-        if: matrix.platform == 'linux'
-        run: test "$(target/release/groundhog-faucet --version)" = "groundhog-faucet ${EXPECTED_BINARY_VERSION}"
-
-      - name: Prepare artifacts
+      - name: Prepare and verify artifacts
         env:
           RELEASE_APPS: ${{ matrix.release_apps }}
         run: |
@@ -203,11 +184,20 @@ jobs:
           for app in $RELEASE_APPS; do
             archive_base="${app}-${release_ref}-${{ matrix.release_target }}"
             package_dir="package/${archive_base}"
+            archive="artifacts/${archive_base}.tar.gz"
             mkdir -p "$package_dir"
             cp "target/release/${app}" "$package_dir/"
             cp README.md LICENSE "$package_dir/"
             chmod +x "$package_dir/$app"
-            tar -czf "artifacts/${archive_base}.tar.gz" -C package "$archive_base"
+            tar -czf "$archive" -C package "$archive_base"
+
+            verify_dir="verify/${archive_base}"
+            mkdir -p "$verify_dir"
+            tar -xzf "$archive" -C "$verify_dir"
+            test -x "$verify_dir/$archive_base/$app"
+            test -f "$verify_dir/$archive_base/README.md"
+            test -f "$verify_dir/$archive_base/LICENSE"
+            test "$("$verify_dir/$archive_base/$app" --version)" = "$app ${EXPECTED_BINARY_VERSION}"
           done
 
       - name: Upload release artifacts
@@ -215,13 +205,13 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: artifacts/*.tar.gz
+          if-no-files-found: error
 
-  publish:
-    if: github.event_name != 'pull_request'
+  assemble:
     needs: build
     runs-on: namespace-profile-chuckd-rs-linux
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Download Linux x86_64 artifacts
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
@@ -251,6 +241,28 @@ jobs:
             test -s "$archive"
           done
           sha256sum -- "${archives[@]}" > SHA256SUMS
+
+      - name: Upload assembled release artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: groundhog-rpc-release-artifacts
+          path: |
+            artifacts/*.tar.gz
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: assemble
+    runs-on: namespace-profile-chuckd-rs-linux
+    permissions:
+      contents: write
+    steps:
+      - name: Download assembled release artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: groundhog-rpc-release-artifacts
+          path: artifacts/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

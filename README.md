@@ -176,7 +176,8 @@ Linux apps are `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, and
 `LICENSE`. `hog-gateway`, `hogsim`, and `groundhog-faucet` are binary release
 artifacts only; `groundhog-rv32-lower` is also a published crate/library. macOS
 releases currently target Apple Silicon and include only the `groundhog` CLI,
-which links the RV32 lowerer in-process.
+which links the RV32 lowerer in-process. The macOS binary is ad-hoc signed but
+not notarized, so macOS may require explicit approval after download.
 
 ### API Surface
 
