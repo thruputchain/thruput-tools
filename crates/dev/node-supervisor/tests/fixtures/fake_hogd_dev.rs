@@ -183,10 +183,7 @@ fn main() {
         Ok("scheduler-network-hash-mismatch") => {
             run_ready_with_scheduler(FakeSchedulerMode::NetworkHashMismatch);
         }
-        Ok("scheduler-load-rejected") => run_ready_with_scheduler(FakeSchedulerMode::LoadRejected),
-        Ok("scheduler-load-no-effect") => {
-            run_ready_with_scheduler(FakeSchedulerMode::LoadNoEffect);
-        }
+        Ok("scheduler-no-genesis") => run_ready_with_scheduler(FakeSchedulerMode::NoGenesis),
         Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
         Ok("automine-slow-commit") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCommit);
@@ -740,8 +737,7 @@ enum FakeSchedulerMode {
     AutomineNominateError,
     GetTipError,
     NetworkHashMismatch,
-    LoadRejected,
-    LoadNoEffect,
+    NoGenesis,
 }
 
 impl FakeSchedulerMode {
@@ -774,14 +770,19 @@ struct FakeScheduler {
 
 impl FakeScheduler {
     fn new(mode: FakeSchedulerMode) -> Self {
-        Self {
+        let scheduler = Self {
             tip: Arc::new(Mutex::new(None)),
             pending_submits: Arc::new(AtomicU64::new(0)),
             commit_in_progress: Arc::new(AtomicBool::new(false)),
             get_tip_calls: Arc::new(AtomicU64::new(0)),
             candidate: Arc::new(Mutex::new(None)),
             mode,
+        };
+        if mode != FakeSchedulerMode::NoGenesis {
+            *scheduler.tip.lock().expect("bug: fake tip mutex poisoned") =
+                Some(scheduler.genesis_tip());
         }
+        scheduler
     }
 
     fn genesis_tip(&self) -> DbTip {
@@ -1082,13 +1083,6 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         _config: GenesisConfiguration,
     ) -> Result<DbSchedResult, ProgramError> {
-        if self.mode == FakeSchedulerMode::LoadRejected {
-            return Ok(DbSchedResult::DbSchedResultError);
-        }
-        if self.mode == FakeSchedulerMode::LoadNoEffect {
-            return Ok(DbSchedResult::DbSchedResultOK);
-        }
-
         *self.tip.lock().expect("bug: fake tip mutex poisoned") = Some(self.genesis_tip());
         Ok(DbSchedResult::DbSchedResultOK)
     }
