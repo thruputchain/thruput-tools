@@ -7807,6 +7807,187 @@ fn keys_json_flow_works() {
 }
 
 #[test]
+fn keys_export_outputs_client_compatible_private_key() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+
+    let generated = groundhog()
+        .args(["--json", "keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let generated: serde_json::Value = serde_json::from_slice(&generated.stdout).unwrap();
+
+    let exported = groundhog()
+        .args(["keys", "export", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(exported.status.success());
+    assert!(exported.stderr.is_empty());
+    let plain = String::from_utf8(exported.stdout).unwrap();
+    assert_eq!(plain.len(), 67);
+    assert!(plain.starts_with("0x"));
+    assert!(plain.ends_with('\n'));
+    assert!(
+        plain[2..66]
+            .chars()
+            .all(|character| { character.is_ascii_hexdigit() && !character.is_ascii_uppercase() })
+    );
+
+    let private_key = plain.trim_end();
+    let stored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(config_home.join("groundhog/keys/alice.json")).unwrap(),
+    )
+    .unwrap();
+    let stored_keypair = stored["keypair_hex"].as_str().unwrap();
+    assert_eq!(private_key, format!("0x{}", &stored_keypair[..64]));
+
+    let private_key_bytes: [u8; 32] = hex::decode(&private_key[2..]).unwrap().try_into().unwrap();
+    let signer = groundhog_signing::LocalSigner::from_secret_key(private_key_bytes);
+    assert_eq!(
+        format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+        generated["data"]["key"]["public_key"]
+    );
+
+    let quiet = groundhog()
+        .args(["--quiet", "keys", "export", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(quiet.status.success());
+    assert_eq!(quiet.stdout, plain.as_bytes());
+    assert!(quiet.stderr.is_empty());
+
+    let json = groundhog()
+        .args(["--json", "keys", "export", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    assert!(json.stderr.is_empty());
+    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["command"], "keys.export");
+    assert_eq!(json["warnings"], serde_json::json!([]));
+    assert_eq!(json["data"]["schemaVersion"], 1);
+    assert_eq!(json["data"]["key"]["name"], "alice");
+    assert_eq!(json["data"]["key"]["scheme"], "ed25519");
+    assert_eq!(json["data"]["key"]["privateKey"], private_key);
+    assert_eq!(json["data"].as_object().unwrap().len(), 2);
+    assert_eq!(json["data"]["key"].as_object().unwrap().len(), 3);
+}
+
+#[test]
+fn keys_export_rejects_missing_and_invalid_names() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+
+    for name in ["ghost", "dev-0"] {
+        let output = groundhog()
+            .args(["--json", "keys", "export", name])
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["command"], "keys.export");
+        assert_eq!(error["error"]["code"], "key_not_found");
+    }
+
+    let invalid = groundhog()
+        .args(["--json", "keys", "export", "../alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(invalid.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "key_name_invalid");
+}
+
+#[test]
+fn keys_export_rejects_invalid_stored_keys() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let keys_dir = config_home.join("groundhog/keys");
+    std::fs::create_dir_all(&keys_dir).unwrap();
+
+    let cases = [
+        (
+            "bad-scheme",
+            serde_json::json!({
+                "version": 1,
+                "scheme": "rsa",
+                "keypair_hex": "00".repeat(64),
+            }),
+            "unsupported key scheme",
+        ),
+        (
+            "bad-hex",
+            serde_json::json!({
+                "version": 1,
+                "scheme": "ed25519",
+                "keypair_hex": "zz",
+            }),
+            "Invalid character",
+        ),
+        (
+            "bad-keypair",
+            serde_json::json!({
+                "version": 1,
+                "scheme": "ed25519",
+                "keypair_hex": "00".repeat(64),
+            }),
+            "invalid keypair",
+        ),
+    ];
+
+    for (name, keyfile, message) in cases {
+        std::fs::write(
+            keys_dir.join(format!("{name}.json")),
+            serde_json::to_vec(&keyfile).unwrap(),
+        )
+        .unwrap();
+        let output = groundhog()
+            .args(["--json", "keys", "export", name])
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(message),
+            "expected {message:?} for {name}, stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn keys_export_help_warns_that_output_is_secret() {
+    let keys_help = groundhog().args(["keys", "--help"]).output().unwrap();
+    assert!(keys_help.status.success());
+    assert!(
+        String::from_utf8(keys_help.stdout)
+            .unwrap()
+            .contains("export")
+    );
+
+    let export_help = groundhog()
+        .args(["keys", "export", "--help"])
+        .output()
+        .unwrap();
+    assert!(export_help.status.success());
+    let stdout = String::from_utf8(export_help.stdout).unwrap();
+    assert!(stdout.contains("written to stdout as lowercase, 0x-prefixed hex"));
+    assert!(stdout.contains("Treat it as a secret"));
+    assert!(stdout.contains("logs, CI output, or committed files"));
+}
+
+#[test]
 fn keys_rm_help_documents_force() {
     let output = groundhog().args(["keys", "rm", "--help"]).output().unwrap();
 

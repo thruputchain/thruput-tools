@@ -263,11 +263,16 @@ Manage Ed25519 signing keys. Keys are stored in
 ```bash
 groundhog keys generate [name]   # generate a new keypair
 groundhog keys ls                # list stored keys
+groundhog keys export <name>     # print a 32-byte private key for client use
 groundhog keys use <name>        # set the default signing key
 groundhog keys rm <name>         # remove a stored key (with confirmation)
 ```
 
 The first generated key automatically becomes the default.
+
+`keys export` prints the 32-byte private key as lowercase, `0x`-prefixed hex.
+With `--json`, read it from `data.key.privateKey`. Treat it as a secret. Do not
+expose it in logs or CI output, or commit it to a file.
 
 ### `groundhog wallet`
 
