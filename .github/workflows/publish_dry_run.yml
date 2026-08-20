@@ -37,24 +37,24 @@ jobs:
             rm -f /home/hogci/.gitconfig
 
       - name: Setup SSH Agent
-        uses: webfactory/ssh-agent@v0.9.1
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: |
             ${{ secrets.ACTIONS_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Configure git to use SSH
         run: |
           git config --global url."git@github.com:".insteadOf "https://github.com/"
 
       - name: Checkout actions repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: groundhogchain/actions
           path: actions
-          ref: main
+          ref: 6661fedc744b057368d7ecb0127aece0aa12b426
 
       - name: publish dry run
         uses: ./actions/cargo-publish-dry-run
