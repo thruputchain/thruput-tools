@@ -22,7 +22,7 @@ use std::{fmt, net::SocketAddr};
 use xdr_common::{BytesM, VecM};
 
 use crate::{
-    NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::ensure_dev_genesis,
+    NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::require_dev_genesis,
     request_deadline::within_request_deadline,
 };
 
@@ -63,11 +63,11 @@ impl HogdDevSchedulerBackend {
     }
 
     #[tracing::instrument(skip_all)]
-    pub(crate) async fn ensure_dev_genesis(
+    pub(crate) async fn require_dev_genesis(
         &self,
         expected_network_hash: &NetworkHashHex,
     ) -> Result<(), NodeSupervisorError> {
-        let db_tip = ensure_dev_genesis(&self.scheduler).await?;
+        let db_tip = require_dev_genesis(&self.scheduler).await?;
         validate_scheduler_network_hash(expected_network_hash, &db_tip)
     }
 

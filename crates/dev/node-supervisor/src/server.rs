@@ -341,7 +341,7 @@ async fn start_rpc_server(
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend
-        .ensure_dev_genesis(&readiness.network_hash)
+        .require_dev_genesis(&readiness.network_hash)
         .await?;
 
     let view = HogdDevViewBackend::connect_optional(
@@ -1373,25 +1373,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[tokio::test]
     #[serial]
-    async fn start_rolls_back_hogd_dev_when_genesis_load_is_rejected() {
-        let err = start_fake_supervisor_expect_error("scheduler-load-rejected").await;
-
-        assert!(
-            matches!(
-                err,
-                NodeSupervisorError::SchedulerRejected {
-                    op: "schedcoord_load_genesis_configuration",
-                    ..
-                }
-            ),
-            "expected SchedulerRejected for load_genesis, got {err:?}",
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn start_rolls_back_hogd_dev_when_retip_still_has_no_genesis() {
-        let err = start_fake_supervisor_expect_error("scheduler-load-no-effect").await;
+    async fn start_rolls_back_hogd_dev_when_readiness_precedes_genesis() {
+        let err = start_fake_supervisor_expect_error("scheduler-no-genesis").await;
 
         assert!(
             matches!(
@@ -1401,7 +1384,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                     ..
                 }
             ),
-            "expected SchedulerRejected for re-tip, got {err:?}",
+            "expected SchedulerRejected for readiness without genesis, got {err:?}",
         );
     }
 
