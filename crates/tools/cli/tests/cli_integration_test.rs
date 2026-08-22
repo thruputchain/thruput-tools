@@ -8693,6 +8693,52 @@ fn tx_show_human_error_escapes_invalid_rpc_url() {
 }
 
 #[test]
+fn proxy_errors_never_print_credentials() {
+    let hash = format!("0x{}", "ab".repeat(32));
+    let unused_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let unused_address = unused_listener.local_addr().unwrap();
+    drop(unused_listener);
+    let proxies = [
+        ("http://proxy-user:supersecret@".to_owned(), true),
+        (
+            format!("http://proxy-user:supersecret@{unused_address}"),
+            false,
+        ),
+    ];
+
+    for (proxy, invalid) in proxies {
+        for json in [false, true] {
+            let mut command = groundhog();
+            if json {
+                command.arg("--json");
+            }
+            let output = command
+                .args(["tx", "show", &hash, "--rpc-url", "http://127.0.0.1:1"])
+                .env("HTTP_PROXY", &proxy)
+                .env("NO_PROXY", "")
+                .output()
+                .unwrap();
+
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(!stderr.contains("proxy-user"));
+            assert!(!stderr.contains("supersecret"));
+            assert!(!stderr.contains(&proxy));
+            if invalid {
+                assert!(stderr.contains("HTTP_PROXY"));
+                if json {
+                    let error: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+                    assert_eq!(error["error"]["code"], "proxy_configuration_invalid");
+                }
+            } else {
+                assert!(stderr.contains("outbound HTTP connection failed"));
+            }
+        }
+    }
+}
+
+#[test]
 fn tx_show_receipt_rpc_errors_remain_failures() {
     let tmp = TempDir::new().unwrap();
     let hash = format!("0x{}", "f1".repeat(32));

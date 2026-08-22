@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{
     ContractAddress,
     hex::HexBytes,
@@ -203,9 +203,7 @@ fn resolve_caller(
 }
 
 async fn fetch_view(rpc_url: &str, request: ViewRequest) -> Result<ViewResponse, CliError> {
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     client
         .view(request)
         .await

@@ -26,6 +26,7 @@ pub mod events;
 pub mod events_json;
 pub(crate) mod faucet_client;
 pub(crate) mod hog;
+pub(crate) mod http_client;
 pub mod init;
 pub mod keys;
 pub(crate) mod keys_json;

@@ -1,7 +1,7 @@
 use std::io::BufRead as _;
 use std::path::Path;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{
     ContractAddress, balance::BalanceResponse, runtime_manifest::RuntimeManifestStorageCostModel,
 };
@@ -67,9 +67,7 @@ async fn fetch_balance(
     rpc_url: &str,
     address: ContractAddress,
 ) -> Result<BalanceResponse, CliError> {
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     client
         .get_balance(address)
         .await

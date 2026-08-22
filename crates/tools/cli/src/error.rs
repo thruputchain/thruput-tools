@@ -152,6 +152,13 @@ pub enum CliError {
     LocalNodeAlreadyRunning(String),
     #[error("could not connect to {0}")]
     RpcConnect(String),
+    #[error("invalid proxy configuration in {variable}: {message}")]
+    ProxyConfiguration {
+        variable: &'static str,
+        message: &'static str,
+    },
+    #[error("failed to initialize outbound HTTP client")]
+    HttpClientInit,
     #[error("no rpc_url configured for the selected profile")]
     MissingRpcUrl,
     #[error("profile `{profile}` {message}")]
@@ -466,6 +473,8 @@ impl CliError {
             Self::NodeSupervisorProtocolIntroRejected { .. } => "protocol_intro_rejected",
             Self::LocalNodeAlreadyRunning(_) => "local_node_already_running",
             Self::RpcConnect(_) => "rpc_connect",
+            Self::ProxyConfiguration { .. } => "proxy_configuration_invalid",
+            Self::HttpClientInit => "http_client_init_failed",
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::ProfileConfigInvalid { .. } => "profile_config_invalid",
             Self::ConfirmationRequired { .. } => "confirmation_required",
@@ -635,6 +644,12 @@ impl CliError {
                 "run `groundhog node` in another terminal, or check that \
                  the RPC endpoint at {url} is running"
             ))),
+            Self::ProxyConfiguration { variable, .. } => Some(Cow::Owned(format!(
+                "set `{variable}` to an HTTP(S) proxy URL or host:port, or unset it"
+            ))),
+            Self::HttpClientInit => Some(Cow::Borrowed(
+                "check the standard proxy environment variables, then retry",
+            )),
             Self::MissingRpcUrl => Some(Cow::Borrowed(
                 "set `rpc_url` in the selected profile in project or global config",
             )),

@@ -83,12 +83,9 @@ async fn fetch_transaction_detail(
     rpc_url: &str,
     tx_hash: TxHash,
 ) -> Result<Option<TransactionDetail>, CliError> {
-    use groundhog_json_rpc_client::HttpClientBuilder;
     use jsonrpsee::core::client::ClientT;
 
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
 
     match client
         .request(

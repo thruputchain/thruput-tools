@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use groundhog_json_rpc_client::{
-    PollTransactionReceiptError, SubmitTransactionError, poll_transaction_receipt_with_config,
-    submit_transaction,
+    PollTransactionReceiptError, poll_transaction_receipt_with_client_config,
+    submit_transaction_with_client,
 };
 use groundhog_json_rpc_types::error::codes;
 use groundhog_json_rpc_types::hex::HexBytes;
@@ -201,44 +201,43 @@ fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<LiveOutcome, CliErr
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     rt.block_on(async {
+        let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
         let signed_transaction = format!("0x{}", hex::encode(&prepared.signed_transaction));
-        match submit_transaction(&prepared.rpc_url, &signed_transaction).await {
+        match submit_transaction_with_client(&client, &signed_transaction).await {
             Ok(server_hash) if server_hash != prepared.tx_hash => {
                 return Ok(LiveOutcome::Unavailable {
                     transaction_status: None,
                     reason: "the RPC returned a transaction hash that did not match the locally computed hash",
                 });
             }
-            Err(SubmitTransactionError::Connect { rpc_url, source }) => {
-                return Err(CliError::RpcConnect(format!("{rpc_url}: {source}")));
-            }
-            Err(SubmitTransactionError::SendRawTransaction(source))
-                if is_unsupported_rpc_method_error(&source) =>
+            Err(source) if is_unsupported_rpc_method_error(&source) =>
             {
                 return Err(CliError::RpcCapabilityUnsupported {
                     method: "sendRawTransaction",
                     message: rpc_error_message(&source),
                 });
             }
-            Err(SubmitTransactionError::SendRawTransaction(source))
-                if is_conclusive_send_error(&source) =>
+            Err(source) if is_conclusive_send_error(&source) =>
             {
                 return Err(CliError::RpcMethodFailed {
                     method: "sendRawTransaction",
                     message: rpc_error_message(&source),
                 });
             }
-            Ok(_) | Err(SubmitTransactionError::SendRawTransaction(_)) => {}
+            Ok(_) | Err(_) => {}
         }
 
-        poll_local_hash(prepared).await
+        poll_local_hash(prepared, &client).await
     })
 }
 
-async fn poll_local_hash(prepared: &PreparedTransfer) -> Result<LiveOutcome, CliError> {
+async fn poll_local_hash(
+    prepared: &PreparedTransfer,
+    client: &(impl jsonrpsee::core::client::ClientT + Sync),
+) -> Result<LiveOutcome, CliError> {
     let (max_attempts, poll_interval) = receipt_poll_config();
-    match poll_transaction_receipt_with_config(
-        &prepared.rpc_url,
+    match poll_transaction_receipt_with_client_config(
+        client,
         prepared.tx_hash,
         max_attempts,
         poll_interval,
@@ -263,10 +262,6 @@ async fn poll_local_hash(prepared: &PreparedTransfer) -> Result<LiveOutcome, Cli
                 reason: "the transaction did not produce a receipt before polling ended",
             })
         }
-        Err(PollTransactionReceiptError::Connect { .. }) => Ok(LiveOutcome::Unavailable {
-            transaction_status: None,
-            reason: "confirmation polling could not connect to the RPC endpoint",
-        }),
         Err(PollTransactionReceiptError::GetTransactionReceipt { .. }) => {
             Ok(LiveOutcome::Unavailable {
                 transaction_status: None,
