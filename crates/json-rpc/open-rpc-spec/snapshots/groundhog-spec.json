@@ -549,15 +549,15 @@
         ]
       },
       "Hex0x_ContractAddress": {
-        "pattern": "^0x[0-9a-f]*$",
+        "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
       "Hex0x_SHA256Hash": {
-        "pattern": "^0x[0-9a-f]*$",
+        "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
       "Hex0x_ValidatorID": {
-        "pattern": "^0x[0-9a-f]*$",
+        "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
       "HexBytes": {
@@ -603,15 +603,20 @@
         "type": "string"
       },
       "NetworkInfo": {
-        "description": "Fixed identity of the network an endpoint serves.\n\nEvery field here is settled when the chain is created and never changes, so\nclients may cache this response against an endpoint indefinitely. Anything\nthat moves as the chain advances belongs on `chainTip` instead.",
+        "description": "Immutable protocol and genesis identity reported by a JSON-RPC server.",
         "properties": {
+          "genesisHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Hash of the materialized genesis state."
+          },
           "networkHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash",
-            "description": "Hash of the network name, bound into the preimage of every transaction\nsignature. Signing for the wrong network produces transactions this\nnetwork rejects, so clients must read it from the endpoint they submit to."
+            "description": "Hash of the network name, bound into every transaction signature."
           }
         },
         "required": [
-          "networkHash"
+          "networkHash",
+          "genesisHash"
         ],
         "type": "object"
       },
@@ -1644,6 +1649,23 @@
         }
       },
       "summary": "Execute a sandboxed contract simulation against committed state.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [],
+      "name": "groundhog_networkInfo",
+      "params": [],
+      "result": {
+        "name": "NetworkInfo",
+        "schema": {
+          "$ref": "#/components/schemas/NetworkInfo"
+        }
+      },
+      "summary": "Immutable configured network and genesis identity.",
       "tags": [
         {
           "name": "Core API"

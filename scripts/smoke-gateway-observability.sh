@@ -380,6 +380,7 @@ log "readyz status: $READY_STATUS"
 fetch_text_status "$OBSERVABILITY_URL/livez" "$WORK/livez.json" 200
 fetch_text_status "$OBSERVABILITY_URL/health" "$WORK/health.json" 200
 post_rpc "$GATEWAY_RPC_URL" groundhog_version "$WORK/rpc-version.json"
+post_rpc "$GATEWAY_RPC_URL" groundhog_networkInfo "$WORK/rpc-network-info.json"
 post_rpc "$GATEWAY_RPC_URL" groundhog_chainTip "$WORK/rpc-chain-tip.json"
 fetch_text_status "$OBSERVABILITY_URL/metrics" "$WORK/metrics.txt" 200
 
@@ -387,6 +388,7 @@ assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_health_status{status
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_backend_up{backend=\"scheduler\"} 1"
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_backend_up{backend=\"indexer\"} 1"
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_rpc_requests_total{method=\"groundhog_version\",outcome=\"ok\"}"
+assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_rpc_requests_total{method=\"groundhog_networkInfo\",outcome=\"ok\"}"
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_rpc_requests_total{method=\"groundhog_chainTip\",outcome=\"ok\"}"
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_http_requests_total{endpoint=\"readyz\",status_class=\"2xx\"}"
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_http_requests_total{endpoint=\"metrics\",status_class=\"2xx\"}"

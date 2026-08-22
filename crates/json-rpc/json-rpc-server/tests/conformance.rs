@@ -245,6 +245,7 @@ type ScriptedServer =
 fn server(backend: ScriptedBackend) -> ScriptedServer {
     GroundhogRpcServer::unified(
         backend,
+        test_network_info(),
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
             .with_max_cursor_bytes(MAX_CURSOR_BYTES)
@@ -262,12 +263,21 @@ fn server_with_view(
         backend.clone(),
         backend,
         view,
+        test_network_info(),
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
             .with_max_cursor_bytes(MAX_CURSOR_BYTES)
             .with_max_view_calldata_bytes(MAX_VIEW_CALLDATA_BYTES),
         BuildInfo::for_tests(),
     )
+}
+
+fn test_network_info() -> NetworkInfo {
+    NetworkInfo::new(
+        "testnet",
+        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
+    )
+    .expect("bug: testnet is a valid network ID")
 }
 
 fn simple_query() -> EventQuery {

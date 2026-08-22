@@ -30,6 +30,14 @@ const ATTEMPT_HEIGHT: i64 = 42;
 const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
 const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
 
+fn test_network_info() -> NetworkInfo {
+    NetworkInfo::new(
+        "testnet",
+        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
+    )
+    .expect("bug: testnet is a valid network ID")
+}
+
 #[derive(Clone)]
 struct RecentFailureBackend {
     receipt_calls: Arc<AtomicUsize>,
@@ -183,6 +191,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::always_failing(),
+        test_network_info(),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );
@@ -229,6 +238,7 @@ async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::eventually_committed(),
+        test_network_info(),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );
@@ -265,6 +275,7 @@ async fn recent_failure_status_roundtrips_through_client() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::always_failing(),
+        test_network_info(),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );

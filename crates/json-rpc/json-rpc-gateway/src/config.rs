@@ -2,7 +2,11 @@ use std::{fmt, str::FromStr, time::Duration};
 
 use serde::Deserialize;
 
-use groundhog_json_rpc_types::{NetworkHashHex, runtime_manifest::RuntimeManifest};
+use groundhog_json_rpc_types::{
+    NetworkHashHex, SHA256Hash,
+    network_info::{LOCALNET_NETWORK_ID, NetworkInfo},
+    runtime_manifest::{HOGD_DEV_RUNTIME_MANIFEST_KIND, RuntimeManifest},
+};
 
 /// Backend used for transaction submission.
 ///
@@ -167,6 +171,12 @@ impl Default for TipConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct GatewayConfig {
+    /// Stable public identifier for the served network.
+    pub network_id: Option<String>,
+
+    /// Hash of the materialized genesis state.
+    pub genesis_hash: Option<SHA256Hash>,
+
     /// Listen address for the JSON-RPC server.
     pub listen_address: String,
 
@@ -289,6 +299,8 @@ pub struct GatewayConfig {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
+            network_id: None,
+            genesis_hash: None,
             listen_address: "0.0.0.0:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
@@ -321,6 +333,20 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
+    /// Resolve the immutable identity required before the gateway starts.
+    pub fn network_info(&self) -> Result<NetworkInfo, NetworkIdentityConfigError> {
+        let network_id = self
+            .network_id
+            .as_deref()
+            .ok_or(NetworkIdentityConfigError::MissingNetworkId)?;
+        let genesis_hash = self
+            .genesis_hash
+            .ok_or(NetworkIdentityConfigError::MissingGenesisHash)?;
+
+        NetworkInfo::new(network_id, genesis_hash)
+            .map_err(|_| NetworkIdentityConfigError::EmptyNetworkId)
+    }
+
     pub(crate) fn request_timeout(&self) -> Duration {
         // Keep backend, application, and HTTP deadlines strictly ordered even
         // for malformed or test-only sub-millisecond configurations.
@@ -354,13 +380,35 @@ impl GatewayConfig {
                 actual: manifest.schema_version,
             });
         }
+        if manifest.kind != HOGD_DEV_RUNTIME_MANIFEST_KIND {
+            return Err(RuntimeManifestConfigError::UnexpectedKind {
+                actual: manifest.kind.clone(),
+            });
+        }
+        if manifest.chain_state.is_none() {
+            return Err(RuntimeManifestConfigError::MissingChainState);
+        }
         let defaults = GatewayConfig::default();
+        let network_id = Some(LOCALNET_NETWORK_ID.to_owned());
+        let genesis_hash = Some(manifest.genesis_hash);
         let scheduler_address = manifest.endpoints.scheduler.to_string();
         let indexer_address = manifest.endpoints.indexer.map(|addr| addr.to_string());
         let db_gateway_address = manifest.endpoints.db_gateway.map(|addr| addr.to_string());
         let view_gateway_address = manifest.endpoints.view_gateway.map(|addr| addr.to_string());
         let hogd_protocol_override = Some(manifest.protocol.clone());
 
+        reject_manifest_conflict(
+            "network_id",
+            &self.network_id,
+            &defaults.network_id,
+            &network_id,
+        )?;
+        reject_manifest_conflict(
+            "genesis_hash",
+            &self.genesis_hash,
+            &defaults.genesis_hash,
+            &genesis_hash,
+        )?;
         reject_manifest_conflict(
             "scheduler_address",
             &self.scheduler_address,
@@ -392,6 +440,8 @@ impl GatewayConfig {
             &hogd_protocol_override,
         )?;
 
+        self.network_id = network_id;
+        self.genesis_hash = genesis_hash;
         self.scheduler_address = scheduler_address;
         self.expected_network_hash = Some(manifest.network_hash.clone());
         self.indexer_address = indexer_address;
@@ -400,6 +450,20 @@ impl GatewayConfig {
         self.hogd_protocol_override = hogd_protocol_override;
         Ok(())
     }
+}
+
+/// Invalid or incomplete immutable gateway identity configuration.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum NetworkIdentityConfigError {
+    /// No logical network identifier was configured.
+    #[error("missing required gateway field `network_id`")]
+    MissingNetworkId,
+    /// The logical network identifier contains no non-whitespace characters.
+    #[error("gateway field `network_id` must not be empty")]
+    EmptyNetworkId,
+    /// No materialized genesis hash was configured.
+    #[error("missing required gateway field `genesis_hash`")]
+    MissingGenesisHash,
 }
 
 fn reject_manifest_conflict<T>(
@@ -427,6 +491,17 @@ pub enum RuntimeManifestConfigError {
         actual: u32,
     },
 
+    /// The manifest was not produced by hog-devnode.
+    #[error("unexpected runtime manifest kind `{actual}`; expected `hogd-dev-runtime`")]
+    UnexpectedKind {
+        /// Actual manifest kind.
+        actual: String,
+    },
+
+    /// The manifest does not identify whether the chain was initialized or recovered.
+    #[error("hog-devnode runtime manifest is missing chainState")]
+    MissingChainState,
+
     /// The config file already set a backend field to a conflicting value.
     #[error("runtime manifest conflicts with configured field `{field}`")]
     TomlConflict {
@@ -443,7 +518,9 @@ mod tests {
     use groundhog_xdr::types::SHA256Hash;
     use serde_json::json;
 
-    use super::{GatewayConfig, RuntimeManifestConfigError};
+    use super::{
+        GatewayConfig, LOCALNET_NETWORK_ID, NetworkIdentityConfigError, RuntimeManifestConfigError,
+    };
 
     #[test]
     fn request_deadlines_are_nested() {
@@ -466,6 +543,61 @@ mod tests {
     }
 
     #[test]
+    fn hosted_network_identity_is_required_and_preserved() {
+        let expected_hash = hash(0x24);
+        let config = GatewayConfig {
+            network_id: Some("devnet-preview".into()),
+            genesis_hash: Some(expected_hash),
+            ..GatewayConfig::default()
+        };
+
+        let network_info = config
+            .network_info()
+            .expect("bug: complete hosted identity should resolve");
+
+        assert_eq!(network_info.network_id, "devnet-preview");
+        assert_eq!(network_info.genesis_hash, expected_hash);
+    }
+
+    #[test]
+    fn hosted_network_identity_rejects_missing_or_empty_fields() {
+        assert_eq!(
+            GatewayConfig::default().network_info(),
+            Err(NetworkIdentityConfigError::MissingNetworkId)
+        );
+        assert_eq!(
+            GatewayConfig {
+                network_id: Some("  ".into()),
+                genesis_hash: Some(hash(0x24)),
+                ..GatewayConfig::default()
+            }
+            .network_info(),
+            Err(NetworkIdentityConfigError::EmptyNetworkId)
+        );
+        assert_eq!(
+            GatewayConfig {
+                network_id: Some("devnet-preview".into()),
+                ..GatewayConfig::default()
+            }
+            .network_info(),
+            Err(NetworkIdentityConfigError::MissingGenesisHash)
+        );
+    }
+
+    #[test]
+    fn hosted_network_identity_rejects_malformed_genesis_hash() {
+        let error = toml::from_str::<GatewayConfig>(
+            r#"
+network_id = "devnet-preview"
+genesis_hash = "0x1234"
+"#,
+        )
+        .expect_err("bug: malformed genesis hash should fail TOML decoding");
+
+        assert!(error.to_string().contains("genesis_hash"));
+    }
+
+    #[test]
     fn runtime_manifest_overlays_gateway_backend_endpoints() {
         let mut config = GatewayConfig::default();
         let manifest = manifest_with_endpoints(&json!({
@@ -480,6 +612,8 @@ mod tests {
             .expect("bug: manifest should configure gateway");
 
         assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.network_id.as_deref(), Some(LOCALNET_NETWORK_ID));
+        assert_eq!(config.genesis_hash, Some(manifest.genesis_hash));
         assert_eq!(config.expected_network_hash, Some(manifest.network_hash));
         assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
         assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
@@ -527,6 +661,29 @@ mod tests {
     }
 
     #[test]
+    fn runtime_manifest_rejects_unexpected_kind_and_missing_chain_state() {
+        let mut wrong_kind = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+        wrong_kind.kind = "other-runtime".into();
+        assert_eq!(
+            GatewayConfig::default().apply_runtime_manifest(&wrong_kind),
+            Err(RuntimeManifestConfigError::UnexpectedKind {
+                actual: "other-runtime".into(),
+            })
+        );
+
+        let mut missing_chain_state = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+        missing_chain_state.chain_state = None;
+        assert_eq!(
+            GatewayConfig::default().apply_runtime_manifest(&missing_chain_state),
+            Err(RuntimeManifestConfigError::MissingChainState)
+        );
+    }
+
+    #[test]
     fn runtime_manifest_conflicts_with_toml_endpoint_config() {
         let mut config = GatewayConfig {
             scheduler_address: "127.0.0.1:9999".into(),
@@ -551,6 +708,8 @@ mod tests {
     #[test]
     fn runtime_manifest_allows_matching_config_value() {
         let mut config = GatewayConfig {
+            network_id: Some(LOCALNET_NETWORK_ID.into()),
+            genesis_hash: Some(hash(0x42)),
             scheduler_address: "127.0.0.1:1000".into(),
             ..GatewayConfig::default()
         };
@@ -563,6 +722,34 @@ mod tests {
             .expect("bug: matching scheduler should not conflict");
 
         assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+    }
+
+    #[test]
+    fn runtime_manifest_rejects_conflicting_network_identity() {
+        let manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+        let mut network_config = GatewayConfig {
+            network_id: Some("devnet-preview".into()),
+            ..GatewayConfig::default()
+        };
+        assert_eq!(
+            network_config.apply_runtime_manifest(&manifest),
+            Err(RuntimeManifestConfigError::TomlConflict {
+                field: "network_id",
+            })
+        );
+
+        let mut genesis_config = GatewayConfig {
+            genesis_hash: Some(hash(0x41)),
+            ..GatewayConfig::default()
+        };
+        assert_eq!(
+            genesis_config.apply_runtime_manifest(&manifest),
+            Err(RuntimeManifestConfigError::TomlConflict {
+                field: "genesis_hash",
+            })
+        );
     }
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {

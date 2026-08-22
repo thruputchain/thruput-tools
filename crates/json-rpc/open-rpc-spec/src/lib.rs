@@ -121,7 +121,7 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_version" => &[],
+        "groundhog_networkInfo" | "groundhog_version" => &[],
         _ => panic!("bug: undocumented OpenRPC method `{method}`"),
     }
 }

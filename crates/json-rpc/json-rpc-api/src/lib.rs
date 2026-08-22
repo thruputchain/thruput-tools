@@ -57,10 +57,7 @@ pub trait GroundhogApi {
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
 
-    /// Fixed identity of the network this endpoint serves.
-    ///
-    /// The values never change for a given chain, so clients should fetch this
-    /// once per endpoint and cache it rather than calling it per request.
+    /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]
     async fn network_info(&self) -> RpcResult<NetworkInfo>;
 

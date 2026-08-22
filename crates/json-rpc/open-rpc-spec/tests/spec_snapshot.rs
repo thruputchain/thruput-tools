@@ -15,9 +15,9 @@ const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
 
 // Methods that are infallible by design and intentionally carry an empty
 // `errors: []` array. Add a method here only when it has no backend
-// dispatch and cannot fail (e.g. `groundhog_version`, sourced entirely
-// from compile-time constants and an injected `BuildInfo`).
-const INFALLIBLE_METHODS: &[&str] = &["groundhog_version"];
+// dispatch and cannot fail. Both current methods are sourced from immutable
+// process state.
+const INFALLIBLE_METHODS: &[&str] = &["groundhog_networkInfo", "groundhog_version"];
 
 #[test]
 fn openrpc_spec_matches_snapshot() {
@@ -104,6 +104,34 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
     assert_eq!(
         send_raw_transaction["params"][0]["schema"]["type"], "string",
         "primitive parameter schemas should stay inline",
+    );
+
+    let network_info = methods
+        .iter()
+        .find(|method| method["name"] == "groundhog_networkInfo")
+        .expect("networkInfo should exist");
+    assert_eq!(
+        network_info["params"],
+        serde_json::json!([]),
+        "networkInfo should take no parameters"
+    );
+    assert_eq!(
+        network_info["result"]["schema"]["$ref"], "#/components/schemas/NetworkInfo",
+        "networkInfo should return the shared NetworkInfo schema"
+    );
+    assert_eq!(
+        schemas["NetworkInfo"]["required"],
+        serde_json::json!(["networkHash", "genesisHash"]),
+        "NetworkInfo should require both identity fields"
+    );
+    assert_eq!(
+        schemas["Hex0x_SHA256Hash"]["pattern"], "^0x[0-9a-f]{64}$",
+        "SHA-256 hashes should expose their exact canonical wire length"
+    );
+    assert_eq!(
+        network_info["errors"],
+        serde_json::json!([]),
+        "networkInfo should be infallible after startup validation"
     );
 
     assert_error_docs_are_wired(&spec, methods, send_raw_transaction);

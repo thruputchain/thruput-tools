@@ -1,59 +1,55 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::NetworkHash;
+use crate::{NetworkHash, SHA256Hash};
 
-/// Fixed identity of the network an endpoint serves.
-///
-/// Every field here is settled when the chain is created and never changes, so
-/// clients may cache this response against an endpoint indefinitely. Anything
-/// that moves as the chain advances belongs on `chainTip` instead.
+/// Immutable protocol and genesis identity reported by a JSON-RPC server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInfo {
-    /// Hash of the network name, bound into the preimage of every transaction
-    /// signature. Signing for the wrong network produces transactions this
-    /// network rejects, so clients must read it from the endpoint they submit to.
+    /// Hash of the network name, bound into every transaction signature.
     pub network_hash: NetworkHash,
+    /// Hash of the materialized genesis state.
+    pub genesis_hash: SHA256Hash,
 }
 
 impl NetworkInfo {
-    /// Describe a network by the hash its signatures are bound to.
+    /// Describe a network by its protocol and genesis hashes.
     #[must_use]
-    pub fn new(network_hash: NetworkHash) -> Self {
-        Self { network_hash }
+    pub fn new(network_hash: NetworkHash, genesis_hash: SHA256Hash) -> Self {
+        Self {
+            network_hash,
+            genesis_hash,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::NetworkInfo;
-    use crate::NetworkHash;
+    use groundhog_xdr::types::SHA256Hash;
     use serde_json::json;
 
-    #[test]
-    fn network_info_serializes_the_hash_as_prefixed_hex() {
-        let info = NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::new(
-            [0x42; 32],
-        )));
+    use crate::{NetworkHash, hex::Hex0x};
 
-        assert_eq!(
-            serde_json::to_value(info).unwrap(),
-            json!({ "networkHash": format!("0x{}", "42".repeat(32)) })
-        );
-    }
+    use super::NetworkInfo;
 
     #[test]
-    fn network_info_round_trips_through_json() {
-        let info = NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::new(
-            [0x07; 32],
-        )));
-        let encoded = serde_json::to_value(&info).unwrap();
-
-        assert_eq!(
-            serde_json::from_value::<NetworkInfo>(encoded).unwrap(),
-            info
+    fn network_info_round_trips_with_camel_case_fields() {
+        let network_info = NetworkInfo::new(
+            NetworkHash::from(SHA256Hash::from([0x07; 32])),
+            Hex0x(SHA256Hash::from([0x42; 32])),
         );
+        let expected = json!({
+            "networkHash": format!("0x{}", "07".repeat(32)),
+            "genesisHash": format!("0x{}", "42".repeat(32)),
+        });
+
+        let encoded = serde_json::to_value(&network_info).expect("bug: NetworkInfo serializes");
+        assert_eq!(encoded, expected);
+
+        let decoded: NetworkInfo =
+            serde_json::from_value(encoded).expect("bug: NetworkInfo deserializes");
+        assert_eq!(decoded, network_info);
     }
 }
