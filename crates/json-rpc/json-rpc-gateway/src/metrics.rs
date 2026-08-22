@@ -385,6 +385,7 @@ impl GatewayMetrics {
             "groundhog_getStorageAt" => "groundhog_getStorageAt",
             "groundhog_getBalance" => "groundhog_getBalance",
             "groundhog_view" => "groundhog_view",
+            "groundhog_networkInfo" => "groundhog_networkInfo",
             "groundhog_version" => "groundhog_version",
             _ => "unknown",
         }
@@ -708,6 +709,7 @@ mod tests {
             "groundhog_getStorageAt",
             "groundhog_getBalance",
             "groundhog_view",
+            "groundhog_networkInfo",
             "groundhog_version",
         ] {
             assert_eq!(GatewayMetrics::bound_rpc_method(method), method);

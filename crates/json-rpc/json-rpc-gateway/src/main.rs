@@ -24,6 +24,7 @@ use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_types::SHA256Hash;
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
@@ -39,6 +40,14 @@ struct Cli {
     /// Path to TOML config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+
+    /// Stable public network identifier (overrides config file)
+    #[arg(long)]
+    network_id: Option<String>,
+
+    /// Materialized genesis hash (overrides config file)
+    #[arg(long, value_parser = parse_sha256_hash)]
+    genesis_hash: Option<SHA256Hash>,
 
     /// Path to backend runtime manifest JSON
     #[arg(long)]
@@ -114,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => GatewayConfig::default(),
     };
+    apply_identity_cli_overrides(&mut config, &cli);
 
     if let Some(path) = &cli.runtime_manifest {
         let contents = read_runtime_manifest(path).await?;
@@ -123,8 +133,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     apply_cli_overrides(&mut config, cli);
+    let network_info = config.network_info()?;
 
     tracing::info!(
+        network_id = %network_info.network_id,
+        genesis_hash = ?network_info.genesis_hash,
         listen = %config.listen_address,
         observability_listen = %config.observability_listen,
         health_required_backends = ?config.health_required_backends,
@@ -184,6 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_view_gas_limit(ctx.config.view_gas_limit);
     let api_impl = GroundhogRpcServer::unified(
         GatewayBackend::new(ctx.clone()),
+        network_info,
         rpc_config,
         BuildInfo::from_build_version(BUILD_VERSION, option_env!("GIT_COMMIT")),
     );
@@ -206,6 +220,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     shutdown_result?;
 
     Ok(())
+}
+
+fn apply_identity_cli_overrides(config: &mut GatewayConfig, cli: &Cli) {
+    if let Some(network_id) = &cli.network_id {
+        config.network_id = Some(network_id.clone());
+    }
+    if let Some(genesis_hash) = cli.genesis_hash {
+        config.genesis_hash = Some(genesis_hash);
+    }
+}
+
+fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned()))
+        .map_err(|error| error.to_string())
 }
 
 fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
@@ -353,6 +381,45 @@ mod tests {
     use super::*;
 
     struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+    #[test]
+    fn cli_accepts_complete_network_identity() {
+        let cli = Cli::try_parse_from([
+            "hog-gateway",
+            "--network-id",
+            "devnet-preview",
+            "--genesis-hash",
+            &format!("0x{}", "42".repeat(32)),
+        ])
+        .expect("bug: valid network identity flags should parse");
+        let mut config = GatewayConfig::default();
+
+        apply_identity_cli_overrides(&mut config, &cli);
+        let network_info = config
+            .network_info()
+            .expect("bug: complete CLI identity should resolve");
+
+        assert_eq!(network_info.network_id, "devnet-preview");
+        assert_eq!(
+            serde_json::to_value(network_info.genesis_hash)
+                .expect("bug: genesis hash should serialize"),
+            format!("0x{}", "42".repeat(32))
+        );
+    }
+
+    #[test]
+    fn cli_rejects_malformed_genesis_hash() {
+        assert!(
+            Cli::try_parse_from([
+                "hog-gateway",
+                "--network-id",
+                "devnet-preview",
+                "--genesis-hash",
+                "0x1234",
+            ])
+            .is_err()
+        );
+    }
 
     impl Drop for NotifyOnDrop {
         fn drop(&mut self) {

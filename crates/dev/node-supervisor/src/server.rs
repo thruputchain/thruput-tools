@@ -11,6 +11,7 @@ use std::{future::Future, io, net::SocketAddr, process::ExitStatus, time::Durati
 
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_types::network_info::NetworkInfo;
 use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerConfig, ServerHandle};
 use serde::Serialize;
@@ -18,7 +19,7 @@ use serde::Serialize;
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     block_driver::{BlockDriverTask, ManualBlockProducer},
-    hogd_dev::{validate_dev_accounts, validate_runtime_identity},
+    hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_dev_accounts, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
@@ -338,6 +339,17 @@ async fn start_rpc_server(
     block_driver_config: BlockDriverConfig,
     rpc_max_connections: u32,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
+    let manifest = readiness.runtime_manifest.as_ref().ok_or_else(|| {
+        NodeSupervisorError::InvalidRuntimeManifest {
+            program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
+            reason: "hog-devnode readiness must advertise a runtime manifest".to_owned(),
+        }
+    })?;
+    let network_info = NetworkInfo::new(
+        manifest.network_hash.to_network_hash(),
+        manifest.genesis_hash,
+    );
+
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend
@@ -371,6 +383,7 @@ async fn start_rpc_server(
             read,
             view,
             RpcServerOptions {
+                network_info,
                 backend_planes: BackendPlanes::hogd_dev_full(view_status),
                 view_gas_limit,
                 block_driver_config,
@@ -392,6 +405,7 @@ async fn start_rpc_server(
             read,
             view,
             RpcServerOptions {
+                network_info,
                 backend_planes: BackendPlanes::hogd_dev_storage_only(view_status),
                 view_gas_limit,
                 block_driver_config,
@@ -411,6 +425,7 @@ async fn start_rpc_server(
             StubBackend::new(),
             view,
             RpcServerOptions {
+                network_info,
                 backend_planes: BackendPlanes {
                     view: view_status,
                     ..BackendPlanes::hogd_dev_scheduler_only()
@@ -424,8 +439,9 @@ async fn start_rpc_server(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct RpcServerOptions {
+    network_info: NetworkInfo,
     backend_planes: BackendPlanes,
     view_gas_limit: u64,
     block_driver_config: BlockDriverConfig,
@@ -443,9 +459,16 @@ where
     R: groundhog_json_rpc_server::ReadPlane,
     V: groundhog_json_rpc_server::ViewPlane,
 {
-    ensure_rpc_nofile_limit(options.rpc_max_connections)?;
+    let RpcServerOptions {
+        network_info,
+        backend_planes,
+        view_gas_limit,
+        block_driver_config,
+        rpc_max_connections,
+    } = options;
+    ensure_rpc_nofile_limit(rpc_max_connections)?;
     let server_config = ServerConfig::builder()
-        .max_connections(options.rpc_max_connections)
+        .max_connections(rpc_max_connections)
         .build();
     let server = Server::builder()
         .set_config(server_config)
@@ -461,7 +484,7 @@ where
 
     let block_driver = BlockDriverTask::start(
         scheduler_backend.scheduler_client().clone(),
-        options.block_driver_config,
+        block_driver_config,
     );
     let scheduler_backend = scheduler_backend.with_block_driver(block_driver.trigger());
     let core_rpc = GroundhogRpcServer::new(
@@ -469,16 +492,14 @@ where
         scheduler_backend,
         read,
         view,
-        RpcServerConfig::default().with_view_gas_limit(options.view_gas_limit),
+        network_info,
+        RpcServerConfig::default().with_view_gas_limit(view_gas_limit),
         BuildInfo::from_build_version(
             groundhog_json_rpc_server::build_version!(),
             option_env!("GIT_COMMIT"),
         ),
     );
     let mut module = RpcModule::new(());
-    // `merge` only fails on duplicate method names, which is a compile-time
-    // invariant of the macro-generated `GroundhogApiServer` trait — the
-    // module starts empty and gets one trait merged in.
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
         .expect("bug: json-rpc-server methods register without conflicts");
@@ -487,7 +508,7 @@ where
     Ok(StartedRpcServer {
         handle: rpc_handle,
         addr: rpc_addr,
-        backend_planes: options.backend_planes,
+        backend_planes,
         block_driver,
     })
 }
@@ -758,6 +779,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let client = HttpClientBuilder::default()
             .build(&url)
             .expect("bug: jsonrpsee http client builds");
+
+        let network_info = client
+            .network_info()
+            .await
+            .expect("bug: networkInfo should use immutable manifest identity");
+        assert_eq!(network_info.network_id, LOCALNET_NETWORK_ID);
+        assert_eq!(
+            serde_json::to_value(network_info.genesis_hash)
+                .expect("bug: genesis hash should serialize"),
+            format!("0x{}", "42".repeat(32))
+        );
 
         let tip = client
             .chain_tip()

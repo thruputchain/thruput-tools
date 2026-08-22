@@ -8,6 +8,7 @@ use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
+    hex::Hex0x,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -132,6 +133,12 @@ async fn version_roundtrips_with_camel_case_json_shape() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         VersionOnlyBackend,
+        NetworkInfo::new(
+            groundhog_json_rpc_types::NetworkHash::from(
+                groundhog_xdr::types::SHA256Hash::from([0x07; 32]),
+            ),
+            Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
+        ),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );
@@ -144,6 +151,14 @@ async fn version_roundtrips_with_camel_case_json_shape() {
         .version()
         .await
         .expect("bug: version call should succeed");
+    let network_info = client
+        .network_info()
+        .await
+        .expect("bug: networkInfo call should succeed");
+    client
+        .chain_tip()
+        .await
+        .expect_err("bug: backend-dependent calls should remain unavailable in this fixture");
 
     assert_eq!(
         version.wire_format,
@@ -152,6 +167,12 @@ async fn version_roundtrips_with_camel_case_json_shape() {
     assert_eq!(version.implementation, "test");
     assert_eq!(version.platform_version.as_deref(), Some("test-platform"));
     assert_eq!(version.commit_hash.as_deref(), Some("test-commit"));
+    assert_eq!(network_info.network_hash.as_ref(), &[0x07; 32]);
+    assert_eq!(
+        serde_json::to_value(network_info.genesis_hash)
+            .expect("bug: genesis hash should serialize"),
+        format!("0x{}", "42".repeat(32))
+    );
 
     let json = serde_json::to_value(&version).expect("bug: version info should serialize");
     assert_eq!(
