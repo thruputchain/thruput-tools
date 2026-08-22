@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
@@ -178,9 +178,7 @@ pub(crate) async fn fetch_event_page(
     query: EventQuery,
 ) -> Result<EventPage, CliError> {
     let requested_limit = query.limit;
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(terminal_safe(&format!("{rpc_url}: {error}"))))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     let page = client
         .get_events(query)
         .await

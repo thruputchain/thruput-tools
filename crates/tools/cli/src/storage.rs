@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::state::StorageItemRead;
@@ -58,9 +58,7 @@ async fn fetch_storage_at(
     address: ContractAddress,
     key: HexBytes,
 ) -> Result<StorageItemRead, CliError> {
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     client
         .get_storage_at(address, key)
         .await

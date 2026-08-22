@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
@@ -156,9 +156,7 @@ async fn fetch_transaction_page(
     query: AddressTransactionQuery,
 ) -> Result<TransactionRefPage, CliError> {
     let requested_limit = query.limit;
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(terminal_safe(&format!("{rpc_url}: {error}"))))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     let page = client
         .get_transactions_by_address(query)
         .await
@@ -189,9 +187,7 @@ async fn fetch_transaction(
     rpc_url: &str,
     tx_hash: TxHash,
 ) -> Result<(TransactionStatus, Option<TransactionReceipt>), CliError> {
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(terminal_safe(&format!("{rpc_url}: {error}"))))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     let status = client
         .get_transaction_status(tx_hash)
         .await

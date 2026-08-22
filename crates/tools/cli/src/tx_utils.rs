@@ -185,11 +185,9 @@ pub(crate) fn print_receipt_data(
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
-    use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+    use groundhog_json_rpc_client::GroundhogApiClient;
 
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+    let client = crate::http_client::rpc_client(rpc_url)?;
     let tip = client
         .chain_tip()
         .await
@@ -204,9 +202,15 @@ pub async fn submit_and_poll(
     rpc_url: &str,
     tx_hex: &str,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
-    groundhog_json_rpc_client::submit_and_poll(rpc_url, tx_hex)
-        .await
-        .map_err(map_submit_and_poll_error)
+    let client = crate::http_client::rpc_client(rpc_url)?;
+    groundhog_json_rpc_client::submit_and_poll_with_client_config(
+        &client,
+        tx_hex,
+        groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
+        groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
+    )
+    .await
+    .map_err(map_submit_and_poll_error)
 }
 
 pub fn submit_and_poll_blocking(

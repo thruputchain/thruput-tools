@@ -6,6 +6,7 @@ pub use groundhog_json_rpc_types as types;
 pub use groundhog_json_rpc_api::GroundhogApiClient;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use jsonrpsee::core::client::ClientT;
 pub use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use std::time::Duration;
 
@@ -93,18 +94,27 @@ pub async fn submit_and_poll_with_config(
     max_attempts: usize,
     poll_interval: Duration,
 ) -> Result<(TxHash, TransactionReceipt), SubmitAndPollError> {
-    let tx_hash = submit_transaction(rpc_url, tx_hex)
-        .await
-        .map_err(|error| match error {
-            SubmitTransactionError::Connect { rpc_url, source } => {
-                SubmitAndPollError::Connect { rpc_url, source }
-            }
-            SubmitTransactionError::SendRawTransaction(source) => {
-                SubmitAndPollError::SendRawTransaction(source)
-            }
+    let client = HttpClientBuilder::default()
+        .build(rpc_url)
+        .map_err(|source| SubmitAndPollError::Connect {
+            rpc_url: rpc_url.to_owned(),
+            source,
         })?;
+    submit_and_poll_with_client_config(&client, tx_hex, max_attempts, poll_interval).await
+}
+
+/// Submit and poll using a caller-provided JSON-RPC client.
+pub async fn submit_and_poll_with_client_config<C: ClientT + Sync>(
+    client: &C,
+    tx_hex: &str,
+    max_attempts: usize,
+    poll_interval: Duration,
+) -> Result<(TxHash, TransactionReceipt), SubmitAndPollError> {
+    let tx_hash = submit_transaction_with_client(client, tx_hex)
+        .await
+        .map_err(SubmitAndPollError::SendRawTransaction)?;
     let receipt =
-        poll_transaction_receipt_with_config(rpc_url, tx_hash, max_attempts, poll_interval)
+        poll_transaction_receipt_with_client_config(client, tx_hash, max_attempts, poll_interval)
             .await
             .map_err(|error| match error {
                 PollTransactionReceiptError::Connect { rpc_url, source } => {
@@ -134,10 +144,17 @@ pub async fn submit_transaction(
             rpc_url: rpc_url.to_owned(),
             source,
         })?;
-    client
-        .send_raw_transaction(tx_hex.to_owned())
+    submit_transaction_with_client(&client, tx_hex)
         .await
         .map_err(SubmitTransactionError::SendRawTransaction)
+}
+
+/// Submit a signed transaction using a caller-provided JSON-RPC client.
+pub async fn submit_transaction_with_client<C: ClientT + Sync>(
+    client: &C,
+    tx_hex: &str,
+) -> Result<TxHash, jsonrpsee::core::client::Error> {
+    client.send_raw_transaction(tx_hex.to_owned()).await
 }
 
 /// Poll an accepted transaction until its receipt is available or its status
@@ -174,6 +191,16 @@ pub async fn poll_transaction_receipt_with_config(
             rpc_url: rpc_url.to_owned(),
             source,
         })?;
+    poll_transaction_receipt_with_client_config(&client, tx_hash, max_attempts, poll_interval).await
+}
+
+/// Poll using a caller-provided JSON-RPC client and explicit retry settings.
+pub async fn poll_transaction_receipt_with_client_config<C: ClientT + Sync>(
+    client: &C,
+    tx_hash: TxHash,
+    max_attempts: usize,
+    poll_interval: Duration,
+) -> Result<TransactionReceipt, PollTransactionReceiptError> {
     let mut recent_failure = None;
 
     for attempt in 0..max_attempts {

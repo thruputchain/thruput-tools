@@ -7,10 +7,7 @@ use crate::CliError;
 const FAUCET_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) fn client() -> Result<reqwest::blocking::Client, CliError> {
-    reqwest::blocking::Client::builder()
-        .timeout(FAUCET_REQUEST_TIMEOUT)
-        .build()
-        .map_err(|error| CliError::Other(format!("failed to build faucet HTTP client: {error}")))
+    crate::http_client::blocking_client(FAUCET_REQUEST_TIMEOUT)
 }
 
 pub(crate) fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
