@@ -8,6 +8,9 @@ cors_allowed_origins = ["http://127.0.0.1:5173"]
 network_id = "local-devnet"
 protocol = "x23"
 genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+# Network hash this faucet signs against, as `hog-devnode` writes it into the
+# runtime manifest: bare lowercase hex, no 0x prefix.
+network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [network.endpoints]
 rpc_url = "http://127.0.0.1:9545"

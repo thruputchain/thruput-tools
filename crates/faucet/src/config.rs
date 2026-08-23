@@ -691,6 +691,7 @@ mod tests {
             network_id = "devnet-preview"
             protocol = "x23"
             genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+            network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
             [network.endpoints]
             rpc_url = "https://rpc.devnet.example"
@@ -866,6 +867,7 @@ mod tests {
         network_id = "devnet-preview"
         protocol = "x23"
         genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+        network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
 
         [network.endpoints]
         rpc_url = "https://rpc.devnet.example"
