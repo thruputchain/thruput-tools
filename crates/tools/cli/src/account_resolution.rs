@@ -58,18 +58,45 @@ pub(crate) fn resolve_transaction_sender(
     profile: &ResolvedProfile,
     explicit_wallet: Option<&str>,
 ) -> Result<ResolvedTransactionSender, CliError> {
+    let sender = resolve_sender_account(profile, explicit_wallet)?;
+    let network_hash = resolve_network_hash(profile, &sender.key_name)?;
+    Ok(ResolvedTransactionSender {
+        key_name: sender.key_name,
+        wallet_name: sender.wallet_name,
+        signer: sender.signer,
+        wallet_address: sender.wallet_address,
+        network_hash,
+    })
+}
+
+/// The key and wallet a profile would send from, without the network binding.
+#[derive(Debug)]
+pub(crate) struct ResolvedSenderAccount {
+    pub(crate) key_name: String,
+    pub(crate) wallet_name: Option<String>,
+    pub(crate) signer: LocalSigner,
+    pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+}
+
+/// Resolves the sender account for callers that inspect or validate a wallet
+/// binding without signing anything.
+///
+/// Signing paths want [`resolve_transaction_sender`] instead, which also
+/// resolves the network hash every signature is bound to.
+pub(crate) fn resolve_sender_account(
+    profile: &ResolvedProfile,
+    explicit_wallet: Option<&str>,
+) -> Result<ResolvedSenderAccount, CliError> {
     let key_name = resolve_default_key_for_profile(profile)?.ok_or(CliError::MissingSigningKey)?;
     let signer = load_local_signer(&key_name)?;
     let selected_wallet = explicit_wallet.or(profile.default_wallet.as_deref());
     let (wallet_name, wallet_address) =
         resolve_wallet_selection(profile, &key_name, &signer, selected_wallet)?;
-    let network_hash = resolve_network_hash(profile, &key_name)?;
-    Ok(ResolvedTransactionSender {
+    Ok(ResolvedSenderAccount {
         key_name,
         wallet_name,
         signer,
         wallet_address,
-        network_hash,
     })
 }
 
