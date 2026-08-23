@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::hex::HexBytes;
 use crate::receipt::ExecStatus;
 use crate::transaction::TxHash;
 use crate::{BlockHeight, ContractAddress, SHA256Hash};
@@ -38,19 +39,7 @@ impl Serialize for ClientNonce {
 
 impl<'de> Deserialize<'de> for ClientNonce {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let encoded = String::deserialize(deserializer)?;
-        let encoded = encoded.strip_prefix("0x").ok_or_else(|| {
-            serde::de::Error::custom("clientNonce must use a lowercase 0x prefix")
-        })?;
-        if !encoded
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(serde::de::Error::custom(
-                "clientNonce must use lowercase hexadecimal characters",
-            ));
-        }
-        let bytes = hex::decode(encoded)
+        let HexBytes(bytes) = HexBytes::deserialize(deserializer)
             .map_err(|_| serde::de::Error::custom("clientNonce must contain complete bytes"))?;
         Self::new(bytes).map_err(serde::de::Error::custom)
     }
@@ -89,10 +78,8 @@ pub enum ClientNonceError {
 #[serde(rename_all = "camelCase")]
 pub struct AirdropRequest {
     /// Address receiving the native HOG transfer.
-    #[serde(deserialize_with = "deserialize_canonical_contract_address")]
     pub recipient: ContractAddress,
     /// Caller-selected idempotency key for this recipient and network.
-    #[serde(deserialize_with = "deserialize_client_nonce")]
     pub client_nonce: ClientNonce,
 }
 
@@ -101,53 +88,13 @@ pub struct AirdropRequest {
 #[serde(rename_all = "camelCase")]
 pub struct HostedAirdropRequest {
     /// Address receiving the native HOG transfer.
-    #[serde(deserialize_with = "deserialize_canonical_contract_address")]
     pub recipient: ContractAddress,
     /// Caller-selected idempotency key for this recipient and network.
-    #[serde(deserialize_with = "deserialize_client_nonce")]
     pub client_nonce: ClientNonce,
     /// Logical network identifier advertised by the gateway.
     pub network_id: String,
     /// Genesis hash advertised by the gateway.
     pub genesis_hash: SHA256Hash,
-}
-
-fn deserialize_client_nonce<'de, D>(deserializer: D) -> Result<ClientNonce, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    ClientNonce::deserialize(deserializer)
-        .map_err(|error| serde::de::Error::custom(format!("clientNonce: {error}")))
-}
-
-fn deserialize_canonical_contract_address<'de, D>(
-    deserializer: D,
-) -> Result<ContractAddress, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let encoded = String::deserialize(deserializer)?;
-    let Some(hex) = encoded.strip_prefix("0x") else {
-        return Err(serde::de::Error::custom(
-            "recipient must use a lowercase 0x prefix",
-        ));
-    };
-    if hex.len() != 64
-        || !hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(serde::de::Error::custom(
-            "recipient must be exactly 32 lowercase hexadecimal bytes",
-        ));
-    }
-    let bytes: [u8; 32] = hex::decode(hex)
-        .map_err(serde::de::Error::custom)?
-        .try_into()
-        .map_err(|_| serde::de::Error::custom("recipient must be exactly 32 bytes"))?;
-    Ok(crate::hex::Hex0x(
-        groundhog_xdr::types::ContractAddress::from(bytes),
-    ))
 }
 
 /// Stable lifecycle response for hosted and local airdrop attempts.
@@ -212,20 +159,29 @@ mod tests {
     }
 
     #[test]
-    fn client_nonce_requires_canonical_hex() {
-        for encoded in [r#""01""#, r#""0X01""#, r#""0xAB""#] {
-            assert!(serde_json::from_str::<ClientNonce>(encoded).is_err());
+    fn client_nonce_accepts_legacy_hex_forms_and_serializes_canonically() {
+        for (encoded, canonical) in [
+            (r#""01""#, "0x01"),
+            (r#""0X01""#, "0x01"),
+            (r#""0xAB""#, "0xab"),
+        ] {
+            let nonce = serde_json::from_str::<ClientNonce>(encoded)
+                .expect("legacy nonce form should deserialize");
+            assert_eq!(
+                serde_json::to_value(nonce).expect("nonce should serialize"),
+                json!(canonical)
+            );
         }
     }
 
     #[test]
-    fn airdrop_request_requires_canonical_recipient() {
+    fn airdrop_request_accepts_legacy_recipient_forms() {
         for recipient in ["11".repeat(32), format!("0X{}", "11".repeat(32))] {
             let request = serde_json::json!({
                 "recipient": recipient,
                 "clientNonce": "0x01"
             });
-            assert!(serde_json::from_value::<super::AirdropRequest>(request).is_err());
+            assert!(serde_json::from_value::<super::AirdropRequest>(request).is_ok());
         }
     }
 
