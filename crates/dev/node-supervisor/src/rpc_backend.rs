@@ -252,7 +252,7 @@ fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServ
     Ok(ChainTip {
         height: value.proposal_header.block_height.clone(),
         block_hash,
-        protocol: value.protocol.clone(),
+        protocol: Some(value.protocol.clone()),
     })
 }
 

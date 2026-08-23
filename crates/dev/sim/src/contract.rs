@@ -757,7 +757,7 @@ mod tests {
                 Ok(ChainTip {
                     height: BlockHeight::from(tip_height),
                     block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
-                    protocol: groundhog_xdr::types::Protocol::new(1),
+                    protocol: Some(groundhog_xdr::types::Protocol::new(1)),
                 })
             }
         }

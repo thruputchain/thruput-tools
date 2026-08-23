@@ -131,7 +131,7 @@ impl TipSink for SchedulerTipSink {
                     tip: ChainTip {
                         height: db_tip.value.proposal_header.block_height.clone(),
                         block_hash,
-                        protocol: db_tip.value.protocol.clone(),
+                        protocol: Some(db_tip.value.protocol.clone()),
                     },
                 })
             }
@@ -443,7 +443,7 @@ mod tests {
             tip: ChainTip {
                 height: BlockHeight::new(height),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
-                protocol: groundhog_xdr::types::Protocol::new(1),
+                protocol: Some(groundhog_xdr::types::Protocol::new(1)),
             },
             network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
         }

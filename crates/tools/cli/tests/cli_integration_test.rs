@@ -11351,6 +11351,51 @@ fn send_jsonrpc_error_response(
     stream.flush().unwrap();
 }
 
+/// Serve two signing commands on one address, reporting a different network each time.
+///
+/// Each run must ask for `groundhog_networkInfo` before `groundhog_chainTip`; a
+/// client that persisted the first answer would never send the second request and
+/// this mock would time out waiting for it.
+fn spawn_two_run_network_info_rpc(
+    first_network_hash: &'static str,
+    second_network_hash: &'static str,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let handle = thread::spawn(move || {
+        for network_hash in [first_network_hash, second_network_hash] {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let (stream, request) =
+                read_scripted_jsonrpc_request(&listener, deadline, "networkInfo");
+            assert_eq!(
+                request["method"], "groundhog_networkInfo",
+                "each signing run must resolve the network before signing"
+            );
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({ "networkHash": network_hash }),
+            );
+
+            let (stream, request) = read_scripted_jsonrpc_request(&listener, deadline, "chainTip");
+            assert_eq!(request["method"], "groundhog_chainTip");
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({
+                    "height": 42,
+                    "blockHash": format!("0x{}", "00".repeat(32)),
+                    "protocol": 1,
+                }),
+            );
+        }
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
 fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -12369,4 +12414,45 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
             },
         },
     })
+}
+
+#[test]
+fn each_signing_run_rereads_the_network() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let first = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    let second = "0x2222222222222222222222222222222222222222222222222222222222222222";
+    let (rpc_url, rpc_server) = spawn_two_run_network_info_rpc(first, second);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    let recipient = format!("0x{}", "ab".repeat(32));
+
+    let mut signed = Vec::new();
+    for _ in 0..2 {
+        let output = groundhog()
+            .args(["--json", "transfer", &recipient, "1.0000000", "--dry-run"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        signed.push(
+            stdout["data"]["signedTransaction"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    rpc_server.join().unwrap();
+
+    // The mock asserts both runs asked; a cache keyed by URL would have skipped
+    // the second and left this endpoint waiting.
+    assert_ne!(signed[0], signed[1]);
 }

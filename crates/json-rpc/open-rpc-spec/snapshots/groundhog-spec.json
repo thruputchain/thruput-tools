@@ -233,14 +233,20 @@
             "$ref": "#/components/schemas/BlockHeight"
           },
           "protocol": {
-            "$ref": "#/components/schemas/Protocol",
-            "description": "Protocol version the tip block was executed under. Changes as the\nnetwork upgrades, so clients must not cache it alongside network identity."
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Protocol"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Protocol version the tip block was executed under. Changes as the\nnetwork upgrades, so clients must not cache it alongside network identity.\n\nAbsent from servers predating this field; a client that needs it must\nhandle `None` rather than assume every endpoint reports it."
           }
         },
         "required": [
           "height",
-          "blockHash",
-          "protocol"
+          "blockHash"
         ],
         "type": "object"
       },

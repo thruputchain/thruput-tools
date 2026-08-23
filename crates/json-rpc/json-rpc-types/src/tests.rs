@@ -169,7 +169,7 @@ mod wire_format {
         let tip = ChainTip {
             height: BlockHeight::from(42i64),
             block_hash: zero_hash(),
-            protocol: groundhog_xdr::types::Protocol::new(1),
+            protocol: Some(groundhog_xdr::types::Protocol::new(1)),
         };
         let v: Value = serde_json::to_value(&tip).unwrap();
         assert_eq!(v["height"], 42);

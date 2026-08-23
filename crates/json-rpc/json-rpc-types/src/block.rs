@@ -22,7 +22,11 @@ pub struct ChainTip {
     pub block_hash: SHA256Hash,
     /// Protocol version the tip block was executed under. Changes as the
     /// network upgrades, so clients must not cache it alongside network identity.
-    pub protocol: Protocol,
+    ///
+    /// Absent from servers predating this field; a client that needs it must
+    /// handle `None` rather than assume every endpoint reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<Protocol>,
 }
 
 /// Block data returned by getBlockByNumber.

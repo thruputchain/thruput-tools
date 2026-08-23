@@ -114,6 +114,49 @@ mod tests {
     }
 
     #[test]
+    fn signature_is_bound_to_one_network() {
+        let signer = test_signer();
+        let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
+        let build = || {
+            build_call_transaction(BuildCallTransaction {
+                invoked_address: account.address().expect("bug: address should derive"),
+                entrypoint: ContractEntrypointID::from([0u8; 8]),
+                calldata: vec![],
+                gas_limit: 1_000_000,
+                block_expiry_height: 1_000_000,
+                nonce: 1,
+                auth_claim: account.auth_claim(),
+            })
+        };
+        let other_network = NetworkHash::new(SHA256Hash::new([0xa5; 32]));
+
+        let signed_here = sign_transaction(
+            build(),
+            &signer,
+            SignTransactionParams::default(),
+            &test_network_hash(),
+        )
+        .expect("bug: transaction should sign");
+        let signed_elsewhere = sign_transaction(
+            build(),
+            &signer,
+            SignTransactionParams::default(),
+            &other_network,
+        )
+        .expect("bug: transaction should sign");
+
+        // Same transaction, same signer, different network: the body and its
+        // hash are identical and only the signature moves. A signer that reused
+        // a stale network hash would produce the wrong one of these.
+        assert_eq!(signed_here.tx, signed_elsewhere.tx);
+        assert_eq!(
+            transaction_hash(&signed_here.tx).expect("bug: tx hash should encode"),
+            transaction_hash(&signed_elsewhere.tx).expect("bug: tx hash should encode")
+        );
+        assert_ne!(signed_here.signatures, signed_elsewhere.signatures);
+    }
+
+    #[test]
     fn builds_dev_wallet_do_action_transaction() {
         let wallet_address = ContractAddress::from([0x11; 32]);
         let target_address = ContractAddress::from([0x22; 32]);

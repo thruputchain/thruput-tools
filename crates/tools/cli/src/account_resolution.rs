@@ -1,15 +1,13 @@
 use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{
-    ContractAddress, NetworkHashHex,
+    ContractAddress,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
 };
 use groundhog_signing::LocalSigner;
-use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 
 use crate::{
     CliError, codec,
-    config::{ResolvedProfile, SavedWalletBinding, cache_dir, resolve_default_key_for_profile},
+    config::{ResolvedProfile, SavedWalletBinding, resolve_default_key_for_profile},
     dev_keys,
     http_client::rpc_client,
     keys::load_local_signer,
@@ -120,8 +118,13 @@ pub(crate) fn resolve_sender_account(
 /// The network hash every signature from this profile is bound to.
 ///
 /// A configured runtime manifest is authoritative and answers offline. Otherwise
-/// the endpoint is asked once via `groundhog_networkInfo` and the answer is
-/// cached, because a network's hash is fixed for the life of its chain.
+/// the endpoint is asked, once per command.
+///
+/// The answer is deliberately not persisted between invocations. A network hash
+/// never changes for a given chain, but an RPC URL is not a chain: a local node
+/// restarted on the same port serves a new one, and a cache keyed by URL would
+/// keep signing against the old network with no way to notice. One request per
+/// signing command is cheaper than a signature the chain silently rejects.
 pub(crate) async fn resolve_network_hash(
     profile: &ResolvedProfile,
     key_name: &str,
@@ -130,57 +133,13 @@ pub(crate) async fn resolve_network_hash(
     if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
         return Ok(manifest.network_hash.to_network_hash());
     }
-    if let Some(cached) = read_cached_network_hash(rpc_url) {
-        return Ok(cached);
-    }
     let info = rpc_client(rpc_url)?.network_info().await.map_err(|error| {
         CliError::NetworkHashUnavailable {
             rpc_url: rpc_url.to_owned(),
             message: error.to_string(),
         }
     })?;
-    let hash = info.network_hash.0;
-    write_cached_network_hash(rpc_url, &hex::encode(hash.as_ref()));
-    Ok(groundhog_xdr::types::NetworkHash::new(hash))
-}
-
-/// Path holding the cached network hash for one endpoint.
-fn cached_network_hash_path(rpc_url: &str) -> Result<PathBuf, CliError> {
-    let hash: [u8; 32] = Sha256::digest(rpc_url).into();
-    Ok(cache_dir()?
-        .join("network-hash")
-        .join(format!("{}.json", hex::encode(hash))))
-}
-
-/// Read a previously cached network hash, ignoring an unusable cache entry.
-///
-/// A missing, unreadable, or malformed entry is not an error: the endpoint is
-/// asked again and the entry rewritten.
-fn read_cached_network_hash(rpc_url: &str) -> Option<groundhog_xdr::types::NetworkHash> {
-    let path = cached_network_hash_path(rpc_url).ok()?;
-    let raw: String = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    NetworkHashHex::try_from(raw.as_str())
-        .ok()
-        .map(|hash| hash.to_network_hash())
-}
-
-/// Cache a network hash for this endpoint, ignoring a cache that cannot be written.
-///
-/// The hash was already resolved by the time this runs, so a read-only or full
-/// cache directory costs a round trip next time rather than failing the command.
-fn write_cached_network_hash(rpc_url: &str, hash: &str) {
-    let Ok(path) = cached_network_hash_path(rpc_url) else {
-        return;
-    };
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    if let Ok(encoded) = serde_json::to_string(hash) {
-        let _ = std::fs::write(path, encoded);
-    }
+    Ok(groundhog_xdr::types::NetworkHash::new(info.network_hash.0))
 }
 
 fn resolve_wallet_selection(

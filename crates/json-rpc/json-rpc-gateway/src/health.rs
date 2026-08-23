@@ -1055,7 +1055,7 @@ fn successful_scheduler_probe(
             tip: Some(ChainTip {
                 height: db_tip.value.proposal_header.block_height.clone(),
                 block_hash,
-                protocol: db_tip.value.protocol.clone(),
+                protocol: Some(db_tip.value.protocol.clone()),
             }),
             tip_observed_at: Some(Instant::now()),
             error: None,
