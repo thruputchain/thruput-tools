@@ -18,6 +18,8 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+pub(crate) const MIN_AIRDROP_TERMINAL_RETENTION_SECS: u64 = 12 * 60 * 60;
+
 /// Faucet service TOML config.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +82,7 @@ impl FaucetConfigFile {
         key_loader: &dyn FaucetSecretKeyLoader,
     ) -> Result<FaucetConfigParts, FaucetConfigError> {
         validate_airdrop_client_overrides(&self.policy.airdrop.client_overrides)?;
+        validate_airdrop_terminal_retention(self.policy.airdrop.recipient_cooldown_secs)?;
         let wallet_create_prefund_raw_amount = self
             .network
             .wallet_create
@@ -282,6 +285,9 @@ pub enum FaucetConfigError {
     /// A gateway quota window cannot be represented by the system clock.
     #[error("airdrop client override for {ip} uses an unrepresentable quota window")]
     AirdropClientOverrideWindowTooLarge { ip: IpAddr },
+    /// Terminal airdrop retention cannot be represented by the system clock.
+    #[error("airdrop recipient cooldown uses an unrepresentable retention window")]
+    AirdropTerminalRetentionTooLarge,
     /// The configured faucet signing key could not be loaded safely.
     #[error(transparent)]
     SecretKey(#[from] FaucetSecretKeyLoadError),
@@ -333,6 +339,17 @@ fn validate_airdrop_client_overrides(
         }
     }
     Ok(())
+}
+
+fn validate_airdrop_terminal_retention(
+    recipient_cooldown_secs: u64,
+) -> Result<(), FaucetConfigError> {
+    SystemTime::now()
+        .checked_add(Duration::from_secs(
+            recipient_cooldown_secs.max(MIN_AIRDROP_TERMINAL_RETENTION_SECS),
+        ))
+        .ok_or(FaucetConfigError::AirdropTerminalRetentionTooLarge)
+        .map(|_| ())
 }
 
 /// Public network metadata fields used to build a descriptor.
@@ -545,7 +562,7 @@ mod tests {
 
     use super::{
         AirdropClientOverride, AirdropConfig, FaucetConfigError, FaucetConfigFile,
-        validate_airdrop_client_overrides,
+        validate_airdrop_client_overrides, validate_airdrop_terminal_retention,
     };
 
     struct TestKeyLoader;
@@ -605,6 +622,17 @@ mod tests {
         assert!(matches!(
             error,
             FaucetConfigError::AirdropClientOverrideWindowTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn airdrop_policy_rejects_unrepresentable_terminal_retention() {
+        let error = validate_airdrop_terminal_retention(u64::MAX)
+            .expect_err("overflowing retention must not disable expiration");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::AirdropTerminalRetentionTooLarge
         ));
     }
 

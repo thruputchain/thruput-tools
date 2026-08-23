@@ -26,7 +26,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
 use crate::{
-    config::PolicyRuntimeConfig,
+    config::{MIN_AIRDROP_TERMINAL_RETENTION_SECS, PolicyRuntimeConfig},
     error::{error_response, error_response_with_retry_after},
     policy::{
         AdmitAirdropAttemptResult, AirdropAttempt, AirdropAttemptKey, AirdropAttemptStatus,
@@ -436,9 +436,9 @@ fn submit_amount_mismatch_response() -> Response {
 }
 
 fn terminal_attempt_expiry(now: SystemTime, retention_secs: u64) -> Option<SystemTime> {
-    (retention_secs > 0)
-        .then(|| now.checked_add(Duration::from_secs(retention_secs)))
-        .flatten()
+    now.checked_add(Duration::from_secs(
+        retention_secs.max(MIN_AIRDROP_TERMINAL_RETENTION_SECS),
+    ))
 }
 
 fn response_from_attempt(
@@ -806,13 +806,27 @@ fn encode_transfer_calldata(
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, SystemTime};
+
     use groundhog_json_rpc_types::hex::HexBytes;
     use serde_json::json;
     use zeroize::Zeroizing;
 
     use groundhog_json_rpc_types::airdrop::HostedAirdropRequest;
 
-    use super::AirdropRuntimeConfig;
+    use super::{
+        AirdropRuntimeConfig, MIN_AIRDROP_TERMINAL_RETENTION_SECS, terminal_attempt_expiry,
+    };
+
+    #[test]
+    fn zero_cooldown_keeps_a_finite_terminal_idempotency_window() {
+        let now = SystemTime::UNIX_EPOCH;
+
+        assert_eq!(
+            terminal_attempt_expiry(now, 0),
+            Some(now + Duration::from_secs(MIN_AIRDROP_TERMINAL_RETENTION_SECS))
+        );
+    }
 
     #[test]
     fn airdrop_runtime_config_debug_redacts_faucet_secret_key() {

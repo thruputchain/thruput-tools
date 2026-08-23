@@ -1,6 +1,6 @@
 # Network Information and Airdrop RPC
 
-**Date:** 2026-08-22 **Status:** Ready for implementation planning
+**Date:** 2026-08-22 **Status:** Implemented
 
 ## Goal
 
@@ -375,13 +375,12 @@ error taxonomy or add untyped `error.data` in v1.
 
 ## Observability
 
-Reuse existing per-method gateway metrics. Add only:
+Reuse existing per-method gateway metrics. For hosted airdrops, add only:
 
 - hosted faucet request latency and outcome;
-- local versus hosted backend label;
 - pending and succeeded RPC response counts.
 
-The faucet emits a bounded structured log when it selects a configured gateway quota override. A faucet metrics subsystem remains out of scope.
+The local node supervisor has no metrics registry or exporter. Adding a second observability server solely for local airdrops is deferred rather than creating process-local counters that cannot be scraped. The faucet emits a bounded structured log when it selects a configured gateway quota override. A faucet metrics subsystem remains out of scope.
 
 Logs must not include secret keys or full untrusted forwarding headers.
 
