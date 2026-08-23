@@ -587,7 +587,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(ChainTip {
                 height: BlockHeight::from(42),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
-                protocol: Some(groundhog_xdr::types::Protocol::new(1)),
             })
         }
 
@@ -783,7 +782,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(ChainTip {
                 height: BlockHeight::from(1_000_000),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
-                protocol: Some(groundhog_xdr::types::Protocol::new(1)),
             })
         }
 
@@ -824,7 +822,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(ChainTip {
                 height: BlockHeight::from(42),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
-                protocol: Some(groundhog_xdr::types::Protocol::new(1)),
             })
         }
 
@@ -918,7 +915,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(ChainTip {
                 height: BlockHeight::from(42),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
-                protocol: Some(groundhog_xdr::types::Protocol::new(1)),
             })
         }
 

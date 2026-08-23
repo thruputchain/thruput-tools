@@ -521,6 +521,9 @@ enum ConfigCommand {
         /// Absolute HTTP(S) RPC URL
         #[arg(long)]
         rpc_url: Option<String>,
+        /// Network hash the RPC endpoint serves, as 64 lowercase hex digits
+        #[arg(long)]
+        network_hash: Option<String>,
         /// Absolute HTTP(S) faucet URL
         #[arg(long)]
         faucet_url: Option<String>,
@@ -970,6 +973,7 @@ fn main() {
                     profile,
                     network,
                     rpc_url,
+                    network_hash,
                     faucet_url,
                     default_key,
                     select,
@@ -981,6 +985,7 @@ fn main() {
                     &groundhog_cli::config::NewProfileOptions {
                         network,
                         rpc_url,
+                        network_hash,
                         faucet_url,
                         default_key,
                         select,

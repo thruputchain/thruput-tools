@@ -4152,7 +4152,6 @@ mod tests {
                 Ok(ChainTip {
                     height: BlockHeight::from(7),
                     block_hash: Hex0x(SHA256Hash::from([0x07; 32])),
-                    protocol: Some(groundhog_xdr::types::Protocol::new(1)),
                 })
             }
         }

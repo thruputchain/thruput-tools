@@ -426,6 +426,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         name: "integration".into(),
         network: None,
         rpc_url: Some(rpc_url.into()),
+        network_hash: None,
         rpc_url_cli_override: false,
         faucet_url: None,
         default_key: Some(key_name.into()),
@@ -459,11 +460,7 @@ fn prepare_deploy_transaction(
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let sender = rt.block_on(resolve_transaction_sender(
-        profile,
-        selected_wallet,
-        rpc_url,
-    ))?;
+    let sender = resolve_transaction_sender(profile, selected_wallet)?;
 
     let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;

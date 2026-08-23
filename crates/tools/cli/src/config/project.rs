@@ -20,6 +20,13 @@ pub struct ProjectProfile {
     pub network: Option<Network>,
     #[serde(default)]
     pub rpc_url: Option<String>,
+    /// Network the profile's endpoint serves, as 64 lowercase hex digits.
+    ///
+    /// Bound into every transaction signature, so a profile carrying the wrong
+    /// one produces transactions the network rejects. One endpoint serves one
+    /// network, so this is configured beside `rpc_url` rather than discovered.
+    #[serde(default)]
+    pub network_hash: Option<String>,
     #[serde(default)]
     pub faucet_url: Option<String>,
     #[serde(default)]
@@ -60,6 +67,8 @@ pub struct ResolvedProfile {
     pub name: String,
     pub network: Option<Network>,
     pub rpc_url: Option<String>,
+    /// Network the profile's endpoint serves, as 64 lowercase hex digits.
+    pub network_hash: Option<String>,
     pub faucet_url: Option<String>,
     #[serde(skip)]
     #[schemars(skip)]
@@ -433,6 +442,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         name,
         network: profile.network,
         rpc_url: profile.rpc_url,
+        network_hash: profile.network_hash,
         faucet_url: profile.faucet_url,
         rpc_url_cli_override: false,
         default_key: profile.default_key,

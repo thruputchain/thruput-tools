@@ -2004,6 +2004,7 @@ mod tests {
             name: "preview".into(),
             network: Some(crate::config::Network::Devnet),
             rpc_url: Some("https://rpc.devnet.example".into()),
+            network_hash: None,
             faucet_url: Some("https://faucet.devnet.example".into()),
             rpc_url_cli_override: false,
             default_key: Some("alice".into()),

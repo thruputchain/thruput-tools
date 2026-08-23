@@ -224,24 +224,13 @@
         "type": "object"
       },
       "ChainTip": {
-        "description": "Current chain tip. Returned by chainTip.\n\nCarries the state that moves as the chain advances. The network identity a\nclient signs against is fixed for the life of the chain and lives on\n`networkInfo` instead.",
+        "description": "Current chain tip. Returned by chainTip.",
         "properties": {
           "blockHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
           },
           "height": {
             "$ref": "#/components/schemas/BlockHeight"
-          },
-          "protocol": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Protocol"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Protocol version the tip block was executed under. Changes as the\nnetwork upgrades, so clients must not cache it alongside network identity.\n\nAbsent from servers predating this field; a client that needs it must\nhandle `None` rather than assume every endpoint reports it."
           }
         },
         "required": [

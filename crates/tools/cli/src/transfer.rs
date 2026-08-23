@@ -116,7 +116,7 @@ fn prepare(
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    let resolved_sender = rt.block_on(bind_sender_to_network(&profile, sender_account, rpc_url))?;
+    let resolved_sender = bind_sender_to_network(&profile, sender_account)?;
     let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
     let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &resolved_sender.key_name)?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;

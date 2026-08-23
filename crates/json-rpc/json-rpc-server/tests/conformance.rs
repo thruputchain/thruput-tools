@@ -126,7 +126,6 @@ impl ChainPlane for ScriptedBackend {
         Ok(ChainTip {
             height: BlockHeight::from(0),
             block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
-            protocol: Some(groundhog_xdr::types::Protocol::new(1)),
         })
     }
 

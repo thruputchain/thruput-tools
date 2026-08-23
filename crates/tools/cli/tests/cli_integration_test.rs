@@ -4726,7 +4726,7 @@ fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -4761,7 +4761,7 @@ fn transfer_from_selects_named_owner_matched_wallet() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -11156,36 +11156,10 @@ fn send_tx_show_response(
 }
 
 /// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
-/// Network hash the mock endpoints report for `groundhog_networkInfo`.
-const MOCK_NETWORK_HASH: &str =
-    "0x3333333333333333333333333333333333333333333333333333333333333333";
+/// Network hash the test profiles declare in `groundhog.toml`.
+const TEST_NETWORK_HASH: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
-/// Read the next JSON-RPC request, answering `groundhog_networkInfo` inline.
-///
-/// Signing binds each transaction to a network, so a profile without a runtime
-/// manifest asks the endpoint for its network hash before anything else.
-/// Answering it here keeps each mock's script about the call it exercises.
 fn read_jsonrpc_request(
-    listener: &TcpListener,
-    deadline: Instant,
-    label: &str,
-) -> (std::net::TcpStream, serde_json::Value) {
-    loop {
-        let (stream, request) = read_scripted_jsonrpc_request(listener, deadline, label);
-        if request["method"] == "groundhog_networkInfo" {
-            send_jsonrpc_response(
-                stream,
-                &request["id"],
-                serde_json::json!({ "networkHash": MOCK_NETWORK_HASH }),
-            );
-            continue;
-        }
-        return (stream, request);
-    }
-}
-
-/// Read the next JSON-RPC request verbatim, without answering anything.
-fn read_scripted_jsonrpc_request(
     listener: &TcpListener,
     deadline: Instant,
     label: &str,
@@ -11351,51 +11325,6 @@ fn send_jsonrpc_error_response(
     stream.flush().unwrap();
 }
 
-/// Serve two signing commands on one address, reporting a different network each time.
-///
-/// Each run must ask for `groundhog_networkInfo` before `groundhog_chainTip`; a
-/// client that persisted the first answer would never send the second request and
-/// this mock would time out waiting for it.
-fn spawn_two_run_network_info_rpc(
-    first_network_hash: &'static str,
-    second_network_hash: &'static str,
-) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    listener.set_nonblocking(true).unwrap();
-
-    let handle = thread::spawn(move || {
-        for network_hash in [first_network_hash, second_network_hash] {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let (stream, request) =
-                read_scripted_jsonrpc_request(&listener, deadline, "networkInfo");
-            assert_eq!(
-                request["method"], "groundhog_networkInfo",
-                "each signing run must resolve the network before signing"
-            );
-            send_jsonrpc_response(
-                stream,
-                &request["id"],
-                serde_json::json!({ "networkHash": network_hash }),
-            );
-
-            let (stream, request) = read_scripted_jsonrpc_request(&listener, deadline, "chainTip");
-            assert_eq!(request["method"], "groundhog_chainTip");
-            send_jsonrpc_response(
-                stream,
-                &request["id"],
-                serde_json::json!({
-                    "height": 42,
-                    "blockHash": format!("0x{}", "00".repeat(32)),
-                    "protocol": 1,
-                }),
-            );
-        }
-    });
-
-    (format!("http://{addr}"), handle)
-}
-
 fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -11412,7 +11341,6 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
             serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
-                "protocol": 1,
             }),
         );
 
@@ -11473,7 +11401,6 @@ fn spawn_balance_then_chain_tip_rpc(
             serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
-                "protocol": 1,
             }),
         );
         assert_no_follow_up_rpc(&listener);
@@ -11609,7 +11536,7 @@ fn run_saved_wallet_transfer_live_mock(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -11653,7 +11580,6 @@ fn spawn_transfer_rpc(
             serde_json::json!({
                 "height": 42,
                 "blockHash": format!("0x{}", "00".repeat(32)),
-                "protocol": 1,
             }),
         );
 
@@ -12073,7 +11999,7 @@ fn write_project_config_with_alice_wallet(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
             "aa".repeat(32)
         ),
     )
@@ -12243,7 +12169,6 @@ fn spawn_transaction_rpc(
             serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
-                "protocol": 1,
             }),
         );
 
@@ -12414,45 +12339,4 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
             },
         },
     })
-}
-
-#[test]
-fn each_signing_run_rereads_the_network() {
-    let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let first = "0x1111111111111111111111111111111111111111111111111111111111111111";
-    let second = "0x2222222222222222222222222222222222222222222222222222222222222222";
-    let (rpc_url, rpc_server) = spawn_two_run_network_info_rpc(first, second);
-    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
-    let recipient = format!("0x{}", "ab".repeat(32));
-
-    let mut signed = Vec::new();
-    for _ in 0..2 {
-        let output = groundhog()
-            .args(["--json", "transfer", &recipient, "1.0000000", "--dry-run"])
-            .current_dir(&project)
-            .env("XDG_CONFIG_HOME", &config_home)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        signed.push(
-            stdout["data"]["signedTransaction"]
-                .as_str()
-                .unwrap()
-                .to_owned(),
-        );
-    }
-    rpc_server.join().unwrap();
-
-    // The mock asserts both runs asked; a cache keyed by URL would have skipped
-    // the second and left this endpoint waiting.
-    assert_ne!(signed[0], signed[1]);
 }

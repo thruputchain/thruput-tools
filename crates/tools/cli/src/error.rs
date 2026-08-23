@@ -180,8 +180,8 @@ pub enum CliError {
     MissingSigningKey,
     #[error("cannot determine the network hash for this profile")]
     MissingNetworkHash,
-    #[error("could not read the network hash from {rpc_url}: {message}")]
-    NetworkHashUnavailable { rpc_url: String, message: String },
+    #[error("profile network_hash {value:?} is not 64 lowercase hexadecimal digits")]
+    InvalidNetworkHash { value: String },
     #[error("invalid HOG amount `{input}`: {message}")]
     InvalidHogAmount { input: String, message: String },
     #[error("address target {target:?} is invalid: {message}")]
@@ -485,7 +485,7 @@ impl CliError {
             Self::FaucetService { .. } => "faucet_service_error",
             Self::MissingSigningKey => "missing_signing_key",
             Self::MissingNetworkHash => "missing_network_hash",
-            Self::NetworkHashUnavailable { .. } => "network_hash_unavailable",
+            Self::InvalidNetworkHash { .. } => "invalid_network_hash",
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
@@ -681,14 +681,14 @@ impl CliError {
                 "set `default_key` in project or global config, or run `groundhog keys generate`",
             )),
             Self::MissingNetworkHash => Some(Cow::Borrowed(
-                "signing binds each transaction to a network: set GROUNDHOG_RUNTIME_MANIFEST \
-                 or profile.<name>.runtime_manifest from `groundhog node`, or point the \
-                 profile at an endpoint that serves `groundhog_networkInfo`",
+                "signing binds each transaction to a network: run `groundhog config set \
+                 network-hash <hash>` for this profile, or point it at a runtime manifest \
+                 from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
+                 profile.<name>.runtime_manifest",
             )),
-            Self::NetworkHashUnavailable { .. } => Some(Cow::Borrowed(
-                "signing binds each transaction to a network, and the endpoint could not \
-                 report which one it serves: check the RPC URL is reachable and runs a \
-                 version that supports `groundhog_networkInfo`",
+            Self::InvalidNetworkHash { .. } => Some(Cow::Borrowed(
+                "network_hash is the unprefixed 32-byte network hash: 64 lowercase \
+                 hexadecimal digits, as `groundhog node` writes it into the runtime manifest",
             )),
             Self::InvalidHogAmount { .. } => Some(Cow::Borrowed(
                 "enter a positive decimal HOG amount with at most seven decimal places",

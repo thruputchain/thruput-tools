@@ -11,22 +11,11 @@ use crate::{
 };
 
 /// Current chain tip. Returned by chainTip.
-///
-/// Carries the state that moves as the chain advances. The network identity a
-/// client signs against is fixed for the life of the chain and lives on
-/// `networkInfo` instead.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainTip {
     pub height: BlockHeight,
     pub block_hash: SHA256Hash,
-    /// Protocol version the tip block was executed under. Changes as the
-    /// network upgrades, so clients must not cache it alongside network identity.
-    ///
-    /// Absent from servers predating this field; a client that needs it must
-    /// handle `None` rather than assume every endpoint reports it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<Protocol>,
 }
 
 /// Block data returned by getBlockByNumber.

@@ -1858,6 +1858,7 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://rpc.example".into()),
+            network_hash: None,
             faucet_url: Some("https://faucet.example".into()),
             default_key: Some("alice".into()),
             select: true,
@@ -1900,6 +1901,7 @@ fn config_new_rejects_existing_target_layer_profile_without_changes() {
         &groundhog_cli::config::NewProfileOptions {
             network: "mainnet".into(),
             rpc_url: None,
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: true,
@@ -1927,6 +1929,7 @@ fn config_new_validates_all_values_before_waiting_for_lock() {
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("relative/path".into()),
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: false,
@@ -1947,6 +1950,7 @@ fn concurrent_config_new_allows_only_one_creator() {
     let options = groundhog_cli::config::NewProfileOptions {
         network: "devnet".into(),
         rpc_url: None,
+        network_hash: None,
         faucet_url: None,
         default_key: None,
         select: false,
@@ -1992,6 +1996,7 @@ fn config_new_project_allows_overlay_for_global_profile() {
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://project.example".into()),
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: false,
@@ -2036,6 +2041,7 @@ fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: None,
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: true,

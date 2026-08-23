@@ -1217,6 +1217,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: Some("http://127.0.0.1:9545".into()),
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),

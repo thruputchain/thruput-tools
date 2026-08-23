@@ -1,6 +1,5 @@
-use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{
-    ContractAddress,
+    ContractAddress, NetworkHashHex,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
 };
 use groundhog_signing::LocalSigner;
@@ -9,7 +8,6 @@ use crate::{
     CliError, codec,
     config::{ResolvedProfile, SavedWalletBinding, resolve_default_key_for_profile},
     dev_keys,
-    http_client::rpc_client,
     keys::load_local_signer,
     runtime_manifest::{SUPPORTED_DERIVATION_SCHEME, load_configured_runtime_manifest},
 };
@@ -56,25 +54,23 @@ pub(crate) struct ValidatedSavedWalletBinding {
     pub(crate) address: groundhog_xdr::types::ContractAddress,
 }
 
-pub(crate) async fn resolve_transaction_sender(
+pub(crate) fn resolve_transaction_sender(
     profile: &ResolvedProfile,
     explicit_wallet: Option<&str>,
-    rpc_url: &str,
 ) -> Result<ResolvedTransactionSender, CliError> {
     let sender = resolve_sender_account(profile, explicit_wallet)?;
-    bind_sender_to_network(profile, sender, rpc_url).await
+    bind_sender_to_network(profile, sender)
 }
 
 /// Bind an already-resolved sender to the network it will sign for.
 ///
 /// Split out so a command can reject bad input against the sender's own
-/// address before spending a round trip on the network hash.
-pub(crate) async fn bind_sender_to_network(
+/// address before resolving the network.
+pub(crate) fn bind_sender_to_network(
     profile: &ResolvedProfile,
     sender: ResolvedSenderAccount,
-    rpc_url: &str,
 ) -> Result<ResolvedTransactionSender, CliError> {
-    let network_hash = resolve_network_hash(profile, &sender.key_name, rpc_url).await?;
+    let network_hash = resolve_network_hash(profile, &sender.key_name)?;
     Ok(ResolvedTransactionSender {
         key_name: sender.key_name,
         wallet_name: sender.wallet_name,
@@ -117,29 +113,26 @@ pub(crate) fn resolve_sender_account(
 
 /// The network hash every signature from this profile is bound to.
 ///
-/// A configured runtime manifest is authoritative and answers offline. Otherwise
-/// the endpoint is asked, once per command.
-///
-/// The answer is deliberately not persisted between invocations. A network hash
-/// never changes for a given chain, but an RPC URL is not a chain: a local node
-/// restarted on the same port serves a new one, and a cache keyed by URL would
-/// keep signing against the old network with no way to notice. One request per
-/// signing command is cheaper than a signature the chain silently rejects.
-pub(crate) async fn resolve_network_hash(
+/// A runtime manifest is authoritative when configured, since it is written by
+/// the node that owns the chain. Otherwise the profile's own `network_hash`
+/// answers: an RPC endpoint serves one network, so this is configuration rather
+/// than something to discover per command.
+pub(crate) fn resolve_network_hash(
     profile: &ResolvedProfile,
     key_name: &str,
-    rpc_url: &str,
 ) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
     if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
         return Ok(manifest.network_hash.to_network_hash());
     }
-    let info = rpc_client(rpc_url)?.network_info().await.map_err(|error| {
-        CliError::NetworkHashUnavailable {
-            rpc_url: rpc_url.to_owned(),
-            message: error.to_string(),
-        }
-    })?;
-    Ok(groundhog_xdr::types::NetworkHash::new(info.network_hash.0))
+    let configured = profile
+        .network_hash
+        .as_deref()
+        .ok_or(CliError::MissingNetworkHash)?;
+    NetworkHashHex::try_from(configured)
+        .map(|hash| hash.to_network_hash())
+        .map_err(|_| CliError::InvalidNetworkHash {
+            value: configured.to_owned(),
+        })
 }
 
 fn resolve_wallet_selection(
@@ -894,6 +887,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: Some("http://127.0.0.1:1".into()),
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some(key_name.into()),
@@ -1038,6 +1032,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: None,
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
@@ -1073,6 +1068,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: None,
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
@@ -1144,6 +1140,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: None,
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
