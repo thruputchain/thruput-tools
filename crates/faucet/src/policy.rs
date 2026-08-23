@@ -77,6 +77,7 @@ pub struct AirdropAttempt {
 pub enum AdmitAirdropAttemptResult {
     Inserted,
     Existing(Box<AirdropAttempt>),
+    CapacityReached,
     PendingLimitReached,
     QuotaExceeded(QuotaDecision),
 }
@@ -171,6 +172,7 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
     fn admit_airdrop_attempt(
         &self,
         attempt: AirdropAttempt,
+        attempt_capacity: usize,
         max_pending_per_recipient: u32,
         quota_checks: &[QuotaCheck],
         now: SystemTime,
@@ -335,6 +337,7 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
     fn admit_airdrop_attempt(
         &self,
         attempt: AirdropAttempt,
+        attempt_capacity: usize,
         max_pending_per_recipient: u32,
         quota_checks: &[QuotaCheck],
         now: SystemTime,
@@ -344,6 +347,9 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             return Ok(AdmitAirdropAttemptResult::Existing(Box::new(
                 existing.clone(),
             )));
+        }
+        if state.airdrop_attempts.len() >= attempt_capacity {
+            return Ok(AdmitAirdropAttemptResult::CapacityReached);
         }
         let pending = state
             .airdrop_attempts
@@ -710,7 +716,7 @@ mod tests {
                 std::thread::spawn(move || {
                     barrier.wait();
                     store
-                        .admit_airdrop_attempt(airdrop_attempt("0xnonce"), 1, &checks, now)
+                        .admit_airdrop_attempt(airdrop_attempt("0xnonce"), 10, 1, &checks, now)
                         .expect("bug: admission should succeed")
                 })
             })
@@ -737,15 +743,46 @@ mod tests {
         );
         assert!(matches!(
             store
-                .admit_airdrop_attempt(airdrop_attempt("0xsecond"), 1, &checks, now)
+                .admit_airdrop_attempt(airdrop_attempt("0xsecond"), 10, 1, &checks, now)
                 .expect("bug: second admission should succeed"),
             AdmitAirdropAttemptResult::Inserted
         ));
         assert!(matches!(
             store
-                .admit_airdrop_attempt(airdrop_attempt("0xthird"), 1, &checks, now)
+                .admit_airdrop_attempt(airdrop_attempt("0xthird"), 10, 1, &checks, now)
                 .expect("bug: quota rejection should succeed"),
             AdmitAirdropAttemptResult::QuotaExceeded(_)
+        ));
+    }
+
+    #[test]
+    fn airdrop_attempt_capacity_rejects_new_keys_but_preserves_idempotent_retries() {
+        let store = InMemoryFaucetPolicyStore::new();
+        let now = SystemTime::UNIX_EPOCH;
+        let checks = [QuotaCheck {
+            key: QuotaKey::AirdropClient(ClientIdentity::Unknown),
+            max: 10,
+            window: Duration::from_mins(1),
+        }];
+        let first = airdrop_attempt("0xfirst");
+
+        assert!(matches!(
+            store
+                .admit_airdrop_attempt(first.clone(), 1, 10, &checks, now)
+                .expect("bug: first admission should succeed"),
+            AdmitAirdropAttemptResult::Inserted
+        ));
+        assert!(matches!(
+            store
+                .admit_airdrop_attempt(first, 1, 10, &checks, now)
+                .expect("bug: retry lookup should succeed"),
+            AdmitAirdropAttemptResult::Existing(_)
+        ));
+        assert!(matches!(
+            store
+                .admit_airdrop_attempt(airdrop_attempt("0xsecond"), 1, 10, &checks, now)
+                .expect("bug: capacity rejection should succeed"),
+            AdmitAirdropAttemptResult::CapacityReached
         ));
     }
 

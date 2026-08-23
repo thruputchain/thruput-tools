@@ -530,9 +530,15 @@ mod tests {
 
         let response = airdrop_request(&config).await;
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(airdrop.calls(), 1);
-        assert_eq!(airdrop.poll_calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 0);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(
+            attempt.error_code.as_deref(),
+            Some("airdrop_submit_amount_mismatch")
+        );
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
     }
 
     #[tokio::test]
@@ -666,6 +672,84 @@ mod tests {
                 && matches!(second.status(), StatusCode::OK | StatusCode::ACCEPTED)
         );
         assert_eq!(airdrop.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn airdrop_execution_capacity_bounds_detached_workers() {
+        let mut submitter = MockAirdropSubmitter::success();
+        let submit_gate = Arc::new(tokio::sync::Semaphore::new(0));
+        submitter.submit_gate = Some(submit_gate.clone());
+        let airdrop = Arc::new(submitter);
+        let mut config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_config.airdrop.ip_quota_max = 100;
+        let router = app(config);
+        let mut tasks = Vec::new();
+        for value in 1_u8..=64 {
+            let mut body = airdrop_body();
+            body["recipient"] = serde_json::json!(format!("0x{}", hex::encode([value; 32])));
+            body["clientNonce"] = serde_json::json!(format!("0x{value:02x}"));
+            let request = request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("bug: airdrop request should build"),
+            );
+            let router = router.clone();
+            tasks.push(tokio::spawn(async move { router.oneshot(request).await }));
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while airdrop.calls() < 64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached workers should reach the submitter");
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            assert!(
+                task.await
+                    .expect_err("canceled request task should not complete")
+                    .is_cancelled()
+            );
+        }
+        let mut overflow_body = airdrop_body();
+        overflow_body["recipient"] = serde_json::json!(format!("0x{}", hex::encode([65; 32])));
+        overflow_body["clientNonce"] = serde_json::json!("0x41");
+
+        let response = router
+            .oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(overflow_body.to_string()))
+                    .expect("bug: airdrop request should build"),
+            ))
+            .await
+            .expect("bug: capacity request should complete");
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: capacity response should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: capacity response should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_capacity_exceeded");
+        submit_gate.add_permits(64);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while airdrop.poll_calls() < 64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached workers should finish after capacity is released");
     }
 
     #[tokio::test]
@@ -1729,12 +1813,18 @@ mod tests {
         fn admit_airdrop_attempt(
             &self,
             attempt: policy::AirdropAttempt,
+            attempt_capacity: usize,
             max_pending_per_recipient: u32,
             quota_checks: &[policy::QuotaCheck],
             now: SystemTime,
         ) -> Result<policy::AdmitAirdropAttemptResult, policy::PolicyStoreError> {
-            self.inner
-                .admit_airdrop_attempt(attempt, max_pending_per_recipient, quota_checks, now)
+            self.inner.admit_airdrop_attempt(
+                attempt,
+                attempt_capacity,
+                max_pending_per_recipient,
+                quota_checks,
+                now,
+            )
         }
 
         fn claim_airdrop_transition(
@@ -1817,6 +1907,7 @@ mod tests {
         accepted_raw_amount: String,
         poll_times_out: bool,
         submit_delay: Option<Duration>,
+        submit_gate: Option<Arc<tokio::sync::Semaphore>>,
     }
 
     struct PanickingAirdropSubmitter;
@@ -1883,6 +1974,7 @@ mod tests {
                 accepted_raw_amount: raw_amount.into(),
                 poll_times_out: false,
                 submit_delay: None,
+                submit_gate: None,
             }
         }
 
@@ -1908,6 +2000,7 @@ mod tests {
                 accepted_raw_amount: "100000000".into(),
                 poll_times_out: false,
                 submit_delay: None,
+                submit_gate: None,
             }
         }
 
@@ -1921,6 +2014,7 @@ mod tests {
                 accepted_raw_amount: "100000000".into(),
                 poll_times_out: false,
                 submit_delay: None,
+                submit_gate: None,
             }
         }
 
@@ -1938,6 +2032,7 @@ mod tests {
                 accepted_raw_amount: "100000000".into(),
                 poll_times_out: false,
                 submit_delay: None,
+                submit_gate: None,
             }
         }
 
@@ -1964,6 +2059,12 @@ mod tests {
             *self.calls.lock().expect("bug: calls lock should succeed") += 1;
             if let Some(delay) = self.submit_delay {
                 tokio::time::sleep(delay).await;
+            }
+            if let Some(gate) = &self.submit_gate {
+                gate.acquire()
+                    .await
+                    .expect("bug: submit gate should stay open")
+                    .forget();
             }
             let mut failures = self
                 .failures_remaining

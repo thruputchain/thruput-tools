@@ -22,6 +22,7 @@ use groundhog_signing::{
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -35,12 +36,16 @@ use crate::{
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+const AIRDROP_SUBMIT_AMOUNT_MISMATCH: &str = "airdrop_submit_amount_mismatch";
+const MAX_RETAINED_AIRDROP_ATTEMPTS: usize = 10_000;
+const MAX_CONCURRENT_AIRDROP_EXECUTIONS: usize = 64;
 #[derive(Clone)]
 pub(crate) struct AirdropService {
     network_descriptor: NetworkDescriptor,
     submitter: Arc<dyn AirdropSubmitter>,
     policy_store: Arc<dyn FaucetPolicyStore>,
     policy_config: PolicyRuntimeConfig,
+    execution: Arc<Semaphore>,
 }
 
 impl AirdropService {
@@ -55,6 +60,7 @@ impl AirdropService {
             submitter,
             policy_store,
             policy_config,
+            execution: Arc::new(Semaphore::new(MAX_CONCURRENT_AIRDROP_EXECUTIONS)),
         }
     }
 
@@ -73,6 +79,14 @@ impl AirdropService {
                 "airdrop request does not match this faucet network",
             );
         }
+        let Ok(execution_permit) = self.execution.clone().try_acquire_owned() else {
+            return error_response_with_retry_after(
+                StatusCode::TOO_MANY_REQUESTS,
+                "airdrop_capacity_exceeded",
+                "airdrop execution capacity reached",
+                Some(1),
+            );
+        };
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
             genesis_hash: hex_string(request.genesis_hash.0),
@@ -113,21 +127,30 @@ impl AirdropService {
         ];
         match self.policy_store.admit_airdrop_attempt(
             attempt.clone(),
+            MAX_RETAINED_AIRDROP_ATTEMPTS,
             self.policy_config.airdrop.max_pending_per_recipient,
             &quota_checks,
             now,
         ) {
             Ok(AdmitAirdropAttemptResult::Inserted) => {
-                self.spawn_submit_airdrop_attempt(request, attempt).await
+                self.spawn_submit_airdrop_attempt(request, attempt, execution_permit)
+                    .await
             }
             Ok(AdmitAirdropAttemptResult::Existing(attempt)) => {
-                self.existing_airdrop_attempt(&request, *attempt).await
+                self.existing_airdrop_attempt(&request, *attempt, execution_permit)
+                    .await
             }
             Ok(AdmitAirdropAttemptResult::PendingLimitReached) => error_response_with_retry_after(
                 StatusCode::TOO_MANY_REQUESTS,
                 "airdrop_recipient_pending_limit_exceeded",
                 "recipient already has an airdrop in progress",
                 Some(5),
+            ),
+            Ok(AdmitAirdropAttemptResult::CapacityReached) => error_response_with_retry_after(
+                StatusCode::TOO_MANY_REQUESTS,
+                "airdrop_capacity_exceeded",
+                "airdrop attempt capacity reached",
+                Some(1),
             ),
             Ok(AdmitAirdropAttemptResult::QuotaExceeded(decision)) => {
                 error_response_with_retry_after(
@@ -145,7 +168,11 @@ impl AirdropService {
         &self,
         request: &HostedAirdropRequest,
         mut attempt: AirdropAttempt,
+        execution_permit: OwnedSemaphorePermit,
     ) -> Response {
+        if attempt.error_code.as_deref() == Some(AIRDROP_SUBMIT_AMOUNT_MISMATCH) {
+            return submit_amount_mismatch_response();
+        }
         match attempt.status {
             AirdropAttemptStatus::Succeeded => {
                 response_from_attempt(StatusCode::OK, request.recipient, attempt)
@@ -168,7 +195,7 @@ impl AirdropService {
                     Err(error) => return policy_store_error_response(&error),
                 };
                 attempt.error_code = None;
-                self.spawn_submit_airdrop_attempt(request.clone(), attempt)
+                self.spawn_submit_airdrop_attempt(request.clone(), attempt, execution_permit)
                     .await
             }
             AirdropAttemptStatus::FailedTerminal => error_response(
@@ -224,16 +251,16 @@ impl AirdropService {
                 // An accepted transaction must not age out while its receipt is unresolved;
                 // otherwise the same idempotency key could submit a second transaction.
                 attempt.expires_at = None;
-                attempt.updated_at = SystemTime::now();
+                if !amount_matches {
+                    attempt.error_code = Some(AIRDROP_SUBMIT_AMOUNT_MISMATCH.into());
+                }
+                let now = SystemTime::now();
+                attempt.updated_at = now;
                 if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
                     return policy_store_error_response(&error);
                 }
                 if !amount_matches {
-                    return error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "airdrop_submit_amount_mismatch",
-                        "airdrop submitter returned an amount that does not match its configuration",
-                    );
+                    return submit_amount_mismatch_response();
                 }
                 self.poll_airdrop_attempt(request.recipient, attempt).await
             }
@@ -258,6 +285,7 @@ impl AirdropService {
         &self,
         request: HostedAirdropRequest,
         attempt: AirdropAttempt,
+        execution_permit: OwnedSemaphorePermit,
     ) -> Response {
         let service = self.clone();
         let recovery_service = self.clone();
@@ -266,6 +294,7 @@ impl AirdropService {
             tokio::spawn(async move { service.submit_airdrop_attempt(request, attempt).await });
         // Keep panic recovery alive even if the client disconnects while the worker runs.
         let supervisor = tokio::spawn(async move {
+            let _execution_permit = execution_permit;
             match worker.await {
                 Ok(response) => response,
                 Err(error) => recovery_service.failed_submission_task(&recovery_key, &error),
@@ -396,6 +425,14 @@ impl AirdropService {
             Err(error) => error.into_response(),
         }
     }
+}
+
+fn submit_amount_mismatch_response() -> Response {
+    error_response(
+        StatusCode::BAD_GATEWAY,
+        AIRDROP_SUBMIT_AMOUNT_MISMATCH,
+        "airdrop submitter returned an amount that does not match its configuration",
+    )
 }
 
 fn terminal_attempt_expiry(now: SystemTime, retention_secs: u64) -> Option<SystemTime> {

@@ -233,7 +233,7 @@ impl LocalAirdropRpc {
             RpcServerError::BackendUnavailable("local airdrop transaction was not retained".into())
         })?;
 
-        let submit_error = if attempt.submitted.load(Ordering::Acquire) {
+        let mut submit_error = if attempt.submitted.load(Ordering::Acquire) {
             None
         } else {
             match self.backend.submit(context, &signed).await {
@@ -244,6 +244,10 @@ impl LocalAirdropRpc {
                 Err(error) => Some(classify_backend_error(error)),
             }
         };
+        if let Some(error) = submit_error.take_if(|error| is_deterministic_failure(error)) {
+            attempt.terminal.store(true, Ordering::Release);
+            return Err(error);
+        }
 
         match self.backend.receipt(context, signed.tx_hash).await {
             Ok(Some(receipt)) if matches!(receipt.status, ExecStatus::Ok) => {
@@ -288,10 +292,6 @@ impl LocalAirdropRpc {
                     ))
                 }
                 Ok(_) => match submit_error {
-                    Some(error) if is_deterministic_failure(&error) => {
-                        attempt.terminal.store(true, Ordering::Release);
-                        Err(error)
-                    }
                     Some(error) => Err(error),
                     None => Ok(AirdropAttemptResponse::Pending {
                         recipient,
@@ -744,6 +744,37 @@ mod tests {
                 .lock()
                 .expect("bug: submissions lock should be available"),
             vec![vec![9, 8, 7, 6], vec![9, 8, 7, 6]]
+        );
+    }
+
+    #[tokio::test]
+    async fn deterministic_submit_rejection_is_terminal_without_status_reconciliation() {
+        let backend = Arc::new(
+            TestBackend::new(vec![Err(RpcServerError::TxRejected("expired".into()))])
+                .with_status_results(vec![Err(RpcServerError::BackendUnavailable(
+                    "status unavailable".into(),
+                ))]),
+        );
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![2, 4, 6],
+        });
+        let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
+        let request = test_request(12, 12);
+
+        let first = rpc.request(request.clone()).await;
+        let second = rpc.request(request).await;
+
+        assert!(matches!(first, Err(RpcServerError::TxRejected(_))));
+        assert!(matches!(second, Err(RpcServerError::TxRejected(_))));
+        assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            backend
+                .submissions
+                .lock()
+                .expect("bug: submissions lock should be available")
+                .len(),
+            1
         );
     }
 

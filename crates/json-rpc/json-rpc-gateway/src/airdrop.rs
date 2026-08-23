@@ -154,6 +154,7 @@ impl HostedAirdrop {
             let deadline = tokio::time::Instant::now() + timeout;
             let Ok(state) = tokio::time::timeout_at(deadline, self.inner.validation.write()).await
             else {
+                self.set_validated(false);
                 return Err(ProbeError::Timeout);
             };
             let result = tokio::time::timeout_at(deadline, self.validate_network_inner())
@@ -369,6 +370,7 @@ fn map_faucet_error(status: StatusCode, error: FaucetError) -> RpcServerError {
         "airdrop_invalid_client_nonce" => RpcServerError::InvalidParam(error.message),
         "airdrop_quota_exceeded"
         | "airdrop_recipient_pending_limit_exceeded"
+        | "airdrop_capacity_exceeded"
         | "airdrop_already_pending" => RpcServerError::Overloaded(error.message),
         "airdrop_attempt_terminal" | "airdrop_transaction_failed" => {
             RpcServerError::TxRejected(error.message)
