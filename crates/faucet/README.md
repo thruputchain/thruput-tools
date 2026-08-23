@@ -101,6 +101,14 @@ Private-preview policy state is in memory. Restarting the faucet clears quota
 counters and idempotency records. The current deployment model assumes one
 faucet instance.
 
+Accepted transactions remain pending until the backend reports a receipt or a
+definitive invalid status. They count toward the bounded attempt capacity while
+their outcome is ambiguous. At capacity, the faucet rejects new attempt keys
+but continues serving existing keys. This fail-closed behavior prevents an
+expired idempotency record from submitting a second transfer. Operators should
+investigate sustained capacity errors before restarting because a restart also
+clears protection for previously accepted transactions.
+
 ## Web UI
 
 The static faucet web UI lives in `web/`. See `web/README.md` for local

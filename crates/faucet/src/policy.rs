@@ -756,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn airdrop_attempt_capacity_rejects_new_keys_but_preserves_idempotent_retries() {
+    fn airdrop_attempt_capacity_fails_closed_for_unresolved_transaction() {
         let store = InMemoryFaucetPolicyStore::new();
         let now = SystemTime::UNIX_EPOCH;
         let checks = [QuotaCheck {
@@ -764,7 +764,8 @@ mod tests {
             max: 10,
             window: Duration::from_mins(1),
         }];
-        let first = airdrop_attempt("0xfirst");
+        let mut first = airdrop_attempt("0xfirst");
+        first.tx_hash = Some("0xaccepted".into());
 
         assert!(matches!(
             store

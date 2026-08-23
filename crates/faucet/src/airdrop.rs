@@ -15,7 +15,7 @@ use groundhog_json_rpc_types::airdrop::{AirdropAttemptResponse, HostedAirdropReq
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
@@ -384,6 +384,25 @@ impl AirdropService {
             Ok(receipt) => {
                 attempt.status = AirdropAttemptStatus::FailedTerminal;
                 attempt.height = Some(*receipt.height);
+                attempt.error_code = Some("airdrop_transaction_failed".into());
+                let now = SystemTime::now();
+                attempt.updated_at = now;
+                attempt.expires_at = terminal_attempt_expiry(
+                    now,
+                    self.policy_config.airdrop.recipient_cooldown_secs,
+                );
+                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt) {
+                    return policy_store_error_response(&error);
+                }
+                AirdropSubmitError::TransactionFailed { tx_hash }.into_response()
+            }
+            Err(AirdropSubmitError::Poll(
+                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                    status: TransactionStatus::Invalid { .. },
+                    ..
+                },
+            )) => {
+                attempt.status = AirdropAttemptStatus::FailedTerminal;
                 attempt.error_code = Some("airdrop_transaction_failed".into());
                 let now = SystemTime::now();
                 attempt.updated_at = now;
