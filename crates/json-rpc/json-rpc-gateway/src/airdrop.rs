@@ -366,26 +366,31 @@ struct FaucetError {
 }
 
 fn map_faucet_error(status: StatusCode, error: FaucetError) -> RpcServerError {
-    match error.code.as_str() {
-        "airdrop_invalid_client_nonce" => RpcServerError::InvalidParam(error.message),
-        "airdrop_quota_exceeded"
+    let FaucetError { code, message } = error;
+    let (mapped, bounded_code) = match code.as_str() {
+        code @ "airdrop_invalid_client_nonce" => (RpcServerError::InvalidParam(message), code),
+        code @ ("airdrop_quota_exceeded"
         | "airdrop_recipient_pending_limit_exceeded"
         | "airdrop_capacity_exceeded"
-        | "airdrop_already_pending" => RpcServerError::Overloaded(error.message),
-        "airdrop_attempt_terminal" | "airdrop_transaction_failed" => {
-            RpcServerError::TxRejected(error.message)
+        | "airdrop_already_pending") => (RpcServerError::Overloaded(message), code),
+        code @ ("airdrop_attempt_terminal" | "airdrop_transaction_failed") => {
+            (RpcServerError::TxRejected(message), code)
         }
-        "airdrop_network_mismatch"
+        code @ ("airdrop_network_mismatch"
         | "airdrop_attempt_conflict"
         | "airdrop_attempt_state_invalid"
         | "faucet_policy_store_unavailable"
         | "airdrop_submit_amount_mismatch"
-        | "airdrop_submit_failed" => RpcServerError::BackendUnavailable(error.message),
-        _ => RpcServerError::BackendUnavailable(format!(
-            "faucet returned HTTP {status}: {} ({})",
-            error.message, error.code
-        )),
-    }
+        | "airdrop_submit_failed") => (RpcServerError::BackendUnavailable(message), code),
+        _ => (
+            RpcServerError::BackendUnavailable(format!(
+                "faucet returned HTTP {status}: {message} ({code})"
+            )),
+            "unknown",
+        ),
+    };
+    tracing::debug!(faucet_code = bounded_code, http_status = %status, "faucet rejected airdrop request");
+    mapped
 }
 
 fn map_http_error(error: &reqwest::Error) -> RpcServerError {

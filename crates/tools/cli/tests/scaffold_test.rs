@@ -111,7 +111,7 @@ fn scaffold_counter_creates_expected_files() {
     // scaffolds a project that `groundhog build` refuses at the preflight.
     assert!(cargo.contains(r#"sdk = { version = "0.21.0", registry = "groundhog" }"#));
     assert!(cargo.contains("groundhog-integration-test = ["));
-    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.9.7""#));
+    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.10.0""#));
     assert!(cargo.contains("optional = true"));
     assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
