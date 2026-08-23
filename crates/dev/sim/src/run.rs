@@ -1136,6 +1136,7 @@ mod tests {
                 tip: ChainTip {
                     height: BlockHeight::from(42),
                     block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    protocol: groundhog_xdr::types::Protocol::new(1),
                 },
             },
             LoadedExecution {
@@ -1199,6 +1200,7 @@ mod tests {
                 tip: ChainTip {
                     height: BlockHeight::from(42),
                     block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    protocol: groundhog_xdr::types::Protocol::new(1),
                 },
             },
             LoadedExecution {
@@ -1292,6 +1294,7 @@ mod tests {
                 tip: ChainTip {
                     height: BlockHeight::from(42),
                     block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                    protocol: groundhog_xdr::types::Protocol::new(1),
                 },
             },
             LoadedExecution {

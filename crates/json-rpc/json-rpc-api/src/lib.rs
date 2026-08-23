@@ -15,6 +15,7 @@ use groundhog_json_rpc_types::{
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     hex::HexBytes,
+    network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
@@ -26,7 +27,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "3.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "3.2.0";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -52,9 +53,16 @@ pub trait GroundhogApi {
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 
-    /// Current chain tip: height + block hash.
+    /// Current chain tip: height, block hash, and the protocol it executed under.
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
+
+    /// Fixed identity of the network this endpoint serves.
+    ///
+    /// The values never change for a given chain, so clients should fetch this
+    /// once per endpoint and cache it rather than calling it per request.
+    #[method(name = "networkInfo")]
+    async fn network_info(&self) -> RpcResult<NetworkInfo>;
 
     /// Block data at a given height.
     #[method(name = "getBlockByNumber")]

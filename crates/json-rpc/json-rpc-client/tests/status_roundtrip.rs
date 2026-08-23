@@ -12,6 +12,7 @@ use groundhog_json_rpc_types::{
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     hex::{Hex0x, HexBytes},
+    network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{
@@ -77,6 +78,13 @@ impl SubmitPlane for RecentFailureBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for RecentFailureBackend {
+    async fn network_info(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<NetworkInfo, RpcServerError> {
+        Err(RpcServerError::NotImplemented("networkInfo".into()))
+    }
+
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }

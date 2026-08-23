@@ -199,6 +199,7 @@ async fn scheduler_tip(
                 height: db_tip.value.proposal_header.block_height.clone(),
                 block_hash: consensus_value_hash(&db_tip.value)
                     .map_err(|source| RuntimeManifestError::SchedulerTipEncoding { source })?,
+                protocol: db_tip.value.protocol.clone(),
             })
         }
         SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
@@ -712,6 +713,7 @@ mod tests {
         ChainTip {
             height: BlockHeight::from(height),
             block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([block_hash; 32])),
+            protocol: groundhog_xdr::types::Protocol::new(1),
         }
     }
 

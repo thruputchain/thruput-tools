@@ -363,7 +363,11 @@ fn prepare_call_with_runtime(
     let contract_address = resolve_contract_target(&resolved_profile, contract)?;
     let contract_address_hex = format_contract_address(&contract_address);
 
-    let sender = resolve_transaction_sender(&resolved_profile, wallet)?;
+    let sender = rt.block_on(resolve_transaction_sender(
+        &resolved_profile,
+        wallet,
+        rpc_url,
+    ))?;
 
     let resolved = resolve_call(&cwd, method, artifacts)?;
     let calldata = encode_args(args, resolved.metadata.as_ref())?;

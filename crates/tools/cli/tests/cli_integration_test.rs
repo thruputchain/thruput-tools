@@ -11156,7 +11156,36 @@ fn send_tx_show_response(
 }
 
 /// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
+/// Network hash the mock endpoints report for `groundhog_networkInfo`.
+const MOCK_NETWORK_HASH: &str =
+    "0x3333333333333333333333333333333333333333333333333333333333333333";
+
+/// Read the next JSON-RPC request, answering `groundhog_networkInfo` inline.
+///
+/// Signing binds each transaction to a network, so a profile without a runtime
+/// manifest asks the endpoint for its network hash before anything else.
+/// Answering it here keeps each mock's script about the call it exercises.
 fn read_jsonrpc_request(
+    listener: &TcpListener,
+    deadline: Instant,
+    label: &str,
+) -> (std::net::TcpStream, serde_json::Value) {
+    loop {
+        let (stream, request) = read_scripted_jsonrpc_request(listener, deadline, label);
+        if request["method"] == "groundhog_networkInfo" {
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({ "networkHash": MOCK_NETWORK_HASH }),
+            );
+            continue;
+        }
+        return (stream, request);
+    }
+}
+
+/// Read the next JSON-RPC request verbatim, without answering anything.
+fn read_scripted_jsonrpc_request(
     listener: &TcpListener,
     deadline: Instant,
     label: &str,
@@ -11338,6 +11367,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
             serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
+                "protocol": 1,
             }),
         );
 
@@ -11398,6 +11428,7 @@ fn spawn_balance_then_chain_tip_rpc(
             serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
+                "protocol": 1,
             }),
         );
         assert_no_follow_up_rpc(&listener);
@@ -11577,6 +11608,7 @@ fn spawn_transfer_rpc(
             serde_json::json!({
                 "height": 42,
                 "blockHash": format!("0x{}", "00".repeat(32)),
+                "protocol": 1,
             }),
         );
 
@@ -12166,6 +12198,7 @@ fn spawn_transaction_rpc(
             serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
+                "protocol": 1,
             }),
         );
 

@@ -9,6 +9,7 @@ use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
+    network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
@@ -71,6 +72,16 @@ impl ChainPlane for GatewayBackend {
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         let context = self.bounded_context(context);
         self.with_deadline(context, handlers::blocks::chain_tip(&self.ctx, context))
+            .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn network_info(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<NetworkInfo, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(context, handlers::blocks::network_info(&self.ctx, context))
             .await
     }
 

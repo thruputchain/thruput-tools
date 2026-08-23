@@ -169,11 +169,13 @@ mod wire_format {
         let tip = ChainTip {
             height: BlockHeight::from(42i64),
             block_hash: zero_hash(),
+            protocol: groundhog_xdr::types::Protocol::new(1),
         };
         let v: Value = serde_json::to_value(&tip).unwrap();
         assert_eq!(v["height"], 42);
         assert!(v["blockHash"].as_str().unwrap().starts_with("0x"));
         assert_eq!(v["blockHash"].as_str().unwrap().len(), 66); // 0x + 64
+        assert_eq!(v["protocol"], 1);
         // Verify camelCase
         assert!(v.get("block_hash").is_none());
     }

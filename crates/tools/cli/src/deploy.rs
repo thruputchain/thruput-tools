@@ -456,12 +456,16 @@ fn prepare_deploy_transaction(
     selected_wallet: Option<&str>,
 ) -> Result<PreparedDeploy, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-    let sender = resolve_transaction_sender(profile, selected_wallet)?;
-
-    let artifact_bytes_len = artifact_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let sender = rt.block_on(resolve_transaction_sender(
+        profile,
+        selected_wallet,
+        rpc_url,
+    ))?;
+
+    let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;
 
     let blob = groundhog_xdr::contract::ContractBlob {

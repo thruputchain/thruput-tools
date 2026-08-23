@@ -14,7 +14,9 @@ use groundhog_signing::{
     transaction_hash,
 };
 
-use crate::account_resolution::{resolve_address_target, resolve_transaction_sender};
+use crate::account_resolution::{
+    bind_sender_to_network, resolve_address_target, resolve_sender_account,
+};
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
@@ -104,17 +106,19 @@ fn prepare(
     let amount = hog::format_amount(raw_amount);
     let token_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
 
-    let resolved_sender = resolve_transaction_sender(&profile, from)?;
-    let sender = resolved_sender.wallet_address;
+    let sender_account = resolve_sender_account(&profile, from)?;
+    let sender = sender_account.wallet_address;
     if sender == recipient {
         return Err(CliError::TransferToSelf {
             address: format_contract_address(&recipient),
         });
     }
-    let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
-    let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &resolved_sender.key_name)?;
+
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let resolved_sender = rt.block_on(bind_sender_to_network(&profile, sender_account, rpc_url))?;
+    let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
+    let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &resolved_sender.key_name)?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
 
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {

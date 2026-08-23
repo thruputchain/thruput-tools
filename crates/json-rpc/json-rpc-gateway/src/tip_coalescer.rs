@@ -14,7 +14,9 @@ use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::RpcRequestContext;
+use groundhog_json_rpc_types::NetworkHash;
 use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
+use groundhog_json_rpc_types::network_info::NetworkInfo;
 use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
@@ -27,11 +29,23 @@ use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASO
 
 const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
 
+/// A scheduler tip together with the network identity it was observed on.
+///
+/// The scheduler returns both in one call, so the gateway reads the network
+/// hash off the tip it already fetches rather than asking for it separately.
+#[derive(Debug, Clone)]
+pub struct TipSnapshot {
+    /// Chain state that advances with each commit.
+    pub tip: ChainTip,
+    /// Network identity, fixed for the life of the chain.
+    pub network_hash: NetworkHash,
+}
+
 /// Backend for chain-tip lookups.  In production this wraps the
 /// scheduler client; tests substitute a mock.
 #[async_trait]
 pub trait TipSink: Send + Sync + 'static {
-    async fn get_tip(&self, deadline: Instant) -> Result<ChainTip, GatewayError>;
+    async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError>;
 }
 
 /// Production sink: forwards to `schedcoord_get_tip` and maps the
@@ -58,7 +72,7 @@ impl SchedulerTipSink {
 
 #[async_trait]
 impl TipSink for SchedulerTipSink {
-    async fn get_tip(&self, deadline: Instant) -> Result<ChainTip, GatewayError> {
+    async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError> {
         let client = self.scheduler.read().await.clone();
         let client = client
             .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
@@ -105,9 +119,20 @@ impl TipSink for SchedulerTipSink {
                         "scheduler returned an unencodable consensus value: {error}"
                     ))
                 })?;
-                Ok(ChainTip {
-                    height: db_tip.value.proposal_header.block_height.clone(),
-                    block_hash,
+                Ok(TipSnapshot {
+                    network_hash: NetworkHash::from(
+                        db_tip
+                            .value
+                            .proposal_header
+                            .network_hash
+                            .clone()
+                            .into_inner(),
+                    ),
+                    tip: ChainTip {
+                        height: db_tip.value.proposal_header.block_height.clone(),
+                        block_hash,
+                        protocol: db_tip.value.protocol.clone(),
+                    },
                 })
             }
             SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => Err(
@@ -121,7 +146,7 @@ impl TipSink for SchedulerTipSink {
 }
 
 struct Waiter {
-    reply: oneshot::Sender<Result<ChainTip, GatewayError>>,
+    reply: oneshot::Sender<Result<TipSnapshot, GatewayError>>,
     backend_deadline: Instant,
 }
 
@@ -286,7 +311,7 @@ impl TipCoalescer {
     /// coalescer's ingress is full; otherwise awaits the fanout from
     /// the next completed backend RPC.
     #[tracing::instrument(skip_all)]
-    pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
+    async fn tip_snapshot(&self, context: RpcRequestContext) -> Result<TipSnapshot, GatewayError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let request_deadline = context
             .capped_from_start(self.request_timeout)
@@ -324,6 +349,26 @@ impl TipCoalescer {
             .map_err(|_| GatewayError::BackendTimeout)?
             .map_err(|_| GatewayError::BackendUnavailable("tip coalescer dropped reply".into()))?
     }
+
+    /// Ask for the current chain tip.
+    #[tracing::instrument(skip_all)]
+    pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
+        Ok(self.tip_snapshot(context).await?.tip)
+    }
+
+    /// Ask for the identity of the network the scheduler is serving.
+    ///
+    /// Read off the same tip the scheduler already returns, so this costs no
+    /// extra backend call.
+    #[tracing::instrument(skip_all)]
+    pub async fn network_info(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<NetworkInfo, GatewayError> {
+        Ok(NetworkInfo::new(
+            self.tip_snapshot(context).await?.network_hash,
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -353,8 +398,8 @@ mod tests {
     }
 
     enum MockResponse {
-        Gate(oneshot::Receiver<Result<ChainTip, GatewayError>>),
-        Immediate(Result<ChainTip, GatewayError>),
+        Gate(oneshot::Receiver<Result<TipSnapshot, GatewayError>>),
+        Immediate(Result<TipSnapshot, GatewayError>),
     }
 
     impl MockSink {
@@ -367,7 +412,7 @@ mod tests {
             })
         }
 
-        fn queue_gate(&self) -> oneshot::Sender<Result<ChainTip, GatewayError>> {
+        fn queue_gate(&self) -> oneshot::Sender<Result<TipSnapshot, GatewayError>> {
             let (tx, rx) = oneshot::channel();
             self.responses
                 .lock()
@@ -376,7 +421,7 @@ mod tests {
             tx
         }
 
-        fn queue_response(&self, r: Result<ChainTip, GatewayError>) {
+        fn queue_response(&self, r: Result<TipSnapshot, GatewayError>) {
             self.responses
                 .lock()
                 .unwrap()
@@ -392,17 +437,21 @@ mod tests {
         }
     }
 
-    fn default_tip(height: i64) -> ChainTip {
+    fn default_tip(height: i64) -> TipSnapshot {
         let bytes = [0u8; 32];
-        ChainTip {
-            height: BlockHeight::new(height),
-            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
+        TipSnapshot {
+            tip: ChainTip {
+                height: BlockHeight::new(height),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
+                protocol: groundhog_xdr::types::Protocol::new(1),
+            },
+            network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
         }
     }
 
     #[async_trait]
     impl TipSink for MockSink {
-        async fn get_tip(&self, deadline: Instant) -> Result<ChainTip, GatewayError> {
+        async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError> {
             {
                 let mut n = self.seen.lock().unwrap();
                 *n += 1;
@@ -431,7 +480,7 @@ mod tests {
 
     #[async_trait]
     impl TipSink for PanicOnceTipSink {
-        async fn get_tip(&self, _deadline: Instant) -> Result<ChainTip, GatewayError> {
+        async fn get_tip(&self, _deadline: Instant) -> Result<TipSnapshot, GatewayError> {
             assert_ne!(
                 self.calls.fetch_add(1, Ordering::SeqCst),
                 0,
@@ -456,7 +505,7 @@ mod tests {
 
     #[async_trait]
     impl TipSink for PendingTipSink {
-        async fn get_tip(&self, _deadline: Instant) -> Result<ChainTip, GatewayError> {
+        async fn get_tip(&self, _deadline: Instant) -> Result<TipSnapshot, GatewayError> {
             let _marker = DropMarker(self.dropped.clone());
             self.started.notify_one();
             std::future::pending().await
@@ -465,7 +514,7 @@ mod tests {
 
     #[async_trait]
     impl TipSink for TimeoutInvalidatesTipSink {
-        async fn get_tip(&self, deadline: Instant) -> Result<ChainTip, GatewayError> {
+        async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError> {
             self.deadlines.lock().unwrap().push(deadline);
             if deadline < self.cutoff {
                 self.valid.store(false, Ordering::SeqCst);
@@ -724,6 +773,7 @@ mod tests {
                 .await
                 .expect("newer reply should be sent")
                 .expect("newer cohort should finish before invalidation")
+                .tip
                 .height,
             BlockHeight::new(20)
         );
