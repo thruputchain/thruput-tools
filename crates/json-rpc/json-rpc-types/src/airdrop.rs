@@ -99,13 +99,14 @@ pub struct HostedAirdropRequest {
 
 /// Stable lifecycle response for hosted and local airdrop attempts.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 #[serde(
     tag = "attemptStatus",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
 pub enum AirdropAttemptResponse {
-    /// The exact signed transaction is submitted but not yet confirmed.
+    /// The logical attempt is in progress and may not have been submitted yet.
     Pending {
         /// Address receiving the native HOG transfer.
         recipient: ContractAddress,
@@ -130,6 +131,22 @@ pub enum AirdropAttemptResponse {
         /// Committed execution result.
         status: ExecStatus,
     },
+}
+
+impl AirdropAttemptResponse {
+    /// Recipient bound to this logical attempt.
+    pub fn recipient(&self) -> &ContractAddress {
+        match self {
+            Self::Pending { recipient, .. } | Self::Succeeded { recipient, .. } => recipient,
+        }
+    }
+
+    /// Native amount in indivisible units.
+    pub fn raw_amount(&self) -> &str {
+        match self {
+            Self::Pending { raw_amount, .. } | Self::Succeeded { raw_amount, .. } => raw_amount,
+        }
+    }
 }
 
 #[cfg(test)]

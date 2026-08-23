@@ -361,6 +361,7 @@ async fn start_rpc_server(
     // Prefer the full indexer-backed read plane when available. If hogd-dev
     // only advertises DbGateway, still serve latest-state storage reads.
     if let Some(indexer_addr) = readiness.endpoints.indexer_block_explorer {
+        let local_airdrop = validated_local_airdrop_context(manifest, config)?;
         tracing::debug!(%indexer_addr, "connecting to hogd-dev IndexerBlockExplorer");
         let read = HogdDevReadBackend::connect(
             indexer_addr,
@@ -438,9 +439,8 @@ async fn start_rpc_server(
 fn validated_local_airdrop_context(
     manifest: &groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
     config: &NodeSupervisorConfig,
-    network_info: &NetworkInfo,
 ) -> Result<LocalAirdropContext, NodeSupervisorError> {
-    LocalAirdropContext::from_validated_runtime(manifest, config, network_info).map_err(|reason| {
+    LocalAirdropContext::from_validated_runtime(manifest, config).map_err(|reason| {
         NodeSupervisorError::InvalidRuntimeManifest {
             program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
             reason,
@@ -832,7 +832,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .network_info()
             .await
             .expect("bug: networkInfo should use immutable manifest identity");
-        assert_eq!(network_info.network_id, LOCALNET_NETWORK_ID);
+        assert_eq!(network_info.network_hash.as_ref(), &[0; 32]);
         assert_eq!(
             serde_json::to_value(network_info.genesis_hash)
                 .expect("bug: genesis hash should serialize"),

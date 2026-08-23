@@ -342,18 +342,7 @@ fn run_remote_airdrop(
             genesis_hash: prepared.genesis_hash.clone(),
         },
     )?;
-    let (recipient, raw_amount) = match &response {
-        AirdropAttemptResponse::Pending {
-            recipient,
-            raw_amount,
-            ..
-        }
-        | AirdropAttemptResponse::Succeeded {
-            recipient,
-            raw_amount,
-            ..
-        } => (recipient, raw_amount),
-    };
+    let recipient = response.recipient();
     if recipient.0 != parse_contract_address(&prepared.recipient_wallet)? {
         return Err(CliError::NetworkDescriptorMismatch {
             field: "airdrop.recipient",
@@ -361,7 +350,7 @@ fn run_remote_airdrop(
             actual: format_contract_address(&recipient.0),
         });
     }
-    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, raw_amount)?;
+    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, response.raw_amount())?;
     let (tx_hash, height, status, raw_amount) = match response {
         AirdropAttemptResponse::Pending {
             retry_after_seconds,
@@ -378,6 +367,11 @@ fn run_remote_airdrop(
             status,
             ..
         } => (tx_hash, height, status, raw_amount),
+        _ => {
+            return Err(CliError::Other(
+                "remote faucet returned an unsupported airdrop attempt status".into(),
+            ));
+        }
     };
     if !matches!(status, ExecStatus::Ok) {
         return Err(CliError::Other(

@@ -12,6 +12,7 @@ use groundhog_json_rpc_types::{
         NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
     },
     network_info::NetworkInfo,
+    receipt::ExecStatus,
 };
 use jsonrpsee::{RpcModule, core::RpcResult, types::ErrorObjectOwned};
 use reqwest::{StatusCode, Url};
@@ -43,14 +44,15 @@ struct HostedAirdropInner {
     client: reqwest::Client,
     base_url: Url,
     network: NetworkInfo,
-    validated: std::sync::atomic::AtomicBool,
     validation: tokio::sync::RwLock<ValidationState>,
     admission: Semaphore,
+    request_timeout: Duration,
     metrics: GatewayMetrics,
 }
 
 #[derive(Default)]
 struct ValidationState {
+    validated: bool,
     last_error: Option<ProbeError>,
 }
 
@@ -119,14 +121,17 @@ impl HostedAirdrop {
                 client,
                 base_url,
                 network,
-                validated: std::sync::atomic::AtomicBool::new(false),
                 validation: tokio::sync::RwLock::new(ValidationState::default()),
                 admission: Semaphore::new(MAX_IN_FLIGHT),
+                request_timeout,
                 metrics,
             }),
         };
 
-        match facade.validate_and_record(None).await {
+        match facade
+            .validate_and_record(Some(connect_timeout.min(Duration::from_secs(5))))
+            .await
+        {
             Ok(()) => {}
             Err(ProbeError::Unavailable(_) | ProbeError::Timeout) => {
                 tracing::warn!(faucet_url = %facade.inner.base_url, "faucet unavailable at startup; starting degraded");
@@ -154,7 +159,6 @@ impl HostedAirdrop {
             let deadline = tokio::time::Instant::now() + timeout;
             let Ok(state) = tokio::time::timeout_at(deadline, self.inner.validation.write()).await
             else {
-                self.set_validated(false);
                 return Err(ProbeError::Timeout);
             };
             let result = tokio::time::timeout_at(deadline, self.validate_network_inner())
@@ -166,18 +170,21 @@ impl HostedAirdrop {
             let result = self.validate_network_inner().await;
             (state, result)
         };
-        self.set_validated(result.is_ok());
+        state.validated = result.is_ok();
         state.last_error = result.as_ref().err().cloned();
         result
     }
 
     async fn ensure_validated(&self) -> Result<(), ProbeError> {
-        if self.is_validated() {
-            return Ok(());
+        {
+            let state = self.inner.validation.read().await;
+            if state.validated {
+                return Ok(());
+            }
         }
         let Ok(mut state) = self.inner.validation.try_write() else {
             let state = self.inner.validation.write().await;
-            return if self.is_validated() {
+            return if state.validated {
                 Ok(())
             } else {
                 Err(state.last_error.clone().unwrap_or_else(|| {
@@ -185,8 +192,11 @@ impl HostedAirdrop {
                 }))
             };
         };
+        if state.validated {
+            return Ok(());
+        }
         let result = self.validate_network_inner().await;
-        self.set_validated(result.is_ok());
+        state.validated = result.is_ok();
         state.last_error = result.as_ref().err().cloned();
         result
     }
@@ -231,32 +241,29 @@ impl HostedAirdrop {
         Ok(())
     }
 
-    fn set_validated(&self, validated: bool) {
-        self.inner
-            .validated
-            .store(validated, std::sync::atomic::Ordering::Release);
-    }
-
-    fn is_validated(&self) -> bool {
-        self.inner
-            .validated
-            .load(std::sync::atomic::Ordering::Acquire)
+    #[cfg(test)]
+    async fn is_validated(&self) -> bool {
+        self.inner.validation.read().await.validated
     }
 
     async fn forward(
         &self,
         request: AirdropRequest,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
-        if !self.is_validated() {
-            self.ensure_validated().await.map_err(map_probe_error)?;
-        }
+        let deadline = tokio::time::Instant::now() + self.inner.request_timeout;
+        tokio::time::timeout_at(deadline, self.ensure_validated())
+            .await
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(map_probe_error)?;
         let _permit = self
             .inner
             .admission
             .try_acquire()
             .map_err(|_| RpcServerError::Overloaded("faucet request limit reached".into()))?;
-        let validation = self.inner.validation.read().await;
-        if !self.is_validated() {
+        let validation = tokio::time::timeout_at(deadline, self.inner.validation.read())
+            .await
+            .map_err(|_| RpcServerError::BackendTimeout)?;
+        if !validation.validated {
             return Err(map_probe_error(
                 validation.last_error.clone().unwrap_or_else(|| {
                     ProbeError::Unavailable("descriptor validation did not complete".into())
@@ -272,12 +279,14 @@ impl HostedAirdrop {
         let url = endpoint(&self.inner.base_url, "v1/airdrop")
             .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
         let started = Instant::now();
-        let result = self.post_airdrop(url, &hosted).await;
+        let result = tokio::time::timeout_at(deadline, self.post_airdrop(url, &hosted))
+            .await
+            .unwrap_or(Err(RpcServerError::BackendTimeout));
         let outcome = match &result {
             Ok(AirdropAttemptResponse::Pending { .. }) => AirdropRequestOutcome::Pending,
             Ok(AirdropAttemptResponse::Succeeded { .. }) => AirdropRequestOutcome::Succeeded,
             Err(RpcServerError::BackendTimeout) => AirdropRequestOutcome::Timeout,
-            Err(_) => AirdropRequestOutcome::Error,
+            Ok(_) | Err(_) => AirdropRequestOutcome::Error,
         };
         self.inner
             .metrics
@@ -305,9 +314,18 @@ impl HostedAirdrop {
         if status.is_success()
             && let Ok(response) = decoded_response
         {
-            if response_recipient(&response) != &hosted.recipient {
+            if response.recipient() != &hosted.recipient {
                 return Err(RpcServerError::BackendUnavailable(
                     "faucet response recipient does not match the request".into(),
+                ));
+            }
+            if matches!(
+                &response,
+                AirdropAttemptResponse::Succeeded { status, .. }
+                    if !matches!(status, ExecStatus::Ok)
+            ) {
+                return Err(RpcServerError::BackendUnavailable(
+                    "faucet returned a succeeded response with a failed execution status".into(),
                 ));
             }
             return Ok(response);
@@ -324,15 +342,6 @@ impl HostedAirdrop {
         } else {
             format!("faucet returned malformed HTTP {status} error: {detail}")
         }))
-    }
-}
-
-fn response_recipient(
-    response: &AirdropAttemptResponse,
-) -> &groundhog_json_rpc_types::ContractAddress {
-    match response {
-        AirdropAttemptResponse::Pending { recipient, .. }
-        | AirdropAttemptResponse::Succeeded { recipient, .. } => recipient,
     }
 }
 
@@ -467,7 +476,10 @@ impl ProbeError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use axum::{
         Json, Router,
@@ -556,7 +568,7 @@ mod tests {
         assert_eq!(snapshot["backends"]["faucet"]["configured"], true);
         assert_eq!(snapshot["backends"]["faucet"]["required"], true);
         assert!(!probe.up);
-        assert!(!facade.is_validated());
+        assert!(!facade.is_validated().await);
 
         let listener = TcpListener::bind(base_url.trim_start_matches("http://"))
             .await
@@ -580,7 +592,7 @@ mod tests {
         let recovered = facade.probe(Duration::from_secs(1)).await;
 
         assert!(recovered.up);
-        assert!(facade.is_validated());
+        assert!(facade.is_validated().await);
         server.abort();
     }
 
@@ -718,6 +730,60 @@ mod tests {
         assert!(!probe.up);
         assert_eq!(probe.error.as_deref(), Some("faucet request timed out"));
         active_validation.abort();
+    }
+
+    #[tokio::test]
+    async fn probe_lock_timeout_does_not_invalidate_active_forwarding() {
+        let post_started = Arc::new(Notify::new());
+        let release_post = Arc::new(Notify::new());
+        let app = Router::new()
+            .route(
+                "/v1/network",
+                get(|| async { Json(network_descriptor("devnet")) }),
+            )
+            .route(
+                "/v1/airdrop",
+                post({
+                    let post_started = post_started.clone();
+                    let release_post = release_post.clone();
+                    move || {
+                        let post_started = post_started.clone();
+                        let release_post = release_post.clone();
+                        async move {
+                            post_started.notify_one();
+                            release_post.notified().await;
+                            Json(json!({
+                                "attemptStatus": "pending",
+                                "recipient": format!("0x{}", "11".repeat(32)),
+                                "rawAmount": "100000000",
+                                "retryAfterSeconds": 5
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, _server) = spawn_app(app).await;
+        let facade = HostedAirdrop::from_config(&config(&base_url), network_info())
+            .await
+            .expect("matching descriptor should pass startup")
+            .expect("configured facade should exist");
+        let active_request = {
+            let facade = facade.clone();
+            tokio::spawn(async move { facade.request_airdrop(airdrop_request()).await })
+        };
+        tokio::time::timeout(Duration::from_secs(1), post_started.notified())
+            .await
+            .expect("faucet POST should start");
+
+        let probe = facade.probe(Duration::from_millis(10)).await;
+
+        assert!(!probe.up);
+        assert!(facade.is_validated().await);
+        release_post.notify_one();
+        active_request
+            .await
+            .expect("request task should complete")
+            .expect("active request should remain valid");
     }
 
     #[tokio::test]
@@ -945,6 +1011,92 @@ mod tests {
             .expect_err("malformed success should fail the RPC");
 
         assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn succeeded_response_with_failed_status_maps_to_backend_unavailable() {
+        let (base_url, _server) = spawn_server(
+            network_descriptor("devnet"),
+            StatusCode::OK,
+            json!({
+                "attemptStatus": "succeeded",
+                "recipient": format!("0x{}", "11".repeat(32)),
+                "rawAmount": "100000000",
+                "txHash": format!("0x{}", "22".repeat(32)),
+                "height": 42,
+                "status": { "result": "reverted", "message": "denied" }
+            }),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await;
+        let facade = HostedAirdrop::from_config(&config(&base_url), network_info())
+            .await
+            .expect("matching descriptor should pass startup")
+            .expect("configured facade should exist");
+
+        let error = facade
+            .request_airdrop(airdrop_request())
+            .await
+            .expect_err("failed execution status must not be reported as succeeded");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn forwarded_request_includes_configured_identity_and_public_fields() {
+        let captured = Arc::new(Mutex::new(None::<HostedAirdropRequest>));
+        let app = Router::new()
+            .route(
+                "/v1/network",
+                get(|| async { Json(network_descriptor("devnet")) }),
+            )
+            .route(
+                "/v1/airdrop",
+                post({
+                    let captured = captured.clone();
+                    move |Json(request): Json<HostedAirdropRequest>| {
+                        let captured = captured.clone();
+                        async move {
+                            *captured.lock().expect("bug: capture lock should succeed") =
+                                Some(request);
+                            (
+                                StatusCode::ACCEPTED,
+                                Json(json!({
+                                    "attemptStatus": "pending",
+                                    "recipient": format!("0x{}", "11".repeat(32)),
+                                    "rawAmount": "100000000",
+                                    "retryAfterSeconds": 5
+                                })),
+                            )
+                        }
+                    }
+                }),
+            );
+        let (base_url, _server) = spawn_app(app).await;
+        let facade = HostedAirdrop::from_config(&config(&base_url), network_info())
+            .await
+            .expect("matching descriptor should pass startup")
+            .expect("configured facade should exist");
+
+        facade
+            .request_airdrop(airdrop_request())
+            .await
+            .expect("airdrop should be forwarded");
+
+        let forwarded = captured
+            .lock()
+            .expect("bug: capture lock should succeed")
+            .clone()
+            .expect("bug: forwarded request should be captured");
+        assert_eq!(
+            serde_json::to_value(forwarded).expect("forwarded request should serialize"),
+            json!({
+                "recipient": format!("0x{}", "11".repeat(32)),
+                "clientNonce": "0x01",
+                "networkId": "devnet",
+                "genesisHash": format!("0x{}", "42".repeat(32))
+            })
+        );
     }
 
     #[tokio::test]
