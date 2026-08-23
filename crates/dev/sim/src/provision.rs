@@ -199,6 +199,7 @@ where
             index: account_index,
             signer,
             wallet_address: prepared.wallet_address,
+            network_hash: sponsor.network_hash.clone(),
         },
         nonce_namespace,
     ));
@@ -381,9 +382,13 @@ fn prepare_wallet_create(
         contracts_to_deploy: VecM(vec![wallet_contract.clone()]),
         auth_claim: source_address_auth_claim(),
     });
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &sponsor.signer, SignTransactionParams::default())
-            .map_err(|source| SimError::Executor(source.to_string()))?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &sponsor.signer,
+        SignTransactionParams::default(),
+        &sponsor.network_hash,
+    )
+    .map_err(|source| SimError::Executor(source.to_string()))?;
     Ok(PreparedWalletCreate {
         tx_hex,
         wallet_address,
@@ -455,13 +460,15 @@ where
     .map_err(|error| {
         ProvisionTxError::without_hash(format!("failed to build airdrop transaction: {error}"))
     })?;
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &sponsor.signer, SignTransactionParams::default())
-            .map_err(|error| {
-                ProvisionTxError::without_hash(format!(
-                    "failed to sign airdrop transaction: {error}"
-                ))
-            })?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &sponsor.signer,
+        SignTransactionParams::default(),
+        &sponsor.network_hash,
+    )
+    .map_err(|error| {
+        ProvisionTxError::without_hash(format!("failed to sign airdrop transaction: {error}"))
+    })?;
     let tx_hash = client.send_raw_transaction(tx_hex).await.map_err(|error| {
         ProvisionTxError::without_hash(format!("airdrop submit failed: {error}"))
     })?;
@@ -980,6 +987,9 @@ mod tests {
                 index: account_index,
                 signer: derive_dev_account_signer("seed", account_index as usize),
                 wallet_address: ContractAddress::from([address_byte; 32]),
+                network_hash: groundhog_xdr::types::NetworkHash::new(
+                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                ),
             },
             NonceNamespace::new(1).expect("namespace should fit"),
         )

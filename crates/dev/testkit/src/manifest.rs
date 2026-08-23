@@ -10,7 +10,7 @@ use groundhog_signing::{
     DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer,
     derive_default_dev_account_signer, derive_dev_account_signer,
 };
-use groundhog_xdr::types::ContractAddress;
+use groundhog_xdr::types::{ContractAddress, NetworkHash, SHA256Hash};
 
 use crate::error::{Result, TestkitError};
 
@@ -24,6 +24,8 @@ pub(crate) struct DevAccount {
     pub(crate) index: u32,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: ContractAddress,
+    /// Network this account signs for. Part of every signature preimage.
+    pub(crate) network_hash: NetworkHash,
 }
 
 /// Where a scenario's accounts come from.
@@ -103,6 +105,7 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount
                 index: account.index,
                 signer,
                 wallet_address: account.wallet_address.0,
+                network_hash: manifest.network_hash.to_network_hash(),
             })
         })
         .collect()
@@ -119,6 +122,10 @@ fn derive_offline_accounts(count: usize) -> Result<Vec<DevAccount>> {
                 index,
                 signer,
                 wallet_address,
+                // Offline scenarios never submit to a live chain, so there is
+                // no network to bind to. A signature produced here is only
+                // ever built and encoded, never accepted by a real network.
+                network_hash: NetworkHash::new(SHA256Hash::new([0u8; 32])),
             })
         })
         .collect()

@@ -26,6 +26,8 @@ pub struct SimAccount {
     pub index: u32,
     pub signer: LocalSigner,
     pub wallet_address: groundhog_xdr::types::ContractAddress,
+    /// Network this account signs for. Part of every signature preimage.
+    pub network_hash: groundhog_xdr::types::NetworkHash,
 }
 
 #[derive(Debug, Clone)]
@@ -349,6 +351,7 @@ fn derive_account(
         index: account.index,
         signer,
         wallet_address: account.wallet_address.0,
+        network_hash: manifest.network_hash.to_network_hash(),
     })
 }
 

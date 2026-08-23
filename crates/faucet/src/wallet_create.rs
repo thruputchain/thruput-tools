@@ -710,6 +710,7 @@ impl WalletCreateRuntimeConfig {
 
 pub struct RpcWalletCreateSubmitter {
     rpc_url: String,
+    network_hash: groundhog_xdr::types::NetworkHash,
     faucet_wallet_address: groundhog_xdr::types::ContractAddress,
     faucet_signer: LocalSigner,
     create_wallet_entrypoint: ContractEntrypointID,
@@ -725,9 +726,11 @@ impl RpcWalletCreateSubmitter {
         descriptor: &NetworkDescriptor,
         config: WalletCreateRuntimeConfig,
         faucet_secret_key: &[u8; 32],
+        network_hash: groundhog_xdr::types::NetworkHash,
     ) -> Self {
         Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
+            network_hash,
             faucet_wallet_address: descriptor.faucet.wallet_address.0,
             faucet_signer: LocalSigner::from_secret_key(*faucet_secret_key),
             create_wallet_entrypoint: config.create_wallet_entrypoint,
@@ -858,6 +861,7 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
             tx,
             &self.faucet_signer,
             SignTransactionParams::default(),
+            &self.network_hash,
         )
         .map_err(|error| WalletCreateError::SignTransaction(error.to_string()))?;
         let tx_hash = submit_transaction(&self.rpc_url, &tx_hex).await?;

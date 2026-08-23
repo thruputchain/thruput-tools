@@ -10,7 +10,7 @@ use groundhog_json_rpc_types::network_descriptor::{
     AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor,
     NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
 };
-use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
+use groundhog_json_rpc_types::{ContractAddress, NetworkHashHex, SHA256Hash};
 use groundhog_signing::LocalSigner;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -45,6 +45,8 @@ pub struct FaucetConfigParts {
     pub network_descriptor: NetworkDescriptor,
     /// Private airdrop execution config.
     pub airdrop: AirdropRuntimeConfig,
+    /// Network hash every faucet-signed transaction is bound to.
+    pub network_hash: groundhog_xdr::types::NetworkHash,
     /// Raw HOG units transferred before wallet creation.
     pub wallet_create_prefund_raw_amount: u128,
     /// Private wallet-create execution config.
@@ -111,6 +113,7 @@ impl FaucetConfigFile {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let policy = self.policy.into_runtime_config();
+        let network_hash = self.network.network_hash.to_network_hash();
         let network_descriptor = self
             .network
             .into_descriptor(airdrop_raw_amount, &policy.airdrop);
@@ -118,6 +121,7 @@ impl FaucetConfigFile {
             listen_address: self.listen_address,
             network_descriptor,
             airdrop,
+            network_hash,
             wallet_create_prefund_raw_amount,
             wallet_create,
             policy,
@@ -285,6 +289,12 @@ pub struct NetworkConfig {
     pub protocol: String,
     /// Hash of the materialized genesis state.
     pub genesis_hash: SHA256Hash,
+    /// Network hash the faucet signs against.
+    ///
+    /// Part of every signature preimage, so a faucet configured with the wrong
+    /// one produces transactions the network rejects. Not served in the public
+    /// descriptor: clients cannot yet learn it over RPC.
+    pub network_hash: NetworkHashHex,
     /// Public endpoint configuration.
     pub endpoints: EndpointConfig,
     /// Native HOG token configuration.

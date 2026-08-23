@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use groundhog_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
 use groundhog_signing::LocalSigner;
-use groundhog_xdr::types::ContractAddress;
+use groundhog_xdr::types::{ContractAddress, NetworkHash};
 
 use crate::manifest::SimulationManifest;
 use crate::nonce::NonceNamespace;
@@ -18,6 +18,8 @@ pub struct ActorState {
     pub account_index: u32,
     pub signer: LocalSigner,
     pub wallet_address: ContractAddress,
+    /// Network this actor signs for. Part of every signature preimage.
+    pub network_hash: NetworkHash,
     pub nonce_namespace: NonceNamespace,
     pub next_nonce_sequence: u32,
     pub last_submitted_tx_hash: Option<TxHash>,
@@ -74,6 +76,7 @@ impl ActorState {
             account_index: account.index,
             signer: account.signer,
             wallet_address: account.wallet_address,
+            network_hash: account.network_hash,
             nonce_namespace,
             next_nonce_sequence: 0,
             last_submitted_tx_hash: None,
@@ -634,6 +637,9 @@ mod tests {
             index,
             signer: derive_dev_account_signer("actor-test-seed", index as usize),
             wallet_address: Hex0x(ContractAddress::from([address_byte; 32])).0,
+            network_hash: groundhog_xdr::types::NetworkHash::new(
+                groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+            ),
         }
     }
 

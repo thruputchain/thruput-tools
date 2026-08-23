@@ -138,6 +138,7 @@ fn prepare(
         tx,
         &resolved_sender.signer,
         SignTransactionParams::default(),
+        &resolved_sender.network_hash,
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
     let signed_transaction = encode_signed_transaction_xdr(&authenticated_tx)

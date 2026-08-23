@@ -12,7 +12,7 @@ use groundhog_signing::{
     wallet_contract_hash, wallet_create_proof_message_v2,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1019,6 +1019,7 @@ fn prepare_local_wallet_create(
         block_expiry_height,
         nonce: deploy_nonce_val,
         signer: &faucet.signer,
+        network_hash: &faucet.network_hash,
     })?;
     let create_tx_hex = sign_create_wallet_transaction(SignCreateWalletTransaction {
         faucet_wallet_address: faucet.wallet_address,
@@ -1028,6 +1029,7 @@ fn prepare_local_wallet_create(
         nonce: deploy_nonce_val.saturating_add(1),
         contract,
         signer: &faucet.signer,
+        network_hash: &faucet.network_hash,
     })?;
 
     Ok(PreparedWalletCreate::Local(PreparedLocalWalletCreate {
@@ -1259,6 +1261,8 @@ struct SignWalletPrefundTransaction<'a> {
     block_expiry_height: i64,
     nonce: u64,
     signer: &'a LocalSigner,
+    /// Network the signature is bound to.
+    network_hash: &'a NetworkHash,
 }
 
 struct SignCreateWalletTransaction<'a> {
@@ -1269,6 +1273,8 @@ struct SignCreateWalletTransaction<'a> {
     nonce: u64,
     contract: Contract,
     signer: &'a LocalSigner,
+    /// Network the signature is bound to.
+    network_hash: &'a NetworkHash,
 }
 
 fn load_dev_wallet_contract(
@@ -1311,8 +1317,13 @@ fn sign_create_wallet_transaction(
         contracts_to_deploy: VecM(vec![args.contract]),
         auth_claim: source_address_auth_claim(),
     });
-    sign_and_encode_transaction_hex(create_tx, args.signer, SignTransactionParams::default())
-        .map_err(|error| CliError::Other(error.to_string()))
+    sign_and_encode_transaction_hex(
+        create_tx,
+        args.signer,
+        SignTransactionParams::default(),
+        args.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))
 }
 
 fn sign_wallet_prefund_transaction(
@@ -1333,8 +1344,13 @@ fn sign_wallet_prefund_transaction(
         nonce: args.nonce,
     })
     .map_err(|error| CliError::Other(error.to_string()))?;
-    sign_and_encode_transaction_hex(tx, args.signer, SignTransactionParams::default())
-        .map_err(|error| CliError::Other(error.to_string()))
+    sign_and_encode_transaction_hex(
+        tx,
+        args.signer,
+        SignTransactionParams::default(),
+        args.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))
 }
 
 fn resolve_dev_wallet_artifact_path(

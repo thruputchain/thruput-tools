@@ -1,12 +1,13 @@
 //! Transaction and signed-transaction builders.
 
 use crate::{PublicKeyId, Signer, SigningError};
+use groundhog_domain_separator::transaction_signature_preimage;
 use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
 use groundhog_xdr::contract::{ContractDeploymentHashPreimage, ContractEntrypointID};
 use groundhog_xdr::transaction::{
     DecoratedSignature, Invocation, SignedTransaction, Transaction, Uniquifier,
 };
-use groundhog_xdr::types::{BlockHeight, ContractAddress, SHA256Hash};
+use groundhog_xdr::types::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
 use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
@@ -258,13 +259,20 @@ pub fn wallet_create_proof_message_v2(
 }
 
 /// Signs a transaction and returns the canonical signed transaction.
+///
+/// `network_hash` identifies the network the transaction is for. It is part of
+/// what gets signed, so a transaction signed for one chain is rejected by
+/// another — see
+/// [`groundhog_domain_separator::transaction_signature_preimage`].
 pub fn sign_transaction(
     tx: Transaction,
     signer: &impl Signer,
     params: SignTransactionParams,
+    network_hash: &NetworkHash,
 ) -> Result<SignedTransaction, SigningError> {
-    let tx_bytes = crate::encode_transaction_xdr(&tx)?;
-    let signature = signer.sign(&tx_bytes)?;
+    let preimage = transaction_signature_preimage(network_hash, &tx)
+        .map_err(|error| SigningError::XdrEncode(error.to_string()))?;
+    let signature = signer.sign(&preimage)?;
     let decorated_signature = DecoratedSignature {
         public_key_id: params.public_key_id.0,
         signature,
@@ -277,12 +285,15 @@ pub fn sign_transaction(
 }
 
 /// Sign a transaction and return its 0x-prefixed signed-transaction XDR bytes.
+///
+/// See [`sign_transaction`] for what `network_hash` binds.
 pub fn sign_and_encode_transaction_hex(
     tx: Transaction,
     signer: &impl Signer,
     params: SignTransactionParams,
+    network_hash: &NetworkHash,
 ) -> Result<String, SigningError> {
-    let signed_tx = sign_transaction(tx, signer, params)?;
+    let signed_tx = sign_transaction(tx, signer, params, network_hash)?;
     let tx_xdr = crate::encode_signed_transaction_xdr(&signed_tx)?;
     Ok(format!("0x{}", hex::encode(tx_xdr)))
 }

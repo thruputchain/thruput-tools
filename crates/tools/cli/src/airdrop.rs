@@ -580,9 +580,13 @@ fn prepare_local_airdrop(
         nonce: nonce_from_timestamp(),
     })
     .map_err(|error| CliError::Other(error.to_string()))?;
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &faucet.signer, SignTransactionParams::default())
-            .map_err(|error| CliError::Other(error.to_string()))?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &faucet.signer,
+        SignTransactionParams::default(),
+        &faucet.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
 
     Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
         rpc_url,

@@ -303,9 +303,13 @@ impl Account {
             auth_claim: source_address_auth_claim(),
         });
         let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
-        let tx_hex =
-            sign_and_encode_transaction_hex(tx, &self.dev.signer, SignTransactionParams::default())
-                .map_err(TestkitError::signing)?;
+        let tx_hex = sign_and_encode_transaction_hex(
+            tx,
+            &self.dev.signer,
+            SignTransactionParams::default(),
+            &self.dev.network_hash,
+        )
+        .map_err(TestkitError::signing)?;
         Ok(PreparedDeploy {
             network: network.clone(),
             owner: self.registration_owner(),
@@ -338,9 +342,13 @@ impl Account {
             nonce,
         })
         .map_err(TestkitError::signing)?;
-        let tx_hex =
-            sign_and_encode_transaction_hex(tx, &self.dev.signer, SignTransactionParams::default())
-                .map_err(TestkitError::signing)?;
+        let tx_hex = sign_and_encode_transaction_hex(
+            tx,
+            &self.dev.signer,
+            SignTransactionParams::default(),
+            &self.dev.network_hash,
+        )
+        .map_err(TestkitError::signing)?;
 
         let tx_hash = network.submit_raw(tx_hex.clone()).await?;
         self.advance()?;

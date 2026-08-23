@@ -565,6 +565,7 @@ impl AirdropRuntimeConfig {
 pub struct RpcAirdropSubmitter {
     rpc_url: String,
     raw_amount: u128,
+    network_hash: groundhog_xdr::types::NetworkHash,
     faucet_wallet_address: groundhog_xdr::types::ContractAddress,
     faucet_signer: LocalSigner,
     wallet_do_action_entrypoint: ContractEntrypointID,
@@ -577,10 +578,12 @@ impl RpcAirdropSubmitter {
     pub fn new(
         descriptor: &NetworkDescriptor,
         config: &AirdropRuntimeConfig,
+        network_hash: groundhog_xdr::types::NetworkHash,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         Ok(Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
             raw_amount: config.raw_amount,
+            network_hash,
             faucet_wallet_address: descriptor.faucet.wallet_address.0,
             faucet_signer: LocalSigner::from_secret_key(*config.faucet_secret_key),
             wallet_do_action_entrypoint: config.wallet_do_action_entrypoint,
@@ -631,6 +634,7 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             tx,
             &self.faucet_signer,
             SignTransactionParams::default(),
+            &self.network_hash,
         )
         .map_err(|error| AirdropSubmitError::SignTransaction(error.to_string()))?;
         let tx_hash = submit_transaction(&self.rpc_url, &tx_hex).await?;

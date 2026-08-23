@@ -35,6 +35,8 @@ pub(crate) struct ResolvedLocalBootstrapAccount {
     pub(crate) role: String,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    /// Network this account signs for. Part of every signature preimage.
+    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
 }
 
 #[derive(Debug)]
@@ -43,6 +45,8 @@ pub(crate) struct ResolvedTransactionSender {
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    /// Network this sender signs for. Part of every signature preimage.
+    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
 }
 
 pub(crate) struct ValidatedSavedWalletBinding {
@@ -59,12 +63,27 @@ pub(crate) fn resolve_transaction_sender(
     let selected_wallet = explicit_wallet.or(profile.default_wallet.as_deref());
     let (wallet_name, wallet_address) =
         resolve_wallet_selection(profile, &key_name, &signer, selected_wallet)?;
+    let network_hash = resolve_network_hash(profile, &key_name)?;
     Ok(ResolvedTransactionSender {
         key_name,
         wallet_name,
         signer,
         wallet_address,
+        network_hash,
     })
+}
+
+/// The network hash every signature from this profile is bound to.
+///
+/// Only the runtime manifest carries it today, so profiles pointed at a remote
+/// gateway cannot sign until that gateway serves the hash itself.
+pub(crate) fn resolve_network_hash(
+    profile: &ResolvedProfile,
+    key_name: &str,
+) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
+    let manifest =
+        load_configured_runtime_manifest(profile, key_name)?.ok_or(CliError::MissingNetworkHash)?;
+    Ok(manifest.network_hash.to_network_hash())
 }
 
 fn resolve_wallet_selection(
@@ -333,6 +352,7 @@ pub(crate) fn resolve_local_bootstrap_account(
         role: selected.role.clone(),
         signer,
         wallet_address: selected.wallet_address.0,
+        network_hash: manifest.network_hash.to_network_hash(),
     })
 }
 

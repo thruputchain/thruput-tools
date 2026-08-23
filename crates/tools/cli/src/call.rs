@@ -388,9 +388,13 @@ fn prepare_call_with_runtime(
     })
     .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &sender.signer, SignTransactionParams::default())
-            .map_err(|e| CliError::Other(e.to_string()))?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &sender.signer,
+        SignTransactionParams::default(),
+        &sender.network_hash,
+    )
+    .map_err(|e| CliError::Other(e.to_string()))?;
 
     Ok(PreparedCall {
         rpc_url: rpc_url.to_owned(),

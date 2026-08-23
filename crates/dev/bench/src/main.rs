@@ -30,7 +30,7 @@ use groundhog_signing::{
     sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::ContractAddress;
+use groundhog_xdr::types::{ContractAddress, NetworkHash};
 use hdrhistogram::Histogram;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -367,6 +367,7 @@ fn generate_tx_batch(
     count: usize,
     accounts: &[BenchAccount],
     wallet_entrypoint: ContractEntrypointID,
+    network_hash: &NetworkHash,
 ) -> Result<Vec<String>, BenchError> {
     (0..count)
         .map(|i| {
@@ -385,8 +386,13 @@ fn generate_tx_batch(
             })
             .map_err(|source| BenchError::WalletCalldata { source })?;
 
-            sign_and_encode_transaction_hex(tx, &account.signer, SignTransactionParams::default())
-                .map_err(|source| BenchError::SignAndEncodeTransaction { source })
+            sign_and_encode_transaction_hex(
+                tx,
+                &account.signer,
+                SignTransactionParams::default(),
+                network_hash,
+            )
+            .map_err(|source| BenchError::SignAndEncodeTransaction { source })
         })
         .collect()
 }
@@ -1127,7 +1133,13 @@ async fn run() -> Result<(), BenchError> {
                 (cli.rate as usize) * (cli.duration as usize + cli.warmup as usize + 1)
             }
         });
-        let batch = generate_tx_batch(batch_size, &accounts, entrypoint)?;
+        // sendRawTransaction requires the manifest, so the hash is always
+        // available on this path; transaction_inputs_for_method enforces it.
+        let network_hash = manifest
+            .ok_or(BenchError::MissingRuntimeManifest)?
+            .network_hash
+            .to_network_hash();
+        let batch = generate_tx_batch(batch_size, &accounts, entrypoint, &network_hash)?;
         eprintln!("Generated {} transactions", batch.len());
         Arc::new(batch)
     } else {
