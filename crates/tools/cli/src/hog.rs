@@ -1,33 +1,24 @@
-use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 
 use crate::CliError;
 
 // Native HOG uses these protocol-defined values on every network.
-pub(crate) const DECIMALS: u32 = 7;
-pub(crate) const SCALE: u128 = 10_000_000;
-pub(crate) const TOKEN_ADDRESS: &str =
-    "0x0000000000000000000000000000000000000000000000000000000000000001";
+pub(crate) const DECIMALS: u32 = groundhog_signing::NATIVE_HOG_DECIMALS;
+pub(crate) const SCALE: u128 = groundhog_signing::NATIVE_HOG_SCALE;
+pub(crate) const fn token_address() -> ContractAddress {
+    groundhog_signing::NATIVE_HOG_ADDRESS
+}
 
 pub(crate) fn transfer_entrypoint() -> ContractEntrypointID {
-    let selector = contract_entrypoint_id(
-        Some("ERC20"),
-        "0.1.0",
-        &NormalizedMethodSignature::new("transfer"),
-    );
-    let bytes: [u8; 8] = selector
-        .as_ref()
-        .try_into()
-        .expect("bug: contract entrypoint selectors are always eight bytes");
-    ContractEntrypointID::from(bytes)
+    groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT
 }
 
 pub(crate) fn encode_transfer_calldata(
     recipient: &ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, CliError> {
-    xdrs::cxs::encode(&(recipient, raw_amount)).map_err(|error| {
+    groundhog_signing::native_hog_transfer_calldata(recipient, raw_amount).map_err(|error| {
         CliError::Other(format!("failed to encode HOG transfer calldata: {error}"))
     })
 }
@@ -164,7 +155,7 @@ mod tests {
     fn protocol_constants_remain_stable() {
         assert_eq!(DECIMALS, 7);
         assert_eq!(SCALE, 10_000_000);
-        assert_eq!(TOKEN_ADDRESS, format!("0x{}01", "00".repeat(31)));
+        assert_eq!(token_address(), groundhog_signing::NATIVE_HOG_ADDRESS);
         assert_eq!(
             transfer_entrypoint().as_ref(),
             &[0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]

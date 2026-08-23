@@ -74,10 +74,11 @@ pub struct AirdropAttempt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InsertAirdropAttemptResult {
+pub enum AdmitAirdropAttemptResult {
     Inserted,
     Existing(Box<AirdropAttempt>),
     PendingLimitReached,
+    QuotaExceeded(QuotaDecision),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,11 +168,13 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
         attempt: AirdropAttempt,
     ) -> Result<Option<AirdropAttempt>, PolicyStoreError>;
 
-    fn insert_airdrop_attempt_if_absent(
+    fn admit_airdrop_attempt(
         &self,
         attempt: AirdropAttempt,
         max_pending_per_recipient: u32,
-    ) -> Result<InsertAirdropAttemptResult, PolicyStoreError>;
+        quota_checks: &[QuotaCheck],
+        now: SystemTime,
+    ) -> Result<AdmitAirdropAttemptResult, PolicyStoreError>;
 
     fn claim_airdrop_transition(
         &self,
@@ -329,16 +332,16 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             .insert(attempt.key.clone(), attempt))
     }
 
-    fn insert_airdrop_attempt_if_absent(
+    fn admit_airdrop_attempt(
         &self,
         attempt: AirdropAttempt,
         max_pending_per_recipient: u32,
-    ) -> Result<InsertAirdropAttemptResult, PolicyStoreError> {
-        use std::collections::hash_map::Entry;
-
+        quota_checks: &[QuotaCheck],
+        now: SystemTime,
+    ) -> Result<AdmitAirdropAttemptResult, PolicyStoreError> {
         let mut state = self.lock()?;
         if let Some(existing) = state.airdrop_attempts.get(&attempt.key) {
-            return Ok(InsertAirdropAttemptResult::Existing(Box::new(
+            return Ok(AdmitAirdropAttemptResult::Existing(Box::new(
                 existing.clone(),
             )));
         }
@@ -353,17 +356,34 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             })
             .count();
         if pending >= max_pending_per_recipient as usize {
-            return Ok(InsertAirdropAttemptResult::PendingLimitReached);
+            return Ok(AdmitAirdropAttemptResult::PendingLimitReached);
         }
-        match state.airdrop_attempts.entry(attempt.key.clone()) {
-            Entry::Occupied(existing) => Ok(InsertAirdropAttemptResult::Existing(Box::new(
-                existing.get().clone(),
-            ))),
-            Entry::Vacant(vacant) => {
-                vacant.insert(attempt);
-                Ok(InsertAirdropAttemptResult::Inserted)
+
+        for check in quota_checks {
+            let events = state.quota_events.entry(check.key.clone()).or_default();
+            events.retain(|event| event.expires_at > now);
+            if events.len() >= check.max as usize {
+                let retry_after = events
+                    .first()
+                    .and_then(|event| event.expires_at.duration_since(now).ok());
+                return Ok(AdmitAirdropAttemptResult::QuotaExceeded(QuotaDecision {
+                    allowed: false,
+                    retry_after,
+                }));
             }
         }
+        for check in quota_checks {
+            state
+                .quota_events
+                .entry(check.key.clone())
+                .or_default()
+                .push(QuotaEvent {
+                    occurred_at: now,
+                    expires_at: now.checked_add(check.window).unwrap_or(now),
+                });
+        }
+        state.airdrop_attempts.insert(attempt.key.clone(), attempt);
+        Ok(AdmitAirdropAttemptResult::Inserted)
     }
 
     fn claim_airdrop_transition(
@@ -459,8 +479,8 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             .wallet_create_attempts
             .retain(|_, attempt| attempt.expires_at.is_none_or(|expires_at| expires_at > now));
         state.airdrop_attempts.retain(|_, attempt| {
-            !matches!(attempt.status, AirdropAttemptStatus::FailedTerminal)
-                && attempt.expires_at.is_none_or(|expires_at| expires_at > now)
+            matches!(attempt.status, AirdropAttemptStatus::Pending)
+                || attempt.expires_at.is_none_or(|expires_at| expires_at > now)
         });
         for events in state.quota_events.values_mut() {
             events.retain(|event| event.expires_at > now);
@@ -500,6 +520,7 @@ fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::{Arc, Barrier};
 
     use super::*;
 
@@ -672,7 +693,64 @@ mod tests {
     }
 
     #[test]
-    fn expire_removes_expired_attempts_terminal_airdrops_and_quota_events() {
+    fn concurrent_same_key_admission_records_one_quota_event() {
+        let store = Arc::new(InMemoryFaucetPolicyStore::new());
+        let barrier = Arc::new(Barrier::new(3));
+        let now = SystemTime::UNIX_EPOCH;
+        let checks = vec![QuotaCheck {
+            key: QuotaKey::AirdropClient(ClientIdentity::Unknown),
+            max: 2,
+            window: Duration::from_mins(1),
+        }];
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let checks = checks.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .admit_airdrop_attempt(airdrop_attempt("0xnonce"), 1, &checks, now)
+                        .expect("bug: admission should succeed")
+                })
+            })
+            .collect();
+        barrier.wait();
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("bug: admission thread should join"))
+            .collect();
+
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, AdmitAirdropAttemptResult::Inserted))
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, AdmitAirdropAttemptResult::Existing(_)))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            store
+                .admit_airdrop_attempt(airdrop_attempt("0xsecond"), 1, &checks, now)
+                .expect("bug: second admission should succeed"),
+            AdmitAirdropAttemptResult::Inserted
+        ));
+        assert!(matches!(
+            store
+                .admit_airdrop_attempt(airdrop_attempt("0xthird"), 1, &checks, now)
+                .expect("bug: quota rejection should succeed"),
+            AdmitAirdropAttemptResult::QuotaExceeded(_)
+        ));
+    }
+
+    #[test]
+    fn expire_removes_only_attempts_with_elapsed_retention_and_quota_events() {
         let store = InMemoryFaucetPolicyStore::new();
         let now = SystemTime::UNIX_EPOCH;
         let wallet_key = wallet_create_key();
@@ -718,7 +796,7 @@ mod tests {
                 key: stale_airdrop_key.clone(),
                 client_identity: ClientIdentity::Unknown,
                 raw_amount: "100000000".into(),
-                status: AirdropAttemptStatus::Pending,
+                status: AirdropAttemptStatus::FailedRetryable,
                 tx_hash: None,
                 height: None,
                 error_code: None,
@@ -750,7 +828,7 @@ mod tests {
             store
                 .get_airdrop_attempt(&airdrop_key)
                 .expect("bug: lookup should succeed")
-                .is_none()
+                .is_some()
         );
         assert!(
             store
@@ -802,6 +880,26 @@ mod tests {
             genesis_hash: "0xgenesis".into(),
             recipient: "0xrecipient".into(),
             client_nonce: "0xnonce".into(),
+        }
+    }
+
+    fn airdrop_attempt(client_nonce: &str) -> AirdropAttempt {
+        let now = SystemTime::UNIX_EPOCH;
+        AirdropAttempt {
+            key: AirdropAttemptKey {
+                client_nonce: client_nonce.into(),
+                recipient: format!("0xrecipient-{client_nonce}"),
+                ..airdrop_key()
+            },
+            client_identity: ClientIdentity::Unknown,
+            raw_amount: "100000000".into(),
+            status: AirdropAttemptStatus::Pending,
+            tx_hash: None,
+            height: None,
+            error_code: None,
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
         }
     }
 }

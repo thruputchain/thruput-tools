@@ -1,4 +1,5 @@
 mod adaptive_batch;
+mod airdrop;
 mod backend;
 mod config;
 mod context;
@@ -48,6 +49,10 @@ struct Cli {
     /// Materialized genesis hash (overrides config file)
     #[arg(long, value_parser = parse_sha256_hash)]
     genesis_hash: Option<SHA256Hash>,
+
+    /// Hosted faucet base URL (overrides config file)
+    #[arg(long)]
+    faucet_url: Option<String>,
 
     /// Path to backend runtime manifest JSON
     #[arg(long)]
@@ -107,6 +112,7 @@ struct Cli {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Observability ---
     tracing_subscriber::fmt()
@@ -138,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         network_id = %network_info.network_id,
         genesis_hash = ?network_info.genesis_hash,
+        faucet_configured = config.faucet_url.is_some(),
         listen = %config.listen_address,
         observability_listen = %config.observability_listen,
         health_required_backends = ?config.health_required_backends,
@@ -156,10 +163,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metrics.set_rpc_connections_limit(config.max_connections);
 
     // --- Context (backend connections) ---
+    let airdrop = airdrop::HostedAirdrop::from_config_with_metrics(
+        &config,
+        network_info.clone(),
+        metrics.clone(),
+    )
+    .await?;
     let ctx = Arc::new(GatewayContext::new(config, metrics.clone()).await?);
 
     // --- Observability HTTP server ---
-    let health = health::GatewayHealth::new(&ctx.config, BUILD_VERSION, option_env!("GIT_COMMIT"));
+    let health = health::GatewayHealth::new_with_airdrop(
+        &ctx.config,
+        BUILD_VERSION,
+        option_env!("GIT_COMMIT"),
+        airdrop.clone(),
+    );
     let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
     let health_handle =
         health::spawn_health_probe_with_shutdown(ctx.clone(), health.clone(), health_shutdown_rx);
@@ -201,7 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rpc_config,
         BuildInfo::from_build_version(BUILD_VERSION, option_env!("GIT_COMMIT")),
     );
-    let handle = server.start(api_impl.into_rpc());
+    let mut rpc = api_impl.into_rpc().remove_context();
+    airdrop::merge_rpc(&mut rpc, airdrop)?;
+    let handle = server.start(rpc);
 
     tracing::info!("hog-gateway listening");
 
@@ -242,6 +262,9 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     }
     if let Some(observability_listen) = cli.observability_listen {
         config.observability_listen = observability_listen;
+    }
+    if let Some(faucet_url) = cli.faucet_url {
+        config.faucet_url = Some(faucet_url);
     }
     if let Some(required_backends) = cli.health_required_backends {
         config.health_required_backends = required_backends;
@@ -418,6 +441,24 @@ mod tests {
                 "0x1234",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn cli_overrides_faucet_url() {
+        let cli = Cli::try_parse_from([
+            "hog-gateway",
+            "--faucet-url",
+            "https://faucet.devnet.example",
+        ])
+        .expect("bug: valid faucet URL flag should parse");
+        let mut config = GatewayConfig::default();
+
+        apply_cli_overrides(&mut config, cli);
+
+        assert_eq!(
+            config.faucet_url.as_deref(),
+            Some("https://faucet.devnet.example")
         );
     }
 

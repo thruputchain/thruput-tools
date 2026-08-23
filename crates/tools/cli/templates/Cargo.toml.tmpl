@@ -30,7 +30,7 @@ groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 sdk = { version = "0.21.0", registry = "groundhog" }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
-groundhog-json-rpc-client = { version = "0.9.6", registry = "groundhog", optional = true }
+groundhog-json-rpc-client = { version = "0.9.7", registry = "groundhog", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 [dev-dependencies]

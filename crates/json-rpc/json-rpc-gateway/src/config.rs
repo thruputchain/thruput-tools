@@ -165,6 +165,9 @@ pub struct GatewayConfig {
     /// Hash of the materialized genesis state.
     pub genesis_hash: Option<SHA256Hash>,
 
+    /// Optional hosted faucet base URL. The airdrop RPC is absent when unset.
+    pub faucet_url: Option<String>,
+
     /// Listen address for the JSON-RPC server.
     pub listen_address: String,
 
@@ -279,6 +282,7 @@ impl Default for GatewayConfig {
         Self {
             network_id: None,
             genesis_hash: None,
+            faucet_url: None,
             listen_address: "127.0.0.1:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,

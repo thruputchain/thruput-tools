@@ -3,7 +3,7 @@
 // Re-exports json-rpc-types so consumers (SDK, CLI) only need this crate.
 pub use groundhog_json_rpc_types as types;
 
-pub use groundhog_json_rpc_api::GroundhogApiClient;
+pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use jsonrpsee::core::client::ClientT;

@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use getrandom::getrandom;
-use groundhog_json_rpc_types::receipt::ExecStatus;
+use groundhog_json_rpc_types::{airdrop::AirdropAttemptResponse, receipt::ExecStatus};
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
+    BuildSignedDevWalletHogTransfer, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    build_signed_dev_wallet_hog_transfer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -88,17 +88,6 @@ struct RemoteAirdropRequest {
     client_nonce: String,
     network_id: String,
     genesis_hash: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteAirdropResponse {
-    attempt_status: String,
-    raw_amount: String,
-    tx_hash: Option<String>,
-    height: Option<groundhog_json_rpc_types::BlockHeight>,
-    status: Option<ExecStatus>,
-    retry_after_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -343,7 +332,7 @@ fn run_remote_airdrop(
         prepared.recipient_wallet
     ));
     let client = faucet_client()?;
-    let response: RemoteAirdropResponse = post_json(
+    let response: AirdropAttemptResponse = post_json(
         &client,
         &format!("{}/v1/airdrop", prepared.faucet_url),
         &RemoteAirdropRequest {
@@ -353,33 +342,49 @@ fn run_remote_airdrop(
             genesis_hash: prepared.genesis_hash.clone(),
         },
     )?;
-    if response.attempt_status != "succeeded" {
-        let retry_after = response
-            .retry_after_seconds
-            .map(|seconds| format!("; retry after {seconds}s"))
-            .unwrap_or_default();
-        return Err(CliError::Other(format!(
-            "remote airdrop is pending ({}) - retry the same command to continue{}",
-            response.attempt_status, retry_after
-        )));
+    let (recipient, raw_amount) = match &response {
+        AirdropAttemptResponse::Pending {
+            recipient,
+            raw_amount,
+            ..
+        }
+        | AirdropAttemptResponse::Succeeded {
+            recipient,
+            raw_amount,
+            ..
+        } => (recipient, raw_amount),
+    };
+    if recipient.0 != parse_contract_address(&prepared.recipient_wallet)? {
+        return Err(CliError::NetworkDescriptorMismatch {
+            field: "airdrop.recipient",
+            expected: prepared.recipient_wallet.clone(),
+            actual: format_contract_address(&recipient.0),
+        });
     }
-    let status = response
-        .status
-        .as_ref()
-        .ok_or_else(|| CliError::Other("remote airdrop response omitted status".into()))?;
+    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, raw_amount)?;
+    let (tx_hash, height, status, raw_amount) = match response {
+        AirdropAttemptResponse::Pending {
+            retry_after_seconds,
+            ..
+        } => {
+            return Err(CliError::Other(format!(
+                "remote airdrop is pending - retry the same command to continue; retry after {retry_after_seconds}s"
+            )));
+        }
+        AirdropAttemptResponse::Succeeded {
+            raw_amount,
+            tx_hash,
+            height,
+            status,
+            ..
+        } => (tx_hash, height, status, raw_amount),
+    };
     if !matches!(status, ExecStatus::Ok) {
         return Err(CliError::Other(
             "remote airdrop transaction did not commit successfully".into(),
         ));
     }
-    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, &response.raw_amount)?;
-    let tx_hash = response
-        .tx_hash
-        .clone()
-        .ok_or_else(|| CliError::Other("remote airdrop response omitted txHash".into()))?;
-    let height = response
-        .height
-        .ok_or_else(|| CliError::Other("remote airdrop response omitted height".into()))?;
+    let tx_hash = format_tx_hash(&tx_hash);
     remove_remote_airdrop_attempt(prepared)?;
     print.status(format_args!("Airdrop sent: {tx_hash}"));
 
@@ -392,7 +397,7 @@ fn run_remote_airdrop(
             "recipient_wallet": prepared.recipient_wallet,
             "faucet_url": prepared.faucet_url,
             "rpc_url": prepared.rpc_url,
-            "raw_amount": response.raw_amount,
+            "raw_amount": raw_amount,
             "policy": {
                 "raw_amount": prepared.airdrop_policy.raw_amount,
                 "amount_hog": prepared.amount_hog,
@@ -560,33 +565,26 @@ fn prepare_local_airdrop(
         ));
     }
 
-    let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
-    let transfer_entrypoint = hog::transfer_entrypoint();
-    let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
-
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(&rpc_url).await })?;
 
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address: faucet.wallet_address,
-        wallet_entrypoint,
-        target_address: hog_address,
-        target_entrypoint: transfer_entrypoint,
-        target_calldata: transfer_calldata.as_slice(),
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height,
-        nonce: nonce_from_timestamp(),
-    })
-    .map_err(|error| CliError::Other(error.to_string()))?;
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
+    let signed = build_signed_dev_wallet_hog_transfer(
+        BuildSignedDevWalletHogTransfer {
+            wallet_address: faucet.wallet_address,
+            wallet_entrypoint,
+            recipient: recipient_address,
+            raw_amount,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height,
+            nonce: nonce_from_timestamp(),
+            sign_params: SignTransactionParams::default(),
+            network_hash: faucet.network_hash,
+        },
         &faucet.signer,
-        SignTransactionParams::default(),
-        &faucet.network_hash,
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
+    let tx_hex = format!("0x{}", hex::encode(signed.bytes));
 
     Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
         rpc_url,

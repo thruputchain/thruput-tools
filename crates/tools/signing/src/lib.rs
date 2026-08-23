@@ -25,7 +25,12 @@ pub use dev_account::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
     derive_default_dev_account_signer, derive_dev_account_signer,
 };
-pub use dev_wallet::{create_wallet_calldata, dev_wallet_contract, wallet_contract_hash};
+pub use dev_wallet::{
+    BuildSignedDevWalletHogTransfer, NATIVE_HOG_ADDRESS, NATIVE_HOG_DECIMALS, NATIVE_HOG_SCALE,
+    NATIVE_HOG_TRANSFER_ENTRYPOINT, SignedDevWalletHogTransfer,
+    build_signed_dev_wallet_hog_transfer, create_wallet_calldata, dev_wallet_contract,
+    native_hog_transfer_calldata, wallet_contract_hash,
+};
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
 pub use hash::transaction_hash;

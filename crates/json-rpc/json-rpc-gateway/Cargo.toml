@@ -52,6 +52,7 @@ time = { workspace = true }
 clap = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
 
 [dev-dependencies]
 groundhog_coordinator = { workspace = true }

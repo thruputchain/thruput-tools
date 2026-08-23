@@ -7,9 +7,9 @@
 //! latest-state storage reads can be backed by hogd-dev's `DbGateway`
 //! endpoint independently.
 
-use std::{future::Future, io, net::SocketAddr, process::ExitStatus, time::Duration};
+use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
-use groundhog_json_rpc_api::GroundhogApiServer;
+use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_json_rpc_types::network_info::NetworkInfo;
 use groundhog_xdr::PROTOCOL_VERSION;
@@ -18,6 +18,7 @@ use serde::Serialize;
 
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
+    airdrop::{LocalAirdropContext, LocalAirdropRpc},
     block_driver::{BlockDriverTask, ManualBlockProducer},
     hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_dev_accounts, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
@@ -148,6 +149,10 @@ impl NodeSupervisorHandle {
     /// process behind.
     #[tracing::instrument(skip_all, fields(rpc_listen = %config.rpc_listen_address))]
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
+        config
+            .local_airdrop
+            .validate()
+            .map_err(|reason| NodeSupervisorError::InvalidLocalAirdropConfig { reason })?;
         let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
         let protocol_version = config
@@ -170,17 +175,7 @@ impl NodeSupervisorHandle {
             }
         }
 
-        match start_rpc_server(
-            &config.rpc_listen_address,
-            hogd.readiness(),
-            protocol_version,
-            config.view_gas_limit,
-            config.view_timeout,
-            config.block_driver,
-            config.rpc_max_connections,
-        )
-        .await
-        {
+        match start_rpc_server(&config, hogd.readiness(), protocol_version).await {
             Ok(started) => {
                 tracing::info!(rpc_addr = %started.addr, "node supervisor JSON-RPC ready");
                 Ok(Self {
@@ -331,14 +326,11 @@ impl NodeSupervisorHandle {
 }
 
 async fn start_rpc_server(
-    listen_address: &str,
+    config: &NodeSupervisorConfig,
     readiness: &HogdDevReadiness,
     protocol_version: &str,
-    view_gas_limit: u64,
-    view_timeout: Duration,
-    block_driver_config: BlockDriverConfig,
-    rpc_max_connections: u32,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
+    let listen_address = &config.rpc_listen_address;
     let manifest = readiness.runtime_manifest.as_ref().ok_or_else(|| {
         NodeSupervisorError::InvalidRuntimeManifest {
             program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
@@ -349,6 +341,7 @@ async fn start_rpc_server(
         manifest.network_hash.to_network_hash(),
         manifest.genesis_hash,
     );
+    let local_airdrop = validated_local_airdrop_context(manifest, config, &network_info)?;
 
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
@@ -360,7 +353,7 @@ async fn start_rpc_server(
         readiness.endpoints.view_gateway,
         protocol_version,
         readiness.protocol.as_deref(),
-        view_timeout,
+        config.view_timeout,
     )
     .await?;
     let view_status = view.plane_status();
@@ -384,10 +377,11 @@ async fn start_rpc_server(
             view,
             RpcServerOptions {
                 network_info,
+                local_airdrop: Some(local_airdrop),
                 backend_planes: BackendPlanes::hogd_dev_full(view_status),
-                view_gas_limit,
-                block_driver_config,
-                rpc_max_connections,
+                view_gas_limit: config.view_gas_limit,
+                block_driver_config: config.block_driver,
+                rpc_max_connections: config.rpc_max_connections,
             },
         )
         .await
@@ -406,10 +400,11 @@ async fn start_rpc_server(
             view,
             RpcServerOptions {
                 network_info,
+                local_airdrop: None,
                 backend_planes: BackendPlanes::hogd_dev_storage_only(view_status),
-                view_gas_limit,
-                block_driver_config,
-                rpc_max_connections,
+                view_gas_limit: config.view_gas_limit,
+                block_driver_config: config.block_driver,
+                rpc_max_connections: config.rpc_max_connections,
             },
         )
         .await
@@ -426,22 +421,36 @@ async fn start_rpc_server(
             view,
             RpcServerOptions {
                 network_info,
+                local_airdrop: None,
                 backend_planes: BackendPlanes {
                     view: view_status,
                     ..BackendPlanes::hogd_dev_scheduler_only()
                 },
-                view_gas_limit,
-                block_driver_config,
-                rpc_max_connections,
+                view_gas_limit: config.view_gas_limit,
+                block_driver_config: config.block_driver,
+                rpc_max_connections: config.rpc_max_connections,
             },
         )
         .await
     }
 }
 
-#[derive(Debug)]
+fn validated_local_airdrop_context(
+    manifest: &groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
+    config: &NodeSupervisorConfig,
+    network_info: &NetworkInfo,
+) -> Result<LocalAirdropContext, NodeSupervisorError> {
+    LocalAirdropContext::from_validated_runtime(manifest, config, network_info).map_err(|reason| {
+        NodeSupervisorError::InvalidRuntimeManifest {
+            program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
+            reason,
+        }
+    })
+}
+
 struct RpcServerOptions {
     network_info: NetworkInfo,
+    local_airdrop: Option<LocalAirdropContext>,
     backend_planes: BackendPlanes,
     view_gas_limit: u64,
     block_driver_config: BlockDriverConfig,
@@ -456,11 +465,12 @@ async fn start_rpc_server_with_read<R, V>(
     options: RpcServerOptions,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
-    R: groundhog_json_rpc_server::ReadPlane,
+    R: groundhog_json_rpc_server::ReadPlane + Clone,
     V: groundhog_json_rpc_server::ViewPlane,
 {
     let RpcServerOptions {
         network_info,
+        local_airdrop,
         backend_planes,
         view_gas_limit,
         block_driver_config,
@@ -486,7 +496,16 @@ where
         scheduler_backend.scheduler_client().clone(),
         block_driver_config,
     );
-    let scheduler_backend = scheduler_backend.with_block_driver(block_driver.trigger());
+    let block_driver_trigger = block_driver.trigger();
+    let scheduler_backend = scheduler_backend.with_block_driver(block_driver_trigger.clone());
+    let local_airdrop = local_airdrop.map(|context| {
+        LocalAirdropRpc::new(
+            context,
+            scheduler_backend.clone(),
+            read.clone(),
+            block_driver_trigger,
+        )
+    });
     let core_rpc = GroundhogRpcServer::new(
         scheduler_backend.clone(),
         scheduler_backend,
@@ -503,6 +522,11 @@ where
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
         .expect("bug: json-rpc-server methods register without conflicts");
+    if let Some(local_airdrop) = local_airdrop {
+        module
+            .merge(AirdropApiServer::into_rpc(local_airdrop))
+            .expect("bug: local airdrop methods register without conflicts");
+    }
 
     let rpc_handle = server.start(module);
     Ok(StartedRpcServer {
@@ -601,8 +625,12 @@ struct StartedRpcServer {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use groundhog_json_rpc_api::GroundhogApiClient;
-    use groundhog_json_rpc_types::error::codes;
+    use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+    use groundhog_json_rpc_types::{
+        airdrop::{AirdropRequest, ClientNonce},
+        error::codes,
+        hex::Hex0x,
+    };
     use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
@@ -610,7 +638,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        BlockDriverConfig, BlockProductionError, HogdDevConfig,
+        BlockDriverConfig, BlockProductionError, HogdDevConfig, LocalAirdropConfig,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
@@ -629,6 +657,26 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     const CANONICAL_HASH_VECTOR_TX_HASH_JSON: &str =
         "0x9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+
+    #[tokio::test]
+    async fn invalid_local_airdrop_config_is_rejected_before_child_start() {
+        let local_airdrop = LocalAirdropConfig {
+            attempt_capacity: 0,
+            ..LocalAirdropConfig::default()
+        };
+        let config = NodeSupervisorConfig::default()
+            .with_hogd_dev_binary("/definitely/missing/hogd-dev")
+            .with_local_airdrop(local_airdrop);
+
+        let error = NodeSupervisorHandle::start(config)
+            .await
+            .expect_err("invalid local airdrop config must fail before resolving hogd-dev");
+
+        assert!(matches!(
+            error,
+            NodeSupervisorError::InvalidLocalAirdropConfig { .. }
+        ));
+    }
 
     /// Set an env var for the duration of a test that needs the fake child
     /// to enter `ready` mode. Restored on drop. `#[serial]` ensures we are
@@ -802,6 +850,19 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
             "0xffad887bb79d1ccb9d42920cdcb1bb4c80f8cb49ec42d85b71282ea208b02a2f"
+        );
+
+        let airdrop_error = client
+            .request_airdrop(AirdropRequest {
+                recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+                client_nonce: ClientNonce::new(vec![0x99])
+                    .expect("bug: test client nonce should validate"),
+            })
+            .await
+            .expect_err("bug: scheduler-only runtime must not expose airdrop");
+        assert!(
+            matches!(&airdrop_error, ClientError::Call(object) if object.code() == jsonrpsee::types::error::METHOD_NOT_FOUND_CODE),
+            "scheduler-only runtime should omit airdrop without a receipt backend, got {airdrop_error:?}",
         );
 
         let tx_hash = client
@@ -1781,6 +1842,21 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             handle.backend_planes(),
             BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub),
             "supervisor with only DbGateway should report storage-only backend planes"
+        );
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .expect("bug: jsonrpsee http client builds");
+        let error = client
+            .request_airdrop(AirdropRequest {
+                recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+                client_nonce: ClientNonce::new(vec![0x99])
+                    .expect("bug: test client nonce should validate"),
+            })
+            .await
+            .expect_err("bug: storage-only runtime must not expose airdrop");
+        assert!(
+            matches!(&error, ClientError::Call(object) if object.code() == jsonrpsee::types::error::METHOD_NOT_FOUND_CODE),
+            "storage-only runtime should omit airdrop without a receipt backend, got {error:?}",
         );
 
         handle.stop().await.expect("bug: clean shutdown");
