@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,7 +15,6 @@ use groundhog_json_rpc_types::{
     ContractAddress,
     airdrop::{AirdropAttemptResponse, AirdropRequest},
     hex::Hex0x,
-    network_info::NetworkInfo,
     receipt::ExecStatus,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, RuntimeManifest},
     transaction::{TransactionStatus, TxHash},
@@ -37,7 +36,6 @@ const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 
 #[derive(Clone)]
 pub(crate) struct LocalAirdropContext {
-    network_info: NetworkInfo,
     wallet_address: groundhog_xdr::types::ContractAddress,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     signer: Arc<LocalSigner>,
@@ -48,7 +46,6 @@ impl LocalAirdropContext {
     pub(crate) fn from_validated_runtime(
         manifest: &RuntimeManifest,
         config: &NodeSupervisorConfig,
-        network_info: &NetworkInfo,
     ) -> Result<Self, String> {
         let faucet = manifest
             .bootstrap_accounts
@@ -72,7 +69,6 @@ impl LocalAirdropContext {
             .do_action_entrypoint_id()
             .map_err(|error| format!("invalid runtime dev-wallet doAction entrypoint: {error}"))?;
         Ok(Self {
-            network_info: network_info.clone(),
             wallet_address: faucet.wallet_address.0,
             wallet_entrypoint,
             signer: Arc::new(signer),
@@ -85,7 +81,6 @@ impl LocalAirdropContext {
 pub(crate) struct LocalAirdropRpc {
     backend: Arc<dyn AirdropBackend>,
     builder: Arc<dyn AirdropTransactionBuilder>,
-    network_info: NetworkInfo,
     attempts: Arc<Mutex<HashMap<AttemptKey, Arc<Attempt>>>>,
     capacity: usize,
     concurrency: Arc<Semaphore>,
@@ -114,7 +109,6 @@ impl LocalAirdropRpc {
             raw_amount: context.config.raw_amount,
         };
         Self::with_parts(
-            context.network_info,
             Arc::new(PlaneAirdropBackend { submit_chain, read }),
             Arc::new(builder),
             context.config,
@@ -123,7 +117,6 @@ impl LocalAirdropRpc {
     }
 
     fn with_parts(
-        network_info: NetworkInfo,
         backend: Arc<dyn AirdropBackend>,
         builder: Arc<dyn AirdropTransactionBuilder>,
         config: LocalAirdropConfig,
@@ -132,7 +125,6 @@ impl LocalAirdropRpc {
         Self {
             backend,
             builder,
-            network_info,
             attempts: Arc::new(Mutex::new(HashMap::new())),
             capacity: config.attempt_capacity,
             concurrency: Arc::new(Semaphore::new(config.max_concurrency)),
@@ -146,19 +138,19 @@ impl LocalAirdropRpc {
         &self,
         request: AirdropRequest,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
-        let key = AttemptKey::new(&self.network_info, &request);
+        let key = AttemptKey::new(&request);
         let (attempt, admission_permit) = self.find_or_admit(key)?;
-        let observed_revision = attempt.revision.load(Ordering::Acquire);
+        let observed_revision = attempt.revision()?;
         let _operation = attempt.operation.lock().await;
 
-        if attempt.revision.load(Ordering::Acquire) != observed_revision {
+        if attempt.revision()? != observed_revision {
             return attempt.last_result()?.ok_or_else(|| {
                 RpcServerError::BackendUnavailable(
                     "local airdrop attempt completed without an outcome".into(),
                 )
             })?;
         }
-        if attempt.terminal.load(Ordering::Acquire) {
+        if attempt.is_terminal()? {
             return attempt.last_result()?.ok_or_else(|| {
                 RpcServerError::BackendUnavailable(
                     "terminal local airdrop attempt has no outcome".into(),
@@ -191,7 +183,7 @@ impl LocalAirdropRpc {
         if attempts.len() >= self.capacity
             && let Some(terminal_key) = attempts
                 .iter()
-                .find(|(_, attempt)| attempt.is_evictable())
+                .find(|(_, attempt)| Arc::strong_count(attempt) == 1 && attempt.is_evictable())
                 .map(|(key, _)| key.clone())
         {
             attempts.remove(&terminal_key);
@@ -223,7 +215,7 @@ impl LocalAirdropRpc {
             ) {
                 Ok(signed) => signed,
                 Err(error) => {
-                    attempt.terminal.store(true, Ordering::Release);
+                    attempt.set_terminal(true)?;
                     return Err(error);
                 }
             };
@@ -233,25 +225,25 @@ impl LocalAirdropRpc {
             RpcServerError::BackendUnavailable("local airdrop transaction was not retained".into())
         })?;
 
-        let mut submit_error = if attempt.submitted.load(Ordering::Acquire) {
+        let mut submit_error = if attempt.is_submitted()? {
             None
         } else {
             match self.backend.submit(context, &signed).await {
                 Ok(()) => {
-                    attempt.submitted.store(true, Ordering::Release);
+                    attempt.set_submitted(true)?;
                     None
                 }
                 Err(error) => Some(classify_backend_error(error)),
             }
         };
         if let Some(error) = submit_error.take_if(|error| is_deterministic_failure(error)) {
-            attempt.terminal.store(true, Ordering::Release);
+            attempt.set_terminal(true)?;
             return Err(error);
         }
 
         match self.backend.receipt(context, signed.tx_hash).await {
             Ok(Some(receipt)) if matches!(receipt.status, ExecStatus::Ok) => {
-                attempt.terminal.store(true, Ordering::Release);
+                attempt.set_terminal(true)?;
                 Ok(AirdropAttemptResponse::Succeeded {
                     recipient,
                     tx_hash: signed.tx_hash,
@@ -261,7 +253,7 @@ impl LocalAirdropRpc {
                 })
             }
             Ok(Some(receipt)) => {
-                attempt.terminal.store(true, Ordering::Release);
+                attempt.set_terminal(true)?;
                 Err(RpcServerError::TxRejected(format!(
                     "local airdrop execution failed: {:?}",
                     receipt.status
@@ -269,14 +261,14 @@ impl LocalAirdropRpc {
             }
             Ok(None) => match self.backend.status(context, signed.tx_hash).await {
                 Ok(TransactionStatus::Invalid { reason }) => {
-                    attempt.terminal.store(true, Ordering::Release);
+                    attempt.set_terminal(true)?;
                     Err(RpcServerError::TxRejected(reason))
                 }
                 Ok(TransactionStatus::Pending) => {
                     if submit_error.is_some() {
                         self.block_driver.trigger_after_submit();
                     }
-                    attempt.submitted.store(true, Ordering::Release);
+                    attempt.set_submitted(true)?;
                     Ok(AirdropAttemptResponse::Pending {
                         recipient,
                         raw_amount: self.raw_amount.to_string(),
@@ -285,7 +277,7 @@ impl LocalAirdropRpc {
                     })
                 }
                 Ok(TransactionStatus::RecentFailure { .. }) => {
-                    attempt.submitted.store(false, Ordering::Release);
+                    attempt.set_submitted(false)?;
                     Err(RpcServerError::BackendUnavailable(
                         "local airdrop has a recent nondeterministic failure and may still commit"
                             .into(),
@@ -317,17 +309,13 @@ impl AirdropApiServer for LocalAirdropRpc {
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct AttemptKey {
-    network_id: String,
-    genesis_hash: [u8; 32],
     recipient: [u8; 32],
     client_nonce: Vec<u8>,
 }
 
 impl AttemptKey {
-    fn new(network_info: &NetworkInfo, request: &AirdropRequest) -> Self {
+    fn new(request: &AirdropRequest) -> Self {
         Self {
-            network_id: network_info.network_id.clone(),
-            genesis_hash: network_info.genesis_hash.into_inner(),
             recipient: request.recipient.0.into_inner(),
             client_nonce: request.client_nonce.as_bytes().to_vec(),
         }
@@ -336,78 +324,107 @@ impl AttemptKey {
 
 struct Attempt {
     operation: tokio::sync::Mutex<()>,
-    signed: Mutex<Option<SignedAirdrop>>,
-    last_result: Mutex<Option<Result<AirdropAttemptResponse, RpcServerError>>>,
-    revision: AtomicU64,
-    terminal: AtomicBool,
-    submitted: AtomicBool,
+    state: Mutex<AttemptState>,
+}
+
+#[derive(Default)]
+struct AttemptState {
+    signed: Option<SignedAirdrop>,
+    last_result: Option<Result<AirdropAttemptResponse, RpcServerError>>,
+    revision: u64,
+    terminal: bool,
+    submitted: bool,
 }
 
 impl Attempt {
     fn new() -> Self {
         Self {
             operation: tokio::sync::Mutex::new(()),
-            signed: Mutex::new(None),
-            last_result: Mutex::new(None),
-            revision: AtomicU64::new(0),
-            terminal: AtomicBool::new(false),
-            submitted: AtomicBool::new(false),
+            state: Mutex::new(AttemptState::default()),
         }
     }
 
     fn signed(&self) -> Result<Option<SignedAirdrop>, RpcServerError> {
-        self.signed
+        self.state
             .lock()
-            .map(|signed| signed.clone())
-            .map_err(|_| {
-                RpcServerError::BackendUnavailable(
-                    "local airdrop signed transaction store is poisoned".into(),
-                )
-            })
+            .map(|state| state.signed.clone())
+            .map_err(|_| attempt_state_poisoned())
     }
 
     fn store_signed(&self, signed: SignedAirdrop) -> Result<(), RpcServerError> {
-        let mut slot = self.signed.lock().map_err(|_| {
-            RpcServerError::BackendUnavailable(
-                "local airdrop signed transaction store is poisoned".into(),
-            )
-        })?;
-        if slot.is_some() {
+        let mut state = self.state.lock().map_err(|_| attempt_state_poisoned())?;
+        if state.signed.is_some() {
             return Err(RpcServerError::BackendUnavailable(
                 "local airdrop transaction was constructed more than once".into(),
             ));
         }
-        *slot = Some(signed);
+        state.signed = Some(signed);
         Ok(())
+    }
+
+    fn revision(&self) -> Result<u64, RpcServerError> {
+        self.state
+            .lock()
+            .map(|state| state.revision)
+            .map_err(|_| attempt_state_poisoned())
+    }
+
+    fn is_terminal(&self) -> Result<bool, RpcServerError> {
+        self.state
+            .lock()
+            .map(|state| state.terminal)
+            .map_err(|_| attempt_state_poisoned())
+    }
+
+    fn set_terminal(&self, terminal: bool) -> Result<(), RpcServerError> {
+        self.state
+            .lock()
+            .map(|mut state| state.terminal = terminal)
+            .map_err(|_| attempt_state_poisoned())
+    }
+
+    fn is_submitted(&self) -> Result<bool, RpcServerError> {
+        self.state
+            .lock()
+            .map(|state| state.submitted)
+            .map_err(|_| attempt_state_poisoned())
+    }
+
+    fn set_submitted(&self, submitted: bool) -> Result<(), RpcServerError> {
+        self.state
+            .lock()
+            .map(|mut state| state.submitted = submitted)
+            .map_err(|_| attempt_state_poisoned())
     }
 
     fn last_result(
         &self,
     ) -> Result<Option<Result<AirdropAttemptResponse, RpcServerError>>, RpcServerError> {
-        self.last_result
+        self.state
             .lock()
-            .map(|result| result.clone())
-            .map_err(|_| {
-                RpcServerError::BackendUnavailable("local airdrop outcome store is poisoned".into())
-            })
+            .map(|state| state.last_result.clone())
+            .map_err(|_| attempt_state_poisoned())
     }
 
     fn record_result(&self, result: Result<AirdropAttemptResponse, RpcServerError>) {
-        match self.last_result.lock() {
-            Ok(mut last_result) => *last_result = Some(result),
+        match self.state.lock() {
+            Ok(mut state) => {
+                state.last_result = Some(result);
+                state.revision = state.revision.wrapping_add(1);
+            }
             Err(error) => tracing::error!(%error, "local airdrop outcome store is poisoned"),
         }
-        self.revision.fetch_add(1, Ordering::Release);
     }
 
     fn is_evictable(&self) -> bool {
-        if !self.terminal.load(Ordering::Acquire) {
-            return false;
-        }
-        self.last_result
-            .lock()
-            .is_ok_and(|last_result| last_result.is_some())
+        self.state.lock().is_ok_and(|state| {
+            state.signed.is_none() || state.terminal && state.last_result.is_some()
+        })
     }
+}
+
+fn attempt_state_poisoned() -> RpcServerError {
+    RpcServerError::BackendUnavailable("local airdrop attempt state is poisoned".into())
 }
 
 #[derive(Clone)]
@@ -841,14 +858,78 @@ mod tests {
     }
 
     #[test]
-    fn terminal_attempt_is_evictable_only_after_outcome_is_recorded() {
+    fn attempt_is_evictable_when_pristine_or_terminal_with_an_outcome() {
         let attempt = Attempt::new();
-        attempt.terminal.store(true, Ordering::Release);
+        assert!(attempt.is_evictable());
+        attempt
+            .store_signed(SignedAirdrop {
+                bytes: vec![1, 2, 3],
+                tx_hash: test_tx_hash(),
+            })
+            .expect("bug: signed transaction should be stored");
+        attempt
+            .set_terminal(true)
+            .expect("bug: terminal state should update");
 
         assert!(!attempt.is_evictable());
 
         attempt.record_result(Err(RpcServerError::TxRejected("failed".into())));
         assert!(attempt.is_evictable());
+    }
+
+    #[tokio::test]
+    async fn abandoned_pristine_attempt_does_not_consume_capacity() {
+        let backend = Arc::new(TestBackend::new(vec![Ok(())]));
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![1, 2, 3],
+        });
+        let rpc = test_rpc(backend, builder, 1, 1);
+        let abandoned = test_request(1, 1);
+        rpc.attempts
+            .lock()
+            .expect("bug: attempt store should be available")
+            .insert(AttemptKey::new(&abandoned), Arc::new(Attempt::new()));
+
+        let result = rpc.request(test_request(2, 2)).await;
+
+        assert!(matches!(result, Ok(AirdropAttemptResponse::Pending { .. })));
+    }
+
+    #[tokio::test]
+    async fn borrowed_terminal_attempt_is_not_evicted() {
+        let backend = Arc::new(TestBackend::new(vec![
+            Err(RpcServerError::TxRejected("first".into())),
+            Err(RpcServerError::TxRejected("second".into())),
+        ]));
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![1, 2, 3],
+        });
+        let rpc = test_rpc(backend, builder, 1, 1);
+        let first_request = test_request(1, 1);
+        let first_key = AttemptKey::new(&first_request);
+        assert!(matches!(
+            rpc.request(first_request).await,
+            Err(RpcServerError::TxRejected(_))
+        ));
+        let borrowed = rpc
+            .attempts
+            .lock()
+            .expect("bug: attempt store should be available")
+            .get(&first_key)
+            .expect("bug: terminal attempt should be retained")
+            .clone();
+
+        assert!(matches!(
+            rpc.request(test_request(2, 2)).await,
+            Err(RpcServerError::Overloaded(_))
+        ));
+        drop(borrowed);
+        assert!(matches!(
+            rpc.request(test_request(2, 2)).await,
+            Err(RpcServerError::TxRejected(_))
+        ));
     }
 
     #[tokio::test]
@@ -961,11 +1042,6 @@ mod tests {
         block_driver: BlockDriverTrigger,
     ) -> LocalAirdropRpc {
         LocalAirdropRpc::with_parts(
-            NetworkInfo::new(
-                "localnet",
-                Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
-            )
-            .expect("bug: localnet network ID should validate"),
             backend,
             builder,
             LocalAirdropConfig {

@@ -35,6 +35,9 @@ pub const WIRE_FORMAT_VERSION: &str = "3.3.0";
 #[rpc(client, server, namespace = "groundhog")]
 pub trait AirdropApi {
     /// Request an idempotent native HOG airdrop.
+    ///
+    /// Servers register this method only when an airdrop backend is configured;
+    /// other deployments return standard JSON-RPC `Method not found`.
     #[method(name = "requestAirdrop")]
     async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
 }
