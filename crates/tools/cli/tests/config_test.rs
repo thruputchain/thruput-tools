@@ -2217,6 +2217,63 @@ fn config_set_reports_unchanged_for_existing_value() {
 }
 
 #[test]
+fn config_set_network_hash_parses_its_field_name_and_persists() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+    let hash = "3".repeat(64);
+
+    // Parse the field name the way the CLI does, so a variant wired everywhere
+    // except `FromStr` cannot pass this.
+    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+    let report =
+        groundhog_cli::config::set_profile_field(tmp.path(), "devnet", field, &hash, false, true)
+            .unwrap();
+
+    assert!(report.changed);
+    assert!(
+        fs::read_to_string(tmp.path().join("groundhog.toml"))
+            .unwrap()
+            .contains(&format!("network_hash = \"{hash}\""))
+    );
+}
+
+#[test]
+fn config_set_network_hash_rejects_a_non_canonical_value() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+
+    // Uppercase is a valid hex string but not the canonical form the manifest
+    // and the signing path agree on.
+    let error = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        field,
+        &"A".repeat(64),
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        groundhog_cli::CliError::ConfigValueInvalid { .. }
+    ));
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap(),
+        "[profile.devnet]\nnetwork = 'devnet'\n"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 #[serial]
 fn config_set_updates_global_file_symlink_target_without_replacing_link() {

@@ -75,6 +75,7 @@ impl FromStr for ConfigField {
         match value.trim() {
             "network" => Ok(Self::Network),
             "rpc-url" => Ok(Self::RpcUrl),
+            "network-hash" => Ok(Self::NetworkHash),
             "faucet-url" => Ok(Self::FaucetUrl),
             "default-key" => Ok(Self::DefaultKey),
             _ => Err(CliError::ConfigFieldUnsupported(value.trim().to_owned())),

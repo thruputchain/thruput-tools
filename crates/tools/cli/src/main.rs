@@ -562,13 +562,13 @@ enum ConfigCommand {
     },
     /// Set one typed field in a profile layer
     #[command(
-        long_about = "Set network, rpc-url, faucet-url, or default-key on an existing \
+        long_about = "Set network, rpc-url, network-hash, faucet-url, or default-key on an existing \
                       profile in one config layer. The profile must already exist in that layer. \
                       Inside a project, pass --global or --project; outside a project, omitted \
                       scope means global."
     )]
     Set {
-        /// Field to set: network, rpc-url, faucet-url, or default-key
+        /// Field to set: network, rpc-url, network-hash, faucet-url, or default-key
         field: String,
         /// New field value
         value: String,
@@ -584,12 +584,12 @@ enum ConfigCommand {
     },
     /// Remove one typed field from a profile layer
     #[command(
-        long_about = "Remove network, rpc-url, faucet-url, or default-key from one config \
+        long_about = "Remove network, rpc-url, network-hash, faucet-url, or default-key from one config \
                       layer. Missing fields and missing target-layer profiles are no-ops. Removing \
                       a project override may reveal the inherited global value."
     )]
     Unset {
-        /// Field to remove: network, rpc-url, faucet-url, or default-key
+        /// Field to remove: network, rpc-url, network-hash, faucet-url, or default-key
         field: String,
         /// Profile to update
         #[arg(long)]

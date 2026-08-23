@@ -864,10 +864,11 @@ impl CliError {
                 "use a non-empty profile name without control characters",
             )),
             Self::ConfigFieldUnsupported(_) => Some(Cow::Borrowed(
-                "supported fields: network, rpc-url, faucet-url, default-key",
+                "supported fields: network, rpc-url, network-hash, faucet-url, default-key",
             )),
             Self::ConfigValueInvalid { .. } => Some(Cow::Borrowed(
-                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; and a non-empty default key",
+                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; 64 lowercase \
+                 hexadecimal digits for network-hash; and a non-empty default key",
             )),
             Self::ConfigParse { .. } | Self::ConfigFileInvalid { .. } => Some(Cow::Borrowed(
                 "fix the reported config file and rerun the command",
