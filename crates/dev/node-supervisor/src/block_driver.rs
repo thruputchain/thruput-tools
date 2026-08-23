@@ -189,13 +189,13 @@ impl fmt::Debug for BlockDriverTrigger {
 }
 
 impl BlockDriverTrigger {
-    fn new(notify: Arc<Notify>) -> Self {
+    pub(crate) fn new(notify: Arc<Notify>) -> Self {
         Self {
             notify: Some(notify),
         }
     }
 
-    fn noop() -> Self {
+    pub(crate) fn noop() -> Self {
         Self { notify: None }
     }
 

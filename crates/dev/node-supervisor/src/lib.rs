@@ -5,6 +5,7 @@
 //! It intentionally starts small so the process contract can be settled before
 //! hogd-specific command construction lands.
 
+mod airdrop;
 mod block_driver;
 pub mod config;
 pub mod error;
@@ -24,7 +25,8 @@ mod test_support;
 
 pub use block_driver::{BlockProductionError, ManualBlockProducer, ProducedBlock};
 pub use config::{
-    BlockDriverConfig, BlockDriverMode, HogdDevConfig, LogLevel, NodeSupervisorConfig,
+    BlockDriverConfig, BlockDriverMode, HogdDevConfig, LocalAirdropConfig, LogLevel,
+    NodeSupervisorConfig,
 };
 pub use error::NodeSupervisorError;
 pub use hogd_dev::{

@@ -1369,7 +1369,7 @@ fn sign_create_wallet_transaction(
 fn sign_wallet_prefund_transaction(
     args: &SignWalletPrefundTransaction<'_>,
 ) -> Result<String, CliError> {
-    let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
+    let hog_address = hog::token_address();
     let transfer_entrypoint = hog::transfer_entrypoint();
     let transfer_calldata = hog::encode_transfer_calldata(&args.recipient, args.raw_amount)?;
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {

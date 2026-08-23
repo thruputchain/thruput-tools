@@ -11,6 +11,7 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    airdrop::{AirdropAttemptResponse, AirdropRequest},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
@@ -27,7 +28,16 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "3.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "3.3.0";
+
+/// Optional faucet-backed API registered only when a server supports airdrops.
+#[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
+#[rpc(client, server, namespace = "groundhog")]
+pub trait AirdropApi {
+    /// Request an idempotent native HOG airdrop.
+    #[method(name = "requestAirdrop")]
+    async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
+}
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]

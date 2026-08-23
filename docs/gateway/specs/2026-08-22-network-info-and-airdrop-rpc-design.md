@@ -212,7 +212,7 @@ The corresponding succeeded response is:
   "rawAmount": "100000000",
   "txHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "height": 42,
-  "status": "ok"
+  "status": { "result": "ok" }
 }
 ```
 

@@ -104,7 +104,7 @@ fn prepare(
     let recipient = resolve_address_target(&profile, recipient_input)?;
     let raw_amount = hog::parse_amount(amount_input)?;
     let amount = hog::format_amount(raw_amount);
-    let token_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
+    let token_address = hog::token_address();
 
     let sender_account = resolve_sender_account(&profile, from)?;
     let sender = sender_account.wallet_address;

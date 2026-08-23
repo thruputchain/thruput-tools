@@ -89,6 +89,108 @@
         ],
         "type": "object"
       },
+      "AirdropAttemptResponse": {
+        "description": "Stable lifecycle response for hosted and local airdrop attempts.",
+        "oneOf": [
+          {
+            "description": "The exact signed transaction is submitted but not yet confirmed.",
+            "properties": {
+              "attemptStatus": {
+                "const": "pending",
+                "type": "string"
+              },
+              "rawAmount": {
+                "description": "Native amount in indivisible units.",
+                "type": "string"
+              },
+              "recipient": {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "description": "Address receiving the native HOG transfer."
+              },
+              "retryAfterSeconds": {
+                "description": "Suggested delay before retrying the same logical attempt.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "txHash": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TxHash"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Canonical transaction hash, once the transaction is accepted."
+              }
+            },
+            "required": [
+              "attemptStatus",
+              "recipient",
+              "rawAmount",
+              "retryAfterSeconds"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The transaction committed successfully.",
+            "properties": {
+              "attemptStatus": {
+                "const": "succeeded",
+                "type": "string"
+              },
+              "height": {
+                "$ref": "#/components/schemas/BlockHeight",
+                "description": "Committed block height."
+              },
+              "rawAmount": {
+                "description": "Native amount in indivisible units.",
+                "type": "string"
+              },
+              "recipient": {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "description": "Address receiving the native HOG transfer."
+              },
+              "status": {
+                "$ref": "#/components/schemas/ExecStatus",
+                "description": "Committed execution result."
+              },
+              "txHash": {
+                "$ref": "#/components/schemas/TxHash",
+                "description": "Canonical transaction hash."
+              }
+            },
+            "required": [
+              "attemptStatus",
+              "recipient",
+              "txHash",
+              "rawAmount",
+              "height",
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AirdropRequest": {
+        "description": "Public parameters for `groundhog_requestAirdrop`.",
+        "properties": {
+          "clientNonce": {
+            "$ref": "#/components/schemas/ClientNonce",
+            "description": "Caller-selected idempotency key for this recipient and network."
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Address receiving the native HOG transfer."
+          }
+        },
+        "required": [
+          "recipient",
+          "clientNonce"
+        ],
+        "type": "object"
+      },
       "BalanceResponse": {
         "description": "Native HOG balance read from committed chain state.",
         "properties": {
@@ -238,6 +340,10 @@
           "blockHash"
         ],
         "type": "object"
+      },
+      "ClientNonce": {
+        "pattern": "^0x(?:[0-9a-f]{2}){1,32}$",
+        "type": "string"
       },
       "ConflictCode": {
         "description": "Reason a storage delta could not be applied during two-phase commit.\nProjects hogd's `DbConflictCode`.\n\nNew codes may be added as hogd evolves; unrecognized codes surface\nas `Other` on both serialize and deserialize so mixed-version\ndeployments degrade instead of failing.",
@@ -1155,7 +1261,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "3.2.0"
+    "version": "3.3.0"
   },
   "methods": [
     {
@@ -1686,6 +1792,47 @@
       "tags": [
         {
           "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxRejected"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        }
+      ],
+      "name": "groundhog_requestAirdrop",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AirdropRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "AirdropAttemptResponse",
+        "schema": {
+          "$ref": "#/components/schemas/AirdropAttemptResponse"
+        }
+      },
+      "summary": "Request an idempotent native HOG airdrop.",
+      "tags": [
+        {
+          "name": "Airdrop API"
         }
       ]
     }

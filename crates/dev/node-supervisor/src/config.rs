@@ -71,6 +71,52 @@ pub const DEFAULT_HOGD_DEV_WALLET_PROFILE: &str = "hog-devnode-default";
 /// Default storage-cost model profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
 
+/// Default local airdrop amount: 10 HOG in indivisible units.
+pub const DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT: u128 = 10 * groundhog_signing::NATIVE_HOG_SCALE;
+
+/// Resource bounds and transfer amount for the optional local airdrop RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LocalAirdropConfig {
+    /// Native amount transferred by each logical attempt.
+    pub raw_amount: u128,
+    /// Maximum retained process-local attempt records.
+    pub attempt_capacity: usize,
+    /// Maximum concurrently advancing attempts.
+    pub max_concurrency: usize,
+    /// Per-call backend operation timeout.
+    pub request_timeout: Duration,
+}
+
+impl Default for LocalAirdropConfig {
+    fn default() -> Self {
+        Self {
+            raw_amount: DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT,
+            attempt_capacity: 1_024,
+            max_concurrency: 16,
+            request_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+impl LocalAirdropConfig {
+    pub(crate) fn validate(self) -> Result<Self, &'static str> {
+        if self.raw_amount == 0 {
+            return Err("raw amount must be greater than zero");
+        }
+        if self.attempt_capacity == 0 {
+            return Err("attempt capacity must be greater than zero");
+        }
+        if self.max_concurrency == 0 {
+            return Err("maximum concurrency must be greater than zero");
+        }
+        if self.request_timeout.is_zero() {
+            return Err("request timeout must be greater than zero");
+        }
+        Ok(self)
+    }
+}
+
 /// Supervisor configuration for a local Groundhog node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -93,6 +139,8 @@ pub struct NodeSupervisorConfig {
     pub view_timeout: Duration,
     /// Local block production policy for hogd-dev scheduler coordination.
     pub block_driver: BlockDriverConfig,
+    /// Optional local airdrop behavior and resource bounds.
+    pub local_airdrop: LocalAirdropConfig,
 }
 
 impl Default for NodeSupervisorConfig {
@@ -105,6 +153,7 @@ impl Default for NodeSupervisorConfig {
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
             block_driver: BlockDriverConfig::default(),
+            local_airdrop: LocalAirdropConfig::default(),
         }
     }
 }
@@ -167,6 +216,13 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub fn with_block_driver(mut self, block_driver: BlockDriverConfig) -> Self {
         self.block_driver = block_driver;
+        self
+    }
+
+    /// Return a copy with different local airdrop controls.
+    #[must_use]
+    pub const fn with_local_airdrop(mut self, local_airdrop: LocalAirdropConfig) -> Self {
+        self.local_airdrop = local_airdrop;
         self
     }
 }
@@ -480,7 +536,7 @@ mod tests {
     use groundhog_json_rpc_types::NetworkHashHex;
     use serde_json::json;
 
-    use super::{BlockDriverConfig, BlockDriverMode, HogdDevConfig};
+    use super::{BlockDriverConfig, BlockDriverMode, HogdDevConfig, LocalAirdropConfig};
 
     #[test]
     fn data_dir_is_absolute_and_expands_home() {
@@ -522,6 +578,36 @@ mod tests {
             config.manual_request_timeout,
             std::time::Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn local_airdrop_default_is_valid() {
+        assert!(LocalAirdropConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn local_airdrop_rejects_zero_resource_bounds() {
+        let default = LocalAirdropConfig::default();
+        let invalid = [
+            LocalAirdropConfig {
+                raw_amount: 0,
+                ..default
+            },
+            LocalAirdropConfig {
+                attempt_capacity: 0,
+                ..default
+            },
+            LocalAirdropConfig {
+                max_concurrency: 0,
+                ..default
+            },
+            LocalAirdropConfig {
+                request_timeout: std::time::Duration::ZERO,
+                ..default
+            },
+        ];
+
+        assert!(invalid.into_iter().all(|config| config.validate().is_err()));
     }
 
     #[test]
