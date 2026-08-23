@@ -350,6 +350,12 @@ If `trust_proxy_client_ip_headers` is enabled for direct REST traffic, deploymen
 
 This work preserves the documented single-process, in-memory faucet behavior. Restart-safe idempotency, exact-byte retries after ambiguous submission, multi-replica policy, aggregate outflow limits, and reserve management remain separate faucet hardening work. The RPC facade neither worsens nor claims to solve those existing limitations.
 
+The hosted faucet retains accepted transactions with unresolved receipts and counts them toward its
+bounded attempt capacity. If that capacity fills with ambiguous attempts, the faucet fails closed
+for new keys while continuing to serve existing keys. Expiring those records would permit a second
+transfer for the same idempotency key. Safe automatic recovery requires authoritative transaction
+expiry reconciliation or restart-safe idempotency and remains part of the deferred hardening work.
+
 ## Error Mapping
 
 The adapter decodes the structured faucet error code before considering HTTP status. Reuse existing JSON-RPC errors:

@@ -230,7 +230,7 @@ mod tests {
         NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
     };
     use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-    use groundhog_json_rpc_types::transaction::TxHash;
+    use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
     use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
     use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
     use std::net::SocketAddr;
@@ -875,6 +875,27 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(airdrop.calls(), 1);
         assert_eq!(airdrop.poll_calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn airdrop_invalid_transaction_becomes_terminal() {
+        let airdrop = Arc::new(MockAirdropSubmitter::invalid());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::FailedTerminal);
+        assert!(attempt.expires_at.is_some());
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 1);
     }
 
     #[tokio::test]
@@ -1906,6 +1927,7 @@ mod tests {
         raw_amount: String,
         accepted_raw_amount: String,
         poll_times_out: bool,
+        poll_invalid: bool,
         submit_delay: Option<Duration>,
         submit_gate: Option<Arc<tokio::sync::Semaphore>>,
     }
@@ -1973,6 +1995,7 @@ mod tests {
                 raw_amount: raw_amount.into(),
                 accepted_raw_amount: raw_amount.into(),
                 poll_times_out: false,
+                poll_invalid: false,
                 submit_delay: None,
                 submit_gate: None,
             }
@@ -1990,6 +2013,12 @@ mod tests {
             submitter
         }
 
+        fn invalid() -> Self {
+            let mut submitter = Self::success();
+            submitter.poll_invalid = true;
+            submitter
+        }
+
         fn failure() -> Self {
             Self {
                 failures_remaining: Mutex::new(usize::MAX),
@@ -1999,6 +2028,7 @@ mod tests {
                 raw_amount: "100000000".into(),
                 accepted_raw_amount: "100000000".into(),
                 poll_times_out: false,
+                poll_invalid: false,
                 submit_delay: None,
                 submit_gate: None,
             }
@@ -2013,6 +2043,7 @@ mod tests {
                 raw_amount: "100000000".into(),
                 accepted_raw_amount: "100000000".into(),
                 poll_times_out: false,
+                poll_invalid: false,
                 submit_delay: None,
                 submit_gate: None,
             }
@@ -2031,6 +2062,7 @@ mod tests {
                 raw_amount: "100000000".into(),
                 accepted_raw_amount: "100000000".into(),
                 poll_times_out: false,
+                poll_invalid: false,
                 submit_delay: None,
                 submit_gate: None,
             }
@@ -2103,6 +2135,16 @@ mod tests {
                     groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout {
                         tx_hash,
                         attempts: 1,
+                    },
+                ));
+            }
+            if self.poll_invalid {
+                return Err(airdrop::AirdropSubmitError::Poll(
+                    groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                        tx_hash,
+                        status: TransactionStatus::Invalid {
+                            reason: "expired".into(),
+                        },
                     },
                 ));
             }
