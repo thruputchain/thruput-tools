@@ -12,15 +12,6 @@ pub struct RpcServerConfig {
     /// backend planes. `None` preserves the embedding application's own policy.
     pub request_timeout_ms: Option<u64>,
 
-    /// Page size substituted when a paginated request sends `limit: 0`.
-    ///
-    /// The wire contract documents `0` as "server default (50)"; the
-    /// substitution happens here so the promise holds regardless of the
-    /// backend's own default. The substituted value is clamped to the
-    /// per-method page cap, so configuring a cap below this default
-    /// keeps the cap authoritative.
-    pub default_page_limit: u32,
-
     /// Per-page cap on `getEvents` responses; requests with `limit`
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
@@ -62,7 +53,6 @@ impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
             request_timeout_ms: None,
-            default_page_limit: 50,
             max_events_per_page: 200,
             max_transactions_per_page: 200,
             max_cursor_bytes: 256,
@@ -79,13 +69,6 @@ impl RpcServerConfig {
     #[must_use]
     pub fn with_request_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.request_timeout_ms = Some(timeout_ms.max(1));
-        self
-    }
-
-    /// Override the page size substituted for `limit: 0`.
-    #[must_use]
-    pub fn with_default_page_limit(mut self, limit: u32) -> Self {
-        self.default_page_limit = limit;
         self
     }
 
