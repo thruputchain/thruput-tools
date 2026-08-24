@@ -3,7 +3,7 @@
 **Status:** Historical sketch. The current source of truth is the
 `GroundhogApi` trait in `crates/json-rpc/json-rpc-api` plus the generated OpenRPC snapshot in
 `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`.
-**Context:** Code sketches for [system-design.md](system-design.md).
+**Context:** Code sketches for [system-design.md](../../gateway/system-design.md).
 Not compilable as-is; intended to communicate shape and decisions.
 
 ---

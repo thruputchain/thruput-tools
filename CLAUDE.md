@@ -56,8 +56,11 @@ Workspace crates are grouped by boundary:
   deterministic actor schedules, writes `result.jsonl` / `result.json`, and
   covers local/existing targets, contract workloads, and soak diagnostics.
 
-See `docs/gateway/system-design.md` for full gateway design and
-`docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
+See `docs/gateway/system-design.md` for full gateway design. The
+jsonrpsee trait in `crates/json-rpc/json-rpc-api/src/lib.rs` and the
+OpenRPC snapshot in
+`crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` are the
+RPC-surface references.
 See `docs/gateway/runtime-manifest.md` for the local
 CLI/gateway/bench startup handoff. See `docs/sim/README.md` for the
 simulator quickstart and result-artifact contract.

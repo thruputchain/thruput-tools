@@ -86,7 +86,7 @@ for available scenarios and defaults.
 ## Documentation
 
 - [System Design](../../docs/gateway/system-design.md) — architecture, data flows, open questions
-- [API Sketch](../../docs/gateway/api-sketch.md) — trait definition, types, handler examples
+- [OpenRPC Snapshot](../open-rpc-spec/snapshots/groundhog-spec.json) — generated RPC-surface reference
 - [Runtime Manifest Quickstart](../../docs/gateway/runtime-manifest.md) — local CLI/gateway/bench handoff
 - [Transaction Ingress and Proposer-Local Races](../../docs/gateway/tx-ingress-and-proposer-race.md) — code-verified threat model framing
 - [Roadmap](../../docs/gateway/roadmap.md) — v1 testnet scope and later ingress evolution
