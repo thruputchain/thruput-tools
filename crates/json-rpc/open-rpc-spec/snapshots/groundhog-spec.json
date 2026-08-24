@@ -602,6 +602,19 @@
         ],
         "type": "string"
       },
+      "NetworkInfo": {
+        "description": "Fixed identity of the network an endpoint serves.\n\nEvery field here is settled when the chain is created and never changes, so\nclients may cache this response against an endpoint indefinitely. Anything\nthat moves as the chain advances belongs on `chainTip` instead.",
+        "properties": {
+          "networkHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Hash of the network name, bound into the preimage of every transaction\nsignature. Signing for the wrong network produces transactions this\nnetwork rejects, so clients must read it from the endpoint they submit to."
+          }
+        },
+        "required": [
+          "networkHash"
+        ],
+        "type": "object"
+      },
       "PaginationCursor": {
         "pattern": "^0x[0-9a-f]*$",
         "type": "string"
@@ -1137,7 +1150,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "3.1.0"
+    "version": "3.2.0"
   },
   "methods": [
     {
@@ -1305,7 +1318,37 @@
           "$ref": "#/components/schemas/ChainTip"
         }
       },
-      "summary": "Current chain tip: height + block hash.",
+      "summary": "Current chain tip: height, block hash, and the protocol it executed under.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_networkInfo",
+      "params": [],
+      "result": {
+        "name": "NetworkInfo",
+        "schema": {
+          "$ref": "#/components/schemas/NetworkInfo"
+        }
+      },
+      "summary": "Fixed identity of the network this endpoint serves.  The values never change for a given chain, so clients should fetch this once per endpoint and cache it rather than calling it per request.",
       "tags": [
         {
           "name": "Core API"

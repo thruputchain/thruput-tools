@@ -22,6 +22,7 @@ pub const CONFIG_REMOVE_JSON_SCHEMA_VERSION: u32 = 1;
 pub struct NewProfileOptions {
     pub network: String,
     pub rpc_url: Option<String>,
+    pub network_hash: Option<String>,
     pub faucet_url: Option<String>,
     pub default_key: Option<String>,
     pub select: bool,
@@ -488,6 +489,7 @@ fn parse_new_profile_fields(
     )];
     for (field, value) in [
         (ConfigField::RpcUrl, options.rpc_url.as_deref()),
+        (ConfigField::NetworkHash, options.network_hash.as_deref()),
         (ConfigField::FaucetUrl, options.faucet_url.as_deref()),
         (ConfigField::DefaultKey, options.default_key.as_deref()),
     ] {
@@ -642,6 +644,7 @@ fn field_key(field: ConfigField) -> &'static str {
     match field {
         ConfigField::Network => "network",
         ConfigField::RpcUrl => "rpc_url",
+        ConfigField::NetworkHash => "network_hash",
         ConfigField::FaucetUrl => "faucet_url",
         ConfigField::DefaultKey => "default_key",
     }

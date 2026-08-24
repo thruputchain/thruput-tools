@@ -377,9 +377,13 @@ fn prepare_deploy(
         contracts_to_deploy: VecM(vec![contract]),
         auth_claim: source_address_auth_claim(),
     });
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &actor.signer, SignTransactionParams::default())
-            .map_err(|source| SimError::Executor(source.to_string()))?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &actor.signer,
+        SignTransactionParams::default(),
+        &actor.network_hash,
+    )
+    .map_err(|source| SimError::Executor(source.to_string()))?;
 
     Ok(PreparedDeploy {
         tx_hex,
@@ -1185,6 +1189,9 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("contract-test-seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x99; 32])).0,
+                network_hash: groundhog_xdr::types::NetworkHash::new(
+                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                ),
             },
             NonceNamespace::new(1).expect("namespace should fit"),
         )]

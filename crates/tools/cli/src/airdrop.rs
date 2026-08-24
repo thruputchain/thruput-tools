@@ -580,9 +580,13 @@ fn prepare_local_airdrop(
         nonce: nonce_from_timestamp(),
     })
     .map_err(|error| CliError::Other(error.to_string()))?;
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &faucet.signer, SignTransactionParams::default())
-            .map_err(|error| CliError::Other(error.to_string()))?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &faucet.signer,
+        SignTransactionParams::default(),
+        &faucet.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
 
     Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
         rpc_url,
@@ -1213,6 +1217,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: Some("http://127.0.0.1:9545".into()),
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),

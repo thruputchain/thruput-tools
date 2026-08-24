@@ -1858,6 +1858,7 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://rpc.example".into()),
+            network_hash: None,
             faucet_url: Some("https://faucet.example".into()),
             default_key: Some("alice".into()),
             select: true,
@@ -1900,6 +1901,7 @@ fn config_new_rejects_existing_target_layer_profile_without_changes() {
         &groundhog_cli::config::NewProfileOptions {
             network: "mainnet".into(),
             rpc_url: None,
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: true,
@@ -1927,6 +1929,7 @@ fn config_new_validates_all_values_before_waiting_for_lock() {
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("relative/path".into()),
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: false,
@@ -1947,6 +1950,7 @@ fn concurrent_config_new_allows_only_one_creator() {
     let options = groundhog_cli::config::NewProfileOptions {
         network: "devnet".into(),
         rpc_url: None,
+        network_hash: None,
         faucet_url: None,
         default_key: None,
         select: false,
@@ -1992,6 +1996,7 @@ fn config_new_project_allows_overlay_for_global_profile() {
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: Some("https://project.example".into()),
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: false,
@@ -2036,6 +2041,7 @@ fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
         &groundhog_cli::config::NewProfileOptions {
             network: "devnet".into(),
             rpc_url: None,
+            network_hash: None,
             faucet_url: None,
             default_key: None,
             select: true,
@@ -2204,6 +2210,63 @@ fn config_set_reports_unchanged_for_existing_value() {
     .unwrap();
 
     assert!(!report.changed);
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap(),
+        "[profile.devnet]\nnetwork = 'devnet'\n"
+    );
+}
+
+#[test]
+fn config_set_network_hash_parses_its_field_name_and_persists() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+    let hash = "3".repeat(64);
+
+    // Parse the field name the way the CLI does, so a variant wired everywhere
+    // except `FromStr` cannot pass this.
+    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+    let report =
+        groundhog_cli::config::set_profile_field(tmp.path(), "devnet", field, &hash, false, true)
+            .unwrap();
+
+    assert!(report.changed);
+    assert!(
+        fs::read_to_string(tmp.path().join("groundhog.toml"))
+            .unwrap()
+            .contains(&format!("network_hash = \"{hash}\""))
+    );
+}
+
+#[test]
+fn config_set_network_hash_rejects_a_non_canonical_value() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+
+    // Uppercase is a valid hex string but not the canonical form the manifest
+    // and the signing path agree on.
+    let error = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        field,
+        &"A".repeat(64),
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        groundhog_cli::CliError::ConfigValueInvalid { .. }
+    ));
     assert_eq!(
         fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap(),
         "[profile.devnet]\nnetwork = 'devnet'\n"

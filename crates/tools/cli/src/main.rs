@@ -521,6 +521,9 @@ enum ConfigCommand {
         /// Absolute HTTP(S) RPC URL
         #[arg(long)]
         rpc_url: Option<String>,
+        /// Network hash the RPC endpoint serves, as 64 lowercase hex digits
+        #[arg(long)]
+        network_hash: Option<String>,
         /// Absolute HTTP(S) faucet URL
         #[arg(long)]
         faucet_url: Option<String>,
@@ -559,13 +562,13 @@ enum ConfigCommand {
     },
     /// Set one typed field in a profile layer
     #[command(
-        long_about = "Set network, rpc-url, faucet-url, or default-key on an existing \
+        long_about = "Set network, rpc-url, network-hash, faucet-url, or default-key on an existing \
                       profile in one config layer. The profile must already exist in that layer. \
                       Inside a project, pass --global or --project; outside a project, omitted \
                       scope means global."
     )]
     Set {
-        /// Field to set: network, rpc-url, faucet-url, or default-key
+        /// Field to set: network, rpc-url, network-hash, faucet-url, or default-key
         field: String,
         /// New field value
         value: String,
@@ -581,12 +584,12 @@ enum ConfigCommand {
     },
     /// Remove one typed field from a profile layer
     #[command(
-        long_about = "Remove network, rpc-url, faucet-url, or default-key from one config \
+        long_about = "Remove network, rpc-url, network-hash, faucet-url, or default-key from one config \
                       layer. Missing fields and missing target-layer profiles are no-ops. Removing \
                       a project override may reveal the inherited global value."
     )]
     Unset {
-        /// Field to remove: network, rpc-url, faucet-url, or default-key
+        /// Field to remove: network, rpc-url, network-hash, faucet-url, or default-key
         field: String,
         /// Profile to update
         #[arg(long)]
@@ -970,6 +973,7 @@ fn main() {
                     profile,
                     network,
                     rpc_url,
+                    network_hash,
                     faucet_url,
                     default_key,
                     select,
@@ -981,6 +985,7 @@ fn main() {
                     &groundhog_cli::config::NewProfileOptions {
                         network,
                         rpc_url,
+                        network_hash,
                         faucet_url,
                         default_key,
                         select,

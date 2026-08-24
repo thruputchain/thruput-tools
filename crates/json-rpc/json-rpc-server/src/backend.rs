@@ -68,6 +68,7 @@ use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
+    network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
@@ -173,6 +174,10 @@ pub trait SubmitPlane: Send + Sync + 'static {
 pub trait ChainPlane: Send + Sync + 'static {
     /// Return the current chain tip.
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError>;
+
+    /// Return the fixed identity of the network this backend serves.
+    async fn network_info(&self, context: RpcRequestContext)
+    -> Result<NetworkInfo, RpcServerError>;
 
     /// Return block data at a specific height, if available.
     async fn get_block_by_number(

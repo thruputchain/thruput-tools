@@ -75,6 +75,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: Some("https://rpc.example".into()),
+            network_hash: None,
             faucet_url: None,
             rpc_url_cli_override: false,
             default_key: None,

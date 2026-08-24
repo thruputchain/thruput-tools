@@ -49,9 +49,13 @@ pub fn build_wallet_submit_smoke_transaction(
         nonce,
     })
     .map_err(|source| TransactionBuildError::BuildWalletAction { source })?;
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &actor.signer, SignTransactionParams::default())
-            .map_err(|source| TransactionBuildError::SignAndEncode { source })?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &actor.signer,
+        SignTransactionParams::default(),
+        &actor.network_hash,
+    )
+    .map_err(|source| TransactionBuildError::SignAndEncode { source })?;
 
     Ok(BuiltSubmitTransaction { tx_hex, nonce })
 }
@@ -81,9 +85,13 @@ pub fn build_contract_call_transaction(
         nonce,
     })
     .map_err(|source| TransactionBuildError::BuildWalletAction { source })?;
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &actor.signer, SignTransactionParams::default())
-            .map_err(|source| TransactionBuildError::SignAndEncode { source })?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &actor.signer,
+        SignTransactionParams::default(),
+        &actor.network_hash,
+    )
+    .map_err(|source| TransactionBuildError::SignAndEncode { source })?;
 
     Ok(BuiltSubmitTransaction { tx_hex, nonce })
 }
@@ -135,6 +143,9 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+                network_hash: groundhog_xdr::types::NetworkHash::new(
+                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                ),
             },
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
         );
@@ -158,6 +169,9 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+                network_hash: groundhog_xdr::types::NetworkHash::new(
+                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                ),
             },
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
         );
@@ -181,6 +195,9 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+                network_hash: groundhog_xdr::types::NetworkHash::new(
+                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                ),
             },
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
         );

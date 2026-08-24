@@ -1,5 +1,5 @@
 use groundhog_json_rpc_types::{
-    ContractAddress,
+    ContractAddress, NetworkHashHex,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
 };
 use groundhog_signing::LocalSigner;
@@ -35,6 +35,8 @@ pub(crate) struct ResolvedLocalBootstrapAccount {
     pub(crate) role: String,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    /// Network this account signs for. Part of every signature preimage.
+    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
 }
 
 #[derive(Debug)]
@@ -43,6 +45,8 @@ pub(crate) struct ResolvedTransactionSender {
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+    /// Network this sender signs for. Part of every signature preimage.
+    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
 }
 
 pub(crate) struct ValidatedSavedWalletBinding {
@@ -54,17 +58,81 @@ pub(crate) fn resolve_transaction_sender(
     profile: &ResolvedProfile,
     explicit_wallet: Option<&str>,
 ) -> Result<ResolvedTransactionSender, CliError> {
+    let sender = resolve_sender_account(profile, explicit_wallet)?;
+    bind_sender_to_network(profile, sender)
+}
+
+/// Bind an already-resolved sender to the network it will sign for.
+///
+/// Split out so a command can reject bad input against the sender's own
+/// address before resolving the network.
+pub(crate) fn bind_sender_to_network(
+    profile: &ResolvedProfile,
+    sender: ResolvedSenderAccount,
+) -> Result<ResolvedTransactionSender, CliError> {
+    let network_hash = resolve_network_hash(profile, &sender.key_name)?;
+    Ok(ResolvedTransactionSender {
+        key_name: sender.key_name,
+        wallet_name: sender.wallet_name,
+        signer: sender.signer,
+        wallet_address: sender.wallet_address,
+        network_hash,
+    })
+}
+
+/// The key and wallet a profile would send from, without the network binding.
+#[derive(Debug)]
+pub(crate) struct ResolvedSenderAccount {
+    pub(crate) key_name: String,
+    pub(crate) wallet_name: Option<String>,
+    pub(crate) signer: LocalSigner,
+    pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
+}
+
+/// Resolves the sender account for callers that inspect or validate a wallet
+/// binding without signing anything.
+///
+/// Signing paths want [`resolve_transaction_sender`] instead, which also
+/// resolves the network hash every signature is bound to.
+pub(crate) fn resolve_sender_account(
+    profile: &ResolvedProfile,
+    explicit_wallet: Option<&str>,
+) -> Result<ResolvedSenderAccount, CliError> {
     let key_name = resolve_default_key_for_profile(profile)?.ok_or(CliError::MissingSigningKey)?;
     let signer = load_local_signer(&key_name)?;
     let selected_wallet = explicit_wallet.or(profile.default_wallet.as_deref());
     let (wallet_name, wallet_address) =
         resolve_wallet_selection(profile, &key_name, &signer, selected_wallet)?;
-    Ok(ResolvedTransactionSender {
+    Ok(ResolvedSenderAccount {
         key_name,
         wallet_name,
         signer,
         wallet_address,
     })
+}
+
+/// The network hash every signature from this profile is bound to.
+///
+/// A runtime manifest is authoritative when configured, since it is written by
+/// the node that owns the chain. Otherwise the profile's own `network_hash`
+/// answers: an RPC endpoint serves one network, so this is configuration rather
+/// than something to discover per command.
+pub(crate) fn resolve_network_hash(
+    profile: &ResolvedProfile,
+    key_name: &str,
+) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
+    if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
+        return Ok(manifest.network_hash.to_network_hash());
+    }
+    let configured = profile
+        .network_hash
+        .as_deref()
+        .ok_or(CliError::MissingNetworkHash)?;
+    NetworkHashHex::try_from(configured)
+        .map(|hash| hash.to_network_hash())
+        .map_err(|_| CliError::InvalidNetworkHash {
+            value: configured.to_owned(),
+        })
 }
 
 fn resolve_wallet_selection(
@@ -333,6 +401,7 @@ pub(crate) fn resolve_local_bootstrap_account(
         role: selected.role.clone(),
         signer,
         wallet_address: selected.wallet_address.0,
+        network_hash: manifest.network_hash.to_network_hash(),
     })
 }
 
@@ -818,6 +887,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: Some("http://127.0.0.1:1".into()),
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some(key_name.into()),
@@ -962,6 +1032,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: None,
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
@@ -997,6 +1068,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: None,
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
@@ -1068,6 +1140,7 @@ mod tests {
             name: "default".into(),
             network: None,
             rpc_url: None,
+            network_hash: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),

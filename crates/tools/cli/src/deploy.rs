@@ -426,6 +426,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         name: "integration".into(),
         network: None,
         rpc_url: Some(rpc_url.into()),
+        network_hash: None,
         rpc_url_cli_override: false,
         faucet_url: None,
         default_key: Some(key_name.into()),
@@ -456,12 +457,12 @@ fn prepare_deploy_transaction(
     selected_wallet: Option<&str>,
 ) -> Result<PreparedDeploy, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-    let sender = resolve_transaction_sender(profile, selected_wallet)?;
-
-    let artifact_bytes_len = artifact_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let sender = resolve_transaction_sender(profile, selected_wallet)?;
+
+    let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;
 
     let blob = groundhog_xdr::contract::ContractBlob {
@@ -510,9 +511,13 @@ fn prepare_deploy_transaction(
         auth_claim,
     });
 
-    let tx_hex =
-        sign_and_encode_transaction_hex(tx, &sender.signer, SignTransactionParams::default())
-            .map_err(|e| CliError::Other(e.to_string()))?;
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &sender.signer,
+        SignTransactionParams::default(),
+        &sender.network_hash,
+    )
+    .map_err(|e| CliError::Other(e.to_string()))?;
 
     Ok(PreparedDeploy {
         rpc_url: rpc_url.to_owned(),

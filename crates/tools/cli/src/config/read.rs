@@ -20,6 +20,7 @@ pub const CONFIG_PROFILES_JSON_SCHEMA_VERSION: u32 = 1;
 pub enum ConfigField {
     Network,
     RpcUrl,
+    NetworkHash,
     FaucetUrl,
     DefaultKey,
 }
@@ -35,6 +36,14 @@ impl ConfigField {
                 let value = value.trim();
                 validate_http_url(value).map_err(|message| invalid_field(self, message))?;
                 Ok(ConfigFieldValue::String(value.to_owned()))
+            }
+            Self::NetworkHash => {
+                let value = value.trim();
+                // Reuse the wire type's validation so a profile cannot hold a
+                // hash the signing path would later reject.
+                groundhog_json_rpc_types::NetworkHashHex::try_from(value)
+                    .map_err(|_| invalid_field(self, "expected 64 lowercase hexadecimal digits"))
+                    .map(|hash| ConfigFieldValue::String(hash.as_ref().to_owned()))
             }
             Self::DefaultKey => {
                 let value = value.trim();
@@ -52,6 +61,7 @@ impl std::fmt::Display for ConfigField {
         formatter.write_str(match self {
             Self::Network => "network",
             Self::RpcUrl => "rpc-url",
+            Self::NetworkHash => "network-hash",
             Self::FaucetUrl => "faucet-url",
             Self::DefaultKey => "default-key",
         })
@@ -65,6 +75,7 @@ impl FromStr for ConfigField {
         match value.trim() {
             "network" => Ok(Self::Network),
             "rpc-url" => Ok(Self::RpcUrl),
+            "network-hash" => Ok(Self::NetworkHash),
             "faucet-url" => Ok(Self::FaucetUrl),
             "default-key" => Ok(Self::DefaultKey),
             _ => Err(CliError::ConfigFieldUnsupported(value.trim().to_owned())),
@@ -150,6 +161,8 @@ pub struct ProfileSources {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<ConfigSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_hash: Option<ConfigSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub faucet_url: Option<ConfigSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_key: Option<ConfigSource>,
@@ -195,6 +208,7 @@ pub struct ConfigGetReport {
     pub scope: ConfigScope,
     pub network: Option<Network>,
     pub rpc_url: Option<String>,
+    pub network_hash: Option<String>,
     pub faucet_url: Option<String>,
     pub default_key: Option<String>,
     pub default_wallet: Option<String>,
@@ -443,6 +457,7 @@ impl ConfigGetReport {
         let ProjectProfile {
             network,
             rpc_url,
+            network_hash,
             faucet_url,
             default_key,
             default_wallet,
@@ -458,6 +473,7 @@ impl ConfigGetReport {
             scope,
             network,
             rpc_url,
+            network_hash,
             faucet_url,
             default_key,
             default_wallet,
@@ -752,6 +768,7 @@ fn sources_for_profile(profile: &ProjectProfile, source: &ConfigSource) -> Profi
     ProfileSources {
         network: profile.network.map(|_| source.clone()),
         rpc_url: profile.rpc_url.as_ref().map(|_| source.clone()),
+        network_hash: profile.network_hash.as_ref().map(|_| source.clone()),
         faucet_url: profile.faucet_url.as_ref().map(|_| source.clone()),
         default_key: profile.default_key.as_ref().map(|_| source.clone()),
         default_wallet: profile.default_wallet.as_ref().map(|_| source.clone()),
@@ -784,6 +801,7 @@ fn merge_profiles(mut global: PersistedProfile, project: PersistedProfile) -> Pe
     }
     replace_scalar!(network);
     replace_scalar!(rpc_url);
+    replace_scalar!(network_hash);
     replace_scalar!(faucet_url);
     replace_scalar!(default_key);
     replace_scalar!(default_wallet);

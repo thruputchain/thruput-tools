@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use getrandom::getrandom;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
+use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
 use groundhog_signing::Signer;
 use groundhog_signing::{
     BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner,
@@ -12,14 +13,15 @@ use groundhog_signing::{
     wallet_contract_hash, wallet_create_proof_message_v2,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
 use crate::account_resolution::{
-    LocalBootstrapRole, resolve_local_bootstrap_account, resolve_transaction_sender,
+    LocalBootstrapRole, ResolvedLocalBootstrapAccount, resolve_local_bootstrap_account,
+    resolve_sender_account,
 };
 use crate::balance::{
     LocalFundingProjection, confirm_low_faucet_balance, fetch_balance_blocking,
@@ -628,7 +630,7 @@ pub fn use_wallet(
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
     let resolved_profile = resolve_profile(&project_root, profile)?;
-    resolve_transaction_sender(&resolved_profile, Some(name))?;
+    resolve_sender_account(&resolved_profile, Some(name))?;
     save_profile_default_wallet(&project_root, Some(&resolved_profile.name), name)?;
 
     print.status(format_args!("Using wallet `{name}` by default."));
@@ -938,6 +940,51 @@ fn resolve_wallet_create_inputs(
     })
 }
 
+/// The faucet account and its checked ability to cover a local wallet creation.
+struct LocalFaucetFunding {
+    faucet: ResolvedLocalBootstrapAccount,
+    faucet_wallet: String,
+    faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    funding_projection: LocalFundingProjection,
+}
+
+/// Resolves the local faucet and confirms its committed balance covers the
+/// prefund plus storage costs for the two transactions wallet creation submits.
+///
+/// Fails with an insufficient-funds error rather than signing transactions that
+/// the faucet cannot pay for.
+fn resolve_local_faucet_funding(
+    profile: &ResolvedProfile,
+    rpc_url: &str,
+    storage_cost_model: &RuntimeManifestStorageCostModel,
+    prefund_raw_amount: u128,
+) -> Result<LocalFaucetFunding, CliError> {
+    let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
+    let faucet_wallet = format_contract_address(&faucet.wallet_address);
+    let faucet_balance = fetch_balance_blocking(
+        rpc_url,
+        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
+    )?;
+    let funding_projection = local_funding_projection(
+        &faucet_balance.raw_balance,
+        storage_cost_model,
+        prefund_raw_amount,
+        2,
+    )?;
+    if funding_projection.projected_balance.is_none() {
+        return Err(insufficient_local_faucet_error(
+            prefund_raw_amount,
+            funding_projection.estimated_max,
+        ));
+    }
+    Ok(LocalFaucetFunding {
+        faucet,
+        faucet_wallet,
+        faucet_balance_height: faucet_balance.height,
+        funding_projection,
+    })
+}
+
 fn prepare_local_wallet_create(
     cwd: &Path,
     profile: crate::config::ResolvedProfile,
@@ -966,24 +1013,17 @@ fn prepare_local_wallet_create(
         .dev_wallet
         .do_action_entrypoint_id()
         .map_err(|error| CliError::Other(error.to_string()))?;
-    let faucet = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)?;
-    let faucet_wallet = format_contract_address(&faucet.wallet_address);
-    let faucet_balance = fetch_balance_blocking(
+    let LocalFaucetFunding {
+        faucet,
+        faucet_wallet,
+        faucet_balance_height,
+        funding_projection,
+    } = resolve_local_faucet_funding(
+        &profile,
         &rpc_url,
-        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
-    )?;
-    let funding_projection = local_funding_projection(
-        &faucet_balance.raw_balance,
         &manifest.bootstrap.storage_cost_model,
         prefund_raw_amount,
-        2,
     )?;
-    if funding_projection.projected_balance.is_none() {
-        return Err(insufficient_local_faucet_error(
-            prefund_raw_amount,
-            funding_projection.estimated_max,
-        ));
-    }
     let owner = load_local_signer(&key_name)?;
     let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
     let (artifact_path, contract, contract_hash) = load_dev_wallet_contract(
@@ -1019,6 +1059,7 @@ fn prepare_local_wallet_create(
         block_expiry_height,
         nonce: deploy_nonce_val,
         signer: &faucet.signer,
+        network_hash: &faucet.network_hash,
     })?;
     let create_tx_hex = sign_create_wallet_transaction(SignCreateWalletTransaction {
         faucet_wallet_address: faucet.wallet_address,
@@ -1028,6 +1069,7 @@ fn prepare_local_wallet_create(
         nonce: deploy_nonce_val.saturating_add(1),
         contract,
         signer: &faucet.signer,
+        network_hash: &faucet.network_hash,
     })?;
 
     Ok(PreparedWalletCreate::Local(PreparedLocalWalletCreate {
@@ -1042,7 +1084,7 @@ fn prepare_local_wallet_create(
         wallet_address: wallet_address_hex,
         prefund_raw_amount,
         faucet_wallet,
-        faucet_balance_height: faucet_balance.height,
+        faucet_balance_height,
         funding_projection,
         prefund_tx_hex,
         create_tx_hex,
@@ -1259,6 +1301,8 @@ struct SignWalletPrefundTransaction<'a> {
     block_expiry_height: i64,
     nonce: u64,
     signer: &'a LocalSigner,
+    /// Network the signature is bound to.
+    network_hash: &'a NetworkHash,
 }
 
 struct SignCreateWalletTransaction<'a> {
@@ -1269,6 +1313,8 @@ struct SignCreateWalletTransaction<'a> {
     nonce: u64,
     contract: Contract,
     signer: &'a LocalSigner,
+    /// Network the signature is bound to.
+    network_hash: &'a NetworkHash,
 }
 
 fn load_dev_wallet_contract(
@@ -1311,8 +1357,13 @@ fn sign_create_wallet_transaction(
         contracts_to_deploy: VecM(vec![args.contract]),
         auth_claim: source_address_auth_claim(),
     });
-    sign_and_encode_transaction_hex(create_tx, args.signer, SignTransactionParams::default())
-        .map_err(|error| CliError::Other(error.to_string()))
+    sign_and_encode_transaction_hex(
+        create_tx,
+        args.signer,
+        SignTransactionParams::default(),
+        args.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))
 }
 
 fn sign_wallet_prefund_transaction(
@@ -1333,8 +1384,13 @@ fn sign_wallet_prefund_transaction(
         nonce: args.nonce,
     })
     .map_err(|error| CliError::Other(error.to_string()))?;
-    sign_and_encode_transaction_hex(tx, args.signer, SignTransactionParams::default())
-        .map_err(|error| CliError::Other(error.to_string()))
+    sign_and_encode_transaction_hex(
+        tx,
+        args.signer,
+        SignTransactionParams::default(),
+        args.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))
 }
 
 fn resolve_dev_wallet_artifact_path(
@@ -1948,6 +2004,7 @@ mod tests {
             name: "preview".into(),
             network: Some(crate::config::Network::Devnet),
             rpc_url: Some("https://rpc.devnet.example".into()),
+            network_hash: None,
             faucet_url: Some("https://faucet.devnet.example".into()),
             rpc_url_cli_override: false,
             default_key: Some("alice".into()),

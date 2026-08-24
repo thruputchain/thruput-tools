@@ -291,6 +291,10 @@ fn merged_field(
             profile.values.rpc_url.clone()?,
             profile.sources.rpc_url.as_ref()?,
         ),
+        ConfigField::NetworkHash => (
+            profile.values.network_hash.clone()?,
+            profile.sources.network_hash.as_ref()?,
+        ),
         ConfigField::FaucetUrl => (
             profile.values.faucet_url.clone()?,
             profile.sources.faucet_url.as_ref()?,

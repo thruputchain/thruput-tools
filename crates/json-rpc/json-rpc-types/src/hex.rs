@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+use groundhog_xdr::types::{NetworkHash, SHA256Hash};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -27,6 +28,17 @@ impl NetworkHashHex {
     /// Borrow the canonical wire representation.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The protocol network hash this wire value encodes.
+    ///
+    /// Callers signing transactions need this: the network hash is part of
+    /// every signature preimage.
+    pub fn to_network_hash(&self) -> NetworkHash {
+        let mut bytes = [0u8; 32];
+        hex::decode_to_slice(&self.0, &mut bytes)
+            .expect("bug: NetworkHashHex is validated as 64 lowercase hex digits on construction");
+        NetworkHash::new(SHA256Hash::new(bytes))
     }
 }
 

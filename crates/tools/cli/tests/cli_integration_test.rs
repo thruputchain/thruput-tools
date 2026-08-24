@@ -4726,7 +4726,7 @@ fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -4761,7 +4761,7 @@ fn transfer_from_selects_named_owner_matched_wallet() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -11156,6 +11156,9 @@ fn send_tx_show_response(
 }
 
 /// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
+/// Network hash the test profiles declare in `groundhog.toml`.
+const TEST_NETWORK_HASH: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+
 fn read_jsonrpc_request(
     listener: &TcpListener,
     deadline: Instant,
@@ -11199,9 +11202,24 @@ fn read_jsonrpc_request(
 fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
     let rpc_url = rpc_url.to_owned();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for network descriptor request"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("failed to accept mock descriptor connection: {err}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut request_line = String::new();
         reader.read_line(&mut request_line).unwrap();
@@ -11518,7 +11536,7 @@ fn run_saved_wallet_transfer_live_mock(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -11981,7 +11999,7 @@ fn write_project_config_with_alice_wallet(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
             "aa".repeat(32)
         ),
     )

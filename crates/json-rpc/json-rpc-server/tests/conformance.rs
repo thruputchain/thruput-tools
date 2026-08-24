@@ -27,6 +27,7 @@ use groundhog_json_rpc_types::{
         EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
     },
     hex::{Hex0x, HexBytes},
+    network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
@@ -114,6 +115,13 @@ impl SubmitPlane for ScriptedBackend {
 
 #[async_trait]
 impl ChainPlane for ScriptedBackend {
+    async fn network_info(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<NetworkInfo, RpcServerError> {
+        Err(RpcServerError::NotImplemented("networkInfo".into()))
+    }
+
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Ok(ChainTip {
             height: BlockHeight::from(0),

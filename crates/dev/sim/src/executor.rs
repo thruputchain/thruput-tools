@@ -6767,6 +6767,9 @@ mod tests {
                 index: 0,
                 signer: derive_dev_account_signer("executor-test-seed", 0),
                 wallet_address: Hex0x(ContractAddress::from([0x99; 32])).0,
+                network_hash: groundhog_xdr::types::NetworkHash::new(
+                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
+                ),
             },
             NonceNamespace::new(1).expect("namespace should fit"),
         )]

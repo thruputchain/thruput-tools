@@ -10,8 +10,9 @@ use groundhog_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, NetworkHashHex,
+    BlockHeight, NetworkHash, NetworkHashHex,
     block::{BlockInfo, ChainTip, consensus_value_hash},
+    network_info::NetworkInfo,
 };
 use groundhog_scheduler::{
     DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
@@ -173,6 +174,34 @@ impl ChainPlane for HogdDevSchedulerBackend {
     }
 
     #[tracing::instrument(skip_all)]
+    async fn network_info(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<NetworkInfo, RpcServerError> {
+        within_request_deadline(context, async {
+            let result = self
+                .scheduler
+                .schedcoord_get_tip()
+                .await
+                .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+            match result {
+                SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
+                    Ok(network_info_from_db_tip(&db_tip))
+                }
+                SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
+                    Err(RpcServerError::BackendUnavailable(
+                        "hogd-dev scheduler has no genesis block".into(),
+                    ))
+                }
+                other => Err(RpcServerError::BackendUnavailable(format!(
+                    "unexpected scheduler tip result: {other:?}"
+                ))),
+            }
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
     async fn get_block_by_number(
         &self,
         _context: RpcRequestContext,
@@ -224,6 +253,13 @@ fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServ
         height: value.proposal_header.block_height.clone(),
         block_hash,
     })
+}
+
+/// Read the network identity off a scheduler tip.
+fn network_info_from_db_tip(DbTip { value, .. }: &DbTip) -> NetworkInfo {
+    NetworkInfo::new(NetworkHash::from(
+        value.proposal_header.network_hash.clone().into_inner(),
+    ))
 }
 
 #[cfg(test)]

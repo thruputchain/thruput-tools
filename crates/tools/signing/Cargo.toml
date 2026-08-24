@@ -24,6 +24,7 @@ workspace = true
 
 [dependencies]
 groundhog-xdr = { workspace = true }
+groundhog-domain-separator = { workspace = true }
 xdrs = { workspace = true }
 xdr-common = { workspace = true }
 sha2 = { workspace = true }

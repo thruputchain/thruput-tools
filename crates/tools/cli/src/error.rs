@@ -178,6 +178,10 @@ pub enum CliError {
     },
     #[error("no signing key configured")]
     MissingSigningKey,
+    #[error("cannot determine the network hash for this profile")]
+    MissingNetworkHash,
+    #[error("profile network_hash {value:?} is not 64 lowercase hexadecimal digits")]
+    InvalidNetworkHash { value: String },
     #[error("invalid HOG amount `{input}`: {message}")]
     InvalidHogAmount { input: String, message: String },
     #[error("address target {target:?} is invalid: {message}")]
@@ -480,6 +484,8 @@ impl CliError {
             Self::ConfirmationRequired { .. } => "confirmation_required",
             Self::FaucetService { .. } => "faucet_service_error",
             Self::MissingSigningKey => "missing_signing_key",
+            Self::MissingNetworkHash => "missing_network_hash",
+            Self::InvalidNetworkHash { .. } => "invalid_network_hash",
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
@@ -674,6 +680,16 @@ impl CliError {
             Self::MissingSigningKey => Some(Cow::Borrowed(
                 "set `default_key` in project or global config, or run `groundhog keys generate`",
             )),
+            Self::MissingNetworkHash => Some(Cow::Borrowed(
+                "signing binds each transaction to a network: run `groundhog config set \
+                 network-hash <hash>` for this profile, or point it at a runtime manifest \
+                 from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
+                 profile.<name>.runtime_manifest",
+            )),
+            Self::InvalidNetworkHash { .. } => Some(Cow::Borrowed(
+                "network_hash is the unprefixed 32-byte network hash: 64 lowercase \
+                 hexadecimal digits, as `groundhog node` writes it into the runtime manifest",
+            )),
             Self::InvalidHogAmount { .. } => Some(Cow::Borrowed(
                 "enter a positive decimal HOG amount with at most seven decimal places",
             )),
@@ -848,10 +864,11 @@ impl CliError {
                 "use a non-empty profile name without control characters",
             )),
             Self::ConfigFieldUnsupported(_) => Some(Cow::Borrowed(
-                "supported fields: network, rpc-url, faucet-url, default-key",
+                "supported fields: network, rpc-url, network-hash, faucet-url, default-key",
             )),
             Self::ConfigValueInvalid { .. } => Some(Cow::Borrowed(
-                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; and a non-empty default key",
+                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; 64 lowercase \
+                 hexadecimal digits for network-hash; and a non-empty default key",
             )),
             Self::ConfigParse { .. } | Self::ConfigFileInvalid { .. } => Some(Cow::Borrowed(
                 "fix the reported config file and rerun the command",
