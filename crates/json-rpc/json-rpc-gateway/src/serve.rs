@@ -64,7 +64,8 @@ pub(crate) async fn start_rpc_server(
         .max_response_body_size(config.max_response_body_bytes)
         .set_batch_request_config(batch_config)
         .build();
-    let http_mw = middleware::http_middleware(config, metrics.clone())?;
+    let http_mw = middleware::http_middleware(config, metrics.clone());
+    let cors = middleware::cors_layer(config)?;
     let rpc_metrics = metrics.clone();
     let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
         .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()));
@@ -94,12 +95,18 @@ pub(crate) async fn start_rpc_server(
             let rpc_service = svc_builder
                 .clone()
                 .build(methods.clone(), stop_handle.clone());
-            let service = RateLimitService::new(
-                rpc_service,
-                limiter.clone(),
-                remote_addr.ip(),
-                trusted_proxy,
-                metrics.clone(),
+            // CORS wraps the rate limiter so a 429 still carries CORS
+            // headers a browser client can observe (and preflights are
+            // answered without spending rate-limit tokens).
+            let service = tower::Layer::layer(
+                &cors,
+                RateLimitService::new(
+                    rpc_service,
+                    limiter.clone(),
+                    remote_addr.ip(),
+                    trusted_proxy,
+                    metrics.clone(),
+                ),
             );
             tokio::spawn(serve_with_graceful_shutdown(
                 socket,
@@ -248,6 +255,40 @@ mod tests {
         assert!(
             rejected.contains("The batch request was too large"),
             "got: {rejected}"
+        );
+
+        server.handle.stop().expect("server should stop");
+        server.handle.stopped().await;
+    }
+
+    #[tokio::test]
+    async fn rate_limited_response_carries_cors_headers() {
+        let server = start(GatewayConfig {
+            cors_allowed_origins: vec!["http://localhost:3000".into()],
+            rate_limit: RateLimitConfig {
+                enabled: true,
+                requests_per_second: 1,
+                burst: 1,
+                trusted_proxy: false,
+            },
+            ..test_config()
+        })
+        .await;
+
+        let origin = "Origin: http://localhost:3000\r\n";
+        let allowed = raw_http_post(server.local_addr, CALL, origin).await;
+        assert!(allowed.starts_with("HTTP/1.1 200"), "got: {allowed}");
+
+        let limited = raw_http_post(server.local_addr, CALL, origin).await;
+        let lower = limited.to_ascii_lowercase();
+        assert!(limited.starts_with("HTTP/1.1 429"), "got: {limited}");
+        assert!(
+            lower.contains("access-control-allow-origin: http://localhost:3000"),
+            "browser client must be able to observe the 429: {limited}"
+        );
+        assert!(
+            lower.contains("access-control-expose-headers") && lower.contains("retry-after"),
+            "Retry-After must be exposed to browser scripts: {limited}"
         );
 
         server.handle.stop().expect("server should stop");

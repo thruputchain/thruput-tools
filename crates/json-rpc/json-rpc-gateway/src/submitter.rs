@@ -25,7 +25,7 @@ use crate::adaptive_batch::{
 };
 use crate::config::AdaptiveBatchConfig;
 use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
-use crate::dedupe::AcceptedTxCache;
+use crate::dedupe::{AcceptedTxCache, InFlightOutcome, SubmitSlot};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
@@ -291,6 +291,9 @@ impl BatchSubmitter {
     /// A hash whose earlier submission the backend accepted within the
     /// dedupe window returns `Ok` immediately without reaching the
     /// backend again; only accepted submissions enter that window.
+    /// Concurrent duplicates coalesce onto one in-flight submission:
+    /// exactly one leads, the rest await its outcome and retry only if
+    /// it fails.
     #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit(
         &self,
@@ -298,17 +301,6 @@ impl BatchSubmitter {
         tx_bytes: Vec<u8>,
         hash: TxHash,
     ) -> Result<(), GatewayError> {
-        if let Some(dedupe) = &self.dedupe
-            && dedupe.contains(&hash)
-        {
-            self.metrics.observe_submitted_transaction("deduplicated");
-            tracing::debug!(tx_hash = ?hash, "duplicate of recently accepted transaction");
-            return Ok(());
-        }
-        let bytes: &[u8] = hash.0.0.as_ref();
-        let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
-        tracing::Span::current().record("shard_idx", shard_idx);
-        let (reply_tx, reply_rx) = oneshot::channel();
         let request_deadline = context
             .capped_from_start(self.request_timeout)
             .deadline()
@@ -317,6 +309,41 @@ impl BatchSubmitter {
             .capped_from_start(self.backend_timeout)
             .deadline()
             .expect("backend timeout should bound submission");
+
+        let mut in_flight_guard = None;
+        if let Some(dedupe) = &self.dedupe {
+            loop {
+                match dedupe.begin_submit(&hash) {
+                    SubmitSlot::AlreadyAccepted => {
+                        self.metrics.observe_submitted_transaction("deduplicated");
+                        tracing::debug!(tx_hash = ?hash, "duplicate of recently accepted transaction");
+                        return Ok(());
+                    }
+                    SubmitSlot::Leader(guard) => {
+                        in_flight_guard = Some(guard);
+                        break;
+                    }
+                    SubmitSlot::Waiter(receiver) => {
+                        match self.await_leader(receiver, request_deadline).await? {
+                            InFlightOutcome::Accepted => {
+                                self.metrics.observe_submitted_transaction("deduplicated");
+                                tracing::debug!(tx_hash = ?hash,
+                                    "duplicate coalesced onto in-flight submission");
+                                return Ok(());
+                            }
+                            // The leader failed; contend for the slot
+                            // again so this attempt stays retryable.
+                            InFlightOutcome::Failed | InFlightOutcome::Pending => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        let bytes: &[u8] = hash.0.0.as_ref();
+        let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
+        tracing::Span::current().record("shard_idx", shard_idx);
+        let (reply_tx, reply_rx) = oneshot::channel();
         if backend_deadline <= Instant::now() {
             let err = GatewayError::BackendTimeout;
             self.metrics
@@ -350,12 +377,44 @@ impl BatchSubmitter {
             }
             Ok(Ok(result)) => {
                 if result.is_ok()
-                    && let Some(dedupe) = &self.dedupe
+                    && let Some(guard) = in_flight_guard.take()
                 {
-                    dedupe.record_accepted(&hash);
+                    guard.settle_accepted();
                 }
                 result
             }
+        }
+    }
+
+    /// Await an in-flight leader's outcome, bounded by this request's
+    /// own deadline. `Pending` is returned only when the leader's
+    /// channel closed without settling, which the caller treats as a
+    /// failure to retry.
+    async fn await_leader(
+        &self,
+        mut receiver: tokio::sync::watch::Receiver<InFlightOutcome>,
+        request_deadline: Instant,
+    ) -> Result<InFlightOutcome, GatewayError> {
+        let wait = async {
+            loop {
+                let outcome = *receiver.borrow_and_update();
+                match outcome {
+                    InFlightOutcome::Accepted | InFlightOutcome::Failed => return outcome,
+                    InFlightOutcome::Pending => {
+                        if receiver.changed().await.is_err() {
+                            return InFlightOutcome::Failed;
+                        }
+                    }
+                }
+            }
+        };
+        if let Ok(outcome) = tokio::time::timeout_at(request_deadline.into(), wait).await {
+            Ok(outcome)
+        } else {
+            let err = GatewayError::BackendTimeout;
+            self.metrics
+                .observe_submitted_transaction(outcome_for_submit_error(&err));
+            Err(err)
         }
     }
 }
@@ -1093,6 +1152,105 @@ mod tests {
             Duration::from_secs(1),
             Some(Arc::new(AcceptedTxCache::new(16, ttl))),
         )
+    }
+
+    #[tokio::test]
+    async fn concurrent_duplicates_coalesce_onto_one_submission() {
+        let mock = MockSink::arc();
+        let metrics = GatewayMetrics::for_tests();
+        let submitter = Arc::new(spawn_with_dedupe(
+            &mock,
+            metrics.clone(),
+            Duration::from_mins(1),
+        ));
+        let gate = mock.queue_gate();
+
+        let leader = tokio::spawn({
+            let submitter = submitter.clone();
+            async move {
+                submitter
+                    .submit(request_context(), vec![0xaa; 8], hash_from_u32(9))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let waiter = tokio::spawn({
+            let submitter = submitter.clone();
+            async move {
+                submitter
+                    .submit(request_context(), vec![0xaa; 8], hash_from_u32(9))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        gate.send(Ok(())).expect("gate should deliver");
+
+        leader
+            .await
+            .expect("leader task should join")
+            .expect("leader submission should be accepted");
+        waiter
+            .await
+            .expect("waiter task should join")
+            .expect("coalesced duplicate should share the leader's success");
+
+        assert_eq!(
+            mock.seen(),
+            vec![1],
+            "backend saw exactly one submission of the hash"
+        );
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics.gather(&snapshot).expect("metrics should encode");
+        assert!(body.contains(
+            "groundhog_gateway_submitted_transactions_total{outcome=\"deduplicated\"} 1"
+        ));
+        assert!(body.contains("groundhog_gateway_submitted_transactions_total{outcome=\"ok\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn waiter_retries_after_leader_failure() {
+        let mock = MockSink::arc();
+        let metrics = GatewayMetrics::for_tests();
+        let submitter = Arc::new(spawn_with_dedupe(
+            &mock,
+            metrics.clone(),
+            Duration::from_mins(1),
+        ));
+        let gate = mock.queue_gate();
+
+        let leader = tokio::spawn({
+            let submitter = submitter.clone();
+            async move {
+                submitter
+                    .submit(request_context(), vec![0xaa; 8], hash_from_u32(5))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let waiter = tokio::spawn({
+            let submitter = submitter.clone();
+            async move {
+                submitter
+                    .submit(request_context(), vec![0xaa; 8], hash_from_u32(5))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        gate.send(Err(GatewayError::BackendUnavailable("test failure".into())))
+            .expect("gate should deliver");
+
+        let leader_result = leader.await.expect("leader task should join");
+        assert!(leader_result.is_err(), "leader should see the failure");
+        waiter
+            .await
+            .expect("waiter task should join")
+            .expect("waiter should retry after the leader failed");
+
+        assert_eq!(
+            mock.seen(),
+            vec![1, 1],
+            "failed submission stays retryable: backend saw the retry"
+        );
     }
 
     #[tokio::test]

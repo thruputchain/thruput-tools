@@ -10,21 +10,91 @@
 
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
 use groundhog_json_rpc_types::transaction::TxHash;
+use tokio::sync::watch;
 
 use crate::config::SubmitDedupeConfig;
 
 type HashKey = [u8; 32];
 
 /// Bounded, TTL'd set of recently accepted transaction hashes.
+///
+/// Also tracks hashes whose submission is currently in flight, so
+/// concurrent duplicates coalesce onto one backend submission instead
+/// of racing past the accepted window before it is populated. The
+/// in-flight map is bounded by the number of concurrent submissions.
 pub(crate) struct AcceptedTxCache {
     ttl: Duration,
     max_entries: usize,
     state: Mutex<CacheState>,
+    in_flight: Mutex<HashMap<HashKey, watch::Receiver<InFlightOutcome>>>,
+}
+
+/// Progress of an in-flight submission of one hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InFlightOutcome {
+    /// The leader has not settled yet.
+    Pending,
+    /// The downstream mempool path accepted the submission.
+    Accepted,
+    /// The submission failed; the hash is retryable again.
+    Failed,
+}
+
+/// Admission decision for one submission attempt of a hash.
+pub(crate) enum SubmitSlot {
+    /// Accepted within the TTL window; answer idempotently.
+    AlreadyAccepted,
+    /// The caller owns this hash's submission; settle the guard.
+    Leader(InFlightGuard),
+    /// Another submission of this hash is in flight; await its outcome.
+    Waiter(watch::Receiver<InFlightOutcome>),
+}
+
+/// The leader's claim on an in-flight hash.
+///
+/// `settle_accepted` promotes the hash into the accepted window and
+/// releases waiters with success. Dropping the guard without settling
+/// (any failure or panic path) releases waiters with
+/// [`InFlightOutcome::Failed`] and frees the slot so a retry can lead.
+pub(crate) struct InFlightGuard {
+    cache: Arc<AcceptedTxCache>,
+    key: HashKey,
+    sender: watch::Sender<InFlightOutcome>,
+    settled: bool,
+}
+
+impl InFlightGuard {
+    /// Record the hash as accepted and release waiters with success.
+    pub(crate) fn settle_accepted(mut self) {
+        self.cache.record_accepted_at(self.key, Instant::now());
+        self.release(InFlightOutcome::Accepted);
+        self.settled = true;
+    }
+
+    fn release(&self, outcome: InFlightOutcome) {
+        // Remove before waking waiters: a waiter that retries after
+        // `Failed` must not find this settled entry still claiming the
+        // hash.
+        self.cache
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+        let _ = self.sender.send(outcome);
+    }
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.release(InFlightOutcome::Failed);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -50,22 +120,46 @@ impl AcceptedTxCache {
             ttl,
             max_entries,
             state: Mutex::new(CacheState::default()),
+            in_flight: Mutex::new(HashMap::new()),
         }
     }
 
     /// Whether `hash` was accepted within the TTL window.
+    #[cfg(test)]
     pub(crate) fn contains(&self, hash: &TxHash) -> bool {
         self.contains_at(key(hash), Instant::now())
+    }
+
+    /// Claim one submission attempt of `hash`.
+    ///
+    /// Exactly one concurrent caller per hash becomes the
+    /// [`SubmitSlot::Leader`]; the rest wait on the leader's outcome
+    /// instead of submitting the same hash again.
+    pub(crate) fn begin_submit(self: &Arc<Self>, hash: &TxHash) -> SubmitSlot {
+        let key = key(hash);
+        if self.contains_at(key, Instant::now()) {
+            return SubmitSlot::AlreadyAccepted;
+        }
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(receiver) = in_flight.get(&key) {
+            return SubmitSlot::Waiter(receiver.clone());
+        }
+        let (sender, receiver) = watch::channel(InFlightOutcome::Pending);
+        in_flight.insert(key, receiver);
+        SubmitSlot::Leader(InFlightGuard {
+            cache: Arc::clone(self),
+            key,
+            sender,
+            settled: false,
+        })
     }
 
     fn contains_at(&self, key: HashKey, now: Instant) -> bool {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         matches!(state.entries.get(&key), Some(at) if now.duration_since(*at) < self.ttl)
-    }
-
-    /// Record `hash` as accepted by the downstream mempool path.
-    pub(crate) fn record_accepted(&self, hash: &TxHash) {
-        self.record_accepted_at(key(hash), Instant::now());
     }
 
     fn record_accepted_at(&self, key: HashKey, now: Instant) {
@@ -170,6 +264,52 @@ mod tests {
         assert!(cache.contains_at(hash_key(1), start + Duration::from_secs(14)));
         assert!(cache.contains_at(hash_key(2), start + Duration::from_secs(14)));
         assert!(cache.contains_at(hash_key(3), start + Duration::from_secs(14)));
+    }
+
+    fn tx_hash(x: u8) -> TxHash {
+        TxHash(groundhog_json_rpc_types::hex::Hex0x(
+            groundhog_xdr::types::SHA256Hash::from([x; 32]),
+        ))
+    }
+
+    #[test]
+    fn concurrent_claims_get_one_leader_and_waiters() {
+        let cache = Arc::new(AcceptedTxCache::new(10, Duration::from_mins(1)));
+
+        let SubmitSlot::Leader(guard) = cache.begin_submit(&tx_hash(1)) else {
+            panic!("first claim should lead");
+        };
+        let SubmitSlot::Waiter(receiver) = cache.begin_submit(&tx_hash(1)) else {
+            panic!("second concurrent claim should wait");
+        };
+        assert_eq!(*receiver.borrow(), InFlightOutcome::Pending);
+
+        guard.settle_accepted();
+        assert_eq!(*receiver.borrow(), InFlightOutcome::Accepted);
+        assert!(matches!(
+            cache.begin_submit(&tx_hash(1)),
+            SubmitSlot::AlreadyAccepted
+        ));
+    }
+
+    #[test]
+    fn dropped_leader_releases_waiters_as_failed_and_frees_the_slot() {
+        let cache = Arc::new(AcceptedTxCache::new(10, Duration::from_mins(1)));
+
+        let SubmitSlot::Leader(guard) = cache.begin_submit(&tx_hash(1)) else {
+            panic!("first claim should lead");
+        };
+        let SubmitSlot::Waiter(receiver) = cache.begin_submit(&tx_hash(1)) else {
+            panic!("second concurrent claim should wait");
+        };
+
+        drop(guard);
+        assert_eq!(*receiver.borrow(), InFlightOutcome::Failed);
+        assert!(
+            matches!(cache.begin_submit(&tx_hash(1)), SubmitSlot::Leader(_)),
+            "failed hash should be claimable again"
+        );
+        assert!(!cache.contains(&tx_hash(1)));
     }
 
     #[test]

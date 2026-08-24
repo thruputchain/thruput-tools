@@ -1,13 +1,13 @@
-//! Tower middleware stack: CORS and request timeout.
+//! Tower middleware stack: request metrics and timeout (CORS wraps the
+//! connection service in `serve`, outside the rate limiter).
 //!
 //! Request-level tracing is handled by jsonrpsee's built-in logger
 //! rather than tower-http's `TraceLayer`, which wraps the response body
 //! in a type incompatible with jsonrpsee's HTTP body constraints.
 //!
-//! Phase 4 adds:
-//! - Per-IP rate limiting (token bucket)
-//! - Request size limits
-//! - Per-method Prometheus histograms
+//! Per-IP rate limiting lives in `rate_limit`, applied per connection
+//! in `serve`; request size limits are set on the jsonrpsee server
+//! config.
 
 use std::{
     future::Future,
@@ -34,38 +34,38 @@ pub(crate) struct InvalidCorsOrigin {
 /// Build the Tower HTTP middleware stack from configuration.
 ///
 /// Layer order (outermost → innermost):
-/// 1. **CORS** — origins from `cors_allowed_origins`, any origin by default
+/// 1. **Metrics** — per-request HTTP metrics
 /// 2. **Timeout** — per-request timeout from config
+///
+/// CORS is not part of this stack: it wraps the whole per-connection
+/// service (outside the rate limiter) in `serve`, so admission
+/// rejections such as 429 still carry CORS headers that a browser
+/// client can observe.
 #[allow(clippy::type_complexity)]
 pub(crate) fn http_middleware(
     config: &GatewayConfig,
     metrics: GatewayMetrics,
-) -> Result<
-    ServiceBuilder<
-        tower::layer::util::Stack<
-            TimeoutLayer,
-            tower::layer::util::Stack<
-                CorsLayer,
-                tower::layer::util::Stack<HttpMetricsLayer, tower::layer::util::Identity>,
-            >,
-        >,
+) -> ServiceBuilder<
+    tower::layer::util::Stack<
+        TimeoutLayer,
+        tower::layer::util::Stack<HttpMetricsLayer, tower::layer::util::Identity>,
     >,
-    InvalidCorsOrigin,
 > {
-    Ok(ServiceBuilder::new()
+    ServiceBuilder::new()
         .layer(HttpMetricsLayer::new(metrics, "jsonrpc"))
-        .layer(cors_layer(config)?)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.http_request_timeout(),
-        )))
+        ))
 }
 
 /// CORS layer honoring `cors_allowed_origins`.
 ///
 /// An empty list or a `"*"` entry allows any origin, preserving the
 /// dev-friendly default; otherwise only the listed origins are allowed.
-fn cors_layer(config: &GatewayConfig) -> Result<CorsLayer, InvalidCorsOrigin> {
+/// `Retry-After` is exposed so browser scripts can read the backoff on
+/// rate-limited responses.
+pub(crate) fn cors_layer(config: &GatewayConfig) -> Result<CorsLayer, InvalidCorsOrigin> {
     let origins = &config.cors_allowed_origins;
     let allow_origin = if origins.is_empty() || origins.iter().any(|origin| origin == "*") {
         AllowOrigin::any()
@@ -83,7 +83,8 @@ fn cors_layer(config: &GatewayConfig) -> Result<CorsLayer, InvalidCorsOrigin> {
     Ok(CorsLayer::new()
         .allow_origin(allow_origin)
         .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any))
+        .allow_headers(tower_http::cors::Any)
+        .expose_headers([axum::http::header::RETRY_AFTER]))
 }
 
 #[derive(Clone)]
@@ -190,12 +191,12 @@ mod tests {
             ..GatewayConfig::default()
         };
         let metrics = GatewayMetrics::for_tests();
-        let mut service = http_middleware(&config, metrics.clone())
-            .expect("default CORS config should build")
-            .service(service_fn(|_request: Request<Body>| async move {
+        let mut service = http_middleware(&config, metrics.clone()).service(service_fn(
+            |_request: Request<Body>| async move {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
-            }));
+            },
+        ));
 
         let response = service
             .ready()
