@@ -164,7 +164,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Server ---
     let server_cfg = jsonrpsee::server::ServerConfig::builder()
         .max_connections(ctx.config.max_connections)
-        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
+        .max_request_body_size(ctx.config.max_request_body_bytes)
+        .max_response_body_size(ctx.config.max_response_body_bytes)
+        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
+            ctx.config.max_batch_requests,
+        ))
         .build();
     let http_mw = middleware::http_middleware(&ctx.config, metrics.clone())?;
     let rpc_metrics = metrics.clone();

@@ -188,6 +188,20 @@ pub struct GatewayConfig {
     /// Maximum simultaneous TCP/WebSocket connections.
     pub max_connections: u32,
 
+    /// Maximum accepted JSON-RPC request body size in bytes.
+    ///
+    /// The default leaves generous headroom over the largest
+    /// `sendRawTransaction` payload (a full RV32 deploy artifact is
+    /// well under 1 MB even hex-encoded) while bounding what one
+    /// request can make the server buffer.
+    pub max_request_body_bytes: u32,
+
+    /// Maximum produced JSON-RPC response body size in bytes.
+    pub max_response_body_bytes: u32,
+
+    /// Maximum number of calls accepted in one JSON-RPC batch request.
+    pub max_batch_requests: u32,
+
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
 
@@ -305,6 +319,9 @@ impl Default for GatewayConfig {
             cors_allowed_origins: Vec::new(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
+            max_request_body_bytes: 2 * 1024 * 1024,
+            max_response_body_bytes: 10 * 1024 * 1024,
+            max_batch_requests: 1_000,
             observability_listen: "127.0.0.1:9646".into(),
             health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
             health_chain_tip_max_age_ms: 30_000,
