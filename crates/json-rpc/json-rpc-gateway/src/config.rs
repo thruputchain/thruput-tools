@@ -93,7 +93,7 @@ impl FromStr for HealthBackend {
 /// `dbgateway_get_items`); see `GatewayConfig::batch` and
 /// `GatewayConfig::storage` for the per-RPC tuning slots.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AdaptiveBatchConfig {
     /// Number of independent sharded worker tasks. Incoming requests
     /// are routed to a shard by a stable hash of the request key.
@@ -146,7 +146,7 @@ impl Default for AdaptiveBatchConfig {
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
 /// comes from an RPC initiated strictly after they arrived.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TipConfig {
     /// Maximum number of overlapping `get_tip` RPCs. Covers RTT under
     /// burst load; `1` means strictly serial.
@@ -167,8 +167,11 @@ impl Default for TipConfig {
 }
 
 /// Gateway configuration, loaded from TOML.
+///
+/// Unknown keys are rejected so a typo in an operator config fails
+/// startup instead of silently running with defaults.
 #[derive(Debug, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GatewayConfig {
     /// Listen address for the JSON-RPC server.
     pub listen_address: String,
@@ -454,6 +457,60 @@ mod tests {
     use serde_json::json;
 
     use super::{GatewayConfig, RuntimeManifestConfigError};
+
+    #[test]
+    fn toml_with_unknown_top_level_key_is_rejected() {
+        let error = toml::from_str::<GatewayConfig>(
+            r#"
+            listen_address = "127.0.0.1:8545"
+            listen_adress = "0.0.0.0:8545"
+            "#,
+        )
+        .expect_err("bug: unknown config key should fail");
+
+        assert!(error.to_string().contains("unknown field"), "{error}");
+    }
+
+    #[test]
+    fn toml_with_unknown_batch_or_tip_key_is_rejected() {
+        let batch_error = toml::from_str::<GatewayConfig>(
+            r"
+            [batch]
+            max_sizes = 10
+            ",
+        )
+        .expect_err("bug: unknown batch key should fail");
+        assert!(batch_error.to_string().contains("unknown field"));
+
+        let tip_error = toml::from_str::<GatewayConfig>(
+            r"
+            [tip]
+            max_inflight_tip = 1
+            ",
+        )
+        .expect_err("bug: unknown tip key should fail");
+        assert!(tip_error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn toml_with_known_keys_parses() {
+        let config = toml::from_str::<GatewayConfig>(
+            r#"
+            listen_address = "127.0.0.1:9999"
+
+            [batch]
+            max_size = 10
+
+            [tip]
+            max_inflight_tips = 2
+            "#,
+        )
+        .expect("bug: known config keys should parse");
+
+        assert_eq!(config.listen_address, "127.0.0.1:9999");
+        assert_eq!(config.batch.max_size, 10);
+        assert_eq!(config.tip.max_inflight_tips, 2);
+    }
 
     #[test]
     fn request_deadlines_are_nested() {
