@@ -16,7 +16,9 @@ pub struct RpcServerConfig {
     ///
     /// The wire contract documents `0` as "server default (50)"; the
     /// substitution happens here so the promise holds regardless of the
-    /// backend's own default.
+    /// backend's own default. The substituted value is clamped to the
+    /// per-method page cap, so configuring a cap below this default
+    /// keeps the cap authoritative.
     pub default_page_limit: u32,
 
     /// Per-page cap on `getEvents` responses; requests with `limit`

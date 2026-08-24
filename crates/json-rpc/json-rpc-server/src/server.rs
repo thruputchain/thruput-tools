@@ -295,7 +295,10 @@ where
         self.within_request_deadline(context, async {
             validate_event_query(&query, &self.config)?;
             if query.limit == 0 {
-                query.limit = self.config.default_page_limit;
+                query.limit = self
+                    .config
+                    .default_page_limit
+                    .min(self.config.max_events_per_page);
             }
             Ok(self.read.contract_events(context, query).await?)
         })
@@ -311,7 +314,10 @@ where
         self.within_request_deadline(context, async {
             validate_address_transaction_query(&query, &self.config)?;
             if query.limit == 0 {
-                query.limit = self.config.default_page_limit;
+                query.limit = self
+                    .config
+                    .default_page_limit
+                    .min(self.config.max_transactions_per_page);
             }
             Ok(self.read.transactions_by_address(context, query).await?)
         })
@@ -419,8 +425,9 @@ where
 /// opaque `cursor` exceed the per-server caps in `RpcServerConfig`.
 ///
 /// `limit == 0` passes validation; the dispatcher substitutes
-/// `default_page_limit` before backend dispatch. Empty `filters` pass
-/// through unchanged; the indexer owns that default.
+/// `default_page_limit` clamped to `max_events_per_page` before
+/// backend dispatch. Empty `filters` pass through unchanged; the
+/// indexer owns that default.
 fn validate_event_query(
     query: &EventQuery,
     config: &RpcServerConfig,
@@ -447,7 +454,8 @@ fn validate_event_query(
 /// `RpcServerConfig`.
 ///
 /// `limit == 0` passes validation; the dispatcher substitutes
-/// `default_page_limit` before backend dispatch.
+/// `default_page_limit` clamped to `max_transactions_per_page` before
+/// backend dispatch.
 fn validate_address_transaction_query(
     query: &AddressTransactionQuery,
     config: &RpcServerConfig,
@@ -1329,6 +1337,40 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
+    async fn limit_zero_default_is_clamped_to_the_events_cap() {
+        let mock = Arc::new(MockBackend::default());
+        let cap = 5;
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_max_events_per_page(cap),
+            BuildInfo::for_tests(),
+        );
+
+        // A cap configured below default_page_limit (50) must stay
+        // authoritative when limit=0 asks for the server default.
+        server
+            .get_events(simple_query())
+            .await
+            .expect("bug: limit=0 should dispatch with the clamped default limit");
+
+        assert_eq!(*mock.event_limits.lock().await, vec![cap]);
+    }
+
+    #[tokio::test]
+    async fn limit_zero_uses_the_default_when_the_events_cap_is_higher() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        // Default config: default_page_limit 50 under a 200 cap.
+        server
+            .get_events(simple_query())
+            .await
+            .expect("bug: limit=0 should dispatch with the default limit");
+
+        assert_eq!(*mock.event_limits.lock().await, vec![50]);
+    }
+
+    #[tokio::test]
     async fn explicit_limit_is_forwarded_unchanged() {
         let mock = Arc::new(MockBackend::default());
         let server = server(mock.clone());
@@ -1409,6 +1451,40 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(*mock.tx_by_address_calls.lock().await, 1);
         assert_eq!(*mock.tx_by_address_limits.lock().await, vec![7]);
+    }
+
+    #[tokio::test]
+    async fn tx_by_address_limit_zero_default_is_clamped_to_the_transactions_cap() {
+        let mock = Arc::new(MockBackend::default());
+        let cap = 5;
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_max_transactions_per_page(cap),
+            BuildInfo::for_tests(),
+        );
+
+        // A cap configured below default_page_limit (50) must stay
+        // authoritative when limit=0 asks for the server default.
+        server
+            .get_transactions_by_address(simple_address_query())
+            .await
+            .expect("bug: limit=0 should dispatch with the clamped default limit");
+
+        assert_eq!(*mock.tx_by_address_limits.lock().await, vec![cap]);
+    }
+
+    #[tokio::test]
+    async fn tx_by_address_limit_zero_uses_the_default_when_the_cap_is_higher() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        // Default config: default_page_limit 50 under a 200 cap.
+        server
+            .get_transactions_by_address(simple_address_query())
+            .await
+            .expect("bug: limit=0 should dispatch with the default limit");
+
+        assert_eq!(*mock.tx_by_address_limits.lock().await, vec![50]);
     }
 
     #[tokio::test]
