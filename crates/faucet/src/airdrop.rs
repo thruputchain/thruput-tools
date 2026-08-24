@@ -31,7 +31,7 @@ use crate::{
         AirdropAttempt, AirdropAttemptKey, AirdropAttemptStatus, FaucetPolicyStore,
         InsertAirdropAttemptResult, PolicyStoreError, QuotaCheck, QuotaKey, client_identity,
     },
-    utils::nonce_from_timestamp,
+    utils::next_nonce,
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
@@ -627,7 +627,7 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height,
-            nonce: nonce_from_timestamp(),
+            nonce: next_nonce(),
         })
         .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
         let tx_hex = sign_and_encode_transaction_hex(
