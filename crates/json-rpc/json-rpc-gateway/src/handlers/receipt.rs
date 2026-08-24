@@ -44,7 +44,9 @@ impl<T: Send + 'static> SchedulerLookupGuard<T> {
     }
 
     fn worker_mut(&mut self) -> &mut JoinHandle<T> {
-        self.worker.as_mut().expect("scheduler worker should exist")
+        self.worker
+            .as_mut()
+            .expect("bug: scheduler worker should exist")
     }
 
     async fn clear_and_abort(&mut self) {

@@ -414,7 +414,7 @@ fn run_integration_against_node(
         default_key: profile
             .default_key
             .clone()
-            .expect("integration profile default key was set"),
+            .expect("bug: integration profile default key was set"),
     };
 
     let report = build_test_report(
