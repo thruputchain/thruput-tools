@@ -1924,6 +1924,7 @@ mod tests {
         // Generate a key, then clear the default selection.
         crate::keys::generate(
             &Some("orphan".into()),
+            false,
             "keys.generate",
             &crate::Print::quiet(),
         )

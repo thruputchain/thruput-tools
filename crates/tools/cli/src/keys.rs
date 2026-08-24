@@ -47,7 +47,12 @@ pub struct KeySummary {
 }
 
 /// Generate a new signing keypair.
-pub fn generate(name: &Option<String>, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+pub fn generate(
+    name: &Option<String>,
+    fund: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     let name = name.as_deref().unwrap_or(DEFAULT_KEY_NAME);
     validate_key_name(name)?;
 
@@ -74,6 +79,9 @@ pub fn generate(name: &Option<String>, cmd: &'static str, print: &Print) -> Resu
 
     task.success(format_args!("Generated key `{name}`"));
     print.detail("address", &info.address);
+    if fund {
+        print.note("Faucet funding is not implemented yet; generated key only");
+    }
     if became_default {
         print.note(format_args!("Default key is now `{name}`"));
     }
@@ -81,6 +89,8 @@ pub fn generate(name: &Option<String>, cmd: &'static str, print: &Print) -> Resu
         cmd,
         json!({
             "key": info,
+            "fund_requested": fund,
+            "funded": false,
         }),
     ))?;
     Ok(())

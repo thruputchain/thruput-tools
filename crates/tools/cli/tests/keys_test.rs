@@ -15,11 +15,11 @@ fn generate_use_and_remove_key_updates_default_selection() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
     let default_key = groundhog_cli::config::load_default_key().unwrap();
     assert_eq!(default_key.as_deref(), Some("alice"));
 
-    groundhog_cli::keys::generate(&Some("bob".into()), "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
     groundhog_cli::keys::use_key("bob", "keys.use", &quiet()).unwrap();
 
     let default_key = groundhog_cli::config::load_default_key().unwrap();
@@ -65,9 +65,10 @@ fn generate_duplicate_key_fails() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    groundhog_cli::keys::generate(&Some("dup".into()), "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("dup".into()), false, "keys.generate", &quiet()).unwrap();
 
-    let result = groundhog_cli::keys::generate(&Some("dup".into()), "keys.generate", &quiet());
+    let result =
+        groundhog_cli::keys::generate(&Some("dup".into()), false, "keys.generate", &quiet());
     assert!(result.is_err());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -102,7 +103,7 @@ fn generated_key_address_matches_shared_signing_crate() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
     let key_path = groundhog_cli::config::keys_dir()
         .unwrap()
