@@ -39,33 +39,26 @@ fn apply(template: &str, name: &str) -> String {
 }
 
 fn validate_name(name: &str) -> Result<(), CliError> {
+    let reject = |message: &str| {
+        Err(CliError::InvalidArgument {
+            argument: "project name".into(),
+            message: message.into(),
+        })
+    };
     if name.is_empty() {
-        return Err(CliError::Other("project name cannot be empty".into()));
+        return reject("cannot be empty");
     }
     if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
-        return Err(CliError::Other(
-            "project name must start with a \
-             lowercase letter"
-                .into(),
-        ));
+        return reject("must start with a lowercase letter");
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(CliError::Other(
-            "project name must contain only \
-             lowercase letters, digits, \
-             and hyphens"
-                .into(),
-        ));
+        return reject("must contain only lowercase letters, digits, and hyphens");
     }
     if name.ends_with('-') || name.contains("--") {
-        return Err(CliError::Other(
-            "project name must not end with a \
-             hyphen or contain consecutive hyphens"
-                .into(),
-        ));
+        return reject("must not end with a hyphen or contain consecutive hyphens");
     }
     Ok(())
 }

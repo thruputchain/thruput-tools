@@ -38,5 +38,7 @@ This directory has two kinds of documents:
 
 - [CLI archive](archive/cli/) - shipped implementation plans, historical design
   context, and competitive DX analysis.
+- [Gateway archive](archive/gateway/) - historical gateway sketches superseded
+  by the `json-rpc-api` trait and the generated OpenRPC snapshot.
 - [Superpowers archive](archive/superpowers/) - shipped artifact-layout and
   instrumentation plans.
