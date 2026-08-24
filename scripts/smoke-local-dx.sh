@@ -638,9 +638,9 @@ if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
 fi
 
 COUNTER_BUILD_JSON="$(run_json "build counter contract" "$CLI" --json build)"
-COUNTER_SPEC_XDR="$(json_field data.spec_xdr "$COUNTER_BUILD_JSON")"
+COUNTER_SPEC_XDR="$(json_field data.specXdr "$COUNTER_BUILD_JSON")"
 [[ "$COUNTER_SPEC_XDR" != "null" && -r "$COUNTER_SPEC_XDR" ]] \
-    || die "counter build did not return a readable spec_xdr path: $COUNTER_SPEC_XDR"
+    || die "counter build did not return a readable specXdr path: $COUNTER_SPEC_XDR"
 
 log "Starting local node"
 "$CLI" "${NODE_ARGS[@]}" --dev-account-hog "$CUSTOM_DEV_ACCOUNT_HOG" \
