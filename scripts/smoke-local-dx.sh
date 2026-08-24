@@ -719,8 +719,8 @@ SENDER_BEFORE_JSON="$(run_json "sender balance before" "$CLI" --json balance "$T
 RECIPIENT_BEFORE_JSON="$(run_json "recipient balance before" "$CLI" --json balance "$TRANSFER_RECIPIENT")"
 SENDER_ADDRESS="$(json_field data.address "$SENDER_BEFORE_JSON")"
 RECIPIENT_ADDRESS="$(json_field data.address "$RECIPIENT_BEFORE_JSON")"
-SENDER_BALANCE_BEFORE="$(json_field data.raw_balance "$SENDER_BEFORE_JSON")"
-RECIPIENT_BALANCE_BEFORE="$(json_field data.raw_balance "$RECIPIENT_BEFORE_JSON")"
+SENDER_BALANCE_BEFORE="$(json_field data.rawBalance "$SENDER_BEFORE_JSON")"
+RECIPIENT_BALANCE_BEFORE="$(json_field data.rawBalance "$RECIPIENT_BEFORE_JSON")"
 
 TRANSFER_JSON="$(run_json transfer "$CLI" --json transfer "$TRANSFER_RECIPIENT" "$TRANSFER_AMOUNT")"
 TRANSFER_TX_HASH="$(json_field data.txHash "$TRANSFER_JSON")"
@@ -735,8 +735,8 @@ TRANSFER_TX_HASH="$(json_field data.txHash "$TRANSFER_JSON")"
 
 SENDER_AFTER_JSON="$(run_json "sender balance after" "$CLI" --json balance "$TRANSFER_SENDER")"
 RECIPIENT_AFTER_JSON="$(run_json "recipient balance after" "$CLI" --json balance "$TRANSFER_RECIPIENT")"
-SENDER_BALANCE_AFTER="$(json_field data.raw_balance "$SENDER_AFTER_JSON")"
-RECIPIENT_BALANCE_AFTER="$(json_field data.raw_balance "$RECIPIENT_AFTER_JSON")"
+SENDER_BALANCE_AFTER="$(json_field data.rawBalance "$SENDER_AFTER_JSON")"
+RECIPIENT_BALANCE_AFTER="$(json_field data.rawBalance "$RECIPIENT_AFTER_JSON")"
 TRANSFER_FEE_RAW="$(assert_transfer_balance_deltas \
     "$SENDER_BALANCE_BEFORE" \
     "$SENDER_BALANCE_AFTER" \
@@ -779,14 +779,14 @@ log "transaction show result: tx=$TRANSFER_TX_HASH height=$TX_SHOW_STATUS_HEIGHT
 
 DIRECT_RECIPIENT="$RECIPIENT_ADDRESS"
 DIRECT_BEFORE_JSON="$(run_json "direct recipient balance before" "$CLI" --json balance "$DIRECT_RECIPIENT")"
-DIRECT_BALANCE_BEFORE="$(json_field data.raw_balance "$DIRECT_BEFORE_JSON")"
+DIRECT_BALANCE_BEFORE="$(json_field data.rawBalance "$DIRECT_BEFORE_JSON")"
 DIRECT_TRANSFER_JSON="$(run_json "direct recipient transfer" "$CLI" --json transfer "$DIRECT_RECIPIENT" "$TRANSFER_AMOUNT")"
 [[ "$(json_field data.status.result "$DIRECT_TRANSFER_JSON")" == "ok" ]] \
     || die "direct recipient transfer did not commit successfully: $(json_field data.status "$DIRECT_TRANSFER_JSON")"
 [[ "$(json_field data.recipient "$DIRECT_TRANSFER_JSON")" == "$DIRECT_RECIPIENT" ]] \
     || die "direct transfer recipient did not match $DIRECT_RECIPIENT"
 DIRECT_AFTER_JSON="$(run_json "direct recipient balance after" "$CLI" --json balance "$DIRECT_RECIPIENT")"
-DIRECT_BALANCE_AFTER="$(json_field data.raw_balance "$DIRECT_AFTER_JSON")"
+DIRECT_BALANCE_AFTER="$(json_field data.rawBalance "$DIRECT_AFTER_JSON")"
 assert_exact_balance_increase "$DIRECT_BALANCE_BEFORE" "$DIRECT_BALANCE_AFTER" "$TRANSFER_RAW_AMOUNT"
 log "direct-address transfer result: recipient=$DIRECT_RECIPIENT $DIRECT_BALANCE_BEFORE->$DIRECT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT height=$(json_field data.height "$DIRECT_TRANSFER_JSON") tx=$(json_field data.txHash "$DIRECT_TRANSFER_JSON")"
 
@@ -1000,7 +1000,7 @@ EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
 STORAGE_VALUE="$(json_field data.item.value "$STORAGE_JSON")"
 [[ "$STORAGE_VALUE" == "$EXPECTED_VALUE" ]] || die "counter storage value was $STORAGE_VALUE, expected $EXPECTED_VALUE"
 log "storage args: address=$CONTRACT_ADDRESS key=$COUNTER_VALUE_KEY"
-log "storage result: height=$(json_field data.block_height "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
+log "storage result: height=$(json_field data.blockHeight "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC back to groundhog node for wallet-create write checks"
@@ -1050,7 +1050,7 @@ UNDERFUNDED_HINT="$(json_field error.hint "$UNDERFUNDED_DEPLOY_JSON")"
 log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDERFUNDED_CODE"
 
 WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
-WALLET_BALANCE_BEFORE="$(json_field data.raw_balance "$WALLET_BALANCE_BEFORE_JSON")"
+WALLET_BALANCE_BEFORE="$(json_field data.rawBalance "$WALLET_BALANCE_BEFORE_JSON")"
 AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop "$USER_KEY" --amount 10)"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
@@ -1059,7 +1059,7 @@ AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdro
 [[ "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
     || die "saved-wallet airdrop JSON did not identify role faucet"
 WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$USER_KEY")"
-WALLET_BALANCE_AFTER="$(json_field data.raw_balance "$WALLET_BALANCE_AFTER_JSON")"
+WALLET_BALANCE_AFTER="$(json_field data.rawBalance "$WALLET_BALANCE_AFTER_JSON")"
 AIRDROP_RAW_AMOUNT="$(json_field data.raw_amount "$AIRDROP_JSON")"
 assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
 log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.tx_hash "$AIRDROP_JSON")"

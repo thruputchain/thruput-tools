@@ -43,11 +43,11 @@ pub fn run(
     print.json(&CommandResult::new(
         cmd,
         json!({
-            "rpc_url": rpc_url,
+            "rpcUrl": rpc_url,
             "target": target,
             "address": address_hex,
-            "raw_balance": balance.raw_balance,
-            "balance_hog": balance_hog,
+            "rawBalance": balance.raw_balance,
+            "balanceHog": balance_hog,
             "height": balance.height,
         }),
     ))?;

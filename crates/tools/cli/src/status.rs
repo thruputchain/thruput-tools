@@ -13,6 +13,9 @@ use serde_json::json;
 use crate::checks::{self, FindingLevel};
 use crate::{CliError, Print};
 
+/// Schema version of the `status --json` data payload.
+pub const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
+
 /// Run the `status` diagnostic command.
 pub fn run(
     project_start: &Path,
@@ -28,32 +31,33 @@ pub fn run(
             cmd,
             all_findings,
             json!({
+                "schemaVersion": STATUS_JSON_SCHEMA_VERSION,
                 "environment": &report.environment,
                 "keys": &report.keys,
                 "credentials": &report.credentials,
                 "project": {
-                    "config_path":
+                    "configPath":
                         report.project.config_path,
-                    "profile_name":
+                    "profileName":
                         report.project.profile_name,
-                    "profile_key":
+                    "profileKey":
                         report.project.profile_key,
-                    "project_default_wallet":
+                    "projectDefaultWallet":
                         report.project.project_default_wallet,
-                    "effective_default_wallet":
+                    "effectiveDefaultWallet":
                         report.project.effective_default_wallet,
-                    "default_wallet_source":
+                    "defaultWalletSource":
                         report.project.default_wallet_source,
-                    "rpc_url": report.project.rpc_url,
-                    "wallet_count":
+                    "rpcUrl": report.project.rpc_url,
+                    "walletCount":
                         report.project.wallet_count,
-                    "contract_count":
+                    "contractCount":
                         report.project.contract_count,
                 },
-                "effective_default_key":
+                "effectiveDefaultKey":
                     report.effective_default_key
                         .as_deref(),
-                "effective_default_key_source":
+                "effectiveDefaultKeySource":
                     report.effective_default_key_source,
             }),
         );

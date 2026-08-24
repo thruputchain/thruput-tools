@@ -42,10 +42,10 @@ pub fn run(
     print.json(&CommandResult::new(
         cmd,
         json!({
-            "rpc_url": rpc_url,
+            "rpcUrl": rpc_url,
             "address": address_hex,
             "key": key_hex,
-            "block_height": read.block_height,
+            "blockHeight": read.block_height,
             "item": read.item,
         }),
     ))?;

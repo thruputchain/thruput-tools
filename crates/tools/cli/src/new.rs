@@ -48,10 +48,10 @@ pub fn run_in(
         cmd,
         warnings,
         json!({
-            "project_name": name,
+            "projectName": name,
             "template": template,
             "path": dir,
-            "config_path": dir.join("groundhog.toml"),
+            "configPath": dir.join("groundhog.toml"),
         }),
     ))?;
     Ok(())

@@ -40,6 +40,7 @@ struct KeyInfo {
 
 /// Public summary of a stored signing key.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KeySummary {
     pub name: String,
     pub address: String,
