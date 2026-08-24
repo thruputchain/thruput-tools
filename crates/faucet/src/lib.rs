@@ -196,24 +196,35 @@ pub async fn serve_with_shutdown(
     let listener = TcpListener::bind(&config.listen_address).await?;
     let local_addr = listener.local_addr()?;
     tracing::info!(listen = %local_addr, "faucet service listening");
-    let sweeper = spawn_policy_expiry_sweeper(config.policy_store.clone());
-    let served = axum::serve(
+    let _sweeper = spawn_policy_expiry_sweeper(config.policy_store.clone());
+    axum::serve(
         listener,
         app(config).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
-    .await;
-    sweeper.abort();
-    served?;
+    .await?;
     Ok(())
 }
 
-/// Spawn the periodic policy-store expiry sweep. The caller aborts the
-/// returned task when the server stops.
-fn spawn_policy_expiry_sweeper(
-    policy_store: Arc<dyn policy::FaucetPolicyStore>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+/// Aborts the wrapped task when dropped.
+///
+/// Dropping a bare `JoinHandle` detaches the task, so a background loop
+/// tied to an enclosing future must be held through this guard: it stops
+/// the task on normal return, on error, and when the future is dropped
+/// before completion.
+#[derive(Debug)]
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Spawn the periodic policy-store expiry sweep. The sweep stops when the
+/// returned guard is dropped.
+fn spawn_policy_expiry_sweeper(policy_store: Arc<dyn policy::FaucetPolicyStore>) -> AbortOnDrop {
+    AbortOnDrop(tokio::spawn(async move {
         let mut interval = tokio::time::interval(POLICY_EXPIRY_SWEEP_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // The first tick fires immediately; sweeping an empty store is free.
@@ -223,7 +234,7 @@ fn spawn_policy_expiry_sweeper(
                 tracing::warn!(%error, "faucet policy expiry sweep failed");
             }
         }
-    })
+    }))
 }
 
 /// Future that resolves once SIGTERM or SIGINT (Ctrl-C) is received.
@@ -334,6 +345,40 @@ mod tests {
             .expect("bug: server should stop after shutdown future resolves")
             .expect("bug: server task should join")
             .expect("bug: server should shut down cleanly");
+    }
+
+    #[tokio::test]
+    async fn dropping_serve_future_stops_policy_expiry_sweeper() {
+        let mut config = test_config();
+        config.listen_address = "127.0.0.1:0".into();
+        let store = config.policy_store.clone();
+
+        let server = tokio::spawn(super::serve_with_shutdown(
+            config,
+            std::future::pending::<()>(),
+        ));
+        // Wait until the server and sweeper hold their store clones.
+        wait_until(|| Arc::strong_count(&store) > 2).await;
+
+        server.abort();
+        let _ = server.await;
+
+        // Cancelling the serve future must abort the sweeper too, so every
+        // clone of the policy store is released instead of leaking in a
+        // detached task.
+        wait_until(|| Arc::strong_count(&store) == 1).await;
+    }
+
+    /// Poll `condition` until it holds, panicking after five seconds.
+    async fn wait_until(condition: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "condition not reached within timeout"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     #[tokio::test]
