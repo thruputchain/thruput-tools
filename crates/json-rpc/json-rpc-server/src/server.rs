@@ -290,10 +290,13 @@ where
     }
 
     #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
-    async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage> {
+    async fn get_events(&self, mut query: EventQuery) -> RpcResult<EventPage> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
             validate_event_query(&query, &self.config)?;
+            if query.limit == 0 {
+                query.limit = self.config.default_page_limit;
+            }
             Ok(self.read.contract_events(context, query).await?)
         })
         .await
@@ -302,11 +305,14 @@ where
     #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
     async fn get_transactions_by_address(
         &self,
-        query: AddressTransactionQuery,
+        mut query: AddressTransactionQuery,
     ) -> RpcResult<TransactionRefPage> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
             validate_address_transaction_query(&query, &self.config)?;
+            if query.limit == 0 {
+                query.limit = self.config.default_page_limit;
+            }
             Ok(self.read.transactions_by_address(context, query).await?)
         })
         .await
@@ -412,8 +418,9 @@ where
 /// hands it to the read backend.  Rejects requests whose `limit` or
 /// opaque `cursor` exceed the per-server caps in `RpcServerConfig`.
 ///
-/// `limit == 0` and empty `filters` pass through unchanged; the
-/// indexer owns those defaults.
+/// `limit == 0` passes validation; the dispatcher substitutes
+/// `default_page_limit` before backend dispatch. Empty `filters` pass
+/// through unchanged; the indexer owns that default.
 fn validate_event_query(
     query: &EventQuery,
     config: &RpcServerConfig,
@@ -439,7 +446,8 @@ fn validate_event_query(
 /// `limit` or opaque `cursor` exceed the per-server caps in
 /// `RpcServerConfig`.
 ///
-/// `limit == 0` passes through unchanged; the indexer owns the default.
+/// `limit == 0` passes validation; the dispatcher substitutes
+/// `default_page_limit` before backend dispatch.
 fn validate_address_transaction_query(
     query: &AddressTransactionQuery,
     config: &RpcServerConfig,
@@ -491,7 +499,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     struct MockBackend {
         submitted: Mutex<Vec<ValidatedTransaction>>,
         event_calls: Mutex<u32>,
+        event_limits: Mutex<Vec<u32>>,
         tx_by_address_calls: Mutex<u32>,
+        tx_by_address_limits: Mutex<Vec<u32>>,
     }
 
     #[derive(Clone)]
@@ -627,18 +637,20 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         async fn contract_events(
             &self,
             _context: RpcRequestContext,
-            _query: EventQuery,
+            query: EventQuery,
         ) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
+            self.event_limits.lock().await.push(query.limit);
             Ok(empty_page())
         }
 
         async fn transactions_by_address(
             &self,
             _context: RpcRequestContext,
-            _query: AddressTransactionQuery,
+            query: AddressTransactionQuery,
         ) -> Result<TransactionRefPage, RpcServerError> {
             *self.tx_by_address_calls.lock().await += 1;
+            self.tx_by_address_limits.lock().await.push(query.limit);
             Ok(empty_ref_page())
         }
 
@@ -1296,18 +1308,39 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn limit_zero_passes_through_as_server_default_marker() {
+    async fn limit_zero_is_replaced_with_the_server_default() {
         let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_default_page_limit(7),
+            BuildInfo::for_tests(),
+        );
 
-        // limit=0 is the XDR convention for "use server default"; the
-        // json-rpc-server layer must let it through unchanged.
+        // limit=0 is the wire convention for "use server default"; the
+        // json-rpc-server layer substitutes the configured default so
+        // the documented behavior does not depend on the backend.
         server
             .get_events(simple_query())
             .await
-            .expect("bug: limit=0 should pass through");
+            .expect("bug: limit=0 should dispatch with the default limit");
 
         assert_eq!(*mock.event_calls.lock().await, 1);
+        assert_eq!(*mock.event_limits.lock().await, vec![7]);
+    }
+
+    #[tokio::test]
+    async fn explicit_limit_is_forwarded_unchanged() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        let mut q = simple_query();
+        q.limit = 3;
+        server
+            .get_events(q)
+            .await
+            .expect("bug: in-range limit should dispatch");
+
+        assert_eq!(*mock.event_limits.lock().await, vec![3]);
     }
 
     #[tokio::test]
@@ -1361,16 +1394,21 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn tx_by_address_limit_zero_passes_through_as_server_default_marker() {
+    async fn tx_by_address_limit_zero_is_replaced_with_the_server_default() {
         let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_default_page_limit(7),
+            BuildInfo::for_tests(),
+        );
 
         server
             .get_transactions_by_address(simple_address_query())
             .await
-            .expect("bug: limit=0 should pass through");
+            .expect("bug: limit=0 should dispatch with the default limit");
 
         assert_eq!(*mock.tx_by_address_calls.lock().await, 1);
+        assert_eq!(*mock.tx_by_address_limits.lock().await, vec![7]);
     }
 
     #[tokio::test]
