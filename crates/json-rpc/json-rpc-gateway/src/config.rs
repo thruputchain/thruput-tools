@@ -163,6 +163,78 @@ impl Default for TipConfig {
     }
 }
 
+/// Per-client-IP token-bucket admission on the public JSON-RPC listener.
+///
+/// Each client IP gets a bucket of `burst` tokens refilled at
+/// `requests_per_second`; every HTTP request (including WebSocket
+/// upgrades and CORS preflights) spends one token. Over-limit requests
+/// receive HTTP 429 with a `Retry-After` header.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RateLimitConfig {
+    /// Enable the per-IP limit. Disable for local development and tests
+    /// that hammer a single loopback address.
+    pub enabled: bool,
+
+    /// Steady-state refill rate per client IP. Values below 1 are
+    /// treated as 1.
+    pub requests_per_second: u32,
+
+    /// Bucket capacity per client IP: the number of requests a client
+    /// can issue back-to-back before the steady-state rate applies.
+    /// Values below 1 are treated as 1.
+    pub burst: u32,
+
+    /// The gateway sits behind a reverse proxy that appends the real
+    /// client address to `X-Forwarded-For`; rate-limit on the rightmost
+    /// entry of that header instead of the socket address. Never enable
+    /// on a directly exposed listener — the header is client-controlled
+    /// and would let callers pick their own bucket.
+    pub trusted_proxy: bool,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            requests_per_second: 50,
+            burst: 100,
+            trusted_proxy: false,
+        }
+    }
+}
+
+/// Idempotent replay window for accepted `sendRawTransaction` submissions.
+///
+/// Only transactions the authoritative downstream mempool path accepted
+/// are recorded; resubmitting one of those hashes within `ttl_ms`
+/// returns the same success response without re-submitting to the
+/// backend. Failed or timed-out submissions are never recorded, so a
+/// client retry after an error always reaches the backend again.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SubmitDedupeConfig {
+    /// Enable the accepted-submission replay window.
+    pub enabled: bool,
+
+    /// Maximum number of accepted transaction hashes retained; the
+    /// oldest entries are evicted first once the cache is full.
+    pub max_entries: usize,
+
+    /// How long an accepted hash stays deduplicated, in milliseconds.
+    pub ttl_ms: u64,
+}
+
+impl Default for SubmitDedupeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: 100_000,
+            ttl_ms: 60_000,
+        }
+    }
+}
+
 /// Gateway configuration, loaded from TOML.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -175,6 +247,28 @@ pub struct GatewayConfig {
 
     /// Maximum simultaneous TCP/WebSocket connections.
     pub max_connections: u32,
+
+    /// Maximum JSON-RPC HTTP request body size in bytes. A maximum
+    /// transaction is far below the default 2 MiB.
+    pub max_request_body_bytes: u32,
+
+    /// Maximum JSON-RPC HTTP response body size in bytes.
+    pub max_response_body_bytes: u32,
+
+    /// Maximum number of calls in one JSON-RPC batch request.
+    /// `0` disables batch requests entirely.
+    pub max_batch_requests: u32,
+
+    /// Allowed CORS origins for browser clients. An empty list or a
+    /// `"*"` entry allows any origin (the dev-friendly default);
+    /// otherwise only the listed origins are allowed.
+    pub cors_allowed_origins: Vec<String>,
+
+    /// Per-client-IP request admission for the JSON-RPC listener.
+    pub rate_limit: RateLimitConfig,
+
+    /// Replay window for accepted transaction submissions.
+    pub submit_dedupe: SubmitDedupeConfig,
 
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
@@ -292,6 +386,12 @@ impl Default for GatewayConfig {
             listen_address: "0.0.0.0:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
+            max_request_body_bytes: 2 * 1024 * 1024,
+            max_response_body_bytes: 10 * 1024 * 1024,
+            max_batch_requests: 50,
+            cors_allowed_origins: Vec::new(),
+            rate_limit: RateLimitConfig::default(),
+            submit_dedupe: SubmitDedupeConfig::default(),
             observability_listen: "127.0.0.1:9646".into(),
             health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
             health_chain_tip_max_age_ms: 30_000,
@@ -463,6 +563,72 @@ mod tests {
         assert_eq!(minimum.backend_request_timeout(), Duration::from_millis(2));
         assert_eq!(minimum.request_timeout(), Duration::from_millis(3));
         assert_eq!(minimum.http_request_timeout(), Duration::from_millis(4));
+    }
+
+    #[test]
+    fn admission_defaults_are_devnet_blocking() {
+        let config = GatewayConfig::default();
+
+        assert_eq!(config.max_request_body_bytes, 2 * 1024 * 1024);
+        assert_eq!(config.max_response_body_bytes, 10 * 1024 * 1024);
+        assert_eq!(config.max_batch_requests, 50);
+        assert!(config.cors_allowed_origins.is_empty());
+        assert!(config.rate_limit.enabled);
+        assert_eq!(config.rate_limit.requests_per_second, 50);
+        assert_eq!(config.rate_limit.burst, 100);
+        assert!(!config.rate_limit.trusted_proxy);
+        assert!(config.submit_dedupe.enabled);
+        assert_eq!(config.submit_dedupe.max_entries, 100_000);
+        assert_eq!(config.submit_dedupe.ttl_ms, 60_000);
+    }
+
+    #[test]
+    fn admission_settings_load_from_toml() {
+        let config: GatewayConfig = toml::from_str(
+            r#"
+            max_request_body_bytes = 1024
+            max_response_body_bytes = 2048
+            max_batch_requests = 0
+            cors_allowed_origins = ["http://localhost:3000"]
+
+            [rate_limit]
+            enabled = false
+            requests_per_second = 5
+            burst = 10
+            trusted_proxy = true
+
+            [submit_dedupe]
+            enabled = false
+            max_entries = 16
+            ttl_ms = 250
+            "#,
+        )
+        .expect("bug: admission TOML should parse");
+
+        assert_eq!(config.max_request_body_bytes, 1024);
+        assert_eq!(config.max_response_body_bytes, 2048);
+        assert_eq!(config.max_batch_requests, 0);
+        assert_eq!(
+            config.cors_allowed_origins,
+            vec!["http://localhost:3000".to_string()]
+        );
+        assert_eq!(
+            config.rate_limit,
+            super::RateLimitConfig {
+                enabled: false,
+                requests_per_second: 5,
+                burst: 10,
+                trusted_proxy: true,
+            }
+        );
+        assert_eq!(
+            config.submit_dedupe,
+            super::SubmitDedupeConfig {
+                enabled: false,
+                max_entries: 16,
+                ttl_ms: 250,
+            }
+        );
     }
 
     #[test]

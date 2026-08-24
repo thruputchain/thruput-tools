@@ -115,6 +115,7 @@ pub struct GatewayMetrics {
     internal_batch_in_flight: GaugeVec,
     coalesced_waiters: HistogramVec,
     submitted_transactions_total: IntCounterVec,
+    rate_limited_requests_total: prometheus::IntCounter,
     view_timeouts_total: prometheus::IntCounter,
     malformed_events_dropped_total: IntCounterVec,
 }
@@ -271,6 +272,10 @@ impl GatewayMetrics {
             ),
             &["outcome"],
         )?;
+        let rate_limited_requests_total = prometheus::IntCounter::with_opts(Opts::new(
+            "groundhog_gateway_rate_limited_requests_total",
+            "Total gateway HTTP requests rejected by per-client-IP rate limiting.",
+        ))?;
         let view_timeouts_total = prometheus::IntCounter::with_opts(Opts::new(
             "groundhog_gateway_view_timeouts_total",
             "Total gateway view RPCs that timed out waiting for ViewGateway.",
@@ -303,6 +308,7 @@ impl GatewayMetrics {
         registry.register(Box::new(internal_batch_in_flight.clone()))?;
         registry.register(Box::new(coalesced_waiters.clone()))?;
         registry.register(Box::new(submitted_transactions_total.clone()))?;
+        registry.register(Box::new(rate_limited_requests_total.clone()))?;
         registry.register(Box::new(view_timeouts_total.clone()))?;
         registry.register(Box::new(malformed_events_dropped_total.clone()))?;
 
@@ -337,6 +343,7 @@ impl GatewayMetrics {
             internal_batch_in_flight,
             coalesced_waiters,
             submitted_transactions_total,
+            rate_limited_requests_total,
             view_timeouts_total,
             malformed_events_dropped_total,
         })
@@ -472,6 +479,10 @@ impl GatewayMetrics {
         self.submitted_transactions_total
             .with_label_values(&[outcome])
             .inc();
+    }
+
+    pub(crate) fn observe_rate_limited_request(&self) {
+        self.rate_limited_requests_total.inc();
     }
 
     pub(crate) fn observe_view_timeout(&self) {
@@ -784,6 +795,8 @@ mod tests {
         metrics.observe_internal_batch_rejected("tip_coalescer", REASON_INGRESS_FULL);
         metrics.observe_coalesced_waiters("tip_coalescer", 10);
         metrics.observe_submitted_transaction("backend_unavailable");
+        metrics.observe_submitted_transaction("deduplicated");
+        metrics.observe_rate_limited_request();
         metrics.observe_view_timeout();
         metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
         let guard = metrics.internal_batch_in_flight_guard("storage_batcher");
@@ -806,6 +819,10 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_submitted_transactions_total{outcome=\"backend_unavailable\"} 1"
         ));
+        assert!(body.contains(
+            "groundhog_gateway_submitted_transactions_total{outcome=\"deduplicated\"} 1"
+        ));
+        assert!(body.contains("groundhog_gateway_rate_limited_requests_total 1"));
         assert!(body.contains("groundhog_gateway_view_timeouts_total 1"));
         assert!(body.contains(
             "groundhog_gateway_malformed_events_dropped_total{reason=\"parse_failed\"} 1"

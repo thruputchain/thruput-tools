@@ -2,13 +2,16 @@ mod adaptive_batch;
 mod backend;
 mod config;
 mod context;
+mod dedupe;
 mod error;
 mod handlers;
 mod health;
 mod metrics;
 mod middleware;
 mod observability;
+mod rate_limit;
 mod rpc_middleware;
+mod serve;
 mod storage_batcher;
 mod submitter;
 mod tip_coalescer;
@@ -162,21 +165,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // --- Server ---
-    let server_cfg = jsonrpsee::server::ServerConfig::builder()
-        .max_connections(ctx.config.max_connections)
-        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
-        .build();
-    let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
-    let rpc_metrics = metrics.clone();
-    let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()));
-    let server = jsonrpsee::server::Server::builder()
-        .set_config(server_cfg)
-        .set_http_middleware(http_mw)
-        .set_rpc_middleware(rpc_mw)
-        .build(&ctx.config.listen_address)
-        .await?;
-
     let rpc_config = RpcServerConfig::default()
         .with_request_timeout_ms(ctx.config.request_timeout_ms.max(3))
         .with_max_events_per_page(ctx.config.max_events_per_page)
@@ -189,9 +177,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rpc_config,
         BuildInfo::from_build_version(BUILD_VERSION, option_env!("GIT_COMMIT")),
     );
-    let handle = server.start(api_impl.into_rpc());
+    let rpc_server =
+        serve::start_rpc_server(&ctx.config, metrics.clone(), api_impl.into_rpc()).await?;
+    let handle = rpc_server.handle;
 
-    tracing::info!("hog-gateway listening");
+    tracing::info!(local_addr = %rpc_server.local_addr, "hog-gateway listening");
 
     shutdown_signal().await?;
     let _ = health_shutdown_tx.send(());

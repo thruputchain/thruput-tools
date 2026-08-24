@@ -314,6 +314,8 @@ impl GatewayContext {
             metrics.clone(),
             backend_request_timeout,
         ));
+        let submit_dedupe = crate::dedupe::AcceptedTxCache::from_config(&config.submit_dedupe)
+            .map(std::sync::Arc::new);
         let batch_submitter = BatchSubmitter::spawn_with_deadlines(
             &config.batch,
             &submit_sink,
@@ -321,6 +323,7 @@ impl GatewayContext {
             request_timeout,
             backend_request_timeout,
             request_timeout_margin,
+            submit_dedupe,
         );
 
         let storage_sink: Arc<dyn StorageReadSink> = Arc::new(DbGatewaySink::new(

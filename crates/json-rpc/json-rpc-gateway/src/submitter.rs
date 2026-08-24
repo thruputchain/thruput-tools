@@ -25,6 +25,7 @@ use crate::adaptive_batch::{
 };
 use crate::config::AdaptiveBatchConfig;
 use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
+use crate::dedupe::AcceptedTxCache;
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
@@ -225,6 +226,7 @@ pub struct BatchSubmitter {
     metrics: GatewayMetrics,
     request_timeout: Duration,
     backend_timeout: Duration,
+    dedupe: Option<Arc<AcceptedTxCache>>,
 }
 
 impl BatchSubmitter {
@@ -243,6 +245,7 @@ impl BatchSubmitter {
             Duration::from_secs(30),
             Duration::from_secs(30),
             Duration::from_secs(1),
+            None,
         )
     }
 
@@ -253,6 +256,7 @@ impl BatchSubmitter {
         request_timeout: Duration,
         backend_timeout: Duration,
         max_deadline_skew: Duration,
+        dedupe: Option<Arc<AcceptedTxCache>>,
     ) -> Self {
         let processor = Arc::new(SubmitProcessor {
             sink: sink.clone(),
@@ -271,6 +275,7 @@ impl BatchSubmitter {
             metrics,
             request_timeout,
             backend_timeout,
+            dedupe,
         }
     }
 
@@ -282,6 +287,10 @@ impl BatchSubmitter {
     /// Submit one tx.  Routes to a shard by tx hash; returns when the
     /// fanout completes.  Returns `Overloaded` if the target shard's
     /// ingress is full (client should retry with backoff).
+    ///
+    /// A hash whose earlier submission the backend accepted within the
+    /// dedupe window returns `Ok` immediately without reaching the
+    /// backend again; only accepted submissions enter that window.
     #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit(
         &self,
@@ -289,6 +298,13 @@ impl BatchSubmitter {
         tx_bytes: Vec<u8>,
         hash: TxHash,
     ) -> Result<(), GatewayError> {
+        if let Some(dedupe) = &self.dedupe
+            && dedupe.contains(&hash)
+        {
+            self.metrics.observe_submitted_transaction("deduplicated");
+            tracing::debug!(tx_hash = ?hash, "duplicate of recently accepted transaction");
+            return Ok(());
+        }
         let bytes: &[u8] = hash.0.0.as_ref();
         let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
@@ -332,7 +348,14 @@ impl BatchSubmitter {
                     .observe_submitted_transaction(outcome_for_submit_error(&err));
                 Err(err)
             }
-            Ok(Ok(result)) => result,
+            Ok(Ok(result)) => {
+                if result.is_ok()
+                    && let Some(dedupe) = &self.dedupe
+                {
+                    dedupe.record_accepted(&hash);
+                }
+                result
+            }
         }
     }
 }
@@ -522,6 +545,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(4),
             Duration::from_secs(1),
+            None,
         );
         let context = RpcRequestContext::new(Some(Duration::from_secs(5)));
         let expected = context
@@ -624,6 +648,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::from_millis(10),
+            None,
         );
 
         let first = tokio::spawn({
@@ -1028,6 +1053,7 @@ mod tests {
             Duration::from_millis(25),
             Duration::from_millis(25),
             Duration::from_millis(1),
+            None,
         );
 
         let first = {
@@ -1051,6 +1077,99 @@ mod tests {
         gate.send(Ok(())).unwrap();
         settle().await;
         assert_eq!(mock.seen(), vec![1]);
+    }
+
+    fn spawn_with_dedupe(
+        mock: &Arc<MockSink>,
+        metrics: GatewayMetrics,
+        ttl: Duration,
+    ) -> BatchSubmitter {
+        BatchSubmitter::spawn_with_deadlines(
+            &config_for_tests(1, 4, 1000, 100),
+            &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(1),
+            Some(Arc::new(AcceptedTxCache::new(16, ttl))),
+        )
+    }
+
+    #[tokio::test]
+    async fn duplicate_of_accepted_submission_is_idempotent_success() {
+        let mock = MockSink::arc();
+        let metrics = GatewayMetrics::for_tests();
+        let submitter = spawn_with_dedupe(&mock, metrics.clone(), Duration::from_mins(1));
+
+        submitter
+            .submit(request_context(), vec![0xaa; 8], hash_from_u32(7))
+            .await
+            .expect("first submission should be accepted");
+        submitter
+            .submit(request_context(), vec![0xaa; 8], hash_from_u32(7))
+            .await
+            .expect("duplicate submission should return the same success");
+
+        assert_eq!(mock.seen(), vec![1], "backend saw the transaction once");
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics.gather(&snapshot).expect("metrics should encode");
+        assert!(body.contains(
+            "groundhog_gateway_submitted_transactions_total{outcome=\"deduplicated\"} 1"
+        ));
+        assert!(body.contains("groundhog_gateway_submitted_transactions_total{outcome=\"ok\"} 1"));
+    }
+
+    #[tokio::test]
+    async fn failed_submission_is_not_deduplicated() {
+        let mock = MockSink::arc();
+        let err_gate = mock.queue_gate();
+        let submitter =
+            spawn_with_dedupe(&mock, GatewayMetrics::for_tests(), Duration::from_mins(1));
+
+        let first = tokio::spawn({
+            let submitter = submitter.clone();
+            async move {
+                submitter
+                    .submit(request_context(), vec![0xaa; 8], hash_from_u32(7))
+                    .await
+            }
+        });
+        settle().await;
+        let _ = err_gate.send(Err(GatewayError::BackendUnavailable("mock".into())));
+        assert!(matches!(
+            first.await.unwrap(),
+            Err(GatewayError::BackendUnavailable(_))
+        ));
+
+        // The retry after a failure must reach the backend again.
+        submitter
+            .submit(request_context(), vec![0xaa; 8], hash_from_u32(7))
+            .await
+            .expect("retry should be submitted and accepted");
+
+        assert_eq!(mock.seen(), vec![1, 1], "backend saw both attempts");
+    }
+
+    #[tokio::test]
+    async fn dedupe_window_expires() {
+        let mock = MockSink::arc();
+        let submitter = spawn_with_dedupe(
+            &mock,
+            GatewayMetrics::for_tests(),
+            Duration::from_millis(20),
+        );
+
+        submitter
+            .submit(request_context(), vec![0xaa; 8], hash_from_u32(7))
+            .await
+            .expect("first submission should be accepted");
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        submitter
+            .submit(request_context(), vec![0xaa; 8], hash_from_u32(7))
+            .await
+            .expect("resubmission after expiry should be accepted");
+
+        assert_eq!(mock.seen(), vec![1, 1], "backend saw both submissions");
     }
 
     #[tokio::test]
