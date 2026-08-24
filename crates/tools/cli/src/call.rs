@@ -1166,14 +1166,13 @@ mod tests {
         .expect_err("bug: invalid numeric argument should fail");
         assert_eq!(err.code(), "invalid_argument");
         assert!(
-            err.hint()
-                .is_some_and(|hint| hint.contains("u64 argument at argument 1")),
-            "hint should name the argument and path: {:?}",
+            err.hint().is_some_and(|hint| hint.contains("u64 argument")),
+            "hint should name the argument: {:?}",
             err.hint()
         );
         match err {
             CliError::InvalidArgument { argument, message } => {
-                assert_eq!(argument, "u64 argument at argument 1");
+                assert_eq!(argument, "u64 argument");
                 assert!(
                     message.contains("`not-a-number` is not a valid u64"),
                     "unexpected message: {message}"
@@ -1199,7 +1198,7 @@ mod tests {
         assert_eq!(err.code(), "invalid_argument");
         match err {
             CliError::InvalidArgument { argument, message } => {
-                assert_eq!(argument, "sha256 hash at argument 1");
+                assert_eq!(argument, "sha256 hash");
                 assert_eq!(message, "must be 32 bytes, got 2");
             }
             other => panic!("bug: expected CliError::InvalidArgument, got {other:?}"),

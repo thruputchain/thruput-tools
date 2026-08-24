@@ -656,8 +656,7 @@ fn encode_json_scalar_value(
                 .and_then(|bytes| encode_variable_bytes(bytes, path)),
         ),
         ContractType::Address => Some(parse_json_string(value, path).and_then(|value| {
-            let address =
-                parse_contract_address(value).map_err(|e| encode_argument_error(path, e))?;
+            let address = parse_contract_address(value)?;
             encode_xdr_value(address).map_err(|e| encode_value_error(path, e.to_string()))
         })),
         _ => None,
@@ -1102,38 +1101,14 @@ fn encode_union_case(
 fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, CliError> {
     let ty = normalize_type_name(ty);
     match ty.as_str() {
-        "u16" => encode_local_xdr_value::<u16>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "u32" => encode_local_xdr_value::<u32>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "u64" => encode_local_xdr_value::<u64>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "u128" => encode_local_xdr_value::<u128>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "i16" => encode_local_xdr_value::<i16>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "i32" => encode_local_xdr_value::<i32>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "i64" => encode_local_xdr_value::<i64>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
-        "i128" => encode_local_xdr_value::<i128>(
-            parse_numeric(value, &ty).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
+        "u16" => encode_local_xdr_value::<u16>(parse_numeric(value, &ty)?, path),
+        "u32" => encode_local_xdr_value::<u32>(parse_numeric(value, &ty)?, path),
+        "u64" => encode_local_xdr_value::<u64>(parse_numeric(value, &ty)?, path),
+        "u128" => encode_local_xdr_value::<u128>(parse_numeric(value, &ty)?, path),
+        "i16" => encode_local_xdr_value::<i16>(parse_numeric(value, &ty)?, path),
+        "i32" => encode_local_xdr_value::<i32>(parse_numeric(value, &ty)?, path),
+        "i64" => encode_local_xdr_value::<i64>(parse_numeric(value, &ty)?, path),
+        "i128" => encode_local_xdr_value::<i128>(parse_numeric(value, &ty)?, path),
         "bool" => {
             let parsed = value
                 .parse::<bool>()
@@ -1141,29 +1116,17 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Cli
             encode_local_xdr_value(parsed, path)
         }
         "String" | "str" => encode_local_xdr_value(value.to_string(), path),
-        "ContractAddress" => encode_local_xdr_value(
-            parse_contract_address(value).map_err(|e| encode_argument_error(path, e))?,
-            path,
-        ),
+        "ContractAddress" => encode_local_xdr_value(parse_contract_address(value)?, path),
         "Ed25519PublicKey" => encode_local_xdr_value(
-            Ed25519PublicKey::from(
-                parse_fixed_hex::<32>(value, "ed25519 public key")
-                    .map_err(|e| encode_argument_error(path, e))?,
-            ),
+            Ed25519PublicKey::from(parse_fixed_hex::<32>(value, "ed25519 public key")?),
             path,
         ),
         "SHA256Hash" => encode_local_xdr_value(
-            SHA256Hash::from(
-                parse_fixed_hex::<32>(value, "sha256 hash")
-                    .map_err(|e| encode_argument_error(path, e))?,
-            ),
+            SHA256Hash::from(parse_fixed_hex::<32>(value, "sha256 hash")?),
             path,
         ),
         "ContractEntrypointID" => encode_local_xdr_value(
-            ContractEntrypointID::from(
-                parse_fixed_hex::<8>(value, "contract entrypoint")
-                    .map_err(|e| encode_argument_error(path, e))?,
-            ),
+            ContractEntrypointID::from(parse_fixed_hex::<8>(value, "contract entrypoint")?),
             path,
         ),
         _ => Err(encode_value_error(
@@ -1237,12 +1200,8 @@ where
     T::Err: std::fmt::Display,
 {
     match value {
-        Value::Number(number) => {
-            parse_numeric(&number.to_string(), ty).map_err(|e| encode_argument_error(path, e))
-        }
-        Value::String(string) => {
-            parse_numeric(string, ty).map_err(|e| encode_argument_error(path, e))
-        }
+        Value::Number(number) => parse_numeric(&number.to_string(), ty),
+        Value::String(string) => parse_numeric(string, ty),
         _ => Err(encode_value_error(path, format!("expected a {ty}"))),
     }
 }
@@ -1269,42 +1228,26 @@ fn encode_scalar_cli_value(
                 .map_err(|e| encode_value_error(path, format!("invalid bool `{value}`: {e}")))?,
         )
         .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U8 => encode_xdr_value(u32::from(
-            parse_numeric::<u8>(value, "u8").map_err(|e| encode_argument_error(path, e))?,
-        ))
-        .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U32 => encode_xdr_value(
-            parse_numeric::<u32>(value, "u32").map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::I32 => encode_xdr_value(
-            parse_numeric::<i32>(value, "i32").map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U64 => encode_xdr_value(
-            parse_numeric::<u64>(value, "u64").map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::I64 => encode_xdr_value(
-            parse_numeric::<i64>(value, "i64").map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U128 => encode_xdr_value(
-            parse_numeric::<u128>(value, "u128").map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::I128 => encode_xdr_value(
-            parse_numeric::<i128>(value, "i128").map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::U8 => encode_xdr_value(u32::from(parse_numeric::<u8>(value, "u8")?))
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::U32 => encode_xdr_value(parse_numeric::<u32>(value, "u32")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::I32 => encode_xdr_value(parse_numeric::<i32>(value, "i32")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::U64 => encode_xdr_value(parse_numeric::<u64>(value, "u64")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::I64 => encode_xdr_value(parse_numeric::<i64>(value, "i64")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::U128 => encode_xdr_value(parse_numeric::<u128>(value, "u128")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::I128 => encode_xdr_value(parse_numeric::<i128>(value, "i128")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
         ContractType::String => {
             encode_xdr_value(value.to_owned()).map_err(|e| encode_value_error(path, e.to_string()))
         }
         ContractType::Bytes => encode_variable_bytes(parse_bytes_argument(value, path)?, path),
-        ContractType::Address => encode_xdr_value(
-            parse_contract_address(value).map_err(|e| encode_argument_error(path, e))?,
-        )
-        .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::Address => encode_xdr_value(parse_contract_address(value)?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
         _ => Err(encode_value_error(
             path,
             "this contract argument type requires structured JSON input",
@@ -1355,21 +1298,6 @@ fn encode_value_error(path: &str, message: impl Into<String>) -> CliError {
     CliError::CallEncode {
         path: path.to_owned(),
         message: message.into(),
-    }
-}
-
-/// Attach the argument path to an encode-side parse failure.
-///
-/// `CliError::InvalidArgument` keeps its variant so the `invalid_argument`
-/// code, corrective hint, and structured details survive typed-call encoding;
-/// other errors become `CallEncode` at the same path.
-fn encode_argument_error(path: &str, error: CliError) -> CliError {
-    match error {
-        CliError::InvalidArgument { argument, message } => CliError::InvalidArgument {
-            argument: format!("{argument} at {path}"),
-            message,
-        },
-        other => encode_value_error(path, other.to_string()),
     }
 }
 
