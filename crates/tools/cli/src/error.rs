@@ -407,6 +407,13 @@ pub enum CliError {
     ChainArchiveInsideDataDir(String),
     #[error("chain archive operation failed: {0}")]
     ChainArchiveIo(String),
+    #[error("invalid {argument}: {message}")]
+    InvalidArgument {
+        /// Which command argument was rejected.
+        argument: String,
+        /// Why the supplied value was rejected.
+        message: String,
+    },
     #[error("{0}")]
     Other(String),
 }
@@ -542,6 +549,7 @@ impl CliError {
             Self::ChainRestoreRequiresForce(_) => "chain_restore_requires_force",
             Self::ChainArchiveInsideDataDir(_) => "chain_archive_inside_data_dir",
             Self::ChainArchiveIo(_) => "chain_archive_io",
+            Self::InvalidArgument { .. } => "invalid_argument",
             Self::Other(_) => "other",
         }
     }
@@ -836,6 +844,9 @@ impl CliError {
             Self::ChainArchiveIo(_) => Some(Cow::Borrowed(
                 "check path permissions and available disk space, then retry",
             )),
+            Self::InvalidArgument { argument, .. } => Some(Cow::Owned(format!(
+                "correct the {argument} and rerun; `--help` shows the expected format"
+            ))),
             // The version-skew message states the fix for its direction.
             Self::RawSpecFormat(_)
             | Self::RuntimeInit(_)
@@ -1180,6 +1191,10 @@ impl CliError {
                     "key": conflict_key,
                     "code": conflict_code,
                 },
+            })),
+            Self::InvalidArgument { argument, message } => Some(json!({
+                "argument": argument,
+                "message": message,
             })),
             _ => None,
         }

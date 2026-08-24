@@ -1181,9 +1181,10 @@ where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    value
-        .parse::<T>()
-        .map_err(|e| CliError::Other(format!("invalid {ty} `{value}`: {e}")))
+    value.parse::<T>().map_err(|e| CliError::InvalidArgument {
+        argument: format!("{ty} argument"),
+        message: format!("`{value}` is not a valid {ty}: {e}"),
+    })
 }
 
 fn encode_xdr_value<T>(value: T) -> Result<Vec<u8>, CliError>
@@ -1735,11 +1736,15 @@ where
 
 fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], CliError> {
     let stripped = value.strip_prefix("0x").unwrap_or(value);
-    let bytes =
-        hex::decode(stripped).map_err(|e| CliError::Other(format!("invalid {label} hex: {e}")))?;
-    bytes
-        .try_into()
-        .map_err(|_| CliError::Other(format!("{label} must be {N} bytes")))
+    let bytes = hex::decode(stripped).map_err(|e| CliError::InvalidArgument {
+        argument: label.to_string(),
+        message: format!("`{value}` is not valid hex: {e}"),
+    })?;
+    let len = bytes.len();
+    bytes.try_into().map_err(|_| CliError::InvalidArgument {
+        argument: label.to_string(),
+        message: format!("must be {N} bytes, got {len}"),
+    })
 }
 
 fn hex_json_value<T>(value: T) -> Value
