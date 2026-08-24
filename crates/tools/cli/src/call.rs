@@ -1149,6 +1149,64 @@ mod tests {
     }
 
     #[test]
+    fn invalid_numeric_argument_keeps_invalid_argument_error() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec!["u64".into()],
+                return_type: None,
+            },
+        };
+        let err = encode_calldata(
+            &["not-a-number".into()],
+            Some(&CallMetadata::Local(metadata)),
+        )
+        .expect_err("bug: invalid numeric argument should fail");
+        assert_eq!(err.code(), "invalid_argument");
+        assert!(
+            err.hint()
+                .is_some_and(|hint| hint.contains("u64 argument at argument 1")),
+            "hint should name the argument and path: {:?}",
+            err.hint()
+        );
+        match err {
+            CliError::InvalidArgument { argument, message } => {
+                assert_eq!(argument, "u64 argument at argument 1");
+                assert!(
+                    message.contains("`not-a-number` is not a valid u64"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("bug: expected CliError::InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_fixed_hex_argument_keeps_invalid_argument_error() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec!["SHA256Hash".into()],
+                return_type: None,
+            },
+        };
+        let err = encode_calldata(&["0x1234".into()], Some(&CallMetadata::Local(metadata)))
+            .expect_err("bug: short hash argument should fail");
+        assert_eq!(err.code(), "invalid_argument");
+        match err {
+            CliError::InvalidArgument { argument, message } => {
+                assert_eq!(argument, "sha256 hash at argument 1");
+                assert_eq!(message, "must be 32 bytes, got 2");
+            }
+            other => panic!("bug: expected CliError::InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_multiple_raw_arguments_without_local_metadata() {
         let err = encode_calldata(&["0x01".into(), "0x02".into()], None)
             .expect_err("bug: multiple raw arguments should fail without metadata");
