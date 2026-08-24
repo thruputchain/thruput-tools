@@ -8,7 +8,7 @@ use groundhog_json_rpc_server::{
     RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight, ContractAddress, NetworkHash,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     hex::{Hex0x, HexBytes},
@@ -32,10 +32,9 @@ const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
 
 fn test_network_info() -> NetworkInfo {
     NetworkInfo::new(
-        "testnet",
+        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
         Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
     )
-    .expect("bug: testnet is a valid network ID")
 }
 
 #[derive(Clone)]
@@ -86,13 +85,6 @@ impl SubmitPlane for RecentFailureBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for RecentFailureBackend {
-    async fn network_info(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<NetworkInfo, RpcServerError> {
-        Err(RpcServerError::NotImplemented("networkInfo".into()))
-    }
-
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }

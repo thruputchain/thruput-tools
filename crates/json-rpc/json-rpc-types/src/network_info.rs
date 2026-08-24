@@ -3,9 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{NetworkHash, SHA256Hash};
 
-/// Logical network label used by local development tooling.
-pub const LOCALNET_NETWORK_ID: &str = "localnet";
-
 /// Immutable protocol and genesis identity reported by a JSON-RPC server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]

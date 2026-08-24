@@ -43,6 +43,7 @@ impl std::fmt::Debug for HostedAirdrop {
 struct HostedAirdropInner {
     client: reqwest::Client,
     base_url: Url,
+    network_id: String,
     network: NetworkInfo,
     validation: tokio::sync::RwLock<ValidationState>,
     admission: Semaphore,
@@ -64,6 +65,8 @@ pub(crate) enum AirdropStartupError {
     Client(#[source] reqwest::Error),
     #[error("faucet network descriptor validation failed: {0}")]
     Descriptor(String),
+    #[error("a hosted faucet requires a non-empty gateway field `network_id`")]
+    MissingNetworkId,
 }
 
 #[derive(Debug)]
@@ -89,6 +92,13 @@ impl HostedAirdrop {
         let Some(base_url) = config.faucet_url.as_deref() else {
             return Ok(None);
         };
+        let network_id = config
+            .network_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|network_id| !network_id.is_empty())
+            .ok_or(AirdropStartupError::MissingNetworkId)?
+            .to_owned();
         let base_url = Url::parse(base_url).map_err(|source| AirdropStartupError::InvalidUrl {
             reason: source.to_string(),
         })?;
@@ -120,6 +130,7 @@ impl HostedAirdrop {
             inner: Arc::new(HostedAirdropInner {
                 client,
                 base_url,
+                network_id,
                 network,
                 validation: tokio::sync::RwLock::new(ValidationState::default()),
                 admission: Semaphore::new(MAX_IN_FLIGHT),
@@ -233,7 +244,8 @@ impl HostedAirdrop {
                 descriptor.schema_version, descriptor.kind
             )));
         }
-        if descriptor.network_id != self.inner.network.network_id
+        if descriptor.network_id != self.inner.network_id
+            || descriptor.network_hash != self.inner.network.network_hash
             || descriptor.genesis_hash != self.inner.network.genesis_hash
         {
             return Err(ProbeError::Mismatch);
@@ -273,7 +285,7 @@ impl HostedAirdrop {
         let hosted = HostedAirdropRequest {
             recipient: request.recipient,
             client_nonce: request.client_nonce,
-            network_id: self.inner.network.network_id.clone(),
+            network_id: self.inner.network_id.clone(),
             genesis_hash: self.inner.network.genesis_hash,
         };
         let url = endpoint(&self.inner.base_url, "v1/airdrop")
@@ -506,6 +518,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unconfigured_faucet_does_not_require_network_id() {
+        let facade = HostedAirdrop::from_config(&GatewayConfig::default(), network_info())
+            .await
+            .expect("bug: an unconfigured faucet should be optional");
+
+        assert!(facade.is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_faucet_requires_non_empty_network_id() {
+        for network_id in [None, Some("  ".to_owned())] {
+            let config = GatewayConfig {
+                network_id,
+                faucet_url: Some("https://faucet.example".into()),
+                ..GatewayConfig::default()
+            };
+
+            let error = HostedAirdrop::from_config(&config, network_info())
+                .await
+                .expect_err("configured faucet should require a logical network ID");
+            assert!(matches!(error, AirdropStartupError::MissingNetworkId));
+        }
+    }
+
+    #[tokio::test]
     async fn descriptor_mismatch_is_startup_fatal() {
         let (base_url, _server) = spawn_server(
             network_descriptor("different-network"),
@@ -521,6 +558,25 @@ mod tests {
             .expect_err("mismatched network identity must fail startup");
 
         assert!(error.to_string().contains("does not match"));
+    }
+
+    #[tokio::test]
+    async fn descriptor_network_hash_mismatch_is_startup_fatal() {
+        let mut descriptor = network_descriptor("devnet");
+        descriptor["networkHash"] = json!(format!("0x{}", "34".repeat(32)));
+        let (base_url, _server) = spawn_server(
+            descriptor,
+            StatusCode::OK,
+            json!({}),
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await;
+
+        let error = HostedAirdrop::from_config(&config(&base_url), network_info())
+            .await
+            .expect_err("mismatched signing network must fail startup");
+
+        assert!(matches!(error, AirdropStartupError::Descriptor(_)));
     }
 
     #[tokio::test]
@@ -1265,6 +1321,7 @@ mod tests {
     fn config(base_url: &str) -> GatewayConfig {
         GatewayConfig {
             network_id: Some("devnet".into()),
+            network_hash: Some(groundhog_json_rpc_types::NetworkHashHex::from([0x12; 32])),
             genesis_hash: Some(network_info().genesis_hash),
             faucet_url: Some(base_url.into()),
             request_timeout_ms: 200,
@@ -1275,7 +1332,7 @@ mod tests {
 
     fn network_info() -> NetworkInfo {
         serde_json::from_value(json!({
-            "networkId": "devnet",
+            "networkHash": format!("0x{}", "12".repeat(32)),
             "genesisHash": format!("0x{}", "42".repeat(32))
         }))
         .expect("bug: network fixture should decode")
@@ -1286,6 +1343,7 @@ mod tests {
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": NETWORK_DESCRIPTOR_KIND,
             "networkId": network_id,
+            "networkHash": format!("0x{}", "12".repeat(32)),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "endpoints": { "rpcUrl": "https://rpc.example" },

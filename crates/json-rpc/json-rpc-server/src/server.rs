@@ -473,6 +473,7 @@ mod tests {
 
     use super::*;
     use crate::{ValidatedTransaction, ViewPlane};
+    use groundhog_json_rpc_types::NetworkHash;
     use groundhog_json_rpc_types::events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventTopicFilter,
         IterationOrder, PaginationCursor, TopicList,
@@ -531,10 +532,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     fn test_network_info() -> NetworkInfo {
         NetworkInfo::new(
-            "testnet",
+            NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
             Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
         )
-        .expect("bug: testnet is a valid network ID")
     }
 
     #[async_trait::async_trait]
@@ -563,13 +563,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for Arc<MockBackend> {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Err(RpcServerError::NotImplemented("chainTip".into()))
         }
@@ -594,13 +587,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for ChainOnly {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Ok(ChainTip {
                 height: BlockHeight::from(42),
@@ -789,13 +775,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for ExpiredTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Ok(ChainTip {
                 height: BlockHeight::from(1_000_000),
@@ -828,13 +807,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for CountingTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             *self.tip_calls.lock().await += 1;
             Ok(ChainTip {
@@ -865,13 +837,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for StalledTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             tokio::time::sleep(std::time::Duration::from_hours(1)).await;
             unreachable!("bug: stalled tip probe should have been abandoned")
@@ -920,13 +885,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for RecordingTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             self.contexts.lock().await.push(context);
             tokio::time::sleep(self.delay).await;

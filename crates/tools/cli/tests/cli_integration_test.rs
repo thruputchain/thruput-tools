@@ -11241,6 +11241,7 @@ fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
             "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet",
+            "networkHash": format!("0x{}", "42".repeat(32)),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "endpoints": { "rpcUrl": rpc_url },
@@ -11335,7 +11336,18 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        if request["method"] == "groundhog_networkInfo" {
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({
+                    "networkHash": format!("0x{}", "42".repeat(32)),
+                    "genesisHash": format!("0x{}", "42".repeat(32)),
+                }),
+            );
+            (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        }
         assert_eq!(request["method"], "groundhog_chainTip");
 
         send_jsonrpc_response(

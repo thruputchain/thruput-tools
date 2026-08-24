@@ -11,7 +11,7 @@ use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
 use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-use groundhog_json_rpc_types::network_info::NetworkInfo;
+use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerConfig, ServerHandle};
 use serde::Serialize;
@@ -337,12 +337,8 @@ async fn start_rpc_server(
             reason: "hog-devnode readiness must advertise a runtime manifest".to_owned(),
         }
     })?;
-    let network_info = NetworkInfo::new(
-        manifest.network_hash.to_network_hash(),
-        manifest.genesis_hash,
-    );
-    let local_airdrop = validated_local_airdrop_context(manifest, config, &network_info)?;
-
+    let network_hash = manifest.network_hash.to_network_hash().into_inner();
+    let network_info = NetworkInfo::new(NetworkHash::from(network_hash), manifest.genesis_hash);
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend

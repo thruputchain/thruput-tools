@@ -1887,6 +1887,7 @@ mod tests {
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
+            "networkHash": format!("0x{}", "00".repeat(32)),
             "protocol": "x23",
             "genesisHash": format!("0x{}", "00".repeat(32)),
             "endpoints": {

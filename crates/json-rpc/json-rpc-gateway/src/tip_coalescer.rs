@@ -14,9 +14,7 @@ use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::NetworkHash;
 use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
-use groundhog_json_rpc_types::network_info::NetworkInfo;
 use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
@@ -29,16 +27,11 @@ use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASO
 
 const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
 
-/// A scheduler tip together with the network identity it was observed on.
-///
-/// The scheduler returns both in one call, so the gateway reads the network
-/// hash off the tip it already fetches rather than asking for it separately.
+/// A scheduler tip returned by the coalesced backend request.
 #[derive(Debug, Clone)]
 pub struct TipSnapshot {
     /// Chain state that advances with each commit.
     pub tip: ChainTip,
-    /// Network identity, fixed for the life of the chain.
-    pub network_hash: NetworkHash,
 }
 
 /// Backend for chain-tip lookups.  In production this wraps the
@@ -120,14 +113,6 @@ impl TipSink for SchedulerTipSink {
                     ))
                 })?;
                 Ok(TipSnapshot {
-                    network_hash: NetworkHash::from(
-                        db_tip
-                            .value
-                            .proposal_header
-                            .network_hash
-                            .clone()
-                            .into_inner(),
-                    ),
                     tip: ChainTip {
                         height: db_tip.value.proposal_header.block_height.clone(),
                         block_hash,
@@ -354,20 +339,6 @@ impl TipCoalescer {
     pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
         Ok(self.tip_snapshot(context).await?.tip)
     }
-
-    /// Ask for the identity of the network the scheduler is serving.
-    ///
-    /// Read off the same tip the scheduler already returns, so this costs no
-    /// extra backend call.
-    #[tracing::instrument(skip_all)]
-    pub async fn network_info(
-        &self,
-        context: RpcRequestContext,
-    ) -> Result<NetworkInfo, GatewayError> {
-        Ok(NetworkInfo::new(
-            self.tip_snapshot(context).await?.network_hash,
-        ))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +414,6 @@ mod tests {
                 height: BlockHeight::new(height),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
             },
-            network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
         }
     }
 

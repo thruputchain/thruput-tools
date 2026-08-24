@@ -25,7 +25,7 @@ use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
-use groundhog_json_rpc_types::SHA256Hash;
+use groundhog_json_rpc_types::{NetworkHashHex, SHA256Hash};
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
@@ -42,9 +42,13 @@ struct Cli {
     #[arg(long)]
     config: Option<std::path::PathBuf>,
 
-    /// Stable public network identifier (overrides config file)
+    /// Logical network identifier used by the hosted faucet API
     #[arg(long)]
     network_id: Option<String>,
+
+    /// Canonical unprefixed network hash (overrides config file)
+    #[arg(long, value_parser = parse_network_hash)]
+    network_hash: Option<NetworkHashHex>,
 
     /// Materialized genesis hash (overrides config file)
     #[arg(long, value_parser = parse_sha256_hash)]
@@ -142,8 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let network_info = config.network_info()?;
 
     tracing::info!(
-        network_id = %network_info.network_id,
+        network_hash = ?network_info.network_hash,
         genesis_hash = ?network_info.genesis_hash,
+        faucet_network_id = ?config.network_id,
         faucet_configured = config.faucet_url.is_some(),
         listen = %config.listen_address,
         observability_listen = %config.observability_listen,
@@ -246,9 +251,16 @@ fn apply_identity_cli_overrides(config: &mut GatewayConfig, cli: &Cli) {
     if let Some(network_id) = &cli.network_id {
         config.network_id = Some(network_id.clone());
     }
+    if let Some(network_hash) = &cli.network_hash {
+        config.network_hash = Some(network_hash.clone());
+    }
     if let Some(genesis_hash) = cli.genesis_hash {
         config.genesis_hash = Some(genesis_hash);
     }
+}
+
+fn parse_network_hash(value: &str) -> Result<NetworkHashHex, String> {
+    NetworkHashHex::try_from(value).map_err(|error| error.to_string())
 }
 
 fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
@@ -411,6 +423,8 @@ mod tests {
             "hog-gateway",
             "--network-id",
             "devnet-preview",
+            "--network-hash",
+            &"12".repeat(32),
             "--genesis-hash",
             &format!("0x{}", "42".repeat(32)),
         ])
@@ -422,7 +436,7 @@ mod tests {
             .network_info()
             .expect("bug: complete CLI identity should resolve");
 
-        assert_eq!(network_info.network_id, "devnet-preview");
+        assert_eq!(network_info.network_hash.as_ref(), &[0x12; 32]);
         assert_eq!(
             serde_json::to_value(network_info.genesis_hash)
                 .expect("bug: genesis hash should serialize"),
@@ -442,6 +456,11 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn cli_rejects_malformed_network_hash() {
+        assert!(Cli::try_parse_from(["hog-gateway", "--network-hash", "0x1234"]).is_err());
     }
 
     #[test]
