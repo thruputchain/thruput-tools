@@ -34,3 +34,4 @@ ed25519-dalek = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+groundhog-json-rpc-server = { workspace = true }
