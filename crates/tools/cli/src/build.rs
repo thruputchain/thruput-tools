@@ -1,4 +1,4 @@
-use crate::artifacts::{self, ArtifactKind, ArtifactOptions};
+use crate::artifacts::{self, ArtifactKind, ArtifactOptions, ManifestFlags};
 use crate::{CliError, Print};
 use serde::Serialize;
 use serde_json::json;
@@ -504,29 +504,20 @@ impl DependencyPackage {
     }
 }
 
-/// Cargo flags that constrain how the manifest may be resolved.
-///
-/// The preflight resolves the dependency graph, which is exactly what these
-/// restrict, so a build that asked for them must not have them dropped: a
-/// `--locked` build whose preflight omits it can rewrite the lockfile the
-/// build was promised would not change, and an `--offline` build can reach
-/// the network.
-const MANIFEST_RESOLVE_FLAGS: [&str; 3] = ["--locked", "--offline", "--frozen"];
-
 /// Run `cargo metadata` over the resolved dependency graph.
 ///
 /// Deliberately a separate call from [`cargo_metadata_with_artifacts`], which
 /// passes `--no-deps`: resolving the full graph is slower and can hit the
 /// network on a cold checkout, and no other caller needs dependencies.
-fn cargo_metadata_with_deps(cargo_args: &[String]) -> Result<DependencyMetadata, CliError> {
+///
+/// This does not forward the user's whole `cargo_args`, so it takes
+/// [`ManifestFlags`] explicitly: resolving the graph is exactly what those
+/// flags restrict, and dropping them here would let a `--locked` build's
+/// preflight rewrite the lockfile or an `--offline` build reach the network.
+fn cargo_metadata_with_deps(flags: ManifestFlags) -> Result<DependencyMetadata, CliError> {
     let mut command = Command::new("cargo");
     command.arg("metadata").arg("--format-version").arg("1");
-    for arg in cargo_args
-        .iter()
-        .filter(|arg| MANIFEST_RESOLVE_FLAGS.contains(&arg.as_str()))
-    {
-        command.arg(arg);
-    }
+    flags.apply_to_command(&mut command);
 
     let output = command
         .output()
@@ -616,7 +607,7 @@ fn check_contract_raw_spec_format(
     cargo_args: &[String],
     print: &Print,
 ) -> Result<(), CliError> {
-    match cargo_metadata_with_deps(cargo_args) {
+    match cargo_metadata_with_deps(ManifestFlags::from_cargo_args(cargo_args)) {
         Ok(metadata) => check_dependency_raw_spec_format(&metadata, pkg_name),
         Err(error) => {
             print.warn(format_args!(

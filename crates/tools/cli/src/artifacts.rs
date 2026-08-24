@@ -123,6 +123,51 @@ impl ArtifactOptions {
     }
 }
 
+/// Cargo flags that constrain how the manifest may be resolved.
+///
+/// A cargo invocation that resolves the dependency graph must carry the
+/// user's `--locked` / `--offline` / `--frozen` intent: a `--locked` build
+/// whose preflight drops the flag can have the lockfile it was promised
+/// would not change rewritten by that preflight, and an `--offline` build
+/// can reach the network. Threading this through a resolving helper's
+/// signature is the point — the next such helper cannot be written without
+/// confronting the flags.
+///
+/// Only for call sites that do **not** forward the user's whole `cargo_args`
+/// slice. A passthrough site already carries these flags inside that slice;
+/// applying this on top would hand each flag to cargo twice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ManifestFlags {
+    locked: bool,
+    offline: bool,
+    frozen: bool,
+}
+
+impl ManifestFlags {
+    /// Read the manifest-resolve flags out of a user `cargo_args` slice.
+    pub fn from_cargo_args(cargo_args: &[String]) -> Self {
+        let present = |flag: &str| cargo_args.iter().any(|arg| arg == flag);
+        Self {
+            locked: present("--locked"),
+            offline: present("--offline"),
+            frozen: present("--frozen"),
+        }
+    }
+
+    /// Append the enabled flags to a cargo command.
+    pub fn apply_to_command(&self, command: &mut Command) {
+        if self.locked {
+            command.arg("--locked");
+        }
+        if self.offline {
+            command.arg("--offline");
+        }
+        if self.frozen {
+            command.arg("--frozen");
+        }
+    }
+}
+
 /// Return the raw Cargo-produced RV32 ELF output path for a package in the given target directory.
 pub fn cargo_rv32_elf_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
     target_dir
@@ -282,7 +327,7 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactKind, ArtifactOptions, cargo_rv32_elf_output_path,
+        ArtifactKind, ArtifactOptions, ManifestFlags, cargo_rv32_elf_output_path,
         ensure_no_target_dir_passthrough_conflicts, groundhog_rv32_metadata_output_path,
         groundhog_rv32_output_path, infer_artifact_kind,
     };
@@ -553,5 +598,54 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn manifest_flags_read_only_resolve_flags_from_cargo_args() {
+        let flags = ManifestFlags::from_cargo_args(&[
+            "--locked".into(),
+            "--frozen".into(),
+            "--release".into(),
+            "-p".into(),
+            "demo".into(),
+        ]);
+        assert_eq!(
+            flags,
+            ManifestFlags {
+                locked: true,
+                offline: false,
+                frozen: true,
+            }
+        );
+    }
+
+    #[test]
+    fn manifest_flags_default_is_empty() {
+        assert_eq!(
+            ManifestFlags::from_cargo_args(&[]),
+            ManifestFlags::default()
+        );
+    }
+
+    #[test]
+    fn manifest_flags_apply_only_enabled_flags() {
+        let flags = ManifestFlags::from_cargo_args(&["--locked".into(), "--offline".into()]);
+        let mut command = Command::new("cargo");
+        command.arg("metadata");
+        flags.apply_to_command(&mut command);
+
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, vec!["metadata", "--locked", "--offline"]);
+    }
+
+    #[test]
+    fn manifest_flags_apply_nothing_when_absent() {
+        let flags = ManifestFlags::default();
+        let mut command = Command::new("cargo");
+        flags.apply_to_command(&mut command);
+        assert_eq!(command.get_args().count(), 0);
     }
 }
