@@ -168,10 +168,7 @@ impl WalletCreateService {
             client_nonce: hex_encode(&request.client_nonce.0),
         };
         let now = SystemTime::now();
-        if let Err(error) = self.policy_store.expire(now) {
-            return policy_store_error_response(&error);
-        }
-        let existing = match self.policy_store.get_wallet_create_attempt(&key) {
+        let existing = match self.policy_store.get_wallet_create_attempt(&key, now) {
             Ok(existing) => existing,
             Err(error) => return policy_store_error_response(&error),
         };
@@ -230,6 +227,7 @@ impl WalletCreateService {
         match self.policy_store.insert_wallet_create_attempt_if_absent(
             attempt.clone(),
             self.policy_config.wallet_create.max_pending_per_owner,
+            input.now,
         ) {
             Ok(InsertWalletCreateAttemptResult::Existing(attempt)) => {
                 existing_wallet_create_attempt(input.request, *attempt)
