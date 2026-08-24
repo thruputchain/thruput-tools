@@ -173,6 +173,12 @@ pub struct GatewayConfig {
     /// Listen address for the JSON-RPC server.
     pub listen_address: String,
 
+    /// Browser origins allowed to call the JSON-RPC API.
+    ///
+    /// Empty (the default) emits no CORS headers, so browsers refuse
+    /// cross-origin calls. Non-browser clients are unaffected either way.
+    pub cors_allowed_origins: Vec<String>,
+
     /// End-to-end HTTP/WebSocket JSON-RPC timeout in milliseconds.
     pub request_timeout_ms: u64,
 
@@ -292,7 +298,8 @@ pub struct GatewayConfig {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            listen_address: "0.0.0.0:8545".into(),
+            listen_address: "127.0.0.1:8545".into(),
+            cors_allowed_origins: Vec::new(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
             observability_listen: "127.0.0.1:9646".into(),

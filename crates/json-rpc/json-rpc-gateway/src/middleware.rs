@@ -16,7 +16,7 @@ use std::{
     time::Instant,
 };
 
-use axum::http::{Request, Response, StatusCode};
+use axum::http::{HeaderValue, Method, Request, Response, StatusCode, header};
 use tower::{Layer, Service, ServiceBuilder};
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -24,41 +24,68 @@ use tower_http::timeout::TimeoutLayer;
 use crate::config::GatewayConfig;
 use crate::metrics::{GatewayMetrics, status_class};
 
+/// A configured CORS origin the HTTP layer cannot use.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid cors_allowed_origins entry `{origin}`: {message}")]
+pub(crate) struct InvalidCorsOrigin {
+    origin: String,
+    message: String,
+}
+
 /// Build the Tower HTTP middleware stack from configuration.
 ///
 /// Layer order (outermost → innermost):
-/// 1. **CORS** — permissive for dev, restrictive for prod
+/// 1. **CORS** — origins from `cors_allowed_origins`; empty emits no
+///    CORS headers
 /// 2. **Timeout** — per-request timeout from config
 #[allow(clippy::type_complexity)]
 pub(crate) fn http_middleware(
     config: &GatewayConfig,
     metrics: GatewayMetrics,
-) -> ServiceBuilder<
-    tower::layer::util::Stack<
-        TimeoutLayer,
+) -> Result<
+    ServiceBuilder<
         tower::layer::util::Stack<
-            CorsLayer,
-            tower::layer::util::Stack<HttpMetricsLayer, tower::layer::util::Identity>,
+            TimeoutLayer,
+            tower::layer::util::Stack<
+                CorsLayer,
+                tower::layer::util::Stack<HttpMetricsLayer, tower::layer::util::Identity>,
+            >,
         >,
     >,
+    InvalidCorsOrigin,
 > {
-    ServiceBuilder::new()
+    Ok(ServiceBuilder::new()
         .layer(HttpMetricsLayer::new(metrics, "jsonrpc"))
-        .layer(cors_layer())
+        .layer(cors_layer(config)?)
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
             config.http_request_timeout(),
-        ))
+        )))
 }
 
-/// CORS layer. Permissive during development.
+/// CORS layer built from `cors_allowed_origins`.
 ///
-/// TODO: make origins configurable for production deployments.
-fn cors_layer() -> CorsLayer {
-    CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any)
+/// An empty origin list produces a layer that emits no CORS headers, so
+/// browsers refuse cross-origin calls. Configured origins are allowed
+/// for JSON-RPC POSTs and their preflights.
+fn cors_layer(config: &GatewayConfig) -> Result<CorsLayer, InvalidCorsOrigin> {
+    if config.cors_allowed_origins.is_empty() {
+        return Ok(CorsLayer::new());
+    }
+    let origins = config
+        .cors_allowed_origins
+        .iter()
+        .map(|origin| {
+            HeaderValue::from_str(origin).map_err(|error| InvalidCorsOrigin {
+                origin: origin.clone(),
+                message: error.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE]))
 }
 
 #[derive(Clone)]
@@ -165,12 +192,12 @@ mod tests {
             ..GatewayConfig::default()
         };
         let metrics = GatewayMetrics::for_tests();
-        let mut service = http_middleware(&config, metrics.clone()).service(service_fn(
-            |_request: Request<Body>| async move {
+        let mut service = http_middleware(&config, metrics.clone())
+            .expect("bug: default config should build middleware")
+            .service(service_fn(|_request: Request<Body>| async move {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
-            },
-        ));
+            }));
 
         let response = service
             .ready()
@@ -186,5 +213,78 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_http_requests_total{endpoint=\"jsonrpc\",status_class=\"4xx\"} 1"
         ));
+    }
+
+    async fn cors_response_for(config: &GatewayConfig, origin: &str) -> Response<Body> {
+        let mut service = http_middleware(config, GatewayMetrics::for_tests())
+            .expect("bug: config should build middleware")
+            .service(service_fn(|_request: Request<Body>| async move {
+                Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
+            }));
+        let request = Request::builder()
+            .method("POST")
+            .header("origin", origin)
+            .body(Body::empty())
+            .expect("bug: test request should build");
+        service
+            .ready()
+            .await
+            .expect("bug: service should become ready")
+            .call(request)
+            .await
+            .expect("bug: request should complete")
+    }
+
+    #[tokio::test]
+    async fn default_config_emits_no_cors_headers() {
+        let config = GatewayConfig::default();
+
+        let response = cors_response_for(&config, "http://localhost:5173").await;
+
+        assert!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_origin_is_allowed_and_others_are_not() {
+        let config = GatewayConfig {
+            cors_allowed_origins: vec!["http://localhost:5173".into()],
+            ..GatewayConfig::default()
+        };
+
+        let allowed = cors_response_for(&config, "http://localhost:5173").await;
+        assert_eq!(
+            allowed
+                .headers()
+                .get("access-control-allow-origin")
+                .map(|value| value.to_str().expect("bug: header should be ASCII")),
+            Some("http://localhost:5173")
+        );
+
+        let denied = cors_response_for(&config, "http://evil.example").await;
+        assert!(
+            denied
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn malformed_configured_origin_is_a_startup_error() {
+        let config = GatewayConfig {
+            cors_allowed_origins: vec!["bad\norigin".into()],
+            ..GatewayConfig::default()
+        };
+
+        let error = http_middleware(&config, GatewayMetrics::for_tests())
+            .err()
+            .expect("bug: malformed origin should fail middleware construction");
+
+        assert!(error.to_string().contains("cors_allowed_origins"));
     }
 }
