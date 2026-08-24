@@ -1577,6 +1577,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "xdr-common",
 ]
 
 [[package]]
@@ -1777,6 +1778,7 @@ version = "0.9.6"
 dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
+ "groundhog-json-rpc-server",
  "groundhog-xdr",
  "hex",
  "sha2 0.10.9",
