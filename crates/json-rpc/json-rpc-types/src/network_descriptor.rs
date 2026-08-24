@@ -8,11 +8,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::hex::HexBytes;
-use crate::{ContractAddress, SHA256Hash};
+use crate::{ContractAddress, NetworkHash, SHA256Hash};
 use groundhog_xdr::contract::ContractEntrypointID;
 
 /// Current public network descriptor schema version.
-pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 2;
+pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 3;
 /// Descriptor family for public hosted-network metadata.
 pub const NETWORK_DESCRIPTOR_KIND: &str = "groundhog-network";
 
@@ -27,6 +27,8 @@ pub struct NetworkDescriptor {
     pub kind: String,
     /// Stable identifier shared by the RPC endpoint, faucet, and CLI.
     pub network_id: String,
+    /// Hash of the network name bound into transaction signatures.
+    pub network_hash: NetworkHash,
     /// x23 protocol string expected by backend services.
     pub protocol: String,
     /// Hash of the materialized genesis state.
@@ -51,6 +53,7 @@ impl NetworkDescriptor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         network_id: String,
+        network_hash: NetworkHash,
         protocol: String,
         genesis_hash: SHA256Hash,
         endpoints: NetworkDescriptorEndpoints,
@@ -63,6 +66,7 @@ impl NetworkDescriptor {
             schema_version: NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             kind: NETWORK_DESCRIPTOR_KIND.to_owned(),
             network_id,
+            network_hash,
             protocol,
             genesis_hash,
             endpoints,

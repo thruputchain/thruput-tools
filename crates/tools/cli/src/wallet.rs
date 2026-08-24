@@ -2024,6 +2024,7 @@ mod tests {
             "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
+            "networkHash": format!("0x{}", "42".repeat(32)),
             "protocol": "x23",
             "genesisHash": format!("0x{}", "01".repeat(32)),
             "endpoints": {

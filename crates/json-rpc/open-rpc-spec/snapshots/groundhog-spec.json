@@ -1437,20 +1437,7 @@
       ]
     },
     {
-      "errors": [
-        {
-          "$ref": "#/components/errors/BackendUnavailable"
-        },
-        {
-          "$ref": "#/components/errors/BackendTimeout"
-        },
-        {
-          "$ref": "#/components/errors/Overloaded"
-        },
-        {
-          "$ref": "#/components/errors/NotImplemented"
-        }
-      ],
+      "errors": [],
       "name": "groundhog_networkInfo",
       "params": [],
       "result": {
@@ -1459,7 +1446,7 @@
           "$ref": "#/components/schemas/NetworkInfo"
         }
       },
-      "summary": "Fixed identity of the network this endpoint serves.  The values never change for a given chain, so clients should fetch this once per endpoint and cache it rather than calling it per request.",
+      "summary": "Immutable protocol and genesis identity of the network this endpoint serves.",
       "tags": [
         {
           "name": "Core API"
@@ -1755,23 +1742,6 @@
         }
       },
       "summary": "Execute a sandboxed contract simulation against committed state.",
-      "tags": [
-        {
-          "name": "Core API"
-        }
-      ]
-    },
-    {
-      "errors": [],
-      "name": "groundhog_networkInfo",
-      "params": [],
-      "result": {
-        "name": "NetworkInfo",
-        "schema": {
-          "$ref": "#/components/schemas/NetworkInfo"
-        }
-      },
-      "summary": "Immutable configured network and genesis identity.",
       "tags": [
         {
           "name": "Core API"

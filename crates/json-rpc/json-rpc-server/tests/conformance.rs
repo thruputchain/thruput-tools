@@ -19,7 +19,7 @@ use groundhog_json_rpc_server::{
     RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight, ContractAddress, NetworkHash,
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{
@@ -115,13 +115,6 @@ impl SubmitPlane for ScriptedBackend {
 
 #[async_trait]
 impl ChainPlane for ScriptedBackend {
-    async fn network_info(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<NetworkInfo, RpcServerError> {
-        Err(RpcServerError::NotImplemented("networkInfo".into()))
-    }
-
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Ok(ChainTip {
             height: BlockHeight::from(0),
@@ -274,10 +267,9 @@ fn server_with_view(
 
 fn test_network_info() -> NetworkInfo {
     NetworkInfo::new(
-        "testnet",
+        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
         Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
     )
-    .expect("bug: testnet is a valid network ID")
 }
 
 fn simple_query() -> EventQuery {

@@ -28,8 +28,8 @@ This work does not:
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | Add `groundhog_networkInfo` to every RPC server. | Clients need the logical network and genesis identity without discovering the faucet first. |
-| D2 | Return the existing `networkId` and `genesisHash` values unchanged. | These values already bind faucet requests and are shared by the hosted descriptor and local runtime manifest. |
+| D1 | Add `groundhog_networkInfo` to every RPC server. | Clients need the protocol network and genesis identity without discovering the faucet first. |
+| D2 | Return `networkHash` and `genesisHash`. | `networkHash` is the authoritative protocol identity bound into transaction signatures; `genesisHash` identifies the materialized chain instance. |
 | D3 | Register `groundhog_requestAirdrop` only when an airdrop implementation is configured. | Mainnet and RPC-only deployments should return standard JSON-RPC `Method not found`, not expose an unusable method. |
 | D4 | Proxy hosted requests to the existing `/v1/airdrop` endpoint. | The faucet already owns policy, idempotency, signing, submission, receipt polling, and web support. |
 | D5 | Preserve the current faucet request and response semantics. | One public contract avoids drift between REST, hosted RPC, and local RPC. |
@@ -79,15 +79,15 @@ The node supervisor derives and validates `dev-0` once during startup. The RPC h
 
 ## Network Information
 
-### Current gap
+### Prior gap
 
-No current public JSON-RPC method returns network identity:
+Before this change, no public JSON-RPC method returned network identity:
 
 | Existing source | Available data | Limitation |
 |---|---|---|
-| `groundhog_chainTip` | Height and current block hash | No logical or genesis identity |
+| `groundhog_chainTip` | Height and current block hash | No immutable protocol or genesis identity |
 | `groundhog_version` | RPC wire and implementation versions | No network identity |
-| Faucet `GET /v1/network` | `networkId`, `genesisHash` | Separate REST service |
+| Faucet `GET /v1/network` | `networkId`, `networkHash`, `genesisHash` | Separate REST service |
 | Runtime manifest | `genesisHash`, `networkHash` | Private local file handoff |
 
 `groundhog_getBlockByNumber` declares a `networkHash`, but both current server implementations return `NotImplemented`. Scheduler health checks already validate `networkHash` separately; this design does not create another validation system.
@@ -104,7 +104,7 @@ The method takes no parameters.
 
 ```json
 {
-  "networkId": "devnet-preview",
+  "networkHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
   "genesisHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
 }
 ```
@@ -113,23 +113,23 @@ The method takes no parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInfo {
-    pub network_id: String,
+    pub network_hash: NetworkHash,
     pub genesis_hash: SHA256Hash,
 }
 ```
 
 The method returns immutable startup metadata and does not query a backend:
 
-| Deployment | `networkId` | `genesisHash` |
+| Deployment | `networkHash` | `genesisHash` |
 |---|---|---|
-| Localnet | `localnet` | Validated runtime manifest |
+| Localnet | Validated runtime manifest | Validated runtime manifest |
 | Hosted | Required gateway configuration | Required gateway configuration |
 
-Hosted values come from the same deployment source used to configure the faucet `NetworkDescriptor`. Configuring `faucet_url` registers the airdrop method; validation against `GET /v1/network` gates execution and readiness.
+Hosted protocol identity comes from gateway startup configuration. The logical `networkId` remains separate and is required only when `faucet_url` enables the existing faucet REST adapter. The public descriptor advertises all three values so the gateway can reject a faucet configured to sign for another network. Validation against `GET /v1/network` gates airdrop execution and readiness.
 
-Missing or malformed identity is a startup configuration error. Backend availability and scheduler `networkHash` mismatch remain health/readiness concerns. `groundhog_networkInfo` stays available during degraded backend operation, like `groundhog_version`.
+Missing or malformed identity is a startup configuration error. Scheduler health checks verify that observed tips match the startup `networkHash`. `groundhog_networkInfo` stays available during degraded backend operation, like `groundhog_version`.
 
-This method reuses the existing meaning and serialization of `NetworkDescriptor.networkId`, `NetworkDescriptor.genesisHash`, and `RuntimeManifest.genesisHash`. It does not redefine `genesisHash` or add a protocol identity type.
+This method exposes the protocol `networkHash` already carried by scheduler headers and runtime manifests, plus the existing `genesisHash`. It does not treat the faucet descriptor's human-readable `networkId` as protocol identity.
 
 ## Airdrop Request
 
@@ -172,7 +172,7 @@ Rules:
 - `clientNonce` is non-empty and at most 32 bytes.
 - Clients should generate 16 cryptographically random bytes.
 - The caller does not select the amount.
-- The gateway supplies `networkId` and `genesisHash` from `groundhog_networkInfo` when calling the hosted faucet.
+- The gateway supplies its faucet-specific `networkId` and startup `genesisHash` when calling the hosted faucet.
 
 The 32-byte bound should be applied in the shared faucet request validator so REST and RPC accept the same nonce values. The current CLI already generates 16 bytes.
 
@@ -255,7 +255,7 @@ When `attemptStatus` is `pending`, the client repeats the same request after `re
 At startup, a hosted gateway configured with `faucet_url`:
 
 1. fetches `GET /v1/network`;
-2. verifies `networkId` and `genesisHash` against gateway configuration; and
+2. verifies `networkId`, `networkHash`, and `genesisHash` against gateway configuration; and
 3. registers the optional airdrop RPC module.
 
 An identity mismatch or malformed descriptor is a configuration error and fails startup. If the
@@ -311,6 +311,9 @@ before submission so an ambiguous retry reuses the same bytes. It may evict term
 stay within its configured capacity, but it must not evict pending or ambiguously submitted
 attempts. Capacity and concurrency limits are resource bounds, not recipient, IP, or aggregate
 airdrop quotas. The map is cleared on node restart.
+
+The signing helper requires the runtime manifest's `networkHash`; it cannot sign with an implicit
+or default network identity.
 
 ## Policy and Security
 
@@ -394,11 +397,12 @@ Logs must not include secret keys or full untrusted forwarding headers.
 
 ### Network information
 
-- Localnet returns `networkId: "localnet"` and the runtime-manifest `genesisHash`.
-- Hosted gateways return configured identity matching `/v1/network`.
+- Localnet returns the runtime manifest's `networkHash` and `genesisHash`.
+- Hosted gateways return their configured `networkHash` and `genesisHash`.
+- CLI hosted flows reject descriptors whose `networkHash` or `genesisHash` differs from the RPC endpoint.
 - Identity is available while chain backends are degraded.
 - Missing identity fails startup.
-- A reachable malformed or mismatched faucet descriptor fails startup.
+- A reachable faucet descriptor with a malformed or mismatched network ID, network hash, or genesis hash fails startup.
 - An unreachable configured faucet starts degraded with the airdrop method registered and returns `BackendUnavailable` until validation succeeds.
 - Concurrent requests share descriptor validation, and no request is forwarded before it succeeds.
 - A descriptor found malformed or mismatched after degraded startup leaves execution disabled and readiness failed.
@@ -442,7 +446,7 @@ Logs must not include secret keys or full untrusted forwarding headers.
 
 1. Add `NetworkInfo` and its always-registered RPC module; update OpenRPC and bump the wire format to `3.2.0`.
 2. Promote the existing faucet airdrop response into a tagged union in `json-rpc-types`; add the RPC airdrop request type and optionally registered module.
-3. Add hosted gateway `network_id`, `genesis_hash`, and `faucet_url` configuration; validate reachable descriptors and preserve degraded startup when the faucet is unavailable.
+3. Add gateway `network_hash` and `genesis_hash` startup identity; scope `network_id` to hosted faucet configuration, validate reachable descriptors, and preserve degraded startup when the faucet is unavailable.
 4. Implement the hosted adapter by calling the existing `POST /v1/airdrop` endpoint.
 5. Extract the current CLI HOG transaction helpers into the publishable signing/tooling layer and implement the process-local `dev-0` adapter.
 6. Add finite per-IP quota overrides to the existing faucet client-quota configuration and policy lookup.
@@ -451,7 +455,7 @@ Logs must not include secret keys or full untrusted forwarding headers.
 
 ## Acceptance Criteria
 
-- Every RPC endpoint returns configured network identity.
+- Every RPC endpoint returns its configured protocol network hash and genesis hash.
 - Local and hosted development endpoints expose the same airdrop request and response contract.
 - Hosted RPC uses the existing faucet REST API and policy store.
 - Local RPC uses the current local-airdrop transaction helpers and `dev-0`.

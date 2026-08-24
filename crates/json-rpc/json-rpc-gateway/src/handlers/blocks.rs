@@ -1,10 +1,9 @@
-//! `groundhog_chainTip`, `groundhog_networkInfo`, `groundhog_getBlockByNumber`,
-//! and `groundhog_pendingTransactionCount` handlers.
+//! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
+//! `groundhog_pendingTransactionCount` handlers.
 
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::BlockHeight;
 use groundhog_json_rpc_types::block::{BlockInfo, ChainTip};
-use groundhog_json_rpc_types::network_info::NetworkInfo;
 
 use crate::context::GatewayContext;
 use crate::error::{self, GatewayError};
@@ -20,15 +19,6 @@ pub async fn chain_tip(
     context: RpcRequestContext,
 ) -> Result<ChainTip, GatewayError> {
     ctx.tip_coalescer.chain_tip(context).await
-}
-
-/// Fixed identity of the network this gateway fronts.
-#[tracing::instrument(skip_all)]
-pub async fn network_info(
-    ctx: &GatewayContext,
-    context: RpcRequestContext,
-) -> Result<NetworkInfo, GatewayError> {
-    ctx.tip_coalescer.network_info(context).await
 }
 
 /// Block data at a given height.

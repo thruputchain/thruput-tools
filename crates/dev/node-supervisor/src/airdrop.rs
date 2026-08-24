@@ -36,6 +36,7 @@ const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 
 #[derive(Clone)]
 pub(crate) struct LocalAirdropContext {
+    network_hash: groundhog_xdr::types::NetworkHash,
     wallet_address: groundhog_xdr::types::ContractAddress,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     signer: Arc<LocalSigner>,
@@ -69,6 +70,7 @@ impl LocalAirdropContext {
             .do_action_entrypoint_id()
             .map_err(|error| format!("invalid runtime dev-wallet doAction entrypoint: {error}"))?;
         Ok(Self {
+            network_hash: manifest.network_hash.to_network_hash(),
             wallet_address: faucet.wallet_address.0,
             wallet_entrypoint,
             signer: Arc::new(signer),
@@ -101,7 +103,7 @@ impl LocalAirdropRpc {
         R: ReadPlane,
     {
         let builder = DevWalletAirdropBuilder {
-            network_hash: context.network_info.network_hash.0,
+            network_hash: context.network_hash,
             wallet_address: context.wallet_address,
             wallet_entrypoint: context.wallet_entrypoint,
             signer: context.signer,
@@ -457,7 +459,7 @@ impl AirdropTransactionBuilder for DevWalletAirdropBuilder {
         block_expiry_height: i64,
     ) -> Result<SignedAirdrop, RpcServerError> {
         let signed = build_signed_dev_wallet_hog_transfer(
-            BuildSignedDevWalletHogTransfer {
+            &BuildSignedDevWalletHogTransfer {
                 wallet_address: self.wallet_address,
                 wallet_entrypoint: self.wallet_entrypoint,
                 recipient: recipient.0,
@@ -466,7 +468,7 @@ impl AirdropTransactionBuilder for DevWalletAirdropBuilder {
                 block_expiry_height,
                 nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
                 sign_params: SignTransactionParams::default(),
-                network_hash: self.network_hash,
+                network_hash: self.network_hash.clone(),
             },
             self.signer.as_ref(),
         )
@@ -697,6 +699,33 @@ mod tests {
                 .pop_front()
                 .unwrap_or(Ok(TransactionStatus::Pending))
         }
+    }
+
+    #[test]
+    fn dev_wallet_builder_binds_signatures_to_network_hash() {
+        let build = |network_byte| {
+            DevWalletAirdropBuilder {
+                network_hash: groundhog_xdr::types::NetworkHash::from(
+                    groundhog_xdr::types::SHA256Hash::from([network_byte; 32]),
+                ),
+                wallet_address: groundhog_xdr::types::ContractAddress::from([0x11; 32]),
+                wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID::from([0x22; 8]),
+                signer: Arc::new(LocalSigner::from_secret_key([0x33; 32])),
+                next_nonce: AtomicU64::new(7),
+                raw_amount: 100_000_000,
+            }
+            .build(
+                ContractAddress::from(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
+                1_000,
+            )
+            .expect("bug: local airdrop should build")
+        };
+
+        let first = build(0x55);
+        let second = build(0x66);
+
+        assert_eq!(first.tx_hash, second.tx_hash);
+        assert_ne!(first.bytes, second.bytes);
     }
 
     #[tokio::test]

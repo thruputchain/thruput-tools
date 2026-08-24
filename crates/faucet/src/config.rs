@@ -10,7 +10,7 @@ use groundhog_json_rpc_types::network_descriptor::{
     AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor,
     NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
 };
-use groundhog_json_rpc_types::{ContractAddress, NetworkHashHex, SHA256Hash};
+use groundhog_json_rpc_types::{ContractAddress, NetworkHash, NetworkHashHex, SHA256Hash};
 use groundhog_signing::LocalSigner;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -362,11 +362,7 @@ pub struct NetworkConfig {
     pub protocol: String,
     /// Hash of the materialized genesis state.
     pub genesis_hash: SHA256Hash,
-    /// Network hash the faucet signs against.
-    ///
-    /// Part of every signature preimage, so a faucet configured with the wrong
-    /// one produces transactions the network rejects. Not served in the public
-    /// descriptor: clients cannot yet learn it over RPC.
+    /// Network hash the faucet signs against and advertises publicly.
     pub network_hash: NetworkHashHex,
     /// Public endpoint configuration.
     pub endpoints: EndpointConfig,
@@ -386,8 +382,10 @@ impl NetworkConfig {
         airdrop_raw_amount: String,
         policy: &AirdropPolicyRuntimeConfig,
     ) -> NetworkDescriptor {
+        let network_hash = NetworkHash::from(self.network_hash.to_network_hash().into_inner());
         NetworkDescriptor::new(
             self.network_id,
+            network_hash,
             self.protocol,
             self.genesis_hash,
             NetworkDescriptorEndpoints::new(self.endpoints.rpc_url),

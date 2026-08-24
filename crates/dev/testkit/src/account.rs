@@ -307,7 +307,12 @@ impl Account {
             tx,
             &self.dev.signer,
             SignTransactionParams::default(),
-            &self.dev.network_hash,
+            self.dev
+                .network_hash
+                .as_ref()
+                .ok_or(TestkitError::Offline {
+                    operation: "deploy",
+                })?,
         )
         .map_err(TestkitError::signing)?;
         Ok(PreparedDeploy {
@@ -346,7 +351,10 @@ impl Account {
             tx,
             &self.dev.signer,
             SignTransactionParams::default(),
-            &self.dev.network_hash,
+            self.dev
+                .network_hash
+                .as_ref()
+                .ok_or(TestkitError::Offline { operation: "call" })?,
         )
         .map_err(TestkitError::signing)?;
 

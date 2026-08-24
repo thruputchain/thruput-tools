@@ -381,9 +381,7 @@ struct ProbeState {
 impl ProbeState {
     fn new(config: &GatewayConfig) -> Self {
         Self {
-            scheduler: SchedulerProbeState::with_expected_network_hash(
-                config.expected_network_hash.clone(),
-            ),
+            scheduler: SchedulerProbeState::with_expected_network_hash(config.network_hash.clone()),
             ..Self::default()
         }
     }
@@ -3128,7 +3126,7 @@ mod tests {
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
-            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            network_hash: Some(NetworkHashHex::from([0x42; 32])),
             indexer_address: None,
             db_gateway_address: None,
             view_gateway_address: None,
@@ -3157,7 +3155,7 @@ mod tests {
         .await
         .expect("scheduler reconnect should enter quarantine");
         let mut scheduler_state =
-            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+            SchedulerProbeState::with_expected_network_hash(config.network_hash.clone());
 
         let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
 
@@ -3190,7 +3188,7 @@ mod tests {
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
-            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            network_hash: Some(NetworkHashHex::from([0x42; 32])),
             indexer_address: None,
             db_gateway_address: None,
             view_gateway_address: None,
@@ -3209,7 +3207,7 @@ mod tests {
             GatewayMetrics::for_tests(),
         );
         let mut scheduler_state =
-            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+            SchedulerProbeState::with_expected_network_hash(config.network_hash.clone());
 
         let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
 

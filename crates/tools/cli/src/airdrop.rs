@@ -564,7 +564,7 @@ fn prepare_local_airdrop(
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(&rpc_url).await })?;
 
     let signed = build_signed_dev_wallet_hog_transfer(
-        BuildSignedDevWalletHogTransfer {
+        &BuildSignedDevWalletHogTransfer {
             wallet_address: faucet.wallet_address,
             wallet_entrypoint,
             recipient: recipient_address,
@@ -1236,6 +1236,7 @@ mod tests {
             "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
+            "networkHash": format!("0x{}", "42".repeat(32)),
             "protocol": "x23",
             "genesisHash": format!("0x{}", "01".repeat(32)),
             "endpoints": { "rpcUrl": "http://127.0.0.1:9545" },

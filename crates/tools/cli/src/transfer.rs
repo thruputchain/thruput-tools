@@ -17,7 +17,7 @@ use groundhog_signing::{
 use crate::account_resolution::{
     bind_sender_to_network, resolve_address_target, resolve_sender_account,
 };
-use crate::codec::{format_contract_address, parse_contract_address};
+use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
 use crate::network_descriptor::resolve_wallet_entrypoints;

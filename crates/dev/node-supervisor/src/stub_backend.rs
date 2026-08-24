@@ -23,7 +23,6 @@ use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
-    network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
@@ -54,13 +53,6 @@ impl SubmitPlane for StubBackend {
 impl ChainPlane for StubBackend {
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
-    }
-
-    async fn network_info(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<NetworkInfo, RpcServerError> {
-        Err(RpcServerError::NotImplemented("networkInfo".into()))
     }
 
     async fn get_block_by_number(

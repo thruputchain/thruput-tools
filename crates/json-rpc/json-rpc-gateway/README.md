@@ -37,12 +37,14 @@ groundhog_version()                             → VersionInfo
 groundhog_requestAirdrop(request)               → AirdropAttemptResponse (optional)
 ```
 
-Hosted deployments must configure immutable identity with `network_id` and
-`genesis_hash`, or the equivalent `--network-id` and `--genesis-hash` flags.
-Runtime-manifest mode derives local identity from the validated manifest.
+Standalone deployments must configure immutable identity with `network_hash`
+and `genesis_hash`, or the equivalent `--network-hash` and `--genesis-hash`
+flags. Runtime-manifest mode derives both values from the validated manifest.
 
 Setting `faucet_url` or `--faucet-url` registers `groundhog_requestAirdrop`.
-The gateway validates `GET /v1/network` against its configured identity before
+Hosted faucet mode also requires `network_id` or `--network-id` for the existing
+faucet REST contract. The gateway validates `GET /v1/network` against this
+logical ID, the configured network hash, and the configured genesis hash before
 forwarding requests. A reachable malformed or mismatched descriptor fails
 startup. An unreachable faucet starts degraded, keeps readiness failed, and
 rejects airdrops until validation succeeds.

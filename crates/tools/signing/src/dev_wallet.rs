@@ -29,7 +29,7 @@ pub const NATIVE_HOG_TRANSFER_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new([0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]);
 
 /// Inputs for constructing and signing a native-HOG transfer through a dev wallet.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct BuildSignedDevWalletHogTransfer {
     /// Dev-wallet contract that owns the HOG being transferred.
     pub wallet_address: ContractAddress,
@@ -71,7 +71,7 @@ pub fn native_hog_transfer_calldata(
 
 /// Construct, sign, and encode one native-HOG transfer through a dev wallet.
 pub fn build_signed_dev_wallet_hog_transfer(
-    args: BuildSignedDevWalletHogTransfer,
+    args: &BuildSignedDevWalletHogTransfer,
     signer: &impl Signer,
 ) -> Result<SignedDevWalletHogTransfer, SigningError> {
     let transfer_calldata = native_hog_transfer_calldata(&args.recipient, args.raw_amount)?;
@@ -153,7 +153,7 @@ mod tests {
     fn signed_hog_transfer_retains_exact_bytes_and_canonical_hash() {
         let signer = LocalSigner::from_secret_key([0x44; 32]);
         let transfer = build_signed_dev_wallet_hog_transfer(
-            BuildSignedDevWalletHogTransfer {
+            &BuildSignedDevWalletHogTransfer {
                 wallet_address: ContractAddress::from([0x11; 32]),
                 wallet_entrypoint: ContractEntrypointID::from([0x22; 8]),
                 recipient: ContractAddress::from([0x33; 32]),
@@ -162,7 +162,7 @@ mod tests {
                 block_expiry_height: 1_007,
                 nonce: 99,
                 sign_params: SignTransactionParams::default(),
-                network_hash: NetworkHash::from([0x55; 32]),
+                network_hash: NetworkHash::from(SHA256Hash::from([0x55; 32])),
             },
             &signer,
         )
