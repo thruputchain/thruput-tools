@@ -16,6 +16,9 @@ pub enum SubmissionBackend {
     HogdScheduler,
 
     /// Gateway forwards signed transactions to chuckd, which relays them to hogd.
+    ///
+    /// Parses for config-file compatibility, but this build has no chuckd
+    /// submission transport: selecting it fails gateway startup.
     ChuckdCoordinator,
 }
 
