@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(airdrop_submitter),
         Arc::new(wallet_prefund_submitter),
         Arc::new(wallet_create_submitter),
-    );
+    )?;
     if let Some(listen) = parts.listen_address {
         config.listen_address = listen;
     }
