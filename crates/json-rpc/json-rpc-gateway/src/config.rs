@@ -292,7 +292,7 @@ pub struct GatewayConfig {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            listen_address: "0.0.0.0:8545".into(),
+            listen_address: "127.0.0.1:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
             observability_listen: "127.0.0.1:9646".into(),
