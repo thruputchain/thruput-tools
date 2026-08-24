@@ -277,6 +277,27 @@ pub enum FaucetConfigError {
     /// The loaded secret key did not control the configured faucet account.
     #[error("loaded faucet signing key does not match network.faucet.public_key")]
     FaucetPublicKeyMismatch,
+    /// The network descriptor did not advertise an airdrop policy.
+    #[error("faucet network descriptor must advertise airdrop policy")]
+    MissingAirdropDescriptor,
+    /// A descriptor amount was not a valid decimal u128.
+    #[error("network descriptor {field} `{value}` is not a valid decimal amount")]
+    InvalidDescriptorAmount {
+        /// Descriptor field holding the invalid amount.
+        field: &'static str,
+        /// The rejected value.
+        value: String,
+    },
+    /// A submitter's transfer amount disagreed with the public descriptor.
+    #[error("{submitter} amount {actual} does not match network descriptor amount {expected}")]
+    SubmitterAmountMismatch {
+        /// Which submitter carried the mismatched amount.
+        submitter: &'static str,
+        /// Amount advertised by the network descriptor.
+        expected: u128,
+        /// Amount the submitter would transfer.
+        actual: u128,
+    },
 }
 
 /// Public network metadata fields used to build a descriptor.
