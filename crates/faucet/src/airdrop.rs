@@ -114,10 +114,7 @@ impl AirdropService {
             client_nonce: hex_encode(&request.client_nonce.0),
         };
         let now = SystemTime::now();
-        if let Err(error) = self.policy_store.expire(now) {
-            return policy_store_error_response(&error);
-        }
-        let existing = match self.policy_store.get_airdrop_attempt(&key) {
+        let existing = match self.policy_store.get_airdrop_attempt(&key, now) {
             Ok(existing) => existing,
             Err(error) => return policy_store_error_response(&error),
         };
@@ -149,6 +146,7 @@ impl AirdropService {
         match self.policy_store.insert_airdrop_attempt_if_absent(
             attempt.clone(),
             self.policy_config.airdrop.max_pending_per_recipient,
+            now,
         ) {
             Ok(InsertAirdropAttemptResult::Inserted) => {
                 self.submit_airdrop_attempt(request, attempt).await

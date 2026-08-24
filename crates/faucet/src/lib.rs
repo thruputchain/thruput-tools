@@ -178,7 +178,17 @@ pub async fn serve(config: FaucetConfig) -> Result<(), std::io::Error> {
     serve_with_shutdown(config, shutdown).await
 }
 
+/// How often the background sweep reclaims expired policy-store state.
+///
+/// Request handling never depends on the sweep: reads evict stale
+/// attempts lazily. The sweep only bounds memory held for keys that
+/// are never touched again.
+const POLICY_EXPIRY_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
+
 /// Serve the faucet API until `shutdown` resolves, draining in-flight requests.
+///
+/// Also runs the periodic policy-store expiry sweep for the lifetime of
+/// the server.
 pub async fn serve_with_shutdown(
     config: FaucetConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -186,13 +196,34 @@ pub async fn serve_with_shutdown(
     let listener = TcpListener::bind(&config.listen_address).await?;
     let local_addr = listener.local_addr()?;
     tracing::info!(listen = %local_addr, "faucet service listening");
-    axum::serve(
+    let sweeper = spawn_policy_expiry_sweeper(config.policy_store.clone());
+    let served = axum::serve(
         listener,
         app(config).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown)
-    .await?;
+    .await;
+    sweeper.abort();
+    served?;
     Ok(())
+}
+
+/// Spawn the periodic policy-store expiry sweep. The caller aborts the
+/// returned task when the server stops.
+fn spawn_policy_expiry_sweeper(
+    policy_store: Arc<dyn policy::FaucetPolicyStore>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(POLICY_EXPIRY_SWEEP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // The first tick fires immediately; sweeping an empty store is free.
+        loop {
+            interval.tick().await;
+            if let Err(error) = policy_store.expire(std::time::SystemTime::now()) {
+                tracing::warn!(%error, "faucet policy expiry sweep failed");
+            }
+        }
+    })
 }
 
 /// Future that resolves once SIGTERM or SIGINT (Ctrl-C) is received.
@@ -1391,7 +1422,7 @@ mod tests {
     fn stored_wallet_create_attempt(config: &FaucetConfig) -> Option<policy::WalletCreateAttempt> {
         config
             .policy_store
-            .get_wallet_create_attempt(&wallet_create_attempt_key())
+            .get_wallet_create_attempt(&wallet_create_attempt_key(), SystemTime::UNIX_EPOCH)
             .expect("bug: test attempt fetch should succeed")
     }
 
@@ -1439,7 +1470,7 @@ mod tests {
     fn stored_airdrop_attempt(config: &FaucetConfig) -> Option<policy::AirdropAttempt> {
         config
             .policy_store
-            .get_airdrop_attempt(&airdrop_attempt_key())
+            .get_airdrop_attempt(&airdrop_attempt_key(), SystemTime::UNIX_EPOCH)
             .expect("bug: test airdrop attempt fetch should succeed")
     }
 
@@ -1471,8 +1502,9 @@ mod tests {
         fn get_wallet_create_attempt(
             &self,
             key: &policy::WalletCreateAttemptKey,
+            now: SystemTime,
         ) -> Result<Option<policy::WalletCreateAttempt>, policy::PolicyStoreError> {
-            self.inner.get_wallet_create_attempt(key)
+            self.inner.get_wallet_create_attempt(key, now)
         }
 
         fn put_wallet_create_attempt(
@@ -1491,9 +1523,10 @@ mod tests {
             &self,
             attempt: policy::WalletCreateAttempt,
             max_pending_per_owner: u32,
+            now: SystemTime,
         ) -> Result<policy::InsertWalletCreateAttemptResult, policy::PolicyStoreError> {
             self.inner
-                .insert_wallet_create_attempt_if_absent(attempt, max_pending_per_owner)
+                .insert_wallet_create_attempt_if_absent(attempt, max_pending_per_owner, now)
         }
 
         fn claim_wallet_create_transition(
@@ -1510,8 +1543,9 @@ mod tests {
         fn get_airdrop_attempt(
             &self,
             key: &policy::AirdropAttemptKey,
+            now: SystemTime,
         ) -> Result<Option<policy::AirdropAttempt>, policy::PolicyStoreError> {
-            self.inner.get_airdrop_attempt(key)
+            self.inner.get_airdrop_attempt(key, now)
         }
 
         fn put_airdrop_attempt(
@@ -1530,9 +1564,10 @@ mod tests {
             &self,
             attempt: policy::AirdropAttempt,
             max_pending_per_recipient: u32,
+            now: SystemTime,
         ) -> Result<policy::InsertAirdropAttemptResult, policy::PolicyStoreError> {
             self.inner
-                .insert_airdrop_attempt_if_absent(attempt, max_pending_per_recipient)
+                .insert_airdrop_attempt_if_absent(attempt, max_pending_per_recipient, now)
         }
 
         fn claim_airdrop_transition(
