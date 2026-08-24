@@ -345,7 +345,7 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
             message: format!(
                 "profile `{}` selects wallet `{wallet_name}` for manifest-backed key `{}`",
                 profile.name,
-                key_name.as_deref().expect("dev key must be present")
+                key_name.as_deref().expect("bug: dev key must be present")
             ),
             hint: Some(Cow::Borrowed(
                 "remove default_wallet; manifest-backed dev keys use their fixed wallet",

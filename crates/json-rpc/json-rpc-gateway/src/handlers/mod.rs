@@ -18,7 +18,7 @@ fn backend_deadline(
     let deadline = context
         .capped_from_start(timeout)
         .deadline()
-        .expect("backend timeout should establish a deadline");
+        .expect("bug: backend timeout should establish a deadline");
     if deadline <= Instant::now() {
         Err(GatewayError::BackendTimeout)
     } else {

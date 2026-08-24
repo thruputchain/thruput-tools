@@ -41,7 +41,7 @@ impl GatewayBackend {
     ) -> Result<T, RpcServerError> {
         let remaining = context
             .remaining()
-            .expect("bounded gateway request context should have a deadline");
+            .expect("bug: bounded gateway request context should have a deadline");
         tokio::time::timeout(remaining, future)
             .await
             .map_err(|_| RpcServerError::BackendTimeout)?

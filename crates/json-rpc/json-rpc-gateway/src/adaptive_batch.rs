@@ -120,7 +120,7 @@ pub(crate) fn deadline_cohorts<I>(
         if joins_current {
             cohorts
                 .last_mut()
-                .expect("current cohort should exist")
+                .expect("bug: current cohort should exist")
                 .push(item);
         } else {
             cohorts.push(vec![item]);
