@@ -145,19 +145,19 @@ pub fn run(
     }
 
     let mut data = json!({
-        "tx_hash": tx_hash_formatted,
+        "txHash": tx_hash_formatted,
         "contract": prepared.contract_address_hex,
         "method": prepared.method,
         "height": receipt.height,
         "status": receipt.status,
-        "status_summary": status_summary,
-        "return_data": receipt.return_data,
-        "abort_data": receipt.abort_data,
-        "return_value": decoded_return,
-        "transaction_detail": transaction_detail,
+        "statusSummary": status_summary,
+        "returnData": receipt.return_data,
+        "abortData": receipt.abort_data,
+        "returnValue": decoded_return,
+        "transactionDetail": transaction_detail,
         "diagnostics": diagnostics,
-        "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
-        "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
+        "walletEntrypointId": prepared.wallet_entrypoint_id,
+        "walletEntrypointSource": prepared.wallet_entrypoint_source,
     });
     crate::tx_utils::insert_abort_json(&mut data, decoded_abort.as_ref());
     if let Some(error) = command_error_for_exec_status(&receipt.status) {
@@ -202,16 +202,16 @@ fn call_diagnostics_json(
     json!({
         "wallet": {
             "address": prepared.wallet_address_hex,
-            "entrypoint_id": prepared.wallet_entrypoint_id,
-            "entrypoint_source": prepared.wallet_entrypoint_source,
+            "entrypointId": prepared.wallet_entrypoint_id,
+            "entrypointSource": prepared.wallet_entrypoint_source,
         },
         "target": {
             "contract": prepared.contract_address_hex,
             "method": prepared.method,
-            "entrypoint_id": format_entrypoint_id(prepared.resolved.entrypoint),
+            "entrypointId": format_entrypoint_id(prepared.resolved.entrypoint),
         },
-        "transaction_detail": {
-            "rpc_method": "groundhog_dev_getTransactionDetail",
+        "transactionDetail": {
+            "rpcMethod": "groundhog_dev_getTransactionDetail",
             "available": transaction_detail_available,
         },
     })
@@ -241,16 +241,16 @@ fn print_dry_run(
     print.json(&CommandResult::new(
         cmd,
         json!({
-            "dry_run": true,
+            "dryRun": true,
             "submitted": false,
-            "rpc_url": prepared.rpc_url,
+            "rpcUrl": prepared.rpc_url,
             "contract": prepared.contract_address_hex,
             "method": prepared.method,
-            "entrypoint_id": entrypoint_id,
-            "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
-            "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
+            "entrypointId": entrypoint_id,
+            "walletEntrypointId": prepared.wallet_entrypoint_id,
+            "walletEntrypointSource": prepared.wallet_entrypoint_source,
             "calldata": calldata_hex,
-            "signed_tx": prepared.tx_hex,
+            "signedTx": prepared.tx_hex,
             "selector": selector_json(&prepared.resolved),
         }),
     ))?;

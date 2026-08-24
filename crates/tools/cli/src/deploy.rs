@@ -162,25 +162,25 @@ pub fn run(
         command_error_for_deploy_receipt(&receipt, decoded_abort.as_ref(), Some(&prepared));
     let mut data = json!({
         "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
-        "tx_hash": tx_hash_formatted,
-        "artifact_kind": prepared.artifact.kind.as_str(),
-        "artifact_path": &prepared.artifact.path,
-        "artifact_bytes": prepared.artifact_bytes_len,
+        "txHash": tx_hash_formatted,
+        "artifactKind": prepared.artifact.kind.as_str(),
+        "artifactPath": &prepared.artifact.path,
+        "artifactBytes": prepared.artifact_bytes_len,
         "address": contract_addr_hex,
-        "address_source": match address_source {
+        "addressSource": match address_source {
             Some(DeployAddressSource::Receipt) => Some("receipt"),
             Some(DeployAddressSource::Derived) => Some("derived"),
             None => None,
         },
         "height": receipt.height,
         "status": receipt.status,
-        "transaction_detail": transaction_detail,
-        "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
-        "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
+        "transactionDetail": transaction_detail,
+        "walletEntrypointId": prepared.wallet_entrypoint_id,
+        "walletEntrypointSource": prepared.wallet_entrypoint_source,
     });
     if command_error.is_some() {
-        data["return_data"] = json!(receipt.return_data);
-        data["abort_data"] = json!(receipt.abort_data);
+        data["returnData"] = json!(receipt.return_data);
+        data["abortData"] = json!(receipt.abort_data);
         crate::tx_utils::insert_abort_json(&mut data, decoded_abort.as_ref());
     }
     if let Some(error) = command_error {
@@ -299,16 +299,16 @@ fn print_dry_run(
         cmd,
         json!({
             "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
-            "dry_run": true,
+            "dryRun": true,
             "submitted": false,
-            "rpc_url": prepared.rpc_url,
-            "artifact_kind": prepared.artifact.kind.as_str(),
-            "artifact_path": &prepared.artifact.path,
-            "artifact_bytes": prepared.artifact_bytes_len,
-            "predicted_address": prepared.predicted_address,
-            "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
-            "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
-            "signed_tx": prepared.tx_hex,
+            "rpcUrl": prepared.rpc_url,
+            "artifactKind": prepared.artifact.kind.as_str(),
+            "artifactPath": &prepared.artifact.path,
+            "artifactBytes": prepared.artifact_bytes_len,
+            "predictedAddress": prepared.predicted_address,
+            "walletEntrypointId": prepared.wallet_entrypoint_id,
+            "walletEntrypointSource": prepared.wallet_entrypoint_source,
+            "signedTx": prepared.tx_hex,
         }),
     ))?;
 

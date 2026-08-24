@@ -3591,7 +3591,7 @@ fn deploy_workspace_root_accepts_long_package_option() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(stdout["data"]["artifactPath"].as_str().unwrap()).unwrap(),
         std::fs::canonicalize(artifact).unwrap()
     );
 }
@@ -3621,7 +3621,7 @@ fn deploy_workspace_member_infers_package_without_option() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(stdout["data"]["artifactPath"].as_str().unwrap()).unwrap(),
         std::fs::canonicalize(artifact).unwrap()
     );
 }
@@ -3708,32 +3708,32 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
-    assert_eq!(stdout["data"]["artifact_kind"], "rv32");
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+    assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
-        stdout["data"]["artifact_path"].as_str().unwrap(),
+        stdout["data"]["artifactPath"].as_str().unwrap(),
         rv32_path.to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifact_bytes"], 13);
+    assert_eq!(stdout["data"]["artifactBytes"], 13);
     assert!(
-        stdout["data"]["predicted_address"]
+        stdout["data"]["predictedAddress"]
             .as_str()
             .unwrap()
             .starts_with("0x")
     );
     assert!(
-        stdout["data"]["signed_tx"]
+        stdout["data"]["signedTx"]
             .as_str()
             .unwrap()
             .starts_with("0x")
     );
     assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
     );
-    let signed_tx = decode_signed_tx(stdout["data"]["signed_tx"].as_str().unwrap());
+    let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
     assert_eq!(
         format!(
             "0x{}",
@@ -3777,13 +3777,13 @@ fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["wallet_entrypoint_id"], "0xf969542572bd6860");
+    assert_eq!(stdout["data"]["walletEntrypointId"], "0xf969542572bd6860");
     assert_eq!(
-        stdout["data"]["wallet_entrypoint_source"],
+        stdout["data"]["walletEntrypointSource"],
         "network_descriptor"
     );
     assert_eq!(
-        signed_tx_entrypoint(stdout["data"]["signed_tx"].as_str().unwrap()),
+        signed_tx_entrypoint(stdout["data"]["signedTx"].as_str().unwrap()),
         "0xf969542572bd6860"
     );
 }
@@ -5454,14 +5454,14 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["artifact_kind"], "rv32");
+    assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
-        stdout["data"]["artifact_path"].as_str().unwrap(),
+        stdout["data"]["artifactPath"].as_str().unwrap(),
         rv32_path.to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifact_bytes"], 13);
+    assert_eq!(stdout["data"]["artifactBytes"], 13);
     assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
     );
 }
@@ -5506,16 +5506,16 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["artifact_kind"], "rv32");
+    assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
-        stdout["data"]["artifact_path"].as_str().unwrap(),
+        stdout["data"]["artifactPath"].as_str().unwrap(),
         std::fs::canonicalize(&artifact_path)
             .unwrap()
             .to_string_lossy()
     );
-    assert_eq!(stdout["data"]["artifact_bytes"], 9);
+    assert_eq!(stdout["data"]["artifactBytes"], 9);
     assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        signed_tx_deploy_contract_kind(stdout["data"]["signedTx"].as_str().unwrap()),
         "rv32"
     );
 }
@@ -5560,7 +5560,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signed_tx"]
+    let signed_tx = stdout["data"]["signedTx"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
@@ -5610,11 +5610,11 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signed_tx"]
+    let signed_tx = stdout["data"]["signedTx"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
 }
 
@@ -5661,7 +5661,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signed_tx"]
+    let signed_tx = stdout["data"]["signedTx"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
@@ -5719,11 +5719,11 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signed_tx"]
+    let signed_tx = stdout["data"]["signedTx"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(signed_tx_invoked_address(signed_tx), cli_wallet);
 }
 
@@ -5768,7 +5768,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signed_tx"]
+    let signed_tx = stdout["data"]["signedTx"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
@@ -5998,18 +5998,13 @@ fn deploy_live_json_submits_and_returns_receipt() {
     // The mock returns 0xbb..bb as the deployed address via return_data.
     let expected_address = format!("0x{}", "bb".repeat(32));
     assert_eq!(stdout["data"]["address"], expected_address);
-    assert_eq!(stdout["data"]["address_source"], "receipt");
+    assert_eq!(stdout["data"]["addressSource"], "receipt");
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
-    assert!(stdout["data"].get("return_data").is_none());
-    assert!(stdout["data"].get("abort_data").is_none());
-    assert!(stdout["data"]["transaction_detail"].is_null());
-    assert!(
-        stdout["data"]["tx_hash"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
+    assert!(stdout["data"].get("returnData").is_none());
+    assert!(stdout["data"].get("abortData").is_none());
+    assert!(stdout["data"]["transactionDetail"].is_null());
+    assert!(stdout["data"]["txHash"].as_str().unwrap().starts_with("0x"));
 }
 
 #[test]
@@ -6049,14 +6044,9 @@ fn deploy_live_json_fails_with_receipt_context() {
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
-    assert_eq!(stdout["data"]["return_data"], "0x0102");
-    assert_eq!(stdout["data"]["abort_data"], "0x0304");
-    assert!(
-        stdout["data"]["tx_hash"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
+    assert_eq!(stdout["data"]["returnData"], "0x0102");
+    assert_eq!(stdout["data"]["abortData"], "0x0304");
+    assert!(stdout["data"]["txHash"].as_str().unwrap().starts_with("0x"));
 }
 
 #[test]
@@ -6107,7 +6097,7 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     }));
     assert_ne!(stdout["error"]["code"], "transaction_reverted");
     assert!(
-        stdout["data"]["abort_data"]
+        stdout["data"]["abortData"]
             .as_str()
             .is_some_and(|value| value.starts_with("0x"))
     );
@@ -6213,13 +6203,13 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["transaction_detail"]["gasConsumed"], 12450);
+    assert_eq!(stdout["data"]["transactionDetail"]["gasConsumed"], 12450);
     assert_eq!(
-        stdout["data"]["transaction_detail"]["storageDeltas"][0]["kind"],
+        stdout["data"]["transactionDetail"]["storageDeltas"][0]["kind"],
         "bytestringSet"
     );
     assert_eq!(
-        stdout["data"]["transaction_detail"]["trace"]["status"]["result"],
+        stdout["data"]["transactionDetail"]["trace"]["status"]["result"],
         "return"
     );
 }
@@ -7154,22 +7144,22 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "call");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["contract"], contract);
     assert_eq!(stdout["data"]["method"], "0x0123456789abcdef");
-    assert_eq!(stdout["data"]["entrypoint_id"], "0x0123456789abcdef");
+    assert_eq!(stdout["data"]["entrypointId"], "0x0123456789abcdef");
     assert_eq!(stdout["data"]["calldata"], "0x0102");
     assert_eq!(stdout["data"]["selector"]["source"], "explicit_entrypoint");
     assert!(stdout["data"]["selector"]["interface"].is_null());
     assert!(
-        stdout["data"]["signed_tx"]
+        stdout["data"]["signedTx"]
             .as_str()
             .unwrap()
             .starts_with("0x")
     );
-    let signed_tx = decode_signed_tx(stdout["data"]["signed_tx"].as_str().unwrap());
+    let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
     assert_eq!(
         format!(
             "0x{}",
@@ -7214,13 +7204,13 @@ fn call_dry_run_uses_hosted_descriptor_entrypoint() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["wallet_entrypoint_id"], "0xa0fff94c64fbaf3c");
+    assert_eq!(stdout["data"]["walletEntrypointId"], "0xa0fff94c64fbaf3c");
     assert_eq!(
-        stdout["data"]["wallet_entrypoint_source"],
+        stdout["data"]["walletEntrypointSource"],
         "network_descriptor"
     );
     assert_eq!(
-        signed_tx_entrypoint(stdout["data"]["signed_tx"].as_str().unwrap()),
+        signed_tx_entrypoint(stdout["data"]["signedTx"].as_str().unwrap()),
         "0xa0fff94c64fbaf3c"
     );
 }
@@ -7265,7 +7255,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let signed_tx = stdout["data"]["signed_tx"]
+    let signed_tx = stdout["data"]["signedTx"]
         .as_str()
         .expect("bug: dry-run output includes signed tx");
 
@@ -7393,23 +7383,23 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
         advertised_wallet
     );
     assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypoint_id"],
+        stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
         "0x646f416374696f6e"
     );
     assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypoint_source"],
+        stdout["data"]["diagnostics"]["wallet"]["entrypointSource"],
         "runtime_manifest"
     );
     assert_eq!(
-        stdout["data"]["diagnostics"]["target"]["entrypoint_id"],
+        stdout["data"]["diagnostics"]["target"]["entrypointId"],
         "0x0123456789abcdef"
     );
     assert_eq!(
-        stdout["data"]["diagnostics"]["transaction_detail"]["rpc_method"],
+        stdout["data"]["diagnostics"]["transactionDetail"]["rpcMethod"],
         "groundhog_dev_getTransactionDetail"
     );
     assert_eq!(
-        stdout["data"]["diagnostics"]["transaction_detail"]["available"],
+        stdout["data"]["diagnostics"]["transactionDetail"]["available"],
         false
     );
 }
@@ -7444,11 +7434,11 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
     assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypoint_id"],
+        stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
         "0x19846d750fad81d6"
     );
     assert_eq!(
-        stdout["data"]["diagnostics"]["wallet"]["entrypoint_source"],
+        stdout["data"]["diagnostics"]["wallet"]["entrypointSource"],
         "legacy_default"
     );
 }
@@ -7519,12 +7509,12 @@ fn call_live_json_decodes_library_abort() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_reverted");
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
-    assert_eq!(stdout["data"]["abort_data"], abort_hex);
-    assert_eq!(stdout["data"]["abort_exception"], "LibraryExn");
-    assert_eq!(stdout["data"]["abort_exception_crate"], "sdk");
-    assert_eq!(stdout["data"]["abort_exception_version"], "1");
+    assert_eq!(stdout["data"]["abortData"], abort_hex);
+    assert_eq!(stdout["data"]["abortException"], "LibraryExn");
+    assert_eq!(stdout["data"]["abortExceptionCrate"], "sdk");
+    assert_eq!(stdout["data"]["abortExceptionVersion"], "1");
     assert_eq!(
-        stdout["data"]["abort_value"],
+        stdout["data"]["abortValue"],
         serde_json::json!({"case": "NonNegativeIntUnderflow"})
     );
 }
@@ -7606,9 +7596,9 @@ fn call_live_json_omits_abort_fields_on_success() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
-    assert!(stdout["data"].get("abort_exception").is_none());
-    assert!(stdout["data"].get("abort_value").is_none());
-    assert!(stdout["data"].get("abort_decode_error").is_none());
+    assert!(stdout["data"].get("abortException").is_none());
+    assert!(stdout["data"].get("abortValue").is_none());
+    assert!(stdout["data"].get("abortDecodeError").is_none());
 }
 
 #[test]
@@ -7640,9 +7630,9 @@ fn call_live_json_reports_abort_decode_error() {
     assert!(!output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
-    assert_eq!(stdout["data"]["abort_data"], "0x00ab");
-    assert_eq!(stdout["data"]["abort_value"], serde_json::Value::Null);
-    let decode_error = stdout["data"]["abort_decode_error"].as_str().unwrap();
+    assert_eq!(stdout["data"]["abortData"], "0x00ab");
+    assert_eq!(stdout["data"]["abortValue"], serde_json::Value::Null);
+    let decode_error = stdout["data"]["abortDecodeError"].as_str().unwrap();
     assert!(
         decode_error.contains("0x0000000000000000"),
         "{decode_error}"
