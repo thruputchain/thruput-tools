@@ -2423,7 +2423,6 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
 
     groundhog_cli::keys::generate(
         &Some("alice".into()),
-        false,
         "keys.generate",
         &groundhog_cli::Print::quiet(),
     )

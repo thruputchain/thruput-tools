@@ -461,9 +461,6 @@ enum KeysCommand {
     Generate {
         /// Key name (default: "default")
         name: Option<String>,
-        /// Fund from testnet faucet (not yet implemented)
-        #[arg(long, hide = true)]
-        fund: bool,
     },
     /// List stored keys
     Ls,
@@ -1310,8 +1307,8 @@ fn main() {
             } => groundhog_cli::chain::restore(&data_dir, &input, force, cmd_name, &print),
         },
         Command::Keys { command } => match command {
-            KeysCommand::Generate { name, fund } => {
-                groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
+            KeysCommand::Generate { name } => {
+                groundhog_cli::keys::generate(&name, cmd_name, &print)
             }
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
             KeysCommand::Export { name } => groundhog_cli::keys::export(&name, cmd_name, &print),

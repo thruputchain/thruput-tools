@@ -63,8 +63,7 @@ fn init_configures_profiles_and_succeeds() {
         password: "pass".into(),
     };
     groundhog_cli::config::save_executor_credentials(&creds).unwrap();
-    groundhog_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet())
-        .unwrap();
+    groundhog_cli::keys::generate(&Some("default".into()), "keys.generate", &quiet()).unwrap();
 
     let result = groundhog_cli::init::run(tmp.path(), "status", &quiet());
 
@@ -146,7 +145,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
 "#,
     )
     .unwrap();
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
 
     groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
 
@@ -203,8 +202,7 @@ fn init_accepts_credentials_from_global_config() {
     };
     groundhog_cli::config::save_executor_credentials(&creds).unwrap();
 
-    groundhog_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet())
-        .unwrap();
+    groundhog_cli::keys::generate(&Some("default".into()), "keys.generate", &quiet()).unwrap();
 
     groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
 
@@ -267,7 +265,7 @@ fn init_uses_global_default_when_project_key_is_dangling() {
     };
     groundhog_cli::config::save_executor_credentials(&creds).unwrap();
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
 
     groundhog_cli::init::run(&project, "status", &quiet()).unwrap();
 

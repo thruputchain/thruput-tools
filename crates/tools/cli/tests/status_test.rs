@@ -35,7 +35,7 @@ fn status_succeeds_when_fully_configured() {
 
     write_groundhog_registry_config(&cargo_home);
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
 
     let creds = groundhog_cli::config::ExecutorCredentials {
         username: "test".into(),
@@ -94,8 +94,8 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
 
     write_groundhog_registry_config(&cargo_home);
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
-    groundhog_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("bob".into()), "keys.generate", &quiet()).unwrap();
 
     let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
     assert_eq!(report.effective_default_key.as_deref(), Some("bob"));
@@ -159,7 +159,7 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
 
     write_groundhog_registry_config(&cargo_home);
 
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
 
     let alice_path = groundhog_cli::config::keys_dir()
         .unwrap()
@@ -228,7 +228,7 @@ counter = "{project_counter}"
     }
 
     write_groundhog_registry_config(&cargo_home);
-    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), "keys.generate", &quiet()).unwrap();
     let creds = groundhog_cli::config::ExecutorCredentials {
         username: "test".into(),
         password: "pass".into(),

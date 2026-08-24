@@ -112,7 +112,7 @@ fn handle_key_step(
     if report.keys.keys.is_empty() {
         ui.note("No signing key found");
         if confirm(ui.print, "Generate a local signing key now?", true)? {
-            crate::keys::generate(&None, false, "keys.generate", ui.print)?;
+            crate::keys::generate(&None, "keys.generate", ui.print)?;
             ui.success("Generated local signing key");
             ui.finish_step(InitStep::SigningKey, StepState::Done);
         } else {
