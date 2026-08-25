@@ -4352,6 +4352,41 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
 }
 
 #[test]
+fn hosted_airdrop_uses_request_airdrop_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    let cache_home = tmp.path().join("cache-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let recipient = format!("0x{}", "aa".repeat(32));
+    let (rpc_url, rpc_server) = spawn_airdrop_rpc(&recipient);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, &faucet_url);
+
+    let output = groundhog()
+        .args(["--json", "airdrop", "alice"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .output()
+        .unwrap();
+
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["mode"], "remote");
+    assert_eq!(stdout["data"]["recipient_wallet"], recipient);
+    assert_eq!(stdout["data"]["raw_amount"], "25000000");
+    assert_eq!(stdout["data"]["tx_hash"], format!("0x{}", "22".repeat(32)));
+}
+
+#[test]
 fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -4532,6 +4567,36 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
     );
     assert_eq!(target, format!("0x{}01", "00".repeat(31)));
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
+}
+
+#[test]
+fn hosted_signing_rejects_profile_network_hash_mismatch() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let live_network_hash = "42".repeat(32);
+    let (rpc_url, rpc_server) = spawn_network_info_rpc(&live_network_hash);
+    let (faucet_url, descriptor_server) =
+        spawn_network_descriptor_with_hash(&rpc_url, &live_network_hash);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, &faucet_url);
+    let recipient = format!("0x{}", "bc".repeat(32));
+
+    let output = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "network_descriptor_mismatch");
+    assert_eq!(stderr["error"]["details"]["field"], "networkHash");
 }
 
 #[test]
@@ -11203,10 +11268,18 @@ fn read_jsonrpc_request(
 }
 
 fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
+    spawn_network_descriptor_with_hash(rpc_url, TEST_NETWORK_HASH)
+}
+
+fn spawn_network_descriptor_with_hash(
+    rpc_url: &str,
+    network_hash: &str,
+) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let rpc_url = rpc_url.to_owned();
+    let network_hash = network_hash.to_owned();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         let (mut stream, _) = loop {
@@ -11241,7 +11314,7 @@ fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
             "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet",
-            "networkHash": format!("0x{}", "42".repeat(32)),
+            "networkHash": format!("0x{network_hash}"),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "endpoints": { "rpcUrl": rpc_url },
@@ -11276,6 +11349,28 @@ fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
         .unwrap();
         stream.write_all(&body).unwrap();
         stream.flush().unwrap();
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let network_hash = network_hash.to_owned();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
+        assert_eq!(request["method"], "groundhog_networkInfo");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "networkHash": format!("0x{network_hash}"),
+                "genesisHash": format!("0x{}", "42".repeat(32)),
+            }),
+        );
+        assert_no_follow_up_rpc(&listener);
     });
     (format!("http://{addr}"), handle)
 }
@@ -11342,7 +11437,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
                 stream,
                 &request["id"],
                 serde_json::json!({
-                    "networkHash": format!("0x{}", "42".repeat(32)),
+                    "networkHash": format!("0x{TEST_NETWORK_HASH}"),
                     "genesisHash": format!("0x{}", "42".repeat(32)),
                 }),
             );
@@ -11380,6 +11475,48 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
         }
     });
 
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let recipient = recipient.to_owned();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
+        assert_eq!(request["method"], "groundhog_networkInfo");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "networkHash": format!("0x{TEST_NETWORK_HASH}"),
+                "genesisHash": format!("0x{}", "42".repeat(32)),
+            }),
+        );
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "requestAirdrop");
+        assert_eq!(request["method"], "groundhog_requestAirdrop");
+        assert_eq!(request["params"][0]["recipient"], recipient);
+        assert_eq!(
+            request["params"][0]["clientNonce"].as_str().map(str::len),
+            Some(34)
+        );
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "attemptStatus": "succeeded",
+                "recipient": recipient,
+                "rawAmount": "25000000",
+                "txHash": format!("0x{}", "22".repeat(32)),
+                "height": 42,
+                "status": { "result": "ok" },
+            }),
+        );
+        assert_no_follow_up_rpc(&listener);
+    });
     (format!("http://{addr}"), handle)
 }
 

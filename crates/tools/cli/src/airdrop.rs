@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use getrandom::getrandom;
-use groundhog_json_rpc_types::{airdrop::AirdropAttemptResponse, receipt::ExecStatus};
+use groundhog_json_rpc_client::AirdropApiClient;
+use groundhog_json_rpc_types::{
+    airdrop::{AirdropAttemptResponse, AirdropRequest},
+    receipt::ExecStatus,
+};
 use groundhog_signing::{
     BuildSignedDevWalletHogTransfer, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     build_signed_dev_wallet_hog_transfer,
@@ -22,7 +26,6 @@ use crate::config::{
     Network, ProfileOverrides, ResolvedProfile, cache_dir, resolve_profile_with_overrides,
 };
 use crate::dev_keys;
-use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
@@ -66,8 +69,6 @@ pub(crate) struct PreparedRemoteAirdrop {
     pub(crate) recipient_input: String,
     pub(crate) recipient_wallet: String,
     client_nonce: String,
-    network_id: String,
-    genesis_hash: String,
     airdrop_policy: groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
     amount_hog: String,
     attempt_path: PathBuf,
@@ -79,15 +80,6 @@ struct PreparedRemoteAirdropDryRun {
     rpc_url: String,
     recipient_input: String,
     recipient_wallet: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteAirdropRequest {
-    recipient: String,
-    client_nonce: String,
-    network_id: String,
-    genesis_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -331,17 +323,22 @@ fn run_remote_airdrop(
         "Requesting remote airdrop to {}...",
         prepared.recipient_wallet
     ));
-    let client = faucet_client()?;
-    let response: AirdropAttemptResponse = post_json(
-        &client,
-        &format!("{}/v1/airdrop", prepared.faucet_url),
-        &RemoteAirdropRequest {
-            recipient: prepared.recipient_wallet.clone(),
-            client_nonce: prepared.client_nonce.clone(),
-            network_id: prepared.network_id.clone(),
-            genesis_hash: prepared.genesis_hash.clone(),
-        },
-    )?;
+    let request: AirdropRequest = serde_json::from_value(json!({
+        "recipient": prepared.recipient_wallet,
+        "clientNonce": prepared.client_nonce,
+    }))
+    .map_err(|error| CliError::Other(format!("invalid retained airdrop request: {error}")))?;
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let response = runtime.block_on(async {
+        crate::http_client::rpc_client(&prepared.rpc_url)?
+            .request_airdrop(request)
+            .await
+            .map_err(|error| CliError::RpcMethodFailed {
+                method: "requestAirdrop",
+                message: error.to_string(),
+            })
+    })?;
     let recipient = response.recipient();
     if recipient.0 != parse_contract_address(&prepared.recipient_wallet)? {
         return Err(CliError::NetworkDescriptorMismatch {
@@ -641,8 +638,6 @@ fn prepare_remote_airdrop_with_descriptor(
         recipient_input: recipient.to_owned(),
         recipient_wallet,
         client_nonce: attempt.client_nonce,
-        network_id: attempt.network_id,
-        genesis_hash: attempt.genesis_hash,
         airdrop_policy: descriptor.policy.clone(),
         amount_hog: descriptor.amount_hog.clone(),
         attempt_path: loaded_attempt.path,
@@ -807,7 +802,7 @@ fn print_dry_run(
                     "faucet_url": prepared.faucet_url,
                     "rpc_url": prepared.rpc_url,
                     "planned_requests": [
-                        "POST /v1/airdrop"
+                        "groundhog_requestAirdrop"
                     ],
                 }),
             ))?;
@@ -842,7 +837,7 @@ fn print_remote_dry_run(
             "rpc_url": prepared.rpc_url,
             "planned_requests": [
                 "GET /v1/network",
-                "POST /v1/airdrop"
+                "groundhog_requestAirdrop"
             ],
             "idempotency_key": "profile + recipient + networkId + genesisHash + clientNonce",
         }),
@@ -971,8 +966,6 @@ mod tests {
         assert_eq!(prepared.rpc_url, "http://127.0.0.1:9545");
         assert_eq!(prepared.recipient_input, "alice");
         assert_eq!(prepared.recipient_wallet, format!("0x{}", "ab".repeat(32)));
-        assert_eq!(prepared.network_id, "devnet-preview");
-        assert_eq!(prepared.genesis_hash, format!("0x{}", "01".repeat(32)));
         assert_eq!(prepared.client_nonce.len(), 34);
         unsafe { env::remove_var("XDG_CACHE_HOME") };
     }

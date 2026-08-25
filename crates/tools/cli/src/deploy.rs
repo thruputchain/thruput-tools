@@ -17,7 +17,7 @@ use crate::account_resolution::resolve_transaction_sender;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
-use crate::network_descriptor::resolve_wallet_entrypoints;
+use crate::network_descriptor::resolve_wallet_signing_context;
 use crate::result::{CommandError, CommandResult};
 use crate::terminal::render_shell_arg;
 use crate::tx_utils::{
@@ -497,13 +497,14 @@ fn prepare_deploy_transaction(
     // Auth claim: source-address auth data at key slot 0.
     let auth_claim = source_address_auth_claim();
 
-    let wallet_entrypoints = resolve_wallet_entrypoints(profile, &sender.key_name)?;
+    let wallet_context =
+        resolve_wallet_signing_context(profile, &sender.key_name, sender.network_hash, &rt)?;
 
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
     let tx = build_deploy_transaction(BuildDeployTransaction {
         invoked_address: wallet_address,
-        entrypoint: wallet_entrypoints.deploy,
+        entrypoint: wallet_context.entrypoints.deploy,
         calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height,
@@ -516,7 +517,7 @@ fn prepare_deploy_transaction(
         tx,
         &sender.signer,
         SignTransactionParams::default(),
-        &sender.network_hash,
+        &wallet_context.network_hash,
     )
     .map_err(|e| CliError::Other(e.to_string()))?;
 
@@ -528,8 +529,11 @@ fn prepare_deploy_transaction(
         artifact,
         artifact_bytes_len,
         predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
-        wallet_entrypoint_id: format!("0x{}", hex::encode(wallet_entrypoints.deploy.into_inner())),
-        wallet_entrypoint_source: wallet_entrypoints.source,
+        wallet_entrypoint_id: format!(
+            "0x{}",
+            hex::encode(wallet_context.entrypoints.deploy.into_inner())
+        ),
+        wallet_entrypoint_source: wallet_context.entrypoints.source,
         tx_hex,
         package_name: None,
     })

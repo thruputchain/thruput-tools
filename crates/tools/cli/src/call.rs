@@ -23,7 +23,7 @@ use crate::contract_spec::{
     InterfaceSpec, load_built_contract_spec, load_built_registered_interfaces,
 };
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
-use crate::network_descriptor::resolve_wallet_entrypoints;
+use crate::network_descriptor::resolve_wallet_signing_context;
 use crate::result::CommandResult;
 use crate::tx_utils::{
     command_error_for_exec_status, decode_receipt_abort, format_tx_hash, nonce_from_timestamp,
@@ -376,13 +376,18 @@ fn prepare_call_with_runtime(
     let wallet_address = sender.wallet_address;
     let wallet_address_hex = format_contract_address(&wallet_address);
 
-    let wallet_entrypoints = resolve_wallet_entrypoints(&resolved_profile, &sender.key_name)?;
-    let wallet_entrypoint_id = format_entrypoint_id(wallet_entrypoints.do_action);
+    let wallet_context = resolve_wallet_signing_context(
+        &resolved_profile,
+        &sender.key_name,
+        sender.network_hash,
+        rt,
+    )?;
+    let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
         wallet_address,
-        wallet_entrypoint: wallet_entrypoints.do_action,
+        wallet_entrypoint: wallet_context.entrypoints.do_action,
         target_address: contract_address,
         target_entrypoint: resolved.entrypoint,
         target_calldata: calldata.as_slice(),
@@ -397,7 +402,7 @@ fn prepare_call_with_runtime(
         tx,
         &sender.signer,
         SignTransactionParams::default(),
-        &sender.network_hash,
+        &wallet_context.network_hash,
     )
     .map_err(|e| CliError::Other(e.to_string()))?;
 
@@ -406,7 +411,7 @@ fn prepare_call_with_runtime(
         contract_address_hex,
         wallet_address_hex,
         wallet_entrypoint_id,
-        wallet_entrypoint_source: wallet_entrypoints.source,
+        wallet_entrypoint_source: wallet_context.entrypoints.source,
         method: method.to_owned(),
         resolved,
         calldata,

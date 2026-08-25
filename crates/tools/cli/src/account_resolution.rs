@@ -45,7 +45,7 @@ pub(crate) struct ResolvedTransactionSender {
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
-    /// Network this sender signs for. Part of every signature preimage.
+    /// Configured network identity, validated against hosted RPC before signing.
     pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
 }
 
@@ -111,12 +111,12 @@ pub(crate) fn resolve_sender_account(
     })
 }
 
-/// The network hash every signature from this profile is bound to.
+/// The network hash configured for signatures from this profile.
 ///
 /// A runtime manifest is authoritative when configured, since it is written by
-/// the node that owns the chain. Otherwise the profile's own `network_hash`
-/// answers: an RPC endpoint serves one network, so this is configuration rather
-/// than something to discover per command.
+/// the node that owns the chain. Otherwise the profile's own `network_hash` is
+/// the expected identity. Hosted signing validates that expectation against the
+/// live RPC identity and signs with the validated value.
 pub(crate) fn resolve_network_hash(
     profile: &ResolvedProfile,
     key_name: &str,
