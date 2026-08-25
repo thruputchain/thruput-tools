@@ -58,8 +58,8 @@ use crate::target::{
     TargetProvider, TargetProviderContext, TargetProviderKind,
 };
 use crate::util::{
-    LoadedSimulationManifest, default_run_dir, json_string, load_simulation_manifest, run_id,
-    workload_name, write_json_pretty, write_json_pretty_atomic,
+    LoadedSimulationManifest, default_run_dir, load_simulation_manifest, run_id, workload_name,
+    write_json_pretty, write_json_pretty_atomic,
 };
 use crate::validation::{validate_against_runtime, validate_manifest};
 
@@ -941,7 +941,6 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         runtime_identity: RuntimeIdentity {
             network_hash: input.runtime_manifest.network_hash.to_string(),
             protocol: input.runtime_manifest.protocol.clone(),
-            genesis_hash: json_string(&input.runtime_manifest.genesis_hash, "genesisHash")?,
             producer: ProducerIdentity {
                 binary: input.runtime_manifest.producer.binary.clone(),
                 version: input.runtime_manifest.producer.version.clone(),
@@ -1784,7 +1783,6 @@ mod tests {
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
-            "genesisHash": prefixed_hex(0x42),
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0"
@@ -1855,7 +1853,6 @@ mod tests {
             runtime_identity: RuntimeIdentity {
                 network_hash: "00".repeat(32),
                 protocol: "hogp/test".into(),
-                genesis_hash: prefixed_hex(0x42),
                 producer: ProducerIdentity {
                     binary: "hog-devnode".into(),
                     version: "0.1.0".into(),

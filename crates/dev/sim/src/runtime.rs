@@ -629,16 +629,6 @@ mod tests {
             .expect("runtime config should hash")
         );
 
-        let mut different_genesis = manifest_json.clone();
-        different_genesis["genesisHash"] = json!(prefixed_hex(0x66));
-        assert_ne!(
-            expected,
-            runtime_config_sha256(
-                &serde_json::to_vec(&different_genesis).expect("runtime manifest should encode")
-            )
-            .expect("runtime config should hash")
-        );
-
         let mut unknown_metadata = manifest_json;
         unknown_metadata["futureRuntimeMetadata"] = json!({"mode": "different"});
         assert_ne!(
@@ -663,7 +653,6 @@ mod tests {
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
-            "genesisHash": prefixed_hex(0x11),
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0"

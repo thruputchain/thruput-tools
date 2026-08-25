@@ -97,7 +97,6 @@ pub struct TargetIdentity {
 pub struct RuntimeIdentity {
     pub network_hash: String,
     pub protocol: String,
-    pub genesis_hash: String,
     pub producer: ProducerIdentity,
 }
 

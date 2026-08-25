@@ -1045,7 +1045,6 @@ mod tests {
             "kind": "hosted-devnet-runtime",
             "networkHash": "11".repeat(32),
             "protocol": "hogp/test",
-            "genesisHash": prefixed_hex(0x11),
             "producer": {
                 "binary": "chuckd",
                 "version": "0.1.0"

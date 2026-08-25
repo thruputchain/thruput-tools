@@ -28,8 +28,8 @@ This work does not:
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | Add `groundhog_networkInfo` to every RPC server. | Clients need the protocol network and genesis identity without discovering the faucet first. |
-| D2 | Return `networkHash` and `genesisHash`. | `networkHash` is the authoritative protocol identity bound into transaction signatures; `genesisHash` identifies the materialized chain instance. |
+| D1 | Add `groundhog_networkInfo` to every RPC server. | Clients need the protocol identity without discovering the faucet first. |
+| D2 | Return `networkHash`. | `networkHash` is the authoritative protocol identity bound into transaction signatures. The hosted faucet adapter's `networkId` and `genesisHash` remain separate from public RPC identity. |
 | D3 | Register `groundhog_requestAirdrop` only when an airdrop implementation is configured. | Mainnet and RPC-only deployments should return standard JSON-RPC `Method not found`, not expose an unusable method. |
 | D4 | Proxy hosted requests to the existing `/v1/airdrop` endpoint. | The faucet already owns policy, idempotency, signing, submission, receipt polling, and web support. |
 | D5 | Preserve the current faucet request and response semantics. | One public contract avoids drift between REST, hosted RPC, and local RPC. |
@@ -37,7 +37,7 @@ This work does not:
 | D7 | Keep recipient, pending-attempt, and idempotency policy in the faucet. | REST and RPC must share the same authoritative policy state. |
 | D8 | Give configured gateway source IPs a finite quota override in the existing faucet policy. | The faucet sees one gateway IP for all proxied users; the default client quota is too small, while an unlimited exemption is unsafe. |
 | D9 | Keep local airdrops unlimited by default. | Local tests and examples should create accounts without public-service quotas. |
-| D10 | Publish the combined network-information and airdrop surface as wire format `4.0.0`. | `origin/main` already exposes `NetworkInfo { networkHash }` at `3.2.0`. Making `genesisHash` required is a breaking result-shape change, so the rebased work requires a major bump; the additive airdrop method ships in the same version. |
+| D10 | Publish the additive airdrop method as wire format `3.3.0`. | `origin/main` already exposes `NetworkInfo { networkHash }` at `3.2.0`; adding a method requires a minor bump. |
 
 ## Architecture
 
@@ -90,7 +90,7 @@ Before this change, no public JSON-RPC method returned network identity:
 | `groundhog_chainTip` | Height and current block hash | No immutable protocol or genesis identity |
 | `groundhog_version` | RPC wire and implementation versions | No network identity |
 | Faucet `GET /v1/network` | `networkId`, `networkHash`, `genesisHash` | Separate REST service |
-| Runtime manifest | `genesisHash`, `networkHash` | Private local file handoff |
+| Runtime manifest | `networkHash` | Private local file handoff |
 
 `groundhog_getBlockByNumber` declares a `networkHash`, but both current server implementations return `NotImplemented`. Scheduler health checks already validate `networkHash` separately; this design does not create another validation system.
 
@@ -106,8 +106,7 @@ The method takes no parameters.
 
 ```json
 {
-  "networkHash": "0x1111111111111111111111111111111111111111111111111111111111111111",
-  "genesisHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
+  "networkHash": "0x1111111111111111111111111111111111111111111111111111111111111111"
 }
 ```
 
@@ -116,22 +115,21 @@ The method takes no parameters.
 #[serde(rename_all = "camelCase")]
 pub struct NetworkInfo {
     pub network_hash: NetworkHash,
-    pub genesis_hash: SHA256Hash,
 }
 ```
 
 The method returns immutable startup metadata and does not query a backend:
 
-| Deployment | `networkHash` | `genesisHash` |
-|---|---|---|
-| Localnet | Validated runtime manifest | Validated runtime manifest |
-| Hosted | Required gateway configuration | Required gateway configuration |
+| Deployment | `networkHash` |
+|---|---|
+| Localnet | Validated runtime manifest |
+| Hosted | Required gateway configuration |
 
 Hosted protocol identity comes from gateway startup configuration. The logical `networkId` remains separate and is required only when `faucet_url` enables the existing faucet REST adapter. The public descriptor advertises all three values so the gateway can reject a faucet configured to sign for another network. Validation against `GET /v1/network` gates airdrop execution and readiness.
 
-Missing or malformed identity is a startup configuration error. Scheduler health checks verify that observed tips match the startup `networkHash`. `groundhog_networkInfo` stays available during degraded backend operation, like `groundhog_version`.
+Missing or malformed `networkHash` is a startup configuration error. Scheduler health checks verify that observed tips match the startup value. `groundhog_networkInfo` stays available during degraded backend operation, like `groundhog_version`.
 
-This method exposes the protocol `networkHash` already carried by scheduler headers and runtime manifests, plus the existing `genesisHash`. It does not treat the faucet descriptor's human-readable `networkId` as protocol identity.
+This method exposes the protocol `networkHash` already carried by scheduler headers and runtime manifests. It does not treat the faucet descriptor's human-readable `networkId` or `genesisHash` as protocol identity.
 
 ## Airdrop Request
 
@@ -402,9 +400,9 @@ Logs must not include secret keys or full untrusted forwarding headers.
 
 ### Network information
 
-- Localnet returns the runtime manifest's `networkHash` and `genesisHash`.
-- Hosted gateways return their configured `networkHash` and `genesisHash`.
-- CLI hosted flows reject descriptors whose `networkHash` or `genesisHash` differs from the RPC endpoint.
+- Localnet returns the runtime manifest's `networkHash`.
+- Hosted gateways return their configured `networkHash`.
+- CLI hosted flows reject descriptors whose `networkHash` differs from the RPC endpoint.
 - Identity is available while chain backends are degraded.
 - Missing identity fails startup.
 - A reachable faucet descriptor with a malformed or mismatched network ID, network hash, or genesis hash fails startup.
@@ -445,22 +443,22 @@ Logs must not include secret keys or full untrusted forwarding headers.
 - Nonces over 32 bytes are rejected by the shared validator.
 - OpenRPC contains both methods and their documented errors.
 - `origin/main` exposes `groundhog_networkInfo` with required `networkHash` at wire format `3.2.0`.
-- This change adds required `genesisHash` to that result and adds `groundhog_requestAirdrop`, producing wire format `4.0.0`.
+- This change adds `groundhog_requestAirdrop`, producing wire format `3.3.0`.
 
 ## Implementation Sequence
 
-1. Extend `NetworkInfo` with `genesisHash` and keep its RPC module always registered.
+1. Keep `NetworkInfo` scoped to `networkHash` and its RPC module always registered.
 2. Promote the existing faucet airdrop response into a tagged union in `json-rpc-types`; add the RPC airdrop request type and optionally registered module.
-3. Add gateway `network_hash` and `genesis_hash` startup identity; scope `network_id` to hosted faucet configuration, validate reachable descriptors, and preserve degraded startup when the faucet is unavailable.
+3. Add gateway `network_hash` startup identity; keep `network_id` and `genesis_hash` scoped to hosted faucet configuration, validate reachable descriptors, and preserve degraded startup when the faucet is unavailable.
 4. Implement the hosted adapter by calling the existing `POST /v1/airdrop` endpoint.
 5. Extract the current CLI HOG transaction helpers into the publishable signing/tooling layer and implement the process-local `dev-0` adapter.
 6. Add finite per-IP quota overrides to the existing faucet client-quota configuration and policy lookup.
-7. Update airdrop OpenRPC method/error mappings and snapshots; bump the wire format to `4.0.0`.
+7. Update airdrop OpenRPC method/error mappings and snapshots; bump the wire format to `3.3.0`.
 8. Hand the generated RPC contract to the separate TypeScript client workstream.
 
 ## Acceptance Criteria
 
-- Every RPC endpoint returns its configured protocol network hash and genesis hash.
+- Every RPC endpoint returns its configured protocol network hash.
 - Local and hosted development endpoints expose the same airdrop request and response contract.
 - Hosted RPC uses the existing faucet REST API and policy store.
 - Local RPC uses the current local-airdrop transaction helpers and `dev-0`.

@@ -166,7 +166,6 @@ come from a live producer because these fields are runtime state:
   `recovered` only when hog-devnode actually recovered an existing committed
   chain. Data-directory presence alone does not make a chain recovered.
 - `endpoints` contain bound ports.
-- `genesisHash` identifies the materialized genesis.
 - `bootstrapAccounts[].walletAddress` must match the deployed dev wallets.
 - `bootstrap.devWallet.*Hash` and `bootstrap.storageCostModel.hash` must match
   the backend that produced the chain.

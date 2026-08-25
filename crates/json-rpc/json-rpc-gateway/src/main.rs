@@ -50,7 +50,7 @@ struct Cli {
     #[arg(long, value_parser = parse_network_hash)]
     network_hash: Option<NetworkHashHex>,
 
-    /// Materialized genesis hash (overrides config file)
+    /// Hosted-faucet genesis hash (overrides config file)
     #[arg(long, value_parser = parse_sha256_hash)]
     genesis_hash: Option<SHA256Hash>,
 
@@ -147,8 +147,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(
         network_hash = ?network_info.network_hash,
-        genesis_hash = ?network_info.genesis_hash,
         faucet_network_id = ?config.network_id,
+        faucet_genesis_hash = ?config.genesis_hash,
         faucet_configured = config.faucet_url.is_some(),
         listen = %config.listen_address,
         observability_listen = %config.observability_listen,
@@ -437,11 +437,7 @@ mod tests {
             .expect("bug: complete CLI identity should resolve");
 
         assert_eq!(network_info.network_hash.as_ref(), &[0x12; 32]);
-        assert_eq!(
-            serde_json::to_value(network_info.genesis_hash)
-                .expect("bug: genesis hash should serialize"),
-            format!("0x{}", "42".repeat(32))
-        );
+        assert!(config.genesis_hash.is_some());
     }
 
     #[test]

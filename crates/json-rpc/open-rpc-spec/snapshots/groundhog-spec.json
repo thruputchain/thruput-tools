@@ -709,20 +709,15 @@
         "type": "string"
       },
       "NetworkInfo": {
-        "description": "Immutable protocol and genesis identity reported by a JSON-RPC server.",
+        "description": "Immutable protocol identity reported by a JSON-RPC server.",
         "properties": {
-          "genesisHash": {
-            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
-            "description": "Hash of the materialized genesis state."
-          },
           "networkHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash",
             "description": "Hash of the network name, bound into every transaction signature."
           }
         },
         "required": [
-          "networkHash",
-          "genesisHash"
+          "networkHash"
         ],
         "type": "object"
       },
@@ -1261,7 +1256,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "4.0.0"
+    "version": "3.3.0"
   },
   "methods": [
     {

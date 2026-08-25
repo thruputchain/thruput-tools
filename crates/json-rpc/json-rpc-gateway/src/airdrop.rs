@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use groundhog_json_rpc_api::AirdropApiServer;
 use groundhog_json_rpc_server::RpcServerError;
 use groundhog_json_rpc_types::{
+    SHA256Hash,
     airdrop::{AirdropAttemptResponse, AirdropRequest, HostedAirdropRequest},
     network_descriptor::{
         NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
@@ -45,6 +46,7 @@ struct HostedAirdropInner {
     base_url: Url,
     network_id: String,
     network: NetworkInfo,
+    genesis_hash: SHA256Hash,
     validation: tokio::sync::RwLock<ValidationState>,
     admission: Semaphore,
     request_timeout: Duration,
@@ -67,6 +69,8 @@ pub(crate) enum AirdropStartupError {
     Descriptor(String),
     #[error("a hosted faucet requires a non-empty gateway field `network_id`")]
     MissingNetworkId,
+    #[error("a hosted faucet requires gateway field `genesis_hash`")]
+    MissingGenesisHash,
 }
 
 #[derive(Debug)]
@@ -99,6 +103,9 @@ impl HostedAirdrop {
             .filter(|network_id| !network_id.is_empty())
             .ok_or(AirdropStartupError::MissingNetworkId)?
             .to_owned();
+        let genesis_hash = config
+            .genesis_hash
+            .ok_or(AirdropStartupError::MissingGenesisHash)?;
         let base_url = Url::parse(base_url).map_err(|source| AirdropStartupError::InvalidUrl {
             reason: source.to_string(),
         })?;
@@ -132,6 +139,7 @@ impl HostedAirdrop {
                 base_url,
                 network_id,
                 network,
+                genesis_hash,
                 validation: tokio::sync::RwLock::new(ValidationState::default()),
                 admission: Semaphore::new(MAX_IN_FLIGHT),
                 request_timeout,
@@ -246,7 +254,7 @@ impl HostedAirdrop {
         }
         if descriptor.network_id != self.inner.network_id
             || descriptor.network_hash != self.inner.network.network_hash
-            || descriptor.genesis_hash != self.inner.network.genesis_hash
+            || descriptor.genesis_hash != self.inner.genesis_hash
         {
             return Err(ProbeError::Mismatch);
         }
@@ -277,7 +285,7 @@ impl HostedAirdrop {
             client_nonce: request.client_nonce,
             network_id: self.inner.network_id.clone(),
             network_hash: self.inner.network.network_hash,
-            genesis_hash: self.inner.network.genesis_hash,
+            genesis_hash: self.inner.genesis_hash,
         };
         let url = endpoint(&self.inner.base_url, "v1/airdrop")
             .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
@@ -530,6 +538,21 @@ mod tests {
                 .expect_err("configured faucet should require a logical network ID");
             assert!(matches!(error, AirdropStartupError::MissingNetworkId));
         }
+    }
+
+    #[tokio::test]
+    async fn configured_faucet_requires_genesis_hash() {
+        let config = GatewayConfig {
+            network_id: Some("devnet".into()),
+            faucet_url: Some("https://faucet.example".into()),
+            ..GatewayConfig::default()
+        };
+
+        let error = HostedAirdrop::from_config(&config, network_info())
+            .await
+            .expect_err("hosted faucet adapter requires its genesis hash");
+
+        assert!(matches!(error, AirdropStartupError::MissingGenesisHash));
     }
 
     #[tokio::test]
@@ -1347,7 +1370,7 @@ mod tests {
         GatewayConfig {
             network_id: Some("devnet".into()),
             network_hash: Some(groundhog_json_rpc_types::NetworkHashHex::from([0x12; 32])),
-            genesis_hash: Some(network_info().genesis_hash),
+            genesis_hash: Some(genesis_hash()),
             faucet_url: Some(base_url.into()),
             request_timeout_ms: 200,
             backend_connect_timeout_ms: 100,
@@ -1357,10 +1380,14 @@ mod tests {
 
     fn network_info() -> NetworkInfo {
         serde_json::from_value(json!({
-            "networkHash": format!("0x{}", "12".repeat(32)),
-            "genesisHash": format!("0x{}", "42".repeat(32))
+            "networkHash": format!("0x{}", "12".repeat(32))
         }))
         .expect("bug: network fixture should decode")
+    }
+
+    fn genesis_hash() -> SHA256Hash {
+        serde_json::from_value(json!(format!("0x{}", "42".repeat(32))))
+            .expect("bug: genesis hash fixture should decode")
     }
 
     fn network_descriptor(network_id: &str) -> serde_json::Value {

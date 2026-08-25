@@ -554,7 +554,6 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
         "chainState": "fresh",
         "networkHash": "00".repeat(32),
         "protocol": PROTOCOL_VERSION,
-        "genesisHash": Hex0x(SHA256Hash::from([0x42; 32])),
         "producer": Value::Object(producer),
         "endpoints": endpoints,
         "bootstrapAccountDerivation": {

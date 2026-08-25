@@ -3087,7 +3087,6 @@ mod tests {
               "chainState":"fresh",
               "networkHash":"0000000000000000000000000000000000000000000000000000000000000000",
               "protocol":"hogp/test",
-              "genesisHash":"0x{}",
               "producer":{{"binary":"hog-devnode","version":"0.1.0","commitHash":"abcdef0"}},
               "endpoints":{endpoints},
               "bootstrapAccountDerivation":{{
@@ -3117,7 +3116,6 @@ mod tests {
                 }}
               }}
             }}"#,
-            "42".repeat(32),
             "51".repeat(32),
             "52".repeat(32),
             "53".repeat(32),

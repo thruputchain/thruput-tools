@@ -191,7 +191,6 @@ The runtime manifest file contains the full payload:
   "chainState": "fresh",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "protocol": "hogp/...",
-  "genesisHash": "0x...",
   "producer": {
     "binary": "hog-devnode",
     "version": "...",
@@ -332,8 +331,6 @@ pretty-printed JSON. The full cost model remains authoritative.
   usable.
 - May serve the same runtime manifest from an admin HTTP endpoint after startup,
   but does not treat that endpoint as the primary readiness contract.
-- Computes and emits `genesisHash` from the complete bootstrap input actually
-  materialized.
 - Emits producer identity so benchmark runs can be tied back to the hogd binary
   and commit that created the runtime state.
 - Prototypes the manifest producer in `hogd-dev` first, but keeps the schema
@@ -362,9 +359,6 @@ pretty-printed JSON. The full cost model remains authoritative.
 - Continues to expose normal chain and state facts through public JSON-RPC.
   Manifest-only metadata should not be promoted into the production RPC surface
   unless real clients need it as chain data rather than orchestration data.
-  `genesisHash` is the strongest candidate for promotion because it is a chain
-  fingerprint; if promoted, prefer adding it to `groundhog_version` rather than
-  minting a manifest-shaped RPC method.
 - Accepts `--runtime-manifest <path>` for dev/bench runs and derives its backend
   endpoint config directly from the manifest. TOML remains the normal production
   config format when no manifest exists.
@@ -526,10 +520,7 @@ the full-stack benchnet needs a portable bootstrap input.
 
 ## Open Questions
 
-1. Should any manifest-only fields beyond `genesisHash` graduate into public
-   JSON-RPC, and if so which are true chain facts rather than orchestration
-   metadata?
-2. Should the full-stack benchnet prefer discrete hogd component processes or a
+1. Should the full-stack benchnet prefer discrete hogd component processes or a
    stitched binary with role-selecting flags?
 
 ## Review Position

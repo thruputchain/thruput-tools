@@ -6857,7 +6857,6 @@ mod tests {
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
-            "genesisHash": prefixed_hex(0x11),
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0"

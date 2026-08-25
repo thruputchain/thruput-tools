@@ -266,10 +266,9 @@ fn server_with_view(
 }
 
 fn test_network_info() -> NetworkInfo {
-    NetworkInfo::new(
-        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
-        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
-    )
+    NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+        [0x07; 32],
+    )))
 }
 
 fn simple_query() -> EventQuery {
