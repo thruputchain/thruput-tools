@@ -1,5 +1,7 @@
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt as _;
 use getrandom::getrandom;
 use groundhog_json_rpc_client::AirdropApiClient;
 use groundhog_json_rpc_types::{
@@ -41,7 +43,7 @@ pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_AIRDROP_HOG: &str = "10";
 const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum PreparedAirdrop {
     Local(PreparedLocalAirdrop),
     Remote(PreparedRemoteAirdrop),
@@ -62,7 +64,7 @@ pub(crate) struct PreparedLocalAirdrop {
     pub(crate) tx_hex: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct PreparedRemoteAirdrop {
     pub(crate) faucet_url: String,
     pub(crate) rpc_url: String,
@@ -72,6 +74,7 @@ pub(crate) struct PreparedRemoteAirdrop {
     airdrop_policy: groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
     amount_hog: String,
     attempt_path: PathBuf,
+    _attempt_lock: File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -628,7 +631,7 @@ fn prepare_remote_airdrop_with_descriptor(
     rpc_url: String,
     descriptor: &RemoteAirdropDescriptor,
 ) -> Result<PreparedAirdrop, CliError> {
-    let loaded_attempt =
+    let (loaded_attempt, attempt_lock) =
         load_or_create_remote_airdrop_attempt(profile, &recipient_wallet, descriptor)?;
     let attempt = loaded_attempt.attempt;
 
@@ -641,6 +644,7 @@ fn prepare_remote_airdrop_with_descriptor(
         airdrop_policy: descriptor.policy.clone(),
         amount_hog: descriptor.amount_hog.clone(),
         attempt_path: loaded_attempt.path,
+        _attempt_lock: attempt_lock,
     }))
 }
 
@@ -648,18 +652,19 @@ fn load_or_create_remote_airdrop_attempt(
     profile: &ResolvedProfile,
     recipient_wallet: &str,
     descriptor: &RemoteAirdropDescriptor,
-) -> Result<LoadedRemoteAirdropAttempt, CliError> {
+) -> Result<(LoadedRemoteAirdropAttempt, File), CliError> {
     let network_id = descriptor.network_id.clone();
     let genesis_hash = descriptor.genesis_hash.clone();
     let path =
         remote_airdrop_attempt_path(&profile.name, recipient_wallet, &network_id, &genesis_hash)?;
+    let attempt_lock = lock_remote_airdrop_attempt(&path)?;
     if let Some(attempt) = read_remote_airdrop_attempt(&path)?
         && attempt.profile == profile.name
         && attempt.recipient_wallet == recipient_wallet
         && attempt.network_id == network_id
         && attempt.genesis_hash == genesis_hash
     {
-        return Ok(LoadedRemoteAirdropAttempt { attempt, path });
+        return Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_lock));
     }
 
     let mut client_nonce = [0u8; 16];
@@ -672,7 +677,37 @@ fn load_or_create_remote_airdrop_attempt(
         client_nonce: format!("0x{}", hex::encode(client_nonce)),
     };
     write_remote_airdrop_attempt(&path, &attempt)?;
-    Ok(LoadedRemoteAirdropAttempt { attempt, path })
+    Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_lock))
+}
+
+fn lock_remote_airdrop_attempt(attempt_path: &Path) -> Result<File, CliError> {
+    let parent = attempt_path
+        .parent()
+        .ok_or_else(|| CliError::Other("airdrop attempt path has no parent".into()))?;
+    std::fs::create_dir_all(parent)?;
+    let lock_path = attempt_path.with_extension("lock");
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path)?;
+    file.try_lock_exclusive().map_err(|error| {
+        let contended = fs2::lock_contended_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock
+            || error.raw_os_error() == contended.raw_os_error()
+        {
+            CliError::Other(format!(
+                "another airdrop command is already running for this profile, recipient, and network ({})",
+                lock_path.display()
+            ))
+        } else {
+            error.into()
+        }
+    })?;
+    Ok(file)
 }
 
 fn read_remote_airdrop_attempt(path: &Path) -> Result<Option<RemoteAirdropAttempt>, CliError> {
@@ -849,17 +884,22 @@ mod tests {
     use std::collections::BTreeMap;
     use std::env;
     use std::ffi::OsString;
+    use std::path::Path;
 
     use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use serial_test::serial;
 
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, ensure_local_airdrop_success,
-        observe_post_airdrop_balance, prepare_remote_airdrop_with_descriptor,
-        resolve_airdrop_backend, resolve_airdrop_recipient, validate_remote_airdrop_amount,
+        lock_remote_airdrop_attempt, observe_post_airdrop_balance,
+        prepare_remote_airdrop_with_descriptor, resolve_airdrop_backend, resolve_airdrop_recipient,
+        validate_remote_airdrop_amount,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
+
+    const ATTEMPT_LOCK_TEST_PATH: &str = "GROUNDHOG_ATTEMPT_LOCK_TEST_PATH";
+    const ATTEMPT_LOCK_TEST_MODE: &str = "GROUNDHOG_ATTEMPT_LOCK_TEST_MODE";
 
     struct EnvGuard {
         key: &'static str,
@@ -968,6 +1008,51 @@ mod tests {
         assert_eq!(prepared.recipient_wallet, format!("0x{}", "ab".repeat(32)));
         assert_eq!(prepared.client_nonce.len(), 34);
         unsafe { env::remove_var("XDG_CACHE_HOME") };
+    }
+
+    #[test]
+    #[serial]
+    fn concurrent_remote_airdrop_lifecycle_is_rejected_across_processes() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let attempt_path = tmp.path().join("attempt.json");
+        let first = lock_remote_airdrop_attempt(&attempt_path)
+            .expect("bug: first process should acquire attempt lock");
+        let blocked = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "airdrop::tests::remote_airdrop_lock_subprocess"])
+            .env(ATTEMPT_LOCK_TEST_PATH, &attempt_path)
+            .env(ATTEMPT_LOCK_TEST_MODE, "blocked")
+            .status()
+            .expect("bug: lock test subprocess should start");
+        assert!(blocked.success());
+
+        drop(first);
+        let available = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "airdrop::tests::remote_airdrop_lock_subprocess"])
+            .env(ATTEMPT_LOCK_TEST_PATH, &attempt_path)
+            .env(ATTEMPT_LOCK_TEST_MODE, "available")
+            .status()
+            .expect("bug: lock test subprocess should start");
+        assert!(available.success());
+    }
+
+    #[test]
+    fn remote_airdrop_lock_subprocess() {
+        let Some(path) = std::env::var_os(ATTEMPT_LOCK_TEST_PATH) else {
+            return;
+        };
+        let result = lock_remote_airdrop_attempt(Path::new(&path));
+        match std::env::var(ATTEMPT_LOCK_TEST_MODE).as_deref() {
+            Ok("blocked") => assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("another airdrop command")
+            ),
+            Ok("available") => {
+                result.expect("lock should be released when the first process exits");
+            }
+            mode => panic!("unexpected attempt lock test mode: {mode:?}"),
+        }
     }
 
     #[test]
