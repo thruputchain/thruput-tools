@@ -1177,6 +1177,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1371,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-bench"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
@@ -1390,15 +1400,16 @@ dependencies = [
 
 [[package]]
 name = "groundhog-build-info"
-version = "0.9.6"
+version = "0.10.0"
 
 [[package]]
 name = "groundhog-cli"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "base64",
  "clap",
  "clap_complete",
+ "fs2",
  "getrandom 0.2.17",
  "groundhog-build-info",
  "groundhog-contract-spec",
@@ -1519,7 +1530,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1554,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-types",
@@ -1565,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1582,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1602,6 +1613,7 @@ dependencies = [
  "groundhog_view",
  "jsonrpsee",
  "prometheus",
+ "reqwest",
  "rpc_driver",
  "serde",
  "serde_json",
@@ -1618,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "groundhog-build-info",
@@ -1637,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1672,7 +1684,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1707,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "schemars",
  "serde",
@@ -1716,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1728,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1739,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-artifact"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1747,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-lower"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1774,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
@@ -1790,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1850,7 +1862,7 @@ checksum = "cbaed9f9f34120f6ac2eb060b477d9545d86b002e5bf440f2c8416990c221a62"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
@@ -1895,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "async-trait",
  "rpc_driver",
@@ -4474,6 +4486,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4481,6 +4509,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-link"

@@ -42,31 +42,42 @@ impl FaucetConfig {
         airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
         wallet_prefund_submitter: Arc<dyn airdrop::AirdropSubmitter>,
         wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
-    ) -> Self {
-        let descriptor_airdrop_raw_amount = network_descriptor
+    ) -> Result<Self, config::FaucetConfigError> {
+        let descriptor_airdrop = network_descriptor
             .airdrop
             .as_ref()
-            .expect("faucet network descriptor must advertise airdrop policy")
-            .raw_amount
-            .parse::<u128>()
-            .expect("airdrop amount in network descriptor must be a valid u128");
-        assert_eq!(
-            airdrop_submitter.raw_amount(),
-            descriptor_airdrop_raw_amount,
-            "airdrop submitter amount must match network descriptor"
-        );
+            .ok_or(config::FaucetConfigError::MissingAirdropDescriptor)?;
+        let descriptor_airdrop_raw_amount =
+            descriptor_airdrop.raw_amount.parse::<u128>().map_err(|_| {
+                config::FaucetConfigError::InvalidDescriptorAmount {
+                    field: "airdrop.rawAmount",
+                    value: descriptor_airdrop.raw_amount.clone(),
+                }
+            })?;
+        if airdrop_submitter.raw_amount() != descriptor_airdrop_raw_amount {
+            return Err(config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "airdrop submitter",
+                expected: descriptor_airdrop_raw_amount,
+                actual: airdrop_submitter.raw_amount(),
+            });
+        }
         let descriptor_prefund_raw_amount = network_descriptor
             .wallet_create
             .prefund_raw_amount
             .parse::<u128>()
-            .expect("wallet prefund amount in network descriptor must be a valid u128");
-        assert_eq!(
-            wallet_prefund_submitter.raw_amount(),
-            descriptor_prefund_raw_amount,
-            "wallet prefund submitter amount must match network descriptor"
-        );
+            .map_err(|_| config::FaucetConfigError::InvalidDescriptorAmount {
+                field: "walletCreate.prefundRawAmount",
+                value: network_descriptor.wallet_create.prefund_raw_amount.clone(),
+            })?;
+        if wallet_prefund_submitter.raw_amount() != descriptor_prefund_raw_amount {
+            return Err(config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "wallet prefund submitter",
+                expected: descriptor_prefund_raw_amount,
+                actual: wallet_prefund_submitter.raw_amount(),
+            });
+        }
 
-        Self {
+        Ok(Self {
             listen_address: DEFAULT_LISTEN_ADDRESS.to_owned(),
             cors_allowed_origins: Vec::new(),
             network_descriptor,
@@ -75,7 +86,7 @@ impl FaucetConfig {
             wallet_create_submitter,
             policy_config: config::PolicyRuntimeConfig::default(),
             policy_store: Arc::new(policy::InMemoryFaucetPolicyStore::new()),
-        }
+        })
     }
 }
 
@@ -230,7 +241,7 @@ mod tests {
         NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
     };
     use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-    use groundhog_json_rpc_types::transaction::TxHash;
+    use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
     use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
     use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
     use std::net::SocketAddr;
@@ -238,7 +249,9 @@ mod tests {
     use std::time::{Duration, SystemTime};
     use tower::ServiceExt;
 
-    use super::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app, policy, wallet_create};
+    use super::{
+        DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app, config, policy, wallet_create,
+    };
 
     #[test]
     fn default_config_uses_local_listen_address() {
@@ -321,7 +334,8 @@ mod tests {
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
-        ))
+        )
+        .expect("bug: test faucet config should build"))
         .oneshot(
             Request::builder()
                 .uri("/v1/network")
@@ -373,6 +387,7 @@ mod tests {
                             "recipient": format!("0x{}", "11".repeat(32)),
                             "clientNonce": "0x01",
                             "networkId": "devnet-preview",
+                            "networkHash": format!("0x{}", "00".repeat(32)),
                             "genesisHash": format!("0x{}", "00".repeat(32))
                         })
                         .to_string(),
@@ -388,17 +403,39 @@ mod tests {
             .expect("bug: airdrop body should read");
         let json: serde_json::Value =
             serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-        assert_eq!(json["attemptStatus"], "succeeded");
-        assert_eq!(json["rawAmount"], "100000000");
-        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
-        assert_eq!(json["height"], 42);
-        assert_eq!(json["status"]["result"], "ok");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "attemptStatus": "succeeded",
+                "recipient": format!("0x{}", "11".repeat(32)),
+                "txHash": format!("0x{}", "22".repeat(32)),
+                "rawAmount": "100000000",
+                "height": 42,
+                "status": { "result": "ok" }
+            })
+        );
     }
 
     #[tokio::test]
-    async fn airdrop_rejects_mismatched_chain_identity() {
+    async fn airdrop_rejects_mismatched_genesis_hash() {
         let mut body = airdrop_body();
         body["genesisHash"] = serde_json::json!(format!("0x{}", "99".repeat(32)));
+
+        let response = airdrop_request_with_body(&test_config(), body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_network_mismatch");
+    }
+
+    #[tokio::test]
+    async fn airdrop_rejects_mismatched_network_hash() {
+        let mut body = airdrop_body();
+        body["networkHash"] = serde_json::json!(format!("0x{}", "99".repeat(32)));
 
         let response = airdrop_request_with_body(&test_config(), body).await;
 
@@ -415,6 +452,54 @@ mod tests {
     async fn airdrop_rejects_empty_client_nonce() {
         let mut body = airdrop_body();
         body["clientNonce"] = serde_json::json!("0x");
+
+        let response = airdrop_request_with_body(&test_config(), body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
+    }
+
+    #[tokio::test]
+    async fn airdrop_rejects_client_nonce_over_32_bytes() {
+        let mut body = airdrop_body();
+        body["clientNonce"] = serde_json::json!(format!("0x{}", "01".repeat(33)));
+
+        let response = airdrop_request_with_body(&test_config(), body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
+    }
+
+    #[tokio::test]
+    async fn airdrop_rejects_odd_length_client_nonce_with_structured_error() {
+        let mut body = airdrop_body();
+        body["clientNonce"] = serde_json::json!("0x1");
+
+        let response = airdrop_request_with_body(&test_config(), body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
+    }
+
+    #[tokio::test]
+    async fn airdrop_rejects_non_string_client_nonce_with_structured_error() {
+        let mut body = airdrop_body();
+        body["clientNonce"] = serde_json::json!(1);
 
         let response = airdrop_request_with_body(&test_config(), body).await;
 
@@ -451,14 +536,68 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "airdrop submitter amount must match network descriptor")]
     fn airdrop_submitter_amount_must_match_network_descriptor() {
-        FaucetConfig::new(
+        let error = FaucetConfig::new(
             test_network_descriptor(),
             Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000")),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect_err("bug: mismatched airdrop amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "airdrop submitter",
+                expected: 100_000_000,
+                actual: 200_000_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn faucet_config_requires_airdrop_descriptor() {
+        let mut descriptor = test_network_descriptor();
+        descriptor.airdrop = None;
+
+        let error = FaucetConfig::new(
+            descriptor,
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        )
+        .expect_err("bug: missing airdrop descriptor should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::MissingAirdropDescriptor
+        ));
+    }
+
+    #[test]
+    fn faucet_config_rejects_invalid_airdrop_descriptor_amount() {
+        let mut descriptor = test_network_descriptor();
+        descriptor
+            .airdrop
+            .as_mut()
+            .expect("bug: test descriptor should advertise airdrops")
+            .raw_amount = "invalid".into();
+
+        let error = FaucetConfig::new(
+            descriptor,
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        )
+        .expect_err("bug: invalid airdrop descriptor amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::InvalidDescriptorAmount {
+                field: "airdrop.rawAmount",
+                ref value,
+            } if value == "invalid"
+        ));
     }
 
     #[tokio::test]
@@ -474,9 +613,15 @@ mod tests {
 
         let response = airdrop_request(&config).await;
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(airdrop.calls(), 1);
-        assert_eq!(airdrop.poll_calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 0);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(
+            attempt.error_code.as_deref(),
+            Some("airdrop_submit_amount_mismatch")
+        );
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
     }
 
     #[tokio::test]
@@ -490,7 +635,8 @@ mod tests {
             airdrop.clone(),
             prefund.clone(),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect("bug: test faucet config should build");
 
         let wallet_response = wallet_create_request(&config).await;
 
@@ -518,14 +664,45 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "wallet prefund submitter amount must match network descriptor")]
     fn faucet_config_rejects_wallet_prefund_amount_mismatch() {
-        let _ = FaucetConfig::new(
+        let error = FaucetConfig::new(
             test_network_descriptor(),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000")),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect_err("bug: mismatched prefund amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "wallet prefund submitter",
+                expected: 100_000_000,
+                actual: 200_000_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn faucet_config_rejects_invalid_prefund_descriptor_amount() {
+        let mut descriptor = test_network_descriptor();
+        descriptor.wallet_create.prefund_raw_amount = "invalid".into();
+
+        let error = FaucetConfig::new(
+            descriptor,
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        )
+        .expect_err("bug: invalid prefund descriptor amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::InvalidDescriptorAmount {
+                field: "walletCreate.prefundRawAmount",
+                ref value,
+            } if value == "invalid"
+        ));
     }
 
     #[tokio::test]
@@ -551,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn airdrop_duplicate_in_flight_returns_pending_attempt() {
         let config = test_config();
-        seed_airdrop_attempt(&config, policy::AirdropAttemptStatus::Pending, None);
+        seed_airdrop_attempt(&config, policy::AirdropAttemptStatus::Executing, None);
 
         let response = airdrop_request(&config).await;
 
@@ -562,8 +739,312 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
         assert_eq!(json["attemptStatus"], "pending");
+        assert_eq!(json["recipient"], format!("0x{}", "11".repeat(32)));
         assert_eq!(json["retryAfterSeconds"], 5);
         assert!(json.get("txHash").is_none());
+    }
+
+    #[tokio::test]
+    async fn airdrop_pending_response_matches_shared_wire_type() {
+        let config = test_config_with_submitters(
+            Arc::new(MockAirdropSubmitter::pending()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: pending airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: pending airdrop body should be JSON");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "attemptStatus": "pending",
+                "recipient": format!("0x{}", "11".repeat(32)),
+                "txHash": format!("0x{}", "22".repeat(32)),
+                "rawAmount": "100000000",
+                "retryAfterSeconds": 5
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_key_airdrops_submit_once_with_zero_cooldown() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let mut config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_config.airdrop.recipient_cooldown_secs = 0;
+
+        let (first, second) = tokio::join!(airdrop_request(&config), airdrop_request(&config));
+
+        assert!(
+            matches!(first.status(), StatusCode::OK | StatusCode::ACCEPTED)
+                && matches!(second.status(), StatusCode::OK | StatusCode::ACCEPTED)
+        );
+        assert_eq!(airdrop.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_key_pending_retries_poll_once_without_consuming_capacity() {
+        let poll_gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let mut submitter = MockAirdropSubmitter::success();
+        submitter.poll_gate = Some(poll_gate.clone());
+        let airdrop = Arc::new(submitter);
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        seed_airdrop_attempt(
+            &config,
+            policy::AirdropAttemptStatus::Pending,
+            Some(format!("0x{}", "22".repeat(32))),
+        );
+        let owner = {
+            let config = config.clone();
+            tokio::spawn(async move { airdrop_request(&config).await })
+        };
+        while airdrop.poll_calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        let mut retries = Vec::new();
+        for _ in 0..=64 {
+            let config = config.clone();
+            retries.push(tokio::spawn(async move { airdrop_request(&config).await }));
+        }
+        for retry in retries {
+            let response = tokio::time::timeout(Duration::from_secs(1), retry)
+                .await
+                .expect("same-key retry should not wait for execution capacity")
+                .expect("same-key retry task should complete");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+        assert_eq!(airdrop.calls(), 0);
+        assert_eq!(airdrop.poll_calls(), 1);
+
+        poll_gate.add_permits(1);
+        let response = owner.await.expect("poll owner task should complete");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn airdrop_execution_capacity_bounds_detached_workers() {
+        let mut submitter = MockAirdropSubmitter::success();
+        let submit_gate = Arc::new(tokio::sync::Semaphore::new(0));
+        submitter.submit_gate = Some(submit_gate.clone());
+        let airdrop = Arc::new(submitter);
+        let mut config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_config.airdrop.ip_quota_max = 65;
+        let policy_store = config.policy_store.clone();
+        let router = app(config);
+        let mut tasks = Vec::new();
+        for value in 1_u8..=64 {
+            let mut body = airdrop_body();
+            body["recipient"] = serde_json::json!(format!("0x{}", hex::encode([value; 32])));
+            body["clientNonce"] = serde_json::json!(format!("0x{value:02x}"));
+            let request = request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("bug: airdrop request should build"),
+            );
+            let router = router.clone();
+            tasks.push(tokio::spawn(async move { router.oneshot(request).await }));
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while airdrop.calls() < 64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached workers should reach the submitter");
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            assert!(
+                task.await
+                    .expect_err("canceled request task should not complete")
+                    .is_cancelled()
+            );
+        }
+        let mut overflow_body = airdrop_body();
+        overflow_body["recipient"] = serde_json::json!(format!("0x{}", hex::encode([65; 32])));
+        overflow_body["clientNonce"] = serde_json::json!("0x41");
+
+        let response = router
+            .clone()
+            .oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(overflow_body.to_string()))
+                    .expect("bug: airdrop request should build"),
+            ))
+            .await
+            .expect("bug: capacity request should complete");
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: capacity response should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: capacity response should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_capacity_exceeded");
+        let overflow_key = airdrop_attempt_key_for(65, "41");
+        assert!(
+            policy_store
+                .get_airdrop_attempt(&overflow_key)
+                .expect("bug: capacity-rejected attempt lookup should succeed")
+                .is_none()
+        );
+        submit_gate.add_permits(64);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while airdrop.poll_calls() < 64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached workers should finish after capacity is released");
+
+        submit_gate.add_permits(1);
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            router.oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(overflow_body.to_string()))
+                    .expect("bug: retry request should build"),
+            )),
+        )
+        .await
+        .expect("capacity-rejected request should remain retryable")
+        .expect("bug: retry request should complete");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn airdrop_execution_timeout_releases_capacity_without_resubmitting() {
+        let mut submitter = MockAirdropSubmitter::success();
+        submitter.submit_gate = Some(Arc::new(tokio::sync::Semaphore::new(0)));
+        let airdrop = Arc::new(submitter);
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        let request = {
+            let config = config.clone();
+            tokio::spawn(async move { airdrop_request(&config).await })
+        };
+        while airdrop.calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        tokio::time::advance(Duration::from_mins(10) + Duration::from_secs(1)).await;
+        let response = request.await.expect("timed-out request should complete");
+
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be retained");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Ambiguous);
+        assert_eq!(airdrop.calls(), 1);
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(airdrop.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn canceled_request_does_not_strand_pending_airdrop() {
+        let mut submitter = MockAirdropSubmitter::success();
+        submitter.submit_delay = Some(Duration::from_millis(25));
+        let airdrop = Arc::new(submitter);
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        let request = {
+            let config = config.clone();
+            tokio::spawn(async move { airdrop_request(&config).await })
+        };
+        while airdrop.calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        request.abort();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Succeeded);
+        assert_eq!(airdrop.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn canceled_request_still_recovers_panicking_submission_task() {
+        let config = test_config_with_submitters(
+            Arc::new(PanickingAirdropSubmitter),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        let request = {
+            let config = config.clone();
+            tokio::spawn(async move { airdrop_request(&config).await })
+        };
+        while stored_airdrop_attempt(&config).is_none() {
+            tokio::task::yield_now().await;
+        }
+
+        request.abort();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::FailedTerminal);
+        assert_eq!(attempt.error_code.as_deref(), Some("airdrop_submit_failed"));
+    }
+
+    #[tokio::test]
+    async fn panicking_poll_does_not_overwrite_accepted_transaction() {
+        let config = test_config_with_submitters(
+            Arc::new(PanickingPollAirdropSubmitter),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+        assert_eq!(attempt.tx_hash, Some(format!("0x{}", "22".repeat(32))));
+    }
+
+    #[tokio::test]
+    async fn terminal_same_key_attempt_is_retained_with_zero_cooldown() {
+        let mut config = test_config();
+        config.policy_config.airdrop.recipient_cooldown_secs = 0;
+        seed_airdrop_attempt(
+            &config,
+            policy::AirdropAttemptStatus::FailedTerminal,
+            Some(format!("0x{}", "22".repeat(32))),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            stored_airdrop_attempt(&config).map(|attempt| attempt.status),
+            Some(policy::AirdropAttemptStatus::FailedTerminal)
+        );
     }
 
     #[tokio::test]
@@ -611,7 +1092,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn airdrop_expires_stale_pending_attempt_before_retry() {
+    async fn airdrop_invalid_transaction_becomes_terminal() {
+        let airdrop = Arc::new(MockAirdropSubmitter::invalid());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::FailedTerminal);
+        assert!(attempt.expires_at.is_some());
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn airdrop_never_expires_executing_attempt() {
         let airdrop = Arc::new(MockAirdropSubmitter::success());
         let config = test_config_with_submitters(
             airdrop.clone(),
@@ -619,17 +1121,39 @@ mod tests {
         );
         seed_airdrop_attempt_with_expiry(
             &config,
-            policy::AirdropAttemptStatus::Pending,
+            policy::AirdropAttemptStatus::Executing,
             None,
             Some(SystemTime::UNIX_EPOCH),
         );
 
         let response = airdrop_request(&config).await;
 
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(airdrop.calls(), 0);
         let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
-        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Succeeded);
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Executing);
+    }
+
+    #[tokio::test]
+    async fn airdrop_never_reexecutes_ambiguous_attempt() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        seed_airdrop_attempt_with_expiry(
+            &config,
+            policy::AirdropAttemptStatus::Ambiguous,
+            None,
+            Some(SystemTime::UNIX_EPOCH),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(airdrop.calls(), 0);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Ambiguous);
     }
 
     #[tokio::test]
@@ -654,6 +1178,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn airdrop_socket_ip_override_uses_finite_override() {
+        let mut config = test_config();
+        config.policy_config.trust_proxy_client_ip_headers = true;
+        config.policy_config.airdrop.ip_quota_max = 0;
+        config
+            .policy_config
+            .airdrop
+            .client_overrides
+            .push(config::AirdropClientOverride {
+                ip: "127.0.0.1".parse().expect("bug: override IP should parse"),
+                quota_max: 1,
+                quota_window_secs: 60,
+            });
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/airdrop")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "203.0.113.10")
+            .body(Body::from(airdrop_body().to_string()))
+            .expect("bug: airdrop request should build");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))));
+
+        let response = app(config.clone())
+            .oneshot(request)
+            .await
+            .expect("request should complete");
+        let mut second_body = airdrop_body();
+        second_body["recipient"] = serde_json::json!(format!("0x{}", "12".repeat(32)));
+        second_body["clientNonce"] = serde_json::json!("0x02");
+        let second_response = airdrop_request_with_body(&config, second_body).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(second_response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn airdrop_unconfigured_socket_ip_uses_default_quota() {
+        let mut config = test_config();
+        config.policy_config.airdrop.ip_quota_max = 0;
+        config
+            .policy_config
+            .airdrop
+            .client_overrides
+            .push(config::AirdropClientOverride {
+                ip: "127.0.0.2".parse().expect("bug: override IP should parse"),
+                quota_max: 1,
+                quota_window_secs: 60,
+            });
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
     async fn airdrop_retries_failed_submit_attempt() {
         let airdrop = Arc::new(MockAirdropSubmitter::fail_once());
         let config = test_config_with_submitters(
@@ -662,6 +1243,12 @@ mod tests {
         );
         let response = airdrop_request(&config).await;
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(
+            stored_airdrop_attempt(&config)
+                .expect("bug: failed attempt should be stored")
+                .expires_at
+                .is_some()
+        );
 
         let response = airdrop_request(&config).await;
 
@@ -669,6 +1256,26 @@ mod tests {
         assert_eq!(airdrop.calls(), 2);
         let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
         assert_eq!(attempt.status, policy::AirdropAttemptStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn airdrop_does_not_retry_ambiguous_submit_error() {
+        let airdrop = Arc::new(MockAirdropSubmitter::ambiguous_submit());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be retained");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Ambiguous);
+        assert!(attempt.expires_at.is_none());
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(airdrop.calls(), 1);
     }
 
     #[tokio::test]
@@ -684,6 +1291,7 @@ mod tests {
                             "recipient": "0xdeadbeef",
                             "clientNonce": "0x01",
                             "networkId": "devnet-preview",
+                            "networkHash": format!("0x{}", "00".repeat(32)),
                             "genesisHash": format!("0x{}", "00".repeat(32))
                         })
                         .to_string(),
@@ -703,7 +1311,8 @@ mod tests {
             Arc::new(MockAirdropSubmitter::failure()),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
-        ))
+        )
+        .expect("bug: test faucet config should build"))
         .oneshot(request_with_connect_info(
             Request::builder()
                 .method("POST")
@@ -714,6 +1323,7 @@ mod tests {
                         "recipient": format!("0x{}", "11".repeat(32)),
                         "clientNonce": "0x01",
                         "networkId": "devnet-preview",
+                        "networkHash": format!("0x{}", "00".repeat(32)),
                         "genesisHash": format!("0x{}", "00".repeat(32))
                     })
                     .to_string(),
@@ -971,7 +1581,8 @@ mod tests {
             airdrop.clone(),
             airdrop.clone(),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect("bug: test faucet config should build");
         config.policy_config.wallet_create.owner_quota_max = 0;
 
         let response = wallet_create_request(&config).await;
@@ -1169,7 +1780,8 @@ mod tests {
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::failure()),
-        ))
+        )
+        .expect("bug: test faucet config should build"))
         .oneshot(request_with_connect_info(
             Request::builder()
                 .method("POST")
@@ -1212,6 +1824,7 @@ mod tests {
             airdrop_submitter,
             Arc::new(MockWalletCreateSubmitter::success()),
         )
+        .expect("bug: test faucet config should build")
     }
 
     fn test_config_with_submitters(
@@ -1224,6 +1837,7 @@ mod tests {
             airdrop_submitter,
             wallet_create_submitter,
         )
+        .expect("bug: test faucet config should build")
     }
 
     async fn wallet_create_request(config: &FaucetConfig) -> axum::response::Response {
@@ -1277,6 +1891,7 @@ mod tests {
             "recipient": format!("0x{}", "11".repeat(32)),
             "clientNonce": "0x01",
             "networkId": "devnet-preview",
+            "networkHash": format!("0x{}", "00".repeat(32)),
             "genesisHash": format!("0x{}", "00".repeat(32))
         })
     }
@@ -1350,11 +1965,18 @@ mod tests {
     }
 
     fn airdrop_attempt_key() -> policy::AirdropAttemptKey {
+        airdrop_attempt_key_for(0x11, "01")
+    }
+
+    fn airdrop_attempt_key_for(
+        recipient_byte: u8,
+        client_nonce: &str,
+    ) -> policy::AirdropAttemptKey {
         policy::AirdropAttemptKey {
             network_id: "devnet-preview".into(),
             genesis_hash: format!("0x{}", "00".repeat(32)),
-            recipient: format!("0x{}", "11".repeat(32)),
-            client_nonce: "01".into(),
+            recipient: format!("0x{}", hex::encode([recipient_byte; 32])),
+            client_nonce: client_nonce.into(),
         }
     }
 
@@ -1380,6 +2002,7 @@ mod tests {
                 client_identity: policy::ClientIdentity::Unknown,
                 raw_amount: "100000000".into(),
                 status,
+                execution_id: u64::from(status == policy::AirdropAttemptStatus::Executing),
                 tx_hash,
                 height: None,
                 error_code: None,
@@ -1480,24 +2103,47 @@ mod tests {
             self.inner.put_airdrop_attempt(attempt)
         }
 
-        fn insert_airdrop_attempt_if_absent(
+        fn admit_airdrop_attempt(
             &self,
             attempt: policy::AirdropAttempt,
+            attempt_capacity: usize,
             max_pending_per_recipient: u32,
-        ) -> Result<policy::InsertAirdropAttemptResult, policy::PolicyStoreError> {
-            self.inner
-                .insert_airdrop_attempt_if_absent(attempt, max_pending_per_recipient)
+            quota_checks: &[policy::QuotaCheck],
+            now: SystemTime,
+        ) -> Result<policy::AdmitAirdropAttemptResult, policy::PolicyStoreError> {
+            self.inner.admit_airdrop_attempt(
+                attempt,
+                attempt_capacity,
+                max_pending_per_recipient,
+                quota_checks,
+                now,
+            )
         }
 
         fn claim_airdrop_transition(
             &self,
             key: &policy::AirdropAttemptKey,
             expected: &[policy::AirdropAttemptStatus],
+            expected_execution_id: Option<u64>,
             next: policy::AirdropAttemptStatus,
             now: SystemTime,
         ) -> Result<policy::AirdropAttempt, policy::PolicyStoreError> {
             self.inner
-                .claim_airdrop_transition(key, expected, next, now)
+                .claim_airdrop_transition(key, expected, expected_execution_id, next, now)
+        }
+
+        fn replace_airdrop_attempt_if_status(
+            &self,
+            expected: &[policy::AirdropAttemptStatus],
+            attempt: policy::AirdropAttempt,
+        ) -> Result<policy::AirdropAttempt, policy::PolicyStoreError> {
+            if self.fail_succeeded_airdrop
+                && attempt.status == policy::AirdropAttemptStatus::Succeeded
+            {
+                return Err(policy::PolicyStoreError::LockPoisoned);
+            }
+            self.inner
+                .replace_airdrop_attempt_if_status(expected, attempt)
         }
 
         fn check_and_record_quota(
@@ -1528,6 +2174,7 @@ mod tests {
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
+            "networkHash": format!("0x{}", "00".repeat(32)),
             "protocol": "x23",
             "genesisHash": format!("0x{}", "00".repeat(32)),
             "endpoints": {
@@ -1567,6 +2214,61 @@ mod tests {
         poll_calls: Mutex<usize>,
         raw_amount: String,
         accepted_raw_amount: String,
+        poll_times_out: bool,
+        poll_invalid: bool,
+        ambiguous_submit: bool,
+        submit_delay: Option<Duration>,
+        submit_gate: Option<Arc<tokio::sync::Semaphore>>,
+        poll_gate: Option<Arc<tokio::sync::Semaphore>>,
+    }
+
+    struct PanickingAirdropSubmitter;
+    struct PanickingPollAirdropSubmitter;
+
+    #[async_trait::async_trait]
+    impl airdrop::AirdropSubmitter for PanickingAirdropSubmitter {
+        fn raw_amount(&self) -> u128 {
+            100_000_000
+        }
+
+        async fn submit_airdrop(
+            &self,
+            _recipient: ContractAddress,
+        ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            panic!("intentional submission panic")
+        }
+
+        async fn poll_airdrop(
+            &self,
+            _tx_hash: TxHash,
+        ) -> Result<TransactionReceipt, airdrop::AirdropSubmitError> {
+            unreachable!("panicking submitter never accepts a transaction")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl airdrop::AirdropSubmitter for PanickingPollAirdropSubmitter {
+        fn raw_amount(&self) -> u128 {
+            100_000_000
+        }
+
+        async fn submit_airdrop(
+            &self,
+            _recipient: ContractAddress,
+        ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
+            Ok(airdrop::AcceptedAirdrop {
+                raw_amount: "100000000".into(),
+                tx_hash: test_tx_hash(),
+            })
+        }
+
+        async fn poll_airdrop(
+            &self,
+            _tx_hash: TxHash,
+        ) -> Result<TransactionReceipt, airdrop::AirdropSubmitError> {
+            panic!("intentional polling panic")
+        }
     }
 
     impl MockAirdropSubmitter {
@@ -1582,12 +2284,36 @@ mod tests {
                 poll_calls: Mutex::new(0),
                 raw_amount: raw_amount.into(),
                 accepted_raw_amount: raw_amount.into(),
+                poll_times_out: false,
+                poll_invalid: false,
+                ambiguous_submit: false,
+                submit_delay: None,
+                submit_gate: None,
+                poll_gate: None,
             }
         }
 
         fn success_with_mismatched_accepted_amount() -> Self {
             let mut submitter = Self::success();
             submitter.accepted_raw_amount = "200000000".into();
+            submitter
+        }
+
+        fn pending() -> Self {
+            let mut submitter = Self::success();
+            submitter.poll_times_out = true;
+            submitter
+        }
+
+        fn invalid() -> Self {
+            let mut submitter = Self::success();
+            submitter.poll_invalid = true;
+            submitter
+        }
+
+        fn ambiguous_submit() -> Self {
+            let mut submitter = Self::success();
+            submitter.ambiguous_submit = true;
             submitter
         }
 
@@ -1599,6 +2325,12 @@ mod tests {
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
                 accepted_raw_amount: "100000000".into(),
+                poll_times_out: false,
+                poll_invalid: false,
+                ambiguous_submit: false,
+                submit_delay: None,
+                submit_gate: None,
+                poll_gate: None,
             }
         }
 
@@ -1610,6 +2342,12 @@ mod tests {
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
                 accepted_raw_amount: "100000000".into(),
+                poll_times_out: false,
+                poll_invalid: false,
+                ambiguous_submit: false,
+                submit_delay: None,
+                submit_gate: None,
+                poll_gate: None,
             }
         }
 
@@ -1625,6 +2363,12 @@ mod tests {
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
                 accepted_raw_amount: "100000000".into(),
+                poll_times_out: false,
+                poll_invalid: false,
+                ambiguous_submit: false,
+                submit_delay: None,
+                submit_gate: None,
+                poll_gate: None,
             }
         }
 
@@ -1649,6 +2393,18 @@ mod tests {
             _recipient: ContractAddress,
         ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
             *self.calls.lock().expect("bug: calls lock should succeed") += 1;
+            if let Some(delay) = self.submit_delay {
+                tokio::time::sleep(delay).await;
+            }
+            if let Some(gate) = &self.submit_gate {
+                gate.acquire()
+                    .await
+                    .expect("bug: submit gate should stay open")
+                    .forget();
+            }
+            if self.ambiguous_submit {
+                return Err(airdrop::AirdropSubmitError::Submit("timeout".into()));
+            }
             let mut failures = self
                 .failures_remaining
                 .lock()
@@ -1673,6 +2429,12 @@ mod tests {
                 .poll_calls
                 .lock()
                 .expect("bug: poll calls lock should succeed") += 1;
+            if let Some(gate) = &self.poll_gate {
+                gate.acquire()
+                    .await
+                    .expect("bug: poll gate should stay open")
+                    .forget();
+            }
             let mut failures = self
                 .poll_failures_remaining
                 .lock()
@@ -1680,6 +2442,24 @@ mod tests {
             if *failures > 0 {
                 *failures -= 1;
                 return Err(airdrop::AirdropSubmitError::RpcConnect("boom".into()));
+            }
+            if self.poll_times_out {
+                return Err(airdrop::AirdropSubmitError::Poll(
+                    groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout {
+                        tx_hash,
+                        attempts: 1,
+                    },
+                ));
+            }
+            if self.poll_invalid {
+                return Err(airdrop::AirdropSubmitError::Poll(
+                    groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                        tx_hash,
+                        status: TransactionStatus::Invalid {
+                            reason: "expired".into(),
+                        },
+                    },
+                ));
             }
             Ok(successful_receipt(tx_hash))
         }

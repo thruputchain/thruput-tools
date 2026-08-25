@@ -17,10 +17,10 @@ use groundhog_signing::{
 use crate::account_resolution::{
     bind_sender_to_network, resolve_address_target, resolve_sender_account,
 };
-use crate::codec::{format_contract_address, parse_contract_address};
+use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
-use crate::network_descriptor::resolve_wallet_entrypoints;
+use crate::network_descriptor::resolve_wallet_signing_context;
 use crate::result::{CommandError, CommandResult};
 use crate::terminal::{render_shell_arg, terminal_safe};
 use crate::transfer_json::{
@@ -104,7 +104,7 @@ fn prepare(
     let recipient = resolve_address_target(&profile, recipient_input)?;
     let raw_amount = hog::parse_amount(amount_input)?;
     let amount = hog::format_amount(raw_amount);
-    let token_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
+    let token_address = hog::token_address();
 
     let sender_account = resolve_sender_account(&profile, from)?;
     let sender = sender_account.wallet_address;
@@ -118,12 +118,17 @@ fn prepare(
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let resolved_sender = bind_sender_to_network(&profile, sender_account)?;
     let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
-    let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &resolved_sender.key_name)?;
+    let wallet_context = resolve_wallet_signing_context(
+        &profile,
+        &resolved_sender.key_name,
+        resolved_sender.network_hash,
+        &rt,
+    )?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
 
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
         wallet_address: sender,
-        wallet_entrypoint: wallet_entrypoints.do_action,
+        wallet_entrypoint: wallet_context.entrypoints.do_action,
         target_address: token_address,
         target_entrypoint: hog::transfer_entrypoint(),
         target_calldata: calldata.as_slice(),
@@ -142,7 +147,7 @@ fn prepare(
         tx,
         &resolved_sender.signer,
         SignTransactionParams::default(),
-        &resolved_sender.network_hash,
+        &wallet_context.network_hash,
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
     let signed_transaction = encode_signed_transaction_xdr(&authenticated_tx)

@@ -45,6 +45,12 @@ impl fmt::Display for ChildSignal {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum NodeSupervisorError {
+    /// Local airdrop resource or transfer configuration is invalid.
+    #[error("invalid local airdrop configuration: {reason}")]
+    InvalidLocalAirdropConfig {
+        /// Human-readable validation failure.
+        reason: &'static str,
+    },
     /// A configured binary path does not exist.
     #[error("configured hog-devnode binary path does not exist: {}", path.display())]
     ConfiguredPathMissing {

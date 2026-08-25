@@ -131,6 +131,7 @@ mod wire_format {
             schema_version: NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             kind: "groundhog-network".into(),
             network_id: "devnet-preview".into(),
+            network_hash: crate::NetworkHash::from(XdrHash::from([0x12; 32])),
             protocol: "x23".into(),
             genesis_hash: zero_hash(),
             endpoints: NetworkDescriptorEndpoints {
@@ -187,6 +188,7 @@ mod wire_format {
         assert_eq!(value["schemaVersion"], NETWORK_DESCRIPTOR_SCHEMA_VERSION);
         assert_eq!(value["kind"], "groundhog-network");
         assert_eq!(value["networkId"], "devnet-preview");
+        assert_eq!(value["networkHash"], format!("0x{}", "12".repeat(32)));
         assert_eq!(value["endpoints"]["rpcUrl"], "https://rpc.devnet.example");
         assert!(value["endpoints"].get("faucetUrl").is_none());
         assert_eq!(value["nativeHog"]["decimals"], 7);

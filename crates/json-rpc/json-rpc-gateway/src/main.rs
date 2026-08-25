@@ -1,4 +1,5 @@
 mod adaptive_batch;
+mod airdrop;
 mod backend;
 mod config;
 mod context;
@@ -24,6 +25,7 @@ use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_types::{NetworkHashHex, SHA256Hash};
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
@@ -39,6 +41,22 @@ struct Cli {
     /// Path to TOML config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+
+    /// Logical network identifier used by the hosted faucet API
+    #[arg(long)]
+    network_id: Option<String>,
+
+    /// Canonical unprefixed network hash (overrides config file)
+    #[arg(long, value_parser = parse_network_hash)]
+    network_hash: Option<NetworkHashHex>,
+
+    /// Materialized genesis hash (overrides config file)
+    #[arg(long, value_parser = parse_sha256_hash)]
+    genesis_hash: Option<SHA256Hash>,
+
+    /// Hosted faucet base URL (overrides config file)
+    #[arg(long)]
+    faucet_url: Option<String>,
 
     /// Path to backend runtime manifest JSON
     #[arg(long)]
@@ -98,6 +116,7 @@ struct Cli {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Observability ---
     tracing_subscriber::fmt()
@@ -114,6 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => GatewayConfig::default(),
     };
+    apply_identity_cli_overrides(&mut config, &cli);
 
     if let Some(path) = &cli.runtime_manifest {
         let contents = read_runtime_manifest(path).await?;
@@ -123,8 +143,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     apply_cli_overrides(&mut config, cli);
+    let network_info = config.network_info()?;
 
     tracing::info!(
+        network_hash = ?network_info.network_hash,
+        genesis_hash = ?network_info.genesis_hash,
+        faucet_network_id = ?config.network_id,
+        faucet_configured = config.faucet_url.is_some(),
         listen = %config.listen_address,
         observability_listen = %config.observability_listen,
         health_required_backends = ?config.health_required_backends,
@@ -143,10 +168,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metrics.set_rpc_connections_limit(config.max_connections);
 
     // --- Context (backend connections) ---
+    let airdrop = airdrop::HostedAirdrop::from_config_with_metrics(
+        &config,
+        network_info.clone(),
+        metrics.clone(),
+    )
+    .await?;
     let ctx = Arc::new(GatewayContext::new(config, metrics.clone()).await?);
 
     // --- Observability HTTP server ---
-    let health = health::GatewayHealth::new(&ctx.config, BUILD_VERSION, option_env!("GIT_COMMIT"));
+    let health = health::GatewayHealth::new_with_airdrop(
+        &ctx.config,
+        BUILD_VERSION,
+        option_env!("GIT_COMMIT"),
+        airdrop.clone(),
+    );
     let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
     let health_handle =
         health::spawn_health_probe_with_shutdown(ctx.clone(), health.clone(), health_shutdown_rx);
@@ -184,10 +220,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_view_gas_limit(ctx.config.view_gas_limit);
     let api_impl = GroundhogRpcServer::unified(
         GatewayBackend::new(ctx.clone()),
+        network_info,
         rpc_config,
         BuildInfo::from_build_version(BUILD_VERSION, option_env!("GIT_COMMIT")),
     );
-    let handle = server.start(api_impl.into_rpc());
+    let mut rpc = api_impl.into_rpc().remove_context();
+    airdrop::merge_rpc(&mut rpc, airdrop)?;
+    let handle = server.start(rpc);
 
     tracing::info!("hog-gateway listening");
 
@@ -208,12 +247,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn apply_identity_cli_overrides(config: &mut GatewayConfig, cli: &Cli) {
+    if let Some(network_id) = &cli.network_id {
+        config.network_id = Some(network_id.clone());
+    }
+    if let Some(network_hash) = &cli.network_hash {
+        config.network_hash = Some(network_hash.clone());
+    }
+    if let Some(genesis_hash) = cli.genesis_hash {
+        config.genesis_hash = Some(genesis_hash);
+    }
+}
+
+fn parse_network_hash(value: &str) -> Result<NetworkHashHex, String> {
+    NetworkHashHex::try_from(value).map_err(|error| error.to_string())
+}
+
+fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned()))
+        .map_err(|error| error.to_string())
+}
+
 fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     if let Some(listen) = cli.listen {
         config.listen_address = listen;
     }
     if let Some(observability_listen) = cli.observability_listen {
         config.observability_listen = observability_listen;
+    }
+    if let Some(faucet_url) = cli.faucet_url {
+        config.faucet_url = Some(faucet_url);
     }
     if let Some(required_backends) = cli.health_required_backends {
         config.health_required_backends = required_backends;
@@ -353,6 +416,70 @@ mod tests {
     use super::*;
 
     struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+    #[test]
+    fn cli_accepts_complete_network_identity() {
+        let cli = Cli::try_parse_from([
+            "hog-gateway",
+            "--network-id",
+            "devnet-preview",
+            "--network-hash",
+            &"12".repeat(32),
+            "--genesis-hash",
+            &format!("0x{}", "42".repeat(32)),
+        ])
+        .expect("bug: valid network identity flags should parse");
+        let mut config = GatewayConfig::default();
+
+        apply_identity_cli_overrides(&mut config, &cli);
+        let network_info = config
+            .network_info()
+            .expect("bug: complete CLI identity should resolve");
+
+        assert_eq!(network_info.network_hash.as_ref(), &[0x12; 32]);
+        assert_eq!(
+            serde_json::to_value(network_info.genesis_hash)
+                .expect("bug: genesis hash should serialize"),
+            format!("0x{}", "42".repeat(32))
+        );
+    }
+
+    #[test]
+    fn cli_rejects_malformed_genesis_hash() {
+        assert!(
+            Cli::try_parse_from([
+                "hog-gateway",
+                "--network-id",
+                "devnet-preview",
+                "--genesis-hash",
+                "0x1234",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cli_rejects_malformed_network_hash() {
+        assert!(Cli::try_parse_from(["hog-gateway", "--network-hash", "0x1234"]).is_err());
+    }
+
+    #[test]
+    fn cli_overrides_faucet_url() {
+        let cli = Cli::try_parse_from([
+            "hog-gateway",
+            "--faucet-url",
+            "https://faucet.devnet.example",
+        ])
+        .expect("bug: valid faucet URL flag should parse");
+        let mut config = GatewayConfig::default();
+
+        apply_cli_overrides(&mut config, cli);
+
+        assert_eq!(
+            config.faucet_url.as_deref(),
+            Some("https://faucet.devnet.example")
+        );
+    }
 
     impl Drop for NotifyOnDrop {
         fn drop(&mut self) {

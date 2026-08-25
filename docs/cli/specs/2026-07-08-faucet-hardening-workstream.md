@@ -4,6 +4,12 @@ Date: 2026-07-08
 Status: Draft after initial review
 Related: GH-72, GH-183, GH-187
 
+2026-08-24 update: Hosted CLI airdrops now use `groundhog_requestAirdrop`, and
+the gateway-to-faucet request additionally carries `networkHash`. Direct
+`POST /v1/airdrop` CLI guidance below is superseded by the network-info and
+airdrop RPC design; web clients may continue using the REST endpoint with all
+three network identity fields.
+
 ## Goal
 Harden the hosted Devnet faucet before it is exposed to private-preview users.
 
@@ -459,7 +465,7 @@ Required changes:
   
 - Detect unset or bad API base in production instead of silently fetching the static host's `index.html`.
   
-- Validate `/v1/network` response shape before treating it as a descriptor. At minimum require `networkId`, `genesisHash`, `nativeHog.decimals`, and `walletCreate.prefundRawAmount`.
+- Validate `/v1/network` response shape before treating it as a descriptor. At minimum require `networkId`, `networkHash`, `genesisHash`, `nativeHog.decimals`, and `walletCreate.prefundRawAmount`.
   
 - Parse API responses defensively:
   
@@ -475,7 +481,7 @@ Required changes:
   
 - Keep post-airdrop formatting outside the request failure path. If `formatHogAmount` fails after a committed airdrop, show the tx success with raw amount fallback rather than a false request failure.
 
-- Generate and send `clientNonce`, `networkId`, and `genesisHash` with `/v1/airdrop` requests. The UI already has `networkId` from `/v1/network`; it should also validate that `genesisHash` is present once the hardened API requires it.
+- Generate and send `clientNonce`, `networkId`, `networkHash`, and `genesisHash` with `/v1/airdrop` requests. The UI should validate all three network identity fields from `/v1/network` before enabling a request.
   
 ## Implementation Plan
 Recommended PR split:

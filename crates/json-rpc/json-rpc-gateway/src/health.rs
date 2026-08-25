@@ -18,6 +18,7 @@ use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
 use xdr_common::StringM;
 
 use crate::{
+    airdrop::HostedAirdrop,
     config::{GatewayConfig, HealthBackend},
     context::{
         GatewayContext, QuarantinedScheduler, clear_scheduler_if_current,
@@ -38,6 +39,7 @@ pub struct GatewayHealth {
     scheduler_required: bool,
     build_version: BuildVersion,
     commit_hash: Option<&'static str>,
+    airdrop: Option<HostedAirdrop>,
 }
 
 impl GatewayHealth {
@@ -46,10 +48,20 @@ impl GatewayHealth {
     /// The snapshot remains `starting` until the background probe loop publishes
     /// its first result. Reads also enforce chain-tip and whole-snapshot
     /// freshness before returning the cached value.
+    #[cfg(test)]
     pub fn new(
         config: &GatewayConfig,
         build_version: BuildVersion,
         commit_hash: Option<&'static str>,
+    ) -> Self {
+        Self::new_with_airdrop(config, build_version, commit_hash, None)
+    }
+
+    pub(crate) fn new_with_airdrop(
+        config: &GatewayConfig,
+        build_version: BuildVersion,
+        commit_hash: Option<&'static str>,
+        airdrop: Option<HostedAirdrop>,
     ) -> Self {
         Self {
             inner: Arc::new(RwLock::new(HealthSnapshot::starting(
@@ -64,6 +76,7 @@ impl GatewayHealth {
             scheduler_required: backend_required(config, HealthBackend::Scheduler),
             build_version,
             commit_hash,
+            airdrop,
         }
     }
 
@@ -163,6 +176,19 @@ impl HealthSnapshot {
                 },
             );
         }
+        if config.faucet_url.is_some() {
+            backends.insert(
+                "faucet",
+                BackendHealth {
+                    configured: true,
+                    required: true,
+                    up: false,
+                    last_success_timestamp: None,
+                    last_error: None,
+                    scheduler_identity: SchedulerIdentityStatus::Unverified,
+                },
+            );
+        }
 
         Self {
             service: "hog-gateway",
@@ -194,6 +220,10 @@ impl HealthSnapshot {
         self.backends
             .get(backend.as_str())
             .is_some_and(|health| health.up)
+    }
+
+    pub(crate) fn named_backend_up(&self, backend: &'static str) -> Option<bool> {
+        self.backends.get(backend).map(|health| health.up)
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -307,6 +337,7 @@ pub fn spawn_health_probe_with_shutdown(
 ) -> tokio::task::JoinHandle<()> {
     let build_version = health.build_version;
     let commit_hash = health.commit_hash;
+    let airdrop = health.airdrop.clone();
     tokio::spawn(async move {
         let started_at = Instant::now();
         let mut probe_state = ProbeState::new(&ctx.config);
@@ -314,7 +345,7 @@ pub fn spawn_health_probe_with_shutdown(
         let mut last_status = None;
         loop {
             let snapshot = tokio::select! {
-                snapshot = probe_once(&ctx, started_at, build_version, commit_hash, &mut probe_state) => snapshot,
+                snapshot = probe_once(&ctx, airdrop.as_ref(), started_at, build_version, commit_hash, &mut probe_state) => snapshot,
                 _ = &mut shutdown => break,
             };
             let status = snapshot.status();
@@ -348,14 +379,13 @@ struct ProbeState {
     last_success: BTreeMap<HealthBackend, String>,
     scheduler: SchedulerProbeState,
     timeouts: ProbeTimeouts,
+    last_faucet_success: Option<String>,
 }
 
 impl ProbeState {
     fn new(config: &GatewayConfig) -> Self {
         Self {
-            scheduler: SchedulerProbeState::with_expected_network_hash(
-                config.expected_network_hash.clone(),
-            ),
+            scheduler: SchedulerProbeState::with_expected_network_hash(config.network_hash.clone()),
             ..Self::default()
         }
     }
@@ -672,8 +702,10 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn probe_once(
     ctx: &GatewayContext,
+    airdrop: Option<&HostedAirdrop>,
     started_at: Instant,
     build_version: BuildVersion,
     commit_hash: Option<&'static str>,
@@ -683,6 +715,7 @@ async fn probe_once(
     let mut backends = BTreeMap::new();
     let probes = Box::pin(probe_backends(
         ctx,
+        airdrop,
         &mut state.scheduler,
         &mut state.timeouts,
     ))
@@ -693,6 +726,7 @@ async fn probe_once(
     let indexer = probes.indexer.result;
     let db_gateway = probes.db_gateway.result;
     let view_gateway = probes.view_gateway.result;
+    let faucet = probes.faucet.result;
 
     if let Some(tip) = scheduler.tip.as_ref() {
         state.last_tip = Some((
@@ -759,6 +793,23 @@ async fn probe_once(
         ),
     );
 
+    if config.faucet_url.is_some() {
+        if faucet.up {
+            state.last_faucet_success = Some(probes.faucet.completed_at.clone());
+        }
+        backends.insert(
+            "faucet",
+            BackendHealth {
+                configured: true,
+                required: true,
+                up: faucet.up,
+                last_success_timestamp: state.last_faucet_success.clone(),
+                last_error: faucet.error,
+                scheduler_identity: SchedulerIdentityStatus::Unverified,
+            },
+        );
+    }
+
     let status = readiness_status(config, &backends, &chain_tip);
     HealthSnapshot {
         service: "hog-gateway",
@@ -783,6 +834,7 @@ struct BackendProbeResults {
     indexer: TimedProbe<ProbeResult>,
     db_gateway: TimedProbe<ProbeResult>,
     view_gateway: TimedProbe<ProbeResult>,
+    faucet: TimedProbe<ProbeResult>,
 }
 
 struct TimedProbe<T> {
@@ -799,6 +851,7 @@ async fn timestamp_probe<T>(future: impl Future<Output = T>) -> TimedProbe<T> {
 
 async fn probe_backends(
     ctx: &GatewayContext,
+    airdrop: Option<&HostedAirdrop>,
     scheduler_state: &mut SchedulerProbeState,
     timeouts: &mut ProbeTimeouts,
 ) -> BackendProbeResults {
@@ -815,7 +868,7 @@ async fn probe_backends(
         db_gateway: db_gateway_timeouts,
         view_gateway: view_gateway_timeouts,
     } = timeouts;
-    let (scheduler, indexer, db_gateway, view_gateway) = tokio::join!(
+    let (scheduler, indexer, db_gateway, view_gateway, faucet) = tokio::join!(
         timestamp_probe(probe_scheduler(ctx, probe_timeout, scheduler_state)),
         timestamp_probe(probe_indexer(
             ctx,
@@ -835,12 +888,25 @@ async fn probe_backends(
             probe_timeout,
             view_gateway_timeouts,
         )),
+        timestamp_probe(probe_faucet(airdrop, probe_timeout)),
     );
     BackendProbeResults {
         scheduler,
         indexer,
         db_gateway,
         view_gateway,
+        faucet,
+    }
+}
+
+async fn probe_faucet(airdrop: Option<&HostedAirdrop>, timeout: Duration) -> ProbeResult {
+    let Some(airdrop) = airdrop else {
+        return failed_probe("faucet not configured");
+    };
+    let result = airdrop.probe(timeout).await;
+    ProbeResult {
+        up: result.up,
+        error: result.error.map(bounded_error),
     }
 }
 
@@ -1473,12 +1539,15 @@ fn readiness_status(
         return HealthStatus::Error;
     }
     for backend in HealthBackend::ALL {
-        let Some(health) = backends.get(backend.as_str()) else {
-            return HealthStatus::Error;
-        };
-        if health.required && (!health.configured || !health.up) {
+        if !backends.contains_key(backend.as_str()) {
             return HealthStatus::Error;
         }
+    }
+    if backends
+        .values()
+        .any(|health| health.required && (!health.configured || !health.up))
+    {
+        return HealthStatus::Error;
     }
 
     if backend_required(config, HealthBackend::Scheduler)
@@ -2637,6 +2706,47 @@ mod tests {
     }
 
     #[test]
+    fn required_faucet_down_is_readiness_error() {
+        let config = GatewayConfig::default();
+        let mut backends = BTreeMap::new();
+        for backend in HealthBackend::ALL {
+            backends.insert(
+                backend.as_str(),
+                BackendHealth {
+                    configured: true,
+                    required: backend_required(&config, backend),
+                    up: true,
+                    last_success_timestamp: None,
+                    last_error: None,
+                    scheduler_identity: SchedulerIdentityStatus::Unverified,
+                },
+            );
+        }
+        backends.insert(
+            "faucet",
+            BackendHealth {
+                configured: true,
+                required: true,
+                up: false,
+                last_success_timestamp: None,
+                last_error: Some("unavailable".into()),
+                scheduler_identity: SchedulerIdentityStatus::Unverified,
+            },
+        );
+
+        let status = readiness_status(
+            &config,
+            &backends,
+            &ChainTipHealth {
+                height: Some(BlockHeight::from(1i64)),
+                age_ms: Some(0),
+            },
+        );
+
+        assert_eq!(status, HealthStatus::Error);
+    }
+
+    #[test]
     fn backend_reconnect_timeout_is_independent_of_probe_interval() {
         let config = GatewayConfig {
             request_timeout_ms: 60_000,
@@ -3020,7 +3130,7 @@ mod tests {
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
-            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            network_hash: Some(NetworkHashHex::from([0x42; 32])),
             indexer_address: None,
             db_gateway_address: None,
             view_gateway_address: None,
@@ -3049,7 +3159,7 @@ mod tests {
         .await
         .expect("scheduler reconnect should enter quarantine");
         let mut scheduler_state =
-            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+            SchedulerProbeState::with_expected_network_hash(config.network_hash.clone());
 
         let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
 
@@ -3082,7 +3192,7 @@ mod tests {
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
-            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            network_hash: Some(NetworkHashHex::from([0x42; 32])),
             indexer_address: None,
             db_gateway_address: None,
             view_gateway_address: None,
@@ -3101,7 +3211,7 @@ mod tests {
             GatewayMetrics::for_tests(),
         );
         let mut scheduler_state =
-            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+            SchedulerProbeState::with_expected_network_hash(config.network_hash.clone());
 
         let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
 

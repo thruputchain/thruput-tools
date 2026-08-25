@@ -168,6 +168,12 @@ pub trait TryFromSlice: Sized {
     fn try_from_slice(slice: &[u8]) -> Result<Self, String>;
 }
 
+/// Fixed byte length of an XDR type represented by [`Hex0x`].
+pub trait FixedHexLength {
+    /// Number of bytes in the canonical representation.
+    const BYTE_LENGTH: usize;
+}
+
 /// Implement `TryFromSlice` for a concrete XDR type with a known byte size.
 macro_rules! impl_try_from_slice_for {
     ($ty:ty, $n:expr) => {
@@ -184,6 +190,10 @@ macro_rules! impl_try_from_slice_for {
                 Ok(<$ty>::from(arr))
             }
         }
+
+        impl FixedHexLength for $ty {
+            const BYTE_LENGTH: usize = $n;
+        }
     };
 }
 
@@ -193,7 +203,7 @@ impl_try_from_slice_for!(groundhog_xdr::types::Ed25519PublicKey, 32);
 impl_try_from_slice_for!(groundhog_xdr::types::StorageLongHash, 2048);
 impl_try_from_slice_for!(groundhog_xdr::validator::ValidatorID, 32);
 
-impl<T: JsonSchema> JsonSchema for Hex0x<T> {
+impl<T: FixedHexLength + JsonSchema> JsonSchema for Hex0x<T> {
     fn schema_name() -> Cow<'static, str> {
         format!("Hex0x_{}", T::schema_name()).into()
     }
@@ -203,9 +213,10 @@ impl<T: JsonSchema> JsonSchema for Hex0x<T> {
     }
 
     fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let pattern = format!("^0x[0-9a-f]{{{}}}$", T::BYTE_LENGTH * 2);
         json_schema!({
             "type": "string",
-            "pattern": "^0x[0-9a-f]*$"
+            "pattern": pattern
         })
     }
 }

@@ -1,7 +1,9 @@
+use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::network_descriptor::{
     AirdropDescriptor, NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
     NetworkDescriptor,
 };
+use groundhog_json_rpc_types::network_info::NetworkInfo;
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 use groundhog_signing::WALLET_DEPLOY_ENTRYPOINT;
 use groundhog_xdr::contract::ContractEntrypointID;
@@ -27,6 +29,12 @@ pub(crate) struct WalletEntrypoints {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalletSigningContext {
+    pub(crate) entrypoints: WalletEntrypoints,
+    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteAirdropDescriptor {
     pub(crate) network_id: String,
     pub(crate) genesis_hash: String,
@@ -34,17 +42,30 @@ pub(crate) struct RemoteAirdropDescriptor {
     pub(crate) amount_hog: String,
 }
 
-pub(crate) fn resolve_wallet_entrypoints(
+pub(crate) fn resolve_wallet_signing_context(
     profile: &ResolvedProfile,
     key_name: &str,
-) -> Result<WalletEntrypoints, CliError> {
+    configured_network_hash: groundhog_xdr::types::NetworkHash,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<WalletSigningContext, CliError> {
     let runtime_manifest = load_configured_runtime_manifest(profile, key_name)?;
     let Some(faucet_url) = profile.faucet_url.as_deref() else {
-        return runtime_or_legacy_entrypoints(runtime_manifest.as_ref(), key_name);
+        return Ok(WalletSigningContext {
+            entrypoints: runtime_or_legacy_entrypoints(runtime_manifest.as_ref(), key_name)?,
+            network_hash: configured_network_hash,
+        });
     };
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let descriptor = fetch_network_descriptor_value(faucet_url)?;
-    descriptor_entrypoints(key_name, rpc_url, &descriptor, runtime_manifest.as_ref())
+    let network_info = fetch_rpc_network_info(runtime, rpc_url)?;
+    validate_network_info(&descriptor, &network_info)?;
+    let entrypoints =
+        descriptor_entrypoints(key_name, rpc_url, &descriptor, runtime_manifest.as_ref())?;
+    let network_hash = validated_signing_network_hash(&configured_network_hash, &network_info)?;
+    Ok(WalletSigningContext {
+        entrypoints,
+        network_hash,
+    })
 }
 
 pub(crate) fn fetch_network_descriptor(
@@ -57,6 +78,7 @@ pub(crate) fn fetch_network_descriptor(
         .ok_or_else(|| descriptor_invalid("profile.faucetUrl", "is required".into()))?;
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let descriptor = fetch_network_descriptor_value(faucet_url)?;
+    validate_rpc_network_info(rpc_url, &descriptor)?;
     let runtime_manifest = load_configured_runtime_manifest(profile, key_name)?;
     let deploy = descriptor
         .dev_wallet
@@ -90,6 +112,7 @@ pub(crate) fn fetch_remote_airdrop_descriptor(
         .ok_or_else(|| descriptor_invalid("profile.faucetUrl", "is required".into()))?;
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let descriptor = fetch_network_descriptor_value(faucet_url)?;
+    validate_rpc_network_info(rpc_url, &descriptor)?;
     remote_airdrop_descriptor(rpc_url, descriptor)
 }
 
@@ -233,6 +256,17 @@ fn validate_descriptor(
     };
     matches_expected("protocol", &manifest.protocol, &descriptor.protocol)?;
     matches_expected(
+        "networkHash",
+        &format_hex(
+            manifest
+                .network_hash
+                .to_network_hash()
+                .into_inner()
+                .as_ref(),
+        ),
+        &format_hex(descriptor.network_hash.0.as_ref()),
+    )?;
+    matches_expected(
         "genesisHash",
         &format_hex(manifest.genesis_hash.as_ref()),
         &format_hex(descriptor.genesis_hash.0.as_ref()),
@@ -295,6 +329,61 @@ fn validate_descriptor_identity(
         return Err(descriptor_invalid("protocol", "must not be empty".into()));
     }
     Ok(())
+}
+
+fn validate_rpc_network_info(
+    rpc_url: &str,
+    descriptor: &NetworkDescriptor,
+) -> Result<(), CliError> {
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let network_info = fetch_rpc_network_info(&runtime, rpc_url)?;
+    validate_network_info(descriptor, &network_info)
+}
+
+fn fetch_rpc_network_info(
+    runtime: &tokio::runtime::Runtime,
+    rpc_url: &str,
+) -> Result<NetworkInfo, CliError> {
+    runtime.block_on(async {
+        crate::http_client::rpc_client(rpc_url)?
+            .network_info()
+            .await
+            .map_err(|error| CliError::RpcMethodFailed {
+                method: "networkInfo",
+                message: error.to_string(),
+            })
+    })
+}
+
+fn validate_network_info(
+    descriptor: &NetworkDescriptor,
+    network_info: &NetworkInfo,
+) -> Result<(), CliError> {
+    matches_expected(
+        "networkHash",
+        &format_hex(network_info.network_hash.0.as_ref()),
+        &format_hex(descriptor.network_hash.0.as_ref()),
+    )?;
+    matches_expected(
+        "genesisHash",
+        &format_hex(network_info.genesis_hash.0.as_ref()),
+        &format_hex(descriptor.genesis_hash.0.as_ref()),
+    )
+}
+
+fn validated_signing_network_hash(
+    configured: &groundhog_xdr::types::NetworkHash,
+    network_info: &NetworkInfo,
+) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
+    matches_expected(
+        "networkHash",
+        &format_hex(configured.as_ref()),
+        &format_hex(network_info.network_hash.0.as_ref()),
+    )?;
+    Ok(groundhog_xdr::types::NetworkHash::from(
+        network_info.network_hash.0,
+    ))
 }
 
 fn parse_positive_raw_amount(field: &'static str, raw: &str) -> Result<u128, CliError> {
@@ -501,6 +590,64 @@ mod tests {
     }
 
     #[test]
+    fn hosted_descriptor_rejects_runtime_network_hash_mismatch() {
+        let mut manifest = runtime_manifest();
+        manifest.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0x99; 32]);
+
+        let error = descriptor_entrypoints(
+            "alice",
+            "https://rpc.devnet.example",
+            &descriptor(),
+            Some(&manifest),
+        )
+        .expect_err("bug: mismatched network hash should fail");
+
+        assert_mismatch_field(error, "networkHash");
+    }
+
+    #[test]
+    fn hosted_descriptor_rejects_rpc_network_hash_mismatch() {
+        let descriptor = descriptor();
+        let network_info = NetworkInfo::new(
+            groundhog_json_rpc_types::NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+                [0x99; 32],
+            )),
+            descriptor.genesis_hash,
+        );
+
+        let error = validate_network_info(&descriptor, &network_info)
+            .expect_err("bug: RPC and faucet network hashes must match");
+
+        assert_mismatch_field(error, "networkHash");
+    }
+
+    #[test]
+    fn hosted_signing_returns_the_validated_rpc_network_hash() {
+        let descriptor = descriptor();
+        let configured = groundhog_xdr::types::NetworkHash::from(descriptor.network_hash.0);
+        let network_info = NetworkInfo::new(descriptor.network_hash, descriptor.genesis_hash);
+
+        let network_hash = validated_signing_network_hash(&configured, &network_info)
+            .expect("bug: matching signing identity should resolve");
+
+        assert_eq!(network_hash.as_ref(), &[0x42; 32]);
+    }
+
+    #[test]
+    fn hosted_signing_rejects_configured_network_hash_mismatch() {
+        let descriptor = descriptor();
+        let configured = groundhog_xdr::types::NetworkHash::from(
+            groundhog_xdr::types::SHA256Hash::from([0x99; 32]),
+        );
+        let network_info = NetworkInfo::new(descriptor.network_hash, descriptor.genesis_hash);
+
+        let error = validated_signing_network_hash(&configured, &network_info)
+            .expect_err("bug: stale signing identity should fail before signing");
+
+        assert_mismatch_field(error, "networkHash");
+    }
+
+    #[test]
     fn hosted_descriptor_rejects_runtime_wallet_contract_mismatch() {
         let mut manifest = runtime_manifest();
         manifest.bootstrap.dev_wallet.content_hash =
@@ -590,6 +737,7 @@ mod tests {
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": NETWORK_DESCRIPTOR_KIND,
             "networkId": "devnet",
+            "networkHash": format!("0x{}", "42".repeat(32)),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "endpoints": { "rpcUrl": "https://rpc.devnet.example" },

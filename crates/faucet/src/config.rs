@@ -10,10 +10,15 @@ use groundhog_json_rpc_types::network_descriptor::{
     AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor,
     NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
 };
-use groundhog_json_rpc_types::{ContractAddress, NetworkHashHex, SHA256Hash};
+use groundhog_json_rpc_types::{ContractAddress, NetworkHash, NetworkHashHex, SHA256Hash};
 use groundhog_signing::LocalSigner;
 use serde::Deserialize;
+use std::collections::HashSet;
+use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
+
+pub(crate) const MIN_AIRDROP_TERMINAL_RETENTION_SECS: u64 = 12 * 60 * 60;
 
 /// Faucet service TOML config.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -76,6 +81,20 @@ impl FaucetConfigFile {
         self,
         key_loader: &dyn FaucetSecretKeyLoader,
     ) -> Result<FaucetConfigParts, FaucetConfigError> {
+        validate_airdrop_client_overrides(&self.policy.airdrop.client_overrides)?;
+        validate_airdrop_terminal_retention(self.policy.airdrop.recipient_cooldown_secs)?;
+        validate_quota_window(
+            "policy.airdrop.ip_quota_window_secs",
+            self.policy.airdrop.ip_quota_window_secs,
+        )?;
+        validate_quota_window(
+            "policy.wallet_create.owner_quota_window_secs",
+            self.policy.wallet_create.owner_quota_window_secs,
+        )?;
+        validate_quota_window(
+            "policy.wallet_create.ip_quota_window_secs",
+            self.policy.wallet_create.ip_quota_window_secs,
+        )?;
         let wallet_create_prefund_raw_amount = self
             .network
             .wallet_create
@@ -150,6 +169,7 @@ impl PolicyConfig {
                 recipient_cooldown_secs: self.airdrop.recipient_cooldown_secs,
                 ip_quota_window_secs: self.airdrop.ip_quota_window_secs,
                 ip_quota_max: self.airdrop.ip_quota_max,
+                client_overrides: self.airdrop.client_overrides,
                 max_pending_per_recipient: self.airdrop.max_pending_per_recipient,
             },
             wallet_create: WalletCreatePolicyRuntimeConfig {
@@ -180,7 +200,20 @@ pub struct AirdropPolicyConfig {
     pub recipient_cooldown_secs: u64,
     pub ip_quota_window_secs: u64,
     pub ip_quota_max: u32,
+    pub client_overrides: Vec<AirdropClientOverride>,
     pub max_pending_per_recipient: u32,
+}
+
+/// Finite airdrop quota for a client identified by its socket peer IP.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AirdropClientOverride {
+    /// Socket peer IP receiving this quota instead of the default client quota.
+    pub ip: IpAddr,
+    /// Maximum accepted attempts within the override window.
+    pub quota_max: u32,
+    /// Override quota window in seconds.
+    pub quota_window_secs: u64,
 }
 
 impl Default for AirdropPolicyConfig {
@@ -189,6 +222,7 @@ impl Default for AirdropPolicyConfig {
             recipient_cooldown_secs: 12 * 60 * 60,
             ip_quota_window_secs: 60 * 60,
             ip_quota_max: 10,
+            client_overrides: Vec::new(),
             max_pending_per_recipient: 1,
         }
     }
@@ -235,6 +269,7 @@ pub struct AirdropPolicyRuntimeConfig {
     pub recipient_cooldown_secs: u64,
     pub ip_quota_window_secs: u64,
     pub ip_quota_max: u32,
+    pub client_overrides: Vec<AirdropClientOverride>,
     pub max_pending_per_recipient: u32,
 }
 
@@ -253,6 +288,21 @@ pub struct WalletCreatePolicyRuntimeConfig {
 /// Errors returned while validating faucet service config.
 #[derive(Debug, thiserror::Error)]
 pub enum FaucetConfigError {
+    /// A gateway client quota override used a zero-length window.
+    #[error("airdrop client override for {ip} must use a nonzero quota window")]
+    ZeroAirdropClientOverrideWindow { ip: IpAddr },
+    /// More than one gateway quota override targeted the same socket IP.
+    #[error("duplicate airdrop client override for {ip}")]
+    DuplicateAirdropClientOverride { ip: IpAddr },
+    /// A gateway quota window cannot be represented by the system clock.
+    #[error("airdrop client override for {ip} uses an unrepresentable quota window")]
+    AirdropClientOverrideWindowTooLarge { ip: IpAddr },
+    /// Terminal airdrop retention cannot be represented by the system clock.
+    #[error("airdrop recipient cooldown uses an unrepresentable retention window")]
+    AirdropTerminalRetentionTooLarge,
+    /// A default quota window cannot be represented by the system clock.
+    #[error("{field} uses an unrepresentable quota window")]
+    QuotaWindowTooLarge { field: &'static str },
     /// The configured faucet signing key could not be loaded safely.
     #[error(transparent)]
     SecretKey(#[from] FaucetSecretKeyLoadError),
@@ -277,6 +327,72 @@ pub enum FaucetConfigError {
     /// The loaded secret key did not control the configured faucet account.
     #[error("loaded faucet signing key does not match network.faucet.public_key")]
     FaucetPublicKeyMismatch,
+    /// The network descriptor did not advertise an airdrop policy.
+    #[error("faucet network descriptor must advertise airdrop policy")]
+    MissingAirdropDescriptor,
+    /// A descriptor amount was not a valid decimal u128.
+    #[error("network descriptor {field} `{value}` is not a valid decimal amount")]
+    InvalidDescriptorAmount {
+        /// Descriptor field holding the invalid amount.
+        field: &'static str,
+        /// The rejected value.
+        value: String,
+    },
+    /// A submitter's transfer amount disagreed with the public descriptor.
+    #[error("{submitter} amount {actual} does not match network descriptor amount {expected}")]
+    SubmitterAmountMismatch {
+        /// Which submitter carried the mismatched amount.
+        submitter: &'static str,
+        /// Amount advertised by the network descriptor.
+        expected: u128,
+        /// Amount the submitter would transfer.
+        actual: u128,
+    },
+}
+
+fn validate_airdrop_client_overrides(
+    overrides: &[AirdropClientOverride],
+) -> Result<(), FaucetConfigError> {
+    let mut ips = HashSet::with_capacity(overrides.len());
+    for client_override in overrides {
+        if client_override.quota_window_secs == 0 {
+            return Err(FaucetConfigError::ZeroAirdropClientOverrideWindow {
+                ip: client_override.ip,
+            });
+        }
+        if SystemTime::now()
+            .checked_add(Duration::from_secs(client_override.quota_window_secs))
+            .is_none()
+        {
+            return Err(FaucetConfigError::AirdropClientOverrideWindowTooLarge {
+                ip: client_override.ip,
+            });
+        }
+        if !ips.insert(client_override.ip) {
+            return Err(FaucetConfigError::DuplicateAirdropClientOverride {
+                ip: client_override.ip,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_airdrop_terminal_retention(
+    recipient_cooldown_secs: u64,
+) -> Result<(), FaucetConfigError> {
+    SystemTime::now()
+        .checked_add(Duration::from_secs(
+            recipient_cooldown_secs.max(MIN_AIRDROP_TERMINAL_RETENTION_SECS),
+        ))
+        .ok_or(FaucetConfigError::AirdropTerminalRetentionTooLarge)
+        .map(|_| ())
+}
+
+fn validate_quota_window(field: &'static str, seconds: u64) -> Result<(), FaucetConfigError> {
+    SystemTime::now()
+        .checked_add(Duration::from_secs(seconds))
+        .ok_or(FaucetConfigError::QuotaWindowTooLarge { field })
+        .map(|_| ())
 }
 
 /// Public network metadata fields used to build a descriptor.
@@ -289,11 +405,7 @@ pub struct NetworkConfig {
     pub protocol: String,
     /// Hash of the materialized genesis state.
     pub genesis_hash: SHA256Hash,
-    /// Network hash the faucet signs against.
-    ///
-    /// Part of every signature preimage, so a faucet configured with the wrong
-    /// one produces transactions the network rejects. Not served in the public
-    /// descriptor: clients cannot yet learn it over RPC.
+    /// Network hash the faucet signs against and advertises publicly.
     pub network_hash: NetworkHashHex,
     /// Public endpoint configuration.
     pub endpoints: EndpointConfig,
@@ -313,8 +425,10 @@ impl NetworkConfig {
         airdrop_raw_amount: String,
         policy: &AirdropPolicyRuntimeConfig,
     ) -> NetworkDescriptor {
+        let network_hash = NetworkHash::from(self.network_hash.to_network_hash().into_inner());
         NetworkDescriptor::new(
             self.network_id,
+            network_hash,
             self.protocol,
             self.genesis_hash,
             NetworkDescriptorEndpoints::new(self.endpoints.rpc_url),
@@ -487,7 +601,11 @@ mod tests {
         FaucetSecretKeyLoadError, FaucetSecretKeyLoader, FaucetSecretKeySource,
     };
 
-    use super::{AirdropConfig, FaucetConfigFile};
+    use super::{
+        AirdropClientOverride, AirdropConfig, FaucetConfigError, FaucetConfigFile,
+        validate_airdrop_client_overrides, validate_airdrop_terminal_retention,
+        validate_quota_window,
+    };
 
     struct TestKeyLoader;
 
@@ -501,6 +619,76 @@ mod tests {
         assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
         assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
         assert_eq!(config.network.wallet_create.prefund_raw_amount, "10000000");
+    }
+
+    #[test]
+    fn airdrop_client_override_rejects_zero_window() {
+        let error = validate_airdrop_client_overrides(&[AirdropClientOverride {
+            ip: "10.0.0.12".parse().expect("test IP should parse"),
+            quota_max: 10_000,
+            quota_window_secs: 0,
+        }])
+        .expect_err("zero window must not disable quota enforcement");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::ZeroAirdropClientOverrideWindow { .. }
+        ));
+    }
+
+    #[test]
+    fn airdrop_client_override_rejects_duplicate_ip() {
+        let client_override = AirdropClientOverride {
+            ip: "10.0.0.12".parse().expect("test IP should parse"),
+            quota_max: 10_000,
+            quota_window_secs: 3_600,
+        };
+        let error = validate_airdrop_client_overrides(&[client_override.clone(), client_override])
+            .expect_err("duplicate IP overrides must not depend on declaration order");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::DuplicateAirdropClientOverride { .. }
+        ));
+    }
+
+    #[test]
+    fn airdrop_client_override_rejects_unrepresentable_window() {
+        let error = validate_airdrop_client_overrides(&[AirdropClientOverride {
+            ip: "10.0.0.12".parse().expect("test IP should parse"),
+            quota_max: 10_000,
+            quota_window_secs: u64::MAX,
+        }])
+        .expect_err("overflowing window must not disable quota enforcement");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::AirdropClientOverrideWindowTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn airdrop_policy_rejects_unrepresentable_terminal_retention() {
+        let error = validate_airdrop_terminal_retention(u64::MAX)
+            .expect_err("overflowing retention must not disable expiration");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::AirdropTerminalRetentionTooLarge
+        ));
+    }
+
+    #[test]
+    fn default_policy_rejects_unrepresentable_quota_window() {
+        let error = validate_quota_window("policy.airdrop.ip_quota_window_secs", u64::MAX)
+            .expect_err("overflowing window must not disable quota enforcement");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::QuotaWindowTooLarge {
+                field: "policy.airdrop.ip_quota_window_secs"
+            }
+        ));
     }
 
     #[async_trait]
@@ -620,7 +808,7 @@ mod tests {
         let config: FaucetConfigFile = toml::from_str(&format!(
             "{}\n{}",
             test_config(),
-            r"
+            r#"
             [policy]
             trust_proxy_client_ip_headers = true
 
@@ -630,6 +818,11 @@ mod tests {
             ip_quota_max = 2
             max_pending_per_recipient = 1
 
+            [[policy.airdrop.client_overrides]]
+            ip = "10.0.0.12"
+            quota_max = 10000
+            quota_window_secs = 3600
+
             [policy.wallet_create]
             owner_quota_window_secs = 120
             owner_quota_max = 4
@@ -638,7 +831,7 @@ mod tests {
             max_pending_per_owner = 1
             unprefunded_attempt_ttl_secs = 20
             prefunded_attempt_retention_secs = 240
-            "
+            "#
         ))
         .expect("bug: fixture config should parse");
 
@@ -649,6 +842,7 @@ mod tests {
 
         assert!(parts.policy.trust_proxy_client_ip_headers);
         assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 60);
+        assert_eq!(parts.policy.airdrop.client_overrides[0].quota_max, 10_000);
         assert_eq!(
             parts.policy.wallet_create.prefunded_attempt_retention_secs,
             240

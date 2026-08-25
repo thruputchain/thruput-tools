@@ -13,6 +13,16 @@ a separate first-class `--network` abstraction. The public descriptor remains
 useful for faucet/wallet-create metadata, but the CLI should not use it to
 discover the profile RPC URL.
 
+**2026-08-24 update:** The hosted airdrop CLI now calls
+`groundhog_requestAirdrop` on the configured RPC gateway. Sections below that
+describe a direct CLI `POST /v1/airdrop` are retained as historical context and
+are superseded by the network-info and airdrop RPC design. Direct hosted
+wallet-creation service calls and the custom-amount local administrative
+airdrop path are unchanged. Claims below that the RPC lacks live network
+identity, or that the public descriptor omits `networkHash`, are also
+superseded. The current contract requires `{ networkHash, genesisHash }` from
+`groundhog_networkInfo` and validates both against the descriptor.
+
 **Companions:**
 
 - [`../../gateway/runtime-manifest.md`](../../gateway/runtime-manifest.md) —
@@ -92,10 +102,9 @@ These were confirmed by reading the backend, not inferred from names.
    bootstrap commit block hash (line 344), so it is the natural producer of a
    sanitized descriptor's `genesisHash`. The descriptor work is therefore not
    hogd-only.
-9. **The public JSON-RPC API exposes no genesis hash.** `version` returns only
-   `wireFormat` / `implementation` / `commitHash` (`version.rs`); there is no
-   `networkInfo` method and no genesis field. A descriptor cached by `networkId`
-   has no first-class live signal to detect a nightly re-genesis (see §2).
+9. **Superseded: the public JSON-RPC API originally exposed no genesis hash.**
+   The implemented `groundhog_networkInfo` method now returns the canonical
+   `{ networkHash, genesisHash }` identity used to validate the descriptor.
 
 ## Decisions
 
@@ -152,9 +161,9 @@ Two artifacts must stay separate (see Security §6):
   (`runtime_manifest.rs:93`); a stripped view of it is one missing-`#[serde(skip)]`
   away from a leak. Define the descriptor fresh.
 
-The public descriptor (owned by `json-rpc-types`, since it crosses the RPC/CLI
-boundary) contains only public fields: `descriptorVersion`, `networkId`,
-`genesisHash`, `rpcUrl`, `faucetUrl`, `walletCreateSponsorAddress`,
+The public descriptor shape proposed here is historical. The implemented
+descriptor is owned by `json-rpc-types` and includes `networkId`, `networkHash`,
+`genesisHash`, endpoint metadata, `walletCreateSponsorAddress`,
 `walletCreatePrefundRawAmount`, and the `devWallet` entrypoints
 (`deployEntrypoint`, `doActionEntrypoint`, `createWalletEntrypoint`) +
 `contentHash`. That is exactly what the CLI needs to derive and pre-fund a
@@ -167,8 +176,10 @@ label/verify the network — and nothing private.
   `~/.cache/groundhog/networks/<networkId>.json`. The CLI hard-refuses any
   seed-derivation on non-`local` networks regardless of descriptor contents.
 
-**Freshness / re-genesis detection.** Because the API exposes no live genesis
-hash (constraint 9), the descriptor needs an explicit refresh path:
+**Superseded freshness design.** This proposal predates
+`groundhog_networkInfo`. Current hosted signing paths fetch
+`{ networkHash, genesisHash }` from RPC and require an exact descriptor match.
+The original descriptor refresh proposal was:
 
 - `GET <faucetUrl>/v1/network` is authoritative and supports HTTP `ETag` /
   conditional revalidation; the CLI revalidates the cached descriptor **before

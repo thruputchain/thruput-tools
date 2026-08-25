@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use groundhog_json_rpc_api::{
     WIRE_FORMAT_VERSION,
     types::{
+        airdrop::MAX_CLIENT_NONCE_BYTES,
         error::{ERROR_INFOS, codes, error_info_by_code},
         events::MAX_TOPIC_VALUES_PER_POSITION,
     },
@@ -15,9 +16,9 @@ const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
 
 // Methods that are infallible by design and intentionally carry an empty
 // `errors: []` array. Add a method here only when it has no backend
-// dispatch and cannot fail (e.g. `groundhog_version`, sourced entirely
-// from compile-time constants and an injected `BuildInfo`).
-const INFALLIBLE_METHODS: &[&str] = &["groundhog_version"];
+// dispatch and cannot fail. Both current methods are sourced from immutable
+// process state.
+const INFALLIBLE_METHODS: &[&str] = &["groundhog_networkInfo", "groundhog_version"];
 
 #[test]
 fn openrpc_spec_matches_snapshot() {
@@ -106,7 +107,91 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         "primitive parameter schemas should stay inline",
     );
 
+    let network_info = methods
+        .iter()
+        .find(|method| method["name"] == "groundhog_networkInfo")
+        .expect("networkInfo should exist");
+    assert_eq!(
+        network_info["params"],
+        serde_json::json!([]),
+        "networkInfo should take no parameters"
+    );
+    assert_eq!(
+        network_info["result"]["schema"]["$ref"], "#/components/schemas/NetworkInfo",
+        "networkInfo should return the shared NetworkInfo schema"
+    );
+    assert_eq!(
+        schemas["NetworkInfo"]["required"],
+        serde_json::json!(["networkHash", "genesisHash"]),
+        "NetworkInfo should require both identity fields"
+    );
+    assert_eq!(
+        schemas["Hex0x_SHA256Hash"]["pattern"], "^0x[0-9a-f]{64}$",
+        "SHA-256 hashes should expose their exact canonical wire length"
+    );
+    assert_eq!(
+        network_info["errors"],
+        serde_json::json!([]),
+        "networkInfo should be infallible after startup validation"
+    );
+
+    assert_airdrop_contract(schemas, methods);
+
     assert_error_docs_are_wired(&spec, methods, send_raw_transaction);
+}
+
+fn assert_airdrop_contract(
+    schemas: &serde_json::Map<String, serde_json::Value>,
+    methods: &[serde_json::Value],
+) {
+    let request_airdrop = methods
+        .iter()
+        .find(|method| method["name"] == "groundhog_requestAirdrop")
+        .expect("requestAirdrop should exist in the canonical contract");
+    assert_eq!(
+        request_airdrop["result"]["schema"]["$ref"],
+        "#/components/schemas/AirdropAttemptResponse"
+    );
+    assert_eq!(
+        schemas["ClientNonce"]["pattern"],
+        format!("^0x(?:[0-9a-f]{{2}}){{1,{MAX_CLIENT_NONCE_BYTES}}}$")
+    );
+    assert_eq!(
+        schemas["AirdropAttemptResponse"]["oneOf"]
+            .as_array()
+            .map(Vec::len),
+        Some(2),
+        "airdrop responses should be a two-variant tagged union"
+    );
+    let airdrop_variants = schemas["AirdropAttemptResponse"]["oneOf"]
+        .as_array()
+        .expect("AirdropAttemptResponse should be a union");
+    assert_eq!(
+        airdrop_variants[0]["required"],
+        serde_json::json!([
+            "attemptStatus",
+            "recipient",
+            "rawAmount",
+            "retryAfterSeconds"
+        ])
+    );
+    assert!(airdrop_variants[0]["properties"].get("height").is_none());
+    assert_eq!(
+        airdrop_variants[1]["required"],
+        serde_json::json!([
+            "attemptStatus",
+            "recipient",
+            "txHash",
+            "rawAmount",
+            "height",
+            "status"
+        ])
+    );
+    assert!(
+        airdrop_variants[1]["properties"]
+            .get("retryAfterSeconds")
+            .is_none()
+    );
 }
 
 fn assert_error_docs_are_wired(

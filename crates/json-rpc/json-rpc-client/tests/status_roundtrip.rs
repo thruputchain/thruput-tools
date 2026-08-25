@@ -8,7 +8,7 @@ use groundhog_json_rpc_server::{
     RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight, ContractAddress, NetworkHash,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     hex::{Hex0x, HexBytes},
@@ -29,6 +29,13 @@ use std::sync::{
 const ATTEMPT_HEIGHT: i64 = 42;
 const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
 const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
+
+fn test_network_info() -> NetworkInfo {
+    NetworkInfo::new(
+        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
+        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
+    )
+}
 
 #[derive(Clone)]
 struct RecentFailureBackend {
@@ -78,13 +85,6 @@ impl SubmitPlane for RecentFailureBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for RecentFailureBackend {
-    async fn network_info(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<NetworkInfo, RpcServerError> {
-        Err(RpcServerError::NotImplemented("networkInfo".into()))
-    }
-
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
@@ -183,6 +183,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::always_failing(),
+        test_network_info(),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );
@@ -229,6 +230,7 @@ async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::eventually_committed(),
+        test_network_info(),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );
@@ -265,6 +267,7 @@ async fn recent_failure_status_roundtrips_through_client() {
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
         RecentFailureBackend::always_failing(),
+        test_network_info(),
         RpcServerConfig::default(),
         BuildInfo::for_tests(),
     );

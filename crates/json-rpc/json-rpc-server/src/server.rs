@@ -33,6 +33,7 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     chain: C,
     read: R,
     view: V,
+    network_info: NetworkInfo,
     config: RpcServerConfig,
     build_info: BuildInfo,
     tip_probe: TipProbe,
@@ -108,6 +109,7 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
         chain: C,
         read: R,
         view: V,
+        network_info: NetworkInfo,
         config: RpcServerConfig,
         build_info: BuildInfo,
     ) -> Self {
@@ -116,6 +118,7 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
             chain,
             read,
             view,
+            network_info,
             config,
             build_info,
             tip_probe: TipProbe::default(),
@@ -188,12 +191,18 @@ where
 {
     /// Convenience constructor for backends that implement all four planes
     /// on a single type.
-    pub fn unified(backend: B, config: RpcServerConfig, build_info: BuildInfo) -> Self {
+    pub fn unified(
+        backend: B,
+        network_info: NetworkInfo,
+        config: RpcServerConfig,
+        build_info: BuildInfo,
+    ) -> Self {
         Self::new(
             backend.clone(),
             backend.clone(),
             backend.clone(),
             backend,
+            network_info,
             config,
             build_info,
         )
@@ -256,19 +265,15 @@ where
     }
 
     #[tracing::instrument(skip_all)]
+    async fn network_info(&self) -> RpcResult<NetworkInfo> {
+        Ok(self.network_info.clone())
+    }
+
+    #[tracing::instrument(skip_all)]
     async fn chain_tip(&self) -> RpcResult<ChainTip> {
         let context = self.request_context();
         self.within_request_deadline(context, async { Ok(self.chain.chain_tip(context).await?) })
             .await
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn network_info(&self) -> RpcResult<NetworkInfo> {
-        let context = self.request_context();
-        self.within_request_deadline(context, async {
-            Ok(self.chain.network_info(context).await?)
-        })
-        .await
     }
 
     #[tracing::instrument(skip_all, fields(?height))]
@@ -468,6 +473,7 @@ mod tests {
 
     use super::*;
     use crate::{ValidatedTransaction, ViewPlane};
+    use groundhog_json_rpc_types::NetworkHash;
     use groundhog_json_rpc_types::events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventTopicFilter,
         IterationOrder, PaginationCursor, TopicList,
@@ -516,7 +522,19 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         mock: Arc<MockBackend>,
     ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>>
     {
-        GroundhogRpcServer::unified(mock, RpcServerConfig::default(), BuildInfo::for_tests())
+        GroundhogRpcServer::unified(
+            mock,
+            test_network_info(),
+            RpcServerConfig::default(),
+            BuildInfo::for_tests(),
+        )
+    }
+
+    fn test_network_info() -> NetworkInfo {
+        NetworkInfo::new(
+            NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
+            Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
+        )
     }
 
     #[async_trait::async_trait]
@@ -545,13 +563,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for Arc<MockBackend> {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Err(RpcServerError::NotImplemented("chainTip".into()))
         }
@@ -576,13 +587,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for ChainOnly {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Ok(ChainTip {
                 height: BlockHeight::from(42),
@@ -771,13 +775,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for ExpiredTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Ok(ChainTip {
                 height: BlockHeight::from(1_000_000),
@@ -810,13 +807,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for CountingTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             *self.tip_calls.lock().await += 1;
             Ok(ChainTip {
@@ -847,13 +837,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for StalledTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             tokio::time::sleep(std::time::Duration::from_hours(1)).await;
             unreachable!("bug: stalled tip probe should have been abandoned")
@@ -902,13 +885,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for RecordingTipChain {
-        async fn network_info(
-            &self,
-            _context: RpcRequestContext,
-        ) -> Result<NetworkInfo, RpcServerError> {
-            Err(RpcServerError::NotImplemented("networkInfo".into()))
-        }
-
         async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             self.contexts.lock().await.push(context);
             tokio::time::sleep(self.delay).await;
@@ -948,6 +924,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ViewOnly {
                 view_gas_limits: Arc::new(Mutex::new(Vec::new())),
             },
+            test_network_info(),
             config,
             BuildInfo::for_tests(),
         )
@@ -967,6 +944,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ViewOnly {
                 view_gas_limits: Arc::new(Mutex::new(Vec::new())),
             },
+            test_network_info(),
             config,
             BuildInfo::for_tests(),
         )
@@ -1125,6 +1103,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ViewOnly {
                 view_gas_limits: Arc::new(Mutex::new(Vec::new())),
             },
+            test_network_info(),
             RpcServerConfig::default(),
             BuildInfo::for_tests(),
         );
@@ -1177,6 +1156,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ViewOnly {
                 view_gas_limits: view_gas_limits.clone(),
             },
+            test_network_info(),
             RpcServerConfig::default(),
             BuildInfo::for_tests(),
         );
@@ -1224,6 +1204,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ViewOnly {
                 view_gas_limits: view_gas_limits.clone(),
             },
+            test_network_info(),
             RpcServerConfig::default().with_view_gas_limit(gas_limit),
             BuildInfo::for_tests(),
         );
@@ -1251,6 +1232,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let cap = 5;
         let server = GroundhogRpcServer::unified(
             mock.clone(),
+            test_network_info(),
             RpcServerConfig::default().with_max_events_per_page(cap),
             BuildInfo::for_tests(),
         );
@@ -1276,6 +1258,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let cap = 16;
         let server = GroundhogRpcServer::unified(
             mock.clone(),
+            test_network_info(),
             RpcServerConfig::default().with_max_cursor_bytes(cap),
             BuildInfo::for_tests(),
         );
@@ -1316,6 +1299,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let cap = 5;
         let server = GroundhogRpcServer::unified(
             mock.clone(),
+            test_network_info(),
             RpcServerConfig::default().with_max_transactions_per_page(cap),
             BuildInfo::for_tests(),
         );
@@ -1341,6 +1325,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let cap = 16;
         let server = GroundhogRpcServer::unified(
             mock.clone(),
+            test_network_info(),
             RpcServerConfig::default().with_max_cursor_bytes(cap),
             BuildInfo::for_tests(),
         );
@@ -1394,6 +1379,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let mock = Arc::new(MockBackend::default());
         let server = GroundhogRpcServer::unified(
             mock.clone(),
+            test_network_info(),
             RpcServerConfig::default(),
             BuildInfo::from_build_version(
                 BuildVersion::new("9.8.7", Some("1.2.3")),

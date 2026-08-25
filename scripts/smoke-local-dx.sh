@@ -1060,9 +1060,9 @@ AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdro
     || die "saved-wallet airdrop JSON did not identify role faucet"
 WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$USER_KEY")"
 WALLET_BALANCE_AFTER="$(json_field data.rawBalance "$WALLET_BALANCE_AFTER_JSON")"
-AIRDROP_RAW_AMOUNT="$(json_field data.raw_amount "$AIRDROP_JSON")"
+AIRDROP_RAW_AMOUNT="$(json_field data.rawAmount "$AIRDROP_JSON")"
 assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
-log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.tx_hash "$AIRDROP_JSON")"
+log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.txHash "$AIRDROP_JSON")"
 
 USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy)"
 USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"

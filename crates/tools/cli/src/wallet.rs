@@ -1369,7 +1369,7 @@ fn sign_create_wallet_transaction(
 fn sign_wallet_prefund_transaction(
     args: &SignWalletPrefundTransaction<'_>,
 ) -> Result<String, CliError> {
-    let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
+    let hog_address = hog::token_address();
     let transfer_entrypoint = hog::transfer_entrypoint();
     let transfer_calldata = hog::encode_transfer_calldata(&args.recipient, args.raw_amount)?;
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
@@ -2024,6 +2024,7 @@ mod tests {
             "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
+            "networkHash": format!("0x{}", "42".repeat(32)),
             "protocol": "x23",
             "genesisHash": format!("0x{}", "01".repeat(32)),
             "endpoints": {

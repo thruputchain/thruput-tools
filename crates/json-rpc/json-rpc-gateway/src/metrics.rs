@@ -63,6 +63,32 @@ pub(crate) enum BackendReconnectOutcome {
     Timeout,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AirdropRequestOutcome {
+    Pending,
+    Succeeded,
+    Error,
+    Timeout,
+}
+
+impl AirdropRequestOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Succeeded => "succeeded",
+            Self::Error => "error",
+            Self::Timeout => "timeout",
+        }
+    }
+
+    const fn result(self) -> &'static str {
+        match self {
+            Self::Pending | Self::Succeeded => "ok",
+            Self::Error | Self::Timeout => "error",
+        }
+    }
+}
+
 impl BackendReconnectOutcome {
     const fn as_str(self) -> &'static str {
         match self {
@@ -103,6 +129,8 @@ pub struct GatewayMetrics {
     backend_requests_total: IntCounterVec,
     backend_request_duration_seconds: HistogramVec,
     backend_reconnects_total: IntCounterVec,
+    airdrop_requests_total: IntCounterVec,
+    airdrop_request_duration_seconds: HistogramVec,
     rpc_requests_total: IntCounterVec,
     rpc_request_duration_seconds: HistogramVec,
     rpc_in_flight: GaugeVec,
@@ -185,6 +213,21 @@ impl GatewayMetrics {
                 "Total gateway backend reconnect attempts by bounded backend and outcome labels.",
             ),
             &["backend", "outcome"],
+        )?;
+        let airdrop_requests_total = IntCounterVec::new(
+            Opts::new(
+                "groundhog_gateway_airdrop_requests_total",
+                "Total airdrop backend requests by bounded backend and outcome labels.",
+            ),
+            &["backend", "outcome"],
+        )?;
+        let airdrop_request_duration_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "groundhog_gateway_airdrop_request_duration_seconds",
+                "Airdrop backend request duration in seconds by bounded backend and result labels.",
+            )
+            .buckets(BACKEND_REQUEST_DURATION_BUCKETS.to_vec()),
+            &["backend", "result"],
         )?;
         let rpc_requests_total = IntCounterVec::new(
             Opts::new(
@@ -291,6 +334,8 @@ impl GatewayMetrics {
         registry.register(Box::new(backend_requests_total.clone()))?;
         registry.register(Box::new(backend_request_duration_seconds.clone()))?;
         registry.register(Box::new(backend_reconnects_total.clone()))?;
+        registry.register(Box::new(airdrop_requests_total.clone()))?;
+        registry.register(Box::new(airdrop_request_duration_seconds.clone()))?;
         registry.register(Box::new(rpc_requests_total.clone()))?;
         registry.register(Box::new(rpc_request_duration_seconds.clone()))?;
         registry.register(Box::new(rpc_in_flight.clone()))?;
@@ -325,6 +370,8 @@ impl GatewayMetrics {
             backend_requests_total,
             backend_request_duration_seconds,
             backend_reconnects_total,
+            airdrop_requests_total,
+            airdrop_request_duration_seconds,
             rpc_requests_total,
             rpc_request_duration_seconds,
             rpc_in_flight,
@@ -372,6 +419,20 @@ impl GatewayMetrics {
             .inc();
     }
 
+    pub(crate) fn observe_airdrop_request(
+        &self,
+        backend: &'static str,
+        outcome: AirdropRequestOutcome,
+        duration: Duration,
+    ) {
+        self.airdrop_requests_total
+            .with_label_values(&[backend, outcome.as_str()])
+            .inc();
+        self.airdrop_request_duration_seconds
+            .with_label_values(&[backend, outcome.result()])
+            .observe(duration.as_secs_f64());
+    }
+
     pub(crate) fn bound_rpc_method(method: &str) -> &'static str {
         match method {
             "groundhog_sendRawTransaction" => "groundhog_sendRawTransaction",
@@ -385,6 +446,8 @@ impl GatewayMetrics {
             "groundhog_getStorageAt" => "groundhog_getStorageAt",
             "groundhog_getBalance" => "groundhog_getBalance",
             "groundhog_view" => "groundhog_view",
+            "groundhog_networkInfo" => "groundhog_networkInfo",
+            "groundhog_requestAirdrop" => "groundhog_requestAirdrop",
             "groundhog_version" => "groundhog_version",
             _ => "unknown",
         }
@@ -519,6 +582,11 @@ impl GatewayMetrics {
                 .with_label_values(&[backend.as_str()])
                 .set(value);
         }
+        if let Some(up) = snapshot.named_backend_up("faucet") {
+            self.backend_up
+                .with_label_values(&["faucet"])
+                .set(if up { 1.0 } else { 0.0 });
+        }
 
         self.chain_tip_height
             .set(snapshot.chain_tip_height().unwrap_or(f64::NAN));
@@ -575,7 +643,10 @@ mod tests {
 
     #[tokio::test]
     async fn core_metrics_render_health_status_backend_and_build_info() {
-        let config = GatewayConfig::default();
+        let config = GatewayConfig {
+            faucet_url: Some("https://faucet.example".into()),
+            ..GatewayConfig::default()
+        };
         let build_version = BuildVersion::new("test-version", Some("test-platform"));
         let health = GatewayHealth::new(&config, build_version, Some("test-commit"));
         let snapshot = health.snapshot().await;
@@ -588,6 +659,7 @@ mod tests {
         assert!(body.contains("groundhog_gateway_health_status{status=\"starting\"} 1"));
         assert!(body.contains("groundhog_gateway_health_status{status=\"ok\"} 0"));
         assert!(body.contains("groundhog_gateway_backend_up{backend=\"scheduler\"} 0"));
+        assert!(body.contains("groundhog_gateway_backend_up{backend=\"faucet\"} 0"));
         assert!(body.contains("groundhog_gateway_chain_tip_height NaN"));
         assert!(body.contains("groundhog_gateway_chain_tip_age_seconds NaN"));
         assert!(body.contains(
@@ -708,6 +780,7 @@ mod tests {
             "groundhog_getStorageAt",
             "groundhog_getBalance",
             "groundhog_view",
+            "groundhog_networkInfo",
             "groundhog_version",
         ] {
             assert_eq!(GatewayMetrics::bound_rpc_method(method), method);
@@ -784,6 +857,11 @@ mod tests {
         metrics.observe_internal_batch_rejected("tip_coalescer", REASON_INGRESS_FULL);
         metrics.observe_coalesced_waiters("tip_coalescer", 10);
         metrics.observe_submitted_transaction("backend_unavailable");
+        metrics.observe_airdrop_request(
+            "hosted",
+            AirdropRequestOutcome::Pending,
+            Duration::from_millis(25),
+        );
         metrics.observe_view_timeout();
         metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
         let guard = metrics.internal_batch_in_flight_guard("storage_batcher");
@@ -805,6 +883,12 @@ mod tests {
         ));
         assert!(body.contains(
             "groundhog_gateway_submitted_transactions_total{outcome=\"backend_unavailable\"} 1"
+        ));
+        assert!(body.contains(
+            "groundhog_gateway_airdrop_requests_total{backend=\"hosted\",outcome=\"pending\"} 1"
+        ));
+        assert!(body.contains(
+            "groundhog_gateway_airdrop_request_duration_seconds_count{backend=\"hosted\",result=\"ok\"} 1"
         ));
         assert!(body.contains("groundhog_gateway_view_timeouts_total 1"));
         assert!(body.contains(

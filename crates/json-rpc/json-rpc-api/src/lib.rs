@@ -11,6 +11,7 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    airdrop::{AirdropAttemptResponse, AirdropRequest},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
@@ -27,7 +28,19 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "3.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "4.0.0";
+
+/// Optional faucet-backed API registered only when a server supports airdrops.
+#[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
+#[rpc(client, server, namespace = "groundhog")]
+pub trait AirdropApi {
+    /// Request an idempotent native HOG airdrop.
+    ///
+    /// Servers register this method only when an airdrop backend is configured;
+    /// other deployments return standard JSON-RPC `Method not found`.
+    #[method(name = "requestAirdrop")]
+    async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
+}
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -57,10 +70,7 @@ pub trait GroundhogApi {
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
 
-    /// Fixed identity of the network this endpoint serves.
-    ///
-    /// The values never change for a given chain, so clients should fetch this
-    /// once per endpoint and cache it rather than calling it per request.
+    /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]
     async fn network_info(&self) -> RpcResult<NetworkInfo>;
 

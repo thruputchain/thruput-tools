@@ -1,5 +1,5 @@
 use groundhog_json_rpc_api::{
-    GroundhogApiOpenRpc, WIRE_FORMAT_VERSION,
+    AirdropApiOpenRpc, GroundhogApiOpenRpc, WIRE_FORMAT_VERSION,
     types::error::{ERROR_INFOS, RpcErrorInfo, codes, error_info_by_code},
 };
 use groundhog_open_rpc::{Project, ProjectInfo};
@@ -14,6 +14,7 @@ pub fn build_spec() -> serde_json::Value {
         version: WIRE_FORMAT_VERSION.to_owned(),
     });
     spec.module(GroundhogApiOpenRpc::module_doc);
+    spec.module(AirdropApiOpenRpc::module_doc);
     let mut json = spec.to_json();
     add_error_docs(&mut json);
     canonicalize(json)
@@ -115,13 +116,20 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_chainTip" | "groundhog_networkInfo" | "groundhog_pendingTransactionCount" => &[
+        "groundhog_chainTip" | "groundhog_pendingTransactionCount" => &[
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_version" => &[],
+        "groundhog_networkInfo" | "groundhog_version" => &[],
+        "groundhog_requestAirdrop" => &[
+            codes::INVALID_PARAMS,
+            codes::TX_REJECTED,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+        ],
         _ => panic!("bug: undocumented OpenRPC method `{method}`"),
     }
 }

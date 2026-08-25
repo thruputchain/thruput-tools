@@ -89,6 +89,108 @@
         ],
         "type": "object"
       },
+      "AirdropAttemptResponse": {
+        "description": "Stable lifecycle response for hosted and local airdrop attempts.",
+        "oneOf": [
+          {
+            "description": "The logical attempt is in progress and may not have been submitted yet.",
+            "properties": {
+              "attemptStatus": {
+                "const": "pending",
+                "type": "string"
+              },
+              "rawAmount": {
+                "description": "Native amount in indivisible units.",
+                "type": "string"
+              },
+              "recipient": {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "description": "Address receiving the native HOG transfer."
+              },
+              "retryAfterSeconds": {
+                "description": "Suggested delay before retrying the same logical attempt.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "txHash": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TxHash"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Canonical transaction hash, once the transaction is accepted."
+              }
+            },
+            "required": [
+              "attemptStatus",
+              "recipient",
+              "rawAmount",
+              "retryAfterSeconds"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The transaction committed successfully.",
+            "properties": {
+              "attemptStatus": {
+                "const": "succeeded",
+                "type": "string"
+              },
+              "height": {
+                "$ref": "#/components/schemas/BlockHeight",
+                "description": "Committed block height."
+              },
+              "rawAmount": {
+                "description": "Native amount in indivisible units.",
+                "type": "string"
+              },
+              "recipient": {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "description": "Address receiving the native HOG transfer."
+              },
+              "status": {
+                "$ref": "#/components/schemas/ExecStatus",
+                "description": "Committed execution result."
+              },
+              "txHash": {
+                "$ref": "#/components/schemas/TxHash",
+                "description": "Canonical transaction hash."
+              }
+            },
+            "required": [
+              "attemptStatus",
+              "recipient",
+              "txHash",
+              "rawAmount",
+              "height",
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AirdropRequest": {
+        "description": "Public parameters for `groundhog_requestAirdrop`.",
+        "properties": {
+          "clientNonce": {
+            "$ref": "#/components/schemas/ClientNonce",
+            "description": "Caller-selected idempotency key for this recipient and network."
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Address receiving the native HOG transfer."
+          }
+        },
+        "required": [
+          "recipient",
+          "clientNonce"
+        ],
+        "type": "object"
+      },
       "BalanceResponse": {
         "description": "Native HOG balance read from committed chain state.",
         "properties": {
@@ -238,6 +340,10 @@
           "blockHash"
         ],
         "type": "object"
+      },
+      "ClientNonce": {
+        "pattern": "^0x(?:[0-9a-f]{2}){1,32}$",
+        "type": "string"
       },
       "ConflictCode": {
         "description": "Reason a storage delta could not be applied during two-phase commit.\nProjects hogd's `DbConflictCode`.\n\nNew codes may be added as hogd evolves; unrecognized codes surface\nas `Other` on both serialize and deserialize so mixed-version\ndeployments degrade instead of failing.",
@@ -549,15 +655,15 @@
         ]
       },
       "Hex0x_ContractAddress": {
-        "pattern": "^0x[0-9a-f]*$",
+        "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
       "Hex0x_SHA256Hash": {
-        "pattern": "^0x[0-9a-f]*$",
+        "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
       "Hex0x_ValidatorID": {
-        "pattern": "^0x[0-9a-f]*$",
+        "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
       "HexBytes": {
@@ -603,15 +709,20 @@
         "type": "string"
       },
       "NetworkInfo": {
-        "description": "Fixed identity of the network an endpoint serves.\n\nEvery field here is settled when the chain is created and never changes, so\nclients may cache this response against an endpoint indefinitely. Anything\nthat moves as the chain advances belongs on `chainTip` instead.",
+        "description": "Immutable protocol and genesis identity reported by a JSON-RPC server.",
         "properties": {
+          "genesisHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Hash of the materialized genesis state."
+          },
           "networkHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash",
-            "description": "Hash of the network name, bound into the preimage of every transaction\nsignature. Signing for the wrong network produces transactions this\nnetwork rejects, so clients must read it from the endpoint they submit to."
+            "description": "Hash of the network name, bound into every transaction signature."
           }
         },
         "required": [
-          "networkHash"
+          "networkHash",
+          "genesisHash"
         ],
         "type": "object"
       },
@@ -1150,7 +1261,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "3.2.0"
+    "version": "4.0.0"
   },
   "methods": [
     {
@@ -1326,20 +1437,7 @@
       ]
     },
     {
-      "errors": [
-        {
-          "$ref": "#/components/errors/BackendUnavailable"
-        },
-        {
-          "$ref": "#/components/errors/BackendTimeout"
-        },
-        {
-          "$ref": "#/components/errors/Overloaded"
-        },
-        {
-          "$ref": "#/components/errors/NotImplemented"
-        }
-      ],
+      "errors": [],
       "name": "groundhog_networkInfo",
       "params": [],
       "result": {
@@ -1348,7 +1446,7 @@
           "$ref": "#/components/schemas/NetworkInfo"
         }
       },
-      "summary": "Fixed identity of the network this endpoint serves.  The values never change for a given chain, so clients should fetch this once per endpoint and cache it rather than calling it per request.",
+      "summary": "Immutable protocol and genesis identity of the network this endpoint serves.",
       "tags": [
         {
           "name": "Core API"
@@ -1664,6 +1762,47 @@
       "tags": [
         {
           "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxRejected"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        }
+      ],
+      "name": "groundhog_requestAirdrop",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AirdropRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "AirdropAttemptResponse",
+        "schema": {
+          "$ref": "#/components/schemas/AirdropAttemptResponse"
+        }
+      },
+      "summary": "Request an idempotent native HOG airdrop.  Servers register this method only when an airdrop backend is configured; other deployments return standard JSON-RPC `Method not found`.",
+      "tags": [
+        {
+          "name": "Airdrop API"
         }
       ]
     }
