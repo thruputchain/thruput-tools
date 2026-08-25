@@ -26,7 +26,8 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 3;
+/// Current schema version for `deploy --json` data payloads.
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeployAddressSource {

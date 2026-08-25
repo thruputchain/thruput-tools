@@ -31,6 +31,9 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
+/// Current schema version for `call --json` data payloads.
+pub const CALL_JSON_SCHEMA_VERSION: u32 = 1;
+
 /// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCall {
@@ -145,6 +148,7 @@ pub fn run(
     }
 
     let mut data = json!({
+        "schemaVersion": CALL_JSON_SCHEMA_VERSION,
         "txHash": tx_hash_formatted,
         "contract": prepared.contract_address_hex,
         "method": prepared.method,
@@ -241,6 +245,7 @@ fn print_dry_run(
     print.json(&CommandResult::new(
         cmd,
         json!({
+            "schemaVersion": CALL_JSON_SCHEMA_VERSION,
             "dryRun": true,
             "submitted": false,
             "rpcUrl": prepared.rpc_url,

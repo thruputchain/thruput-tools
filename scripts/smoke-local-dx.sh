@@ -517,17 +517,17 @@ assert_call_succeeded() {
     local label="$1"
     local payload="$2"
     local status_summary
-    status_summary="$(json_field data.status_summary "$payload")"
+    status_summary="$(json_field data.statusSummary "$payload")"
     if [[ "$status_summary" == "succeeded" ]]; then
         return
     fi
 
     local tx_hash wallet_entrypoint wallet_entrypoint_source target_entrypoint detail_available
-    tx_hash="$(json_field data.tx_hash "$payload")"
-    wallet_entrypoint="$(json_field data.diagnostics.wallet.entrypoint_id "$payload")"
-    wallet_entrypoint_source="$(json_field data.diagnostics.wallet.entrypoint_source "$payload")"
-    target_entrypoint="$(json_field data.diagnostics.target.entrypoint_id "$payload")"
-    detail_available="$(json_field data.diagnostics.transaction_detail.available "$payload")"
+    tx_hash="$(json_field data.txHash "$payload")"
+    wallet_entrypoint="$(json_field data.diagnostics.wallet.entrypointId "$payload")"
+    wallet_entrypoint_source="$(json_field data.diagnostics.wallet.entrypointSource "$payload")"
+    target_entrypoint="$(json_field data.diagnostics.target.entrypointId "$payload")"
+    detail_available="$(json_field data.diagnostics.transactionDetail.available "$payload")"
     die "$label status was $status_summary (tx=$tx_hash wallet_entrypoint=$wallet_entrypoint \
 wallet_entrypoint_source=$wallet_entrypoint_source target_entrypoint=$target_entrypoint \
 transaction_detail_available=$detail_available)"
@@ -868,7 +868,7 @@ CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \
     || die "deploy did not return a contract address"
 DEPLOY_HEIGHT="$(json_field data.height "$DEPLOY_JSON")"
-DEPLOY_TX_HASH="$(json_field data.tx_hash "$DEPLOY_JSON")"
+DEPLOY_TX_HASH="$(json_field data.txHash "$DEPLOY_JSON")"
 log "deploy result: address=$CONTRACT_ADDRESS height=$DEPLOY_HEIGHT tx=$DEPLOY_TX_HASH"
 assert_transaction_committed "embedded gateway" "$RPC_URL" "$DEPLOY_TX_HASH" "$DEPLOY_HEIGHT"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
@@ -877,23 +877,23 @@ if [[ -n "$GATEWAY_RPC_URL" ]]; then
 fi
 
 INITIALIZE_DRY_RUN_JSON="$(run_json "dry-run initialize" "$CLI" --json call "$PROJECT_NAME" initialize "$INITIAL_VALUE" --dry-run)"
-[[ "$(json_field data.dry_run "$INITIALIZE_DRY_RUN_JSON")" == "true" ]] \
+[[ "$(json_field data.dryRun "$INITIALIZE_DRY_RUN_JSON")" == "true" ]] \
     || die "initialize dry-run was not reported as a dry-run"
 INITIALIZE_SELECTOR_SOURCE="$(json_field data.selector.source "$INITIALIZE_DRY_RUN_JSON")"
 [[ "$INITIALIZE_SELECTOR_SOURCE" == "embedded_spec" ]] \
     || die "initialize selector source was $INITIALIZE_SELECTOR_SOURCE, expected embedded_spec from the RV32 sidecar"
 INITIALIZE_JSON="$(run_json "call initialize" "$CLI" --json call "$PROJECT_NAME" initialize "$INITIAL_VALUE")"
 assert_call_succeeded "initialize" "$INITIALIZE_JSON"
-log "initialize result: status=$(json_field data.status_summary "$INITIALIZE_JSON") height=$(json_field data.height "$INITIALIZE_JSON") tx=$(json_field data.tx_hash "$INITIALIZE_JSON")"
+log "initialize result: status=$(json_field data.statusSummary "$INITIALIZE_JSON") height=$(json_field data.height "$INITIALIZE_JSON") tx=$(json_field data.txHash "$INITIALIZE_JSON")"
 
 INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call "$PROJECT_NAME" increment "$INCREMENT_AMOUNT")"
 assert_call_succeeded "increment" "$INCREMENT_JSON"
-log "increment result: status=$(json_field data.status_summary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.tx_hash "$INCREMENT_JSON")"
+log "increment result: status=$(json_field data.statusSummary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.txHash "$INCREMENT_JSON")"
 
 PING_TAG=99
 PING_CALL_JSON="$(run_json "call ping" "$CLI" --json call "$PROJECT_NAME" ping "$PING_TAG")"
 assert_call_succeeded "ping" "$PING_CALL_JSON"
-PING_TX_HASH="$(json_field data.tx_hash "$PING_CALL_JSON")"
+PING_TX_HASH="$(json_field data.txHash "$PING_CALL_JSON")"
 PING_HEIGHT="$(json_field data.height "$PING_CALL_JSON")"
 
 RAW_EVENTS_JSON="$(run_json "raw counter events" "$CLI" --json events list "$CONTRACT_ADDRESS")"
@@ -984,10 +984,10 @@ if [[ -n "$GATEWAY_RPC_URL" ]]; then
 else
     GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
     assert_call_succeeded "get" "$GET_JSON"
-    GET_RETURN="$(json_field data.return_value "$GET_JSON")"
+    GET_RETURN="$(json_field data.returnValue "$GET_JSON")"
     [[ "$GET_RETURN" == "$EXPECTED_VALUE" ]] \
         || die "get decoded return was $GET_RETURN, expected $EXPECTED_VALUE"
-    log "get result: status=$(json_field data.status_summary "$GET_JSON") height=$(json_field data.height "$GET_JSON") tx=$(json_field data.tx_hash "$GET_JSON") return=$GET_RETURN"
+    log "get result: status=$(json_field data.statusSummary "$GET_JSON") height=$(json_field data.height "$GET_JSON") tx=$(json_field data.txHash "$GET_JSON") return=$GET_RETURN"
 fi
 
 COUNTER_VALUE_KEY="$(counter_value_key)"
@@ -1068,7 +1068,7 @@ USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json d
 USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"
-log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
+log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.txHash "$USER_DEPLOY_JSON")"
 SAVED_ALIAS="$(toml_field groundhog.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
 [[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
@@ -1077,7 +1077,7 @@ USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call "$
 assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
 USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call "$PROJECT_NAME" increment 2)"
 assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
-log "saved-wallet call result: status=$(json_field data.status_summary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.tx_hash "$USER_INCREMENT_JSON")"
+log "saved-wallet call result: status=$(json_field data.statusSummary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.txHash "$USER_INCREMENT_JSON")"
 
 unset GROUNDHOG_RUNTIME_MANIFEST
 VIEW_FROM="dev-1"
