@@ -74,7 +74,7 @@ pub(crate) struct PreparedRemoteAirdrop {
     airdrop_policy: groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
     amount_hog: String,
     attempt_path: PathBuf,
-    _attempt_lock: File,
+    _attempt_locks: Vec<File>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -631,7 +631,7 @@ fn prepare_remote_airdrop_with_descriptor(
     rpc_url: String,
     descriptor: &RemoteAirdropDescriptor,
 ) -> Result<PreparedAirdrop, CliError> {
-    let (loaded_attempt, attempt_lock) =
+    let (loaded_attempt, attempt_locks) =
         load_or_create_remote_airdrop_attempt(profile, &recipient_wallet, descriptor)?;
     let attempt = loaded_attempt.attempt;
 
@@ -644,7 +644,7 @@ fn prepare_remote_airdrop_with_descriptor(
         airdrop_policy: descriptor.policy.clone(),
         amount_hog: descriptor.amount_hog.clone(),
         attempt_path: loaded_attempt.path,
-        _attempt_lock: attempt_lock,
+        _attempt_locks: attempt_locks,
     }))
 }
 
@@ -652,19 +652,53 @@ fn load_or_create_remote_airdrop_attempt(
     profile: &ResolvedProfile,
     recipient_wallet: &str,
     descriptor: &RemoteAirdropDescriptor,
-) -> Result<(LoadedRemoteAirdropAttempt, File), CliError> {
+) -> Result<(LoadedRemoteAirdropAttempt, Vec<File>), CliError> {
     let network_id = descriptor.network_id.clone();
     let genesis_hash = descriptor.genesis_hash.clone();
     let path =
         remote_airdrop_attempt_path(&profile.name, recipient_wallet, &network_id, &genesis_hash)?;
-    let attempt_lock = lock_remote_airdrop_attempt(&path)?;
-    if let Some(attempt) = read_remote_airdrop_attempt(&path)?
-        && attempt.profile == profile.name
-        && attempt.recipient_wallet == recipient_wallet
-        && attempt.network_id == network_id
-        && attempt.genesis_hash == genesis_hash
-    {
-        return Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_lock));
+    let mut attempt_locks = vec![lock_remote_airdrop_attempt(&path)?];
+    let legacy_paths = find_legacy_remote_airdrop_attempt_paths(
+        &path,
+        &profile.name,
+        recipient_wallet,
+        &network_id,
+        &genesis_hash,
+    )?;
+    for legacy_path in &legacy_paths {
+        attempt_locks.push(lock_remote_airdrop_attempt(legacy_path)?);
+    }
+
+    let mut attempts = Vec::new();
+    for attempt_path in std::iter::once(&path).chain(legacy_paths.iter()) {
+        if let Some(attempt) = read_remote_airdrop_attempt(attempt_path)?
+            && remote_airdrop_attempt_matches(
+                &attempt,
+                &profile.name,
+                recipient_wallet,
+                &network_id,
+                &genesis_hash,
+            )
+        {
+            attempts.push(attempt);
+        }
+    }
+    if let Some(mut attempt) = attempts.pop() {
+        if attempts
+            .iter()
+            .any(|other| other.client_nonce != attempt.client_nonce)
+        {
+            return Err(CliError::Other(format!(
+                "multiple pending airdrop attempts exist for profile `{}`, recipient `{recipient_wallet}`, and network `{network_id}`; refusing to generate another nonce",
+                profile.name
+            )));
+        }
+        recipient_wallet.clone_into(&mut attempt.recipient_wallet);
+        write_remote_airdrop_attempt(&path, &attempt)?;
+        for legacy_path in &legacy_paths {
+            remove_remote_airdrop_attempt_path(legacy_path)?;
+        }
+        return Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_locks));
     }
 
     let mut client_nonce = [0u8; 16];
@@ -677,7 +711,59 @@ fn load_or_create_remote_airdrop_attempt(
         client_nonce: format!("0x{}", hex::encode(client_nonce)),
     };
     write_remote_airdrop_attempt(&path, &attempt)?;
-    Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_lock))
+    Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_locks))
+}
+
+fn find_legacy_remote_airdrop_attempt_paths(
+    canonical_path: &Path,
+    profile: &str,
+    recipient_wallet: &str,
+    network_id: &str,
+    genesis_hash: &str,
+) -> Result<Vec<PathBuf>, CliError> {
+    let parent = canonical_path
+        .parent()
+        .ok_or_else(|| CliError::Other("airdrop attempt path has no parent".into()))?;
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(parent)? {
+        let path = entry?.path();
+        if path == canonical_path
+            || path.extension().and_then(|value| value.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(attempt) = serde_json::from_str(&contents) else {
+            continue;
+        };
+        if remote_airdrop_attempt_matches(
+            &attempt,
+            profile,
+            recipient_wallet,
+            network_id,
+            genesis_hash,
+        ) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn remote_airdrop_attempt_matches(
+    attempt: &RemoteAirdropAttempt,
+    profile: &str,
+    recipient_wallet: &str,
+    network_id: &str,
+    genesis_hash: &str,
+) -> bool {
+    attempt.profile == profile
+        && attempt.network_id == network_id
+        && attempt.genesis_hash == genesis_hash
+        && parse_contract_address(&attempt.recipient_wallet)
+            .is_ok_and(|address| format_contract_address(&address) == recipient_wallet)
 }
 
 fn lock_remote_airdrop_attempt(attempt_path: &Path) -> Result<File, CliError> {
@@ -735,7 +821,11 @@ fn write_remote_airdrop_attempt(
 }
 
 fn remove_remote_airdrop_attempt(prepared: &PreparedRemoteAirdrop) -> Result<(), CliError> {
-    match std::fs::remove_file(&prepared.attempt_path) {
+    remove_remote_airdrop_attempt_path(&prepared.attempt_path)
+}
+
+fn remove_remote_airdrop_attempt_path(path: &Path) -> Result<(), CliError> {
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
@@ -890,10 +980,11 @@ mod tests {
     use serial_test::serial;
 
     use super::{
-        PreparedAirdrop, PreparedLocalAirdrop, ensure_local_airdrop_success,
+        PreparedAirdrop, PreparedLocalAirdrop, RemoteAirdropAttempt, ensure_local_airdrop_success,
         lock_remote_airdrop_attempt, observe_post_airdrop_balance,
         prepare_remote_airdrop_with_descriptor, remote_airdrop_attempt_path,
         resolve_airdrop_backend, resolve_airdrop_recipient, validate_remote_airdrop_amount,
+        write_remote_airdrop_attempt,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
@@ -963,6 +1054,115 @@ mod tests {
             remote_airdrop_attempt_path(&profile.name, &lower, "devnet", "0xgenesis").unwrap(),
             remote_airdrop_attempt_path(&profile.name, &mixed, "devnet", "0xgenesis").unwrap()
         );
+    }
+
+    #[test]
+    #[serial]
+    fn migrates_mixed_case_attempt_without_changing_nonce() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+        let profile = test_profile(BTreeMap::new());
+        let descriptor = test_network_descriptor();
+        let legacy_recipient = format!("0x{}", "aB".repeat(32));
+        let current_recipient = format!("0x{}", "Ab".repeat(32));
+        let recipient_wallet = resolve_airdrop_recipient(&profile, &current_recipient)
+            .expect("bug: mixed-case recipient should resolve");
+        let legacy_path = remote_airdrop_attempt_path(
+            &profile.name,
+            &legacy_recipient,
+            &descriptor.network_id,
+            &descriptor.genesis_hash,
+        )
+        .unwrap();
+        let client_nonce = format!("0x{}", "11".repeat(16));
+        write_remote_airdrop_attempt(
+            &legacy_path,
+            &RemoteAirdropAttempt {
+                profile: profile.name.clone(),
+                recipient_wallet: legacy_recipient.clone(),
+                network_id: descriptor.network_id.clone(),
+                genesis_hash: descriptor.genesis_hash.clone(),
+                client_nonce: client_nonce.clone(),
+            },
+        )
+        .unwrap();
+
+        let prepared = prepare_remote_airdrop_with_descriptor(
+            &profile,
+            &current_recipient,
+            recipient_wallet.clone(),
+            "http://127.0.0.1:8081".into(),
+            "http://127.0.0.1:9545".into(),
+            &descriptor,
+        )
+        .expect("bug: legacy attempt should migrate");
+        let PreparedAirdrop::Remote(prepared) = prepared else {
+            panic!("bug: expected remote airdrop");
+        };
+
+        assert_eq!(prepared.client_nonce, client_nonce);
+        assert_eq!(prepared.recipient_wallet, recipient_wallet);
+        assert!(!legacy_path.exists());
+        assert!(prepared.attempt_path.exists());
+    }
+
+    #[test]
+    #[serial]
+    fn cleans_legacy_copy_left_after_attempt_migration() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+        let profile = test_profile(BTreeMap::new());
+        let descriptor = test_network_descriptor();
+        let legacy_recipient = format!("0x{}", "aB".repeat(32));
+        let recipient_wallet = resolve_airdrop_recipient(&profile, &legacy_recipient).unwrap();
+        let canonical_path = remote_airdrop_attempt_path(
+            &profile.name,
+            &recipient_wallet,
+            &descriptor.network_id,
+            &descriptor.genesis_hash,
+        )
+        .unwrap();
+        let legacy_path = remote_airdrop_attempt_path(
+            &profile.name,
+            &legacy_recipient,
+            &descriptor.network_id,
+            &descriptor.genesis_hash,
+        )
+        .unwrap();
+        let client_nonce = format!("0x{}", "11".repeat(16));
+        for (path, stored_recipient) in [
+            (&canonical_path, &recipient_wallet),
+            (&legacy_path, &legacy_recipient),
+        ] {
+            write_remote_airdrop_attempt(
+                path,
+                &RemoteAirdropAttempt {
+                    profile: profile.name.clone(),
+                    recipient_wallet: stored_recipient.clone(),
+                    network_id: descriptor.network_id.clone(),
+                    genesis_hash: descriptor.genesis_hash.clone(),
+                    client_nonce: client_nonce.clone(),
+                },
+            )
+            .unwrap();
+        }
+
+        let prepared = prepare_remote_airdrop_with_descriptor(
+            &profile,
+            &recipient_wallet,
+            recipient_wallet.clone(),
+            "http://127.0.0.1:8081".into(),
+            "http://127.0.0.1:9545".into(),
+            &descriptor,
+        )
+        .expect("bug: duplicate copy with the same nonce should be cleaned up");
+        let PreparedAirdrop::Remote(prepared) = prepared else {
+            panic!("bug: expected remote airdrop");
+        };
+
+        assert_eq!(prepared.client_nonce, client_nonce);
+        assert!(canonical_path.exists());
+        assert!(!legacy_path.exists());
     }
 
     #[test]
