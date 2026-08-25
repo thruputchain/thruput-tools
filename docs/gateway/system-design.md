@@ -74,7 +74,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
 | Chain tip (height, hash) | hogd scheduler | `get_tip()` | |
-| Transaction submission | configurable: hogd scheduler or chuckd coordinator | `submit_unvetted(batch)` | Gateway config selects the private-network ingress path |
+| Transaction submission | hogd scheduler | `submit_unvetted(batch)` | Direct to the authoritative mempool admission point |
 | Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
 | Pending tx count | hogd scheduler | `size()` | Atomic counter, includes runqueue + stranded |
 | Latest committed storage | hogd DbGateway | `get_storage_at(address, key)` | Optional endpoint; required for `groundhog_getStorageAt` |
@@ -95,49 +95,23 @@ Most query paths already exist. Gaps:
   but is stubbed (`IgnoreNotify`). Phase 2 needs this wired to a
   broadcast channel that the gateway can subscribe to. See `open-questions.md`.
 
-- **A concrete Rust surface for a chuckd submit backend**: `protocol-rs`
-  now provides generated Rust/XDR support for the direct scheduler path
-  (`groundhog-xdr`, `groundhog_scheduler`), but it does not yet provide an
-  equivalent generated x23 "submit unvetted to chuckd" surface. If we keep a
-  configurable `chuckd_coordinator` submission backend, we still need to define
-  its concrete transport contract.
-
 ---
 
-## Transaction Submission Backend
+## Transaction Submission
 
-The gateway should support two private-network submission targets:
+`groundhog_sendRawTransaction` forwards directly to hogd scheduler's
+`submit_unvetted`; read paths use hogd scheduler/indexer directly as well.
+This keeps the public ingress as close as possible to the authoritative
+mempool admission point and has a concrete generated Rust client path via
+`protocol-rs`.
 
-- **`hogd_scheduler`**: `groundhog_sendRawTransaction` forwards directly to
-  hogd's `submit_unvetted`.
-- **`chuckd_coordinator`**: `groundhog_sendRawTransaction` forwards to
-  chuckd, which relays the transaction to hogd.
-
-This should be a deployment-time config choice, not a baked-in protocol
-decision. The gateway still uses hogd scheduler/indexer directly for the
-read paths; only tx ingress is switchable.
-
-### Why both exist
-
-- **Direct to hogd** keeps the public ingress as close as possible to the
-  authoritative mempool admission point, removes one hop/queue, and
-  now has a concrete generated Rust client path via `protocol-rs`.
-- **Via chuckd** can simplify private-network topology and ACLs because
-  hogd only needs to trust a single internal caller.
-
-### What does not change
-
-Routing through chuckd does **not** materially change the proposer-local
-fairness posture by itself. If chuckd is only a relay, the pressure point
-simply moves from `gateway -> hogd` to `gateway -> chuckd -> hogd`.
-Whichever component first accepts internet-originated transactions still
-owns rate limiting, dedupe, backpressure, overload shedding, and any
-future QoS policy.
+As the component that first accepts internet-originated transactions,
+the gateway owns rate limiting, dedupe, backpressure, overload shedding,
+and any future QoS policy.
 
 ### Client-facing submit semantics
 
-`groundhog_sendRawTransaction` should preserve the same external
-contract in both modes:
+`groundhog_sendRawTransaction` preserves this external contract:
 
 - success means the transaction was accepted by the authoritative
   downstream mempool path
@@ -147,11 +121,6 @@ contract in both modes:
   submission. The pre-check is best-effort: if the tip is unavailable
   the transaction is submitted anyway and the scheduler enforces expiry
   authoritatively.
-
-If the gateway routes through chuckd, it should not silently degrade to
-"accepted by a relay queue." Otherwise the topology choice leaks into
-API semantics and makes downstream admission behavior harder to reason
-about.
 
 ### V1 posture
 
@@ -426,7 +395,7 @@ remain a later phase.
 
 | Method | Data Source | Notes |
 |--------|-----------|-------|
-| `groundhog_sendRawTransaction(bytes) → TxHash` | configurable submission backend | Preserve mempool-acceptance semantics in both modes |
+| `groundhog_sendRawTransaction(bytes) → TxHash` | hogd scheduler | Preserve mempool-acceptance semantics |
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |

@@ -131,12 +131,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend_connect_timeout_ms = config.backend_connect_timeout_ms,
         scheduler_reconnect_grace_ms = config.scheduler_reconnect_grace_ms,
         shutdown_grace_ms = config.shutdown_grace_ms,
-        submission_backend = ?config.submission_backend,
         scheduler = %config.scheduler_address,
         indexer = ?config.indexer_address,
         view_gateway = ?config.view_gateway_address,
         hogd_protocol_override = ?config.hogd_protocol_override,
-        coordinator = ?config.coordinator_address,
         "loading configuration",
     );
 

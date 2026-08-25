@@ -67,14 +67,13 @@ simulator quickstart and result-artifact contract.
 
 ### Gateway Data Flows
 
-- **Tx submission** → configurable: hogd scheduler or chuckd coordinator (`submit_unvetted`) via x23
+- **Tx submission** → hogd scheduler (`submit_unvetted`) via x23
 - **Receipts/events** → hogd indexer (`get_transaction_info`, `get_contract_events`) via x23
 - **Chain state** → hogd scheduler (`get_tip`, `find_tx`, `size`) via x23
 - **Block data** → coordinator storage (TBD — see docs/gateway/system-design.md)
 
-The submit target is a topology choice, not a change in external
-gateway semantics. `groundhog_sendRawTransaction` should only return
-success once the authoritative downstream mempool path accepted the tx.
+`groundhog_sendRawTransaction` should only return success once the
+authoritative downstream mempool path accepted the tx.
 
 ### Dependencies
 
@@ -581,7 +580,5 @@ history retains the design context for anything not currently active.
   them.
 - The CLI wraps the Rust/RV32 build workflow and integrates with
   the gateway client for deploy, call, and status commands.
-- Submission through chuckd's current wallet stub is not a target
-  architecture. If a `chuckd` backend remains configurable, it should
-  mean a real private-network transport contract, not reuse of the old
-  wallet path.
+- The gateway submits directly to hogd scheduler; submission through
+  chuckd is not a target architecture.
