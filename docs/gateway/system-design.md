@@ -74,7 +74,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
 | Chain tip (height, hash) | hogd scheduler | `get_tip()` | |
-| Transaction submission | configurable: hogd scheduler or chuckd coordinator | `submit_unvetted(batch)` | Gateway config selects the private-network ingress path |
+| Transaction submission | hogd scheduler | `submit_unvetted(batch)` | Direct to the authoritative mempool admission point |
 | Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
 | Pending tx count | hogd scheduler | `size()` | Atomic counter, includes runqueue + stranded |
 | Latest committed storage | hogd DbGateway | `get_storage_at(address, key)` | Optional endpoint; required for `groundhog_getStorageAt` |
@@ -402,7 +402,7 @@ remain a later phase.
 
 | Method | Data Source | Notes |
 |--------|-----------|-------|
-| `groundhog_sendRawTransaction(bytes) → TxHash` | configurable submission backend | Preserve mempool-acceptance semantics in both modes |
+| `groundhog_sendRawTransaction(bytes) → TxHash` | hogd scheduler | Preserve mempool-acceptance semantics |
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |

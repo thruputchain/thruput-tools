@@ -153,9 +153,6 @@ impl Drop for AbortTaskOnDrop {
 pub struct GatewayContext {
     /// x23 RPC client to hogd scheduler.
     /// Used for: `submit_unvetted`, `get_tip`, `lookup_transactions`, `size`.
-    ///
-    /// Even when tx submission is routed through chuckd, read paths still use
-    /// the scheduler directly.
     pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
 
     /// Admission bound for direct transaction-status scheduler lookups.
