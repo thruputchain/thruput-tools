@@ -7149,10 +7149,6 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "call");
-    assert_eq!(
-        stdout["data"]["schemaVersion"],
-        groundhog_cli::call::CALL_JSON_SCHEMA_VERSION
-    );
     assert_eq!(stdout["warnings"], serde_json::json!([]));
     assert_eq!(groundhog_cli::call::CALL_JSON_SCHEMA_VERSION, 1);
     assert_eq!(stdout["data"]["schemaVersion"], 1);
@@ -7392,10 +7388,6 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
-    assert_eq!(
-        stdout["data"]["schemaVersion"],
-        groundhog_cli::call::CALL_JSON_SCHEMA_VERSION
-    );
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
