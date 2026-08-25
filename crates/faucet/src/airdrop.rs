@@ -618,6 +618,8 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
     ) -> Result<AcceptedAirdrop, AirdropSubmitError> {
         let block_expiry_height = self.block_expiry_height().await?;
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
+        let nonce = next_nonce()
+            .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
         let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
             wallet_address: self.faucet_wallet_address,
             wallet_entrypoint: self.wallet_do_action_entrypoint,
@@ -627,7 +629,7 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height,
-            nonce: next_nonce(),
+            nonce,
         })
         .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
         let tx_hex = sign_and_encode_transaction_hex(
