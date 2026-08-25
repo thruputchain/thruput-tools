@@ -127,7 +127,6 @@ struct RuntimeIdentity {
     chain_state: Option<String>,
     network_hash: String,
     protocol: String,
-    genesis_hash: String,
     producer: RuntimeProducerIdentity,
 }
 
@@ -1286,7 +1285,6 @@ async fn run() -> Result<(), BenchError> {
                 .map(|chain_state| chain_state.to_string()),
             network_hash: loaded.manifest.network_hash.to_string(),
             protocol: loaded.manifest.protocol.clone(),
-            genesis_hash: format!("0x{}", hex::encode(loaded.manifest.genesis_hash.as_ref())),
             producer: RuntimeProducerIdentity {
                 binary: loaded.manifest.producer.binary.clone(),
                 version: loaded.manifest.producer.version.clone(),
@@ -1465,7 +1463,6 @@ mod tests {
                 chain_state: Some("fresh".into()),
                 network_hash: "22".repeat(32),
                 protocol: "hogp/abcdef012345".into(),
-                genesis_hash: format!("0x{}", "33".repeat(32)),
                 producer: RuntimeProducerIdentity {
                     binary: "hog-devnode".into(),
                     version: "1.2.3".into(),
@@ -1547,7 +1544,6 @@ mod tests {
                     "chainState": "fresh",
                     "networkHash": "22".repeat(32),
                     "protocol": "hogp/abcdef012345",
-                    "genesisHash": format!("0x{}", "33".repeat(32)),
                     "producer": {
                         "binary": "hog-devnode",
                         "version": "1.2.3",
@@ -1768,7 +1764,6 @@ mod tests {
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
-            "genesisHash": hash(0x42),
             "producer": {
                 "binary": "hogd-dev",
                 "version": "0.1.0",

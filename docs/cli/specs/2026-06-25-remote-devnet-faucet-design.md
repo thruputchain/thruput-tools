@@ -20,8 +20,8 @@ are superseded by the network-info and airdrop RPC design. Direct hosted
 wallet-creation service calls and the custom-amount local administrative
 airdrop path are unchanged. Claims below that the RPC lacks live network
 identity, or that the public descriptor omits `networkHash`, are also
-superseded. The current contract requires `{ networkHash, genesisHash }` from
-`groundhog_networkInfo` and validates both against the descriptor.
+superseded. The current `groundhog_networkInfo` contract returns `networkHash`
+and validates that signing-domain identity against the descriptor.
 
 **Companions:**
 
@@ -102,9 +102,9 @@ These were confirmed by reading the backend, not inferred from names.
    bootstrap commit block hash (line 344), so it is the natural producer of a
    sanitized descriptor's `genesisHash`. The descriptor work is therefore not
    hogd-only.
-9. **Superseded: the public JSON-RPC API originally exposed no genesis hash.**
+9. **Superseded: the public JSON-RPC API originally exposed no network identity.**
    The implemented `groundhog_networkInfo` method now returns the canonical
-   `{ networkHash, genesisHash }` identity used to validate the descriptor.
+   `networkHash` used to validate the descriptor.
 
 ## Decisions
 
@@ -178,7 +178,7 @@ label/verify the network — and nothing private.
 
 **Superseded freshness design.** This proposal predates
 `groundhog_networkInfo`. Current hosted signing paths fetch
-`{ networkHash, genesisHash }` from RPC and require an exact descriptor match.
+`networkHash` from RPC and require an exact descriptor match.
 The original descriptor refresh proposal was:
 
 - `GET <faucetUrl>/v1/network` is authoritative and supports HTTP `ETag` /

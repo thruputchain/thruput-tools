@@ -96,8 +96,7 @@ impl ResultDiff {
         };
         let runtime_identity_match = a.runtime_identity.network_hash
             == b.runtime_identity.network_hash
-            && a.runtime_identity.protocol == b.runtime_identity.protocol
-            && a.runtime_identity.genesis_hash == b.runtime_identity.genesis_hash;
+            && a.runtime_identity.protocol == b.runtime_identity.protocol;
         let producer_identity_match = a.runtime_identity.producer == b.runtime_identity.producer;
 
         let metric_diffs = metric_diffs(a, b);

@@ -39,10 +39,9 @@ const TIP_HASH: [u8; 32] = [0xaa; 32];
 type StorageRead = (ContractAddress, [u8; 32]);
 
 fn test_network_info() -> NetworkInfo {
-    NetworkInfo::new(
-        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
-        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
-    )
+    NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+        [0x07; 32],
+    )))
 }
 
 /// Read/chain backend returning fully-populated canned payloads and

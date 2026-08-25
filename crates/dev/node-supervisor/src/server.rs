@@ -338,7 +338,7 @@ async fn start_rpc_server(
         }
     })?;
     let network_hash = manifest.network_hash.to_network_hash().into_inner();
-    let network_info = NetworkInfo::new(NetworkHash::from(network_hash), manifest.genesis_hash);
+    let network_info = NetworkInfo::new(NetworkHash::from(network_hash));
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend
@@ -829,11 +829,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .await
             .expect("bug: networkInfo should use immutable manifest identity");
         assert_eq!(network_info.network_hash.as_ref(), &[0; 32]);
-        assert_eq!(
-            serde_json::to_value(network_info.genesis_hash)
-                .expect("bug: genesis hash should serialize"),
-            format!("0x{}", "42".repeat(32))
-        );
 
         let tip = client
             .chain_tip()

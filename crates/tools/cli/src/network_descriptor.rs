@@ -267,11 +267,6 @@ fn validate_descriptor(
         &format_hex(descriptor.network_hash.0.as_ref()),
     )?;
     matches_expected(
-        "genesisHash",
-        &format_hex(manifest.genesis_hash.as_ref()),
-        &format_hex(descriptor.genesis_hash.0.as_ref()),
-    )?;
-    matches_expected(
         "walletCreate.walletContractHash",
         &format_hex(manifest.bootstrap.dev_wallet.content_hash.as_ref()),
         &format_hex(descriptor.wallet_create.wallet_contract_hash.0.as_ref()),
@@ -364,11 +359,6 @@ fn validate_network_info(
         "networkHash",
         &format_hex(network_info.network_hash.0.as_ref()),
         &format_hex(descriptor.network_hash.0.as_ref()),
-    )?;
-    matches_expected(
-        "genesisHash",
-        &format_hex(network_info.genesis_hash.0.as_ref()),
-        &format_hex(descriptor.genesis_hash.0.as_ref()),
     )
 }
 
@@ -574,22 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn hosted_descriptor_rejects_runtime_genesis_mismatch() {
-        let mut manifest = runtime_manifest();
-        manifest.genesis_hash = Hex0x(groundhog_xdr::types::SHA256Hash::from([0x99; 32]));
-
-        let error = descriptor_entrypoints(
-            "alice",
-            "https://rpc.devnet.example",
-            &descriptor(),
-            Some(&manifest),
-        )
-        .expect_err("bug: mismatched genesis should fail");
-
-        assert_mismatch_field(error, "genesisHash");
-    }
-
-    #[test]
     fn hosted_descriptor_rejects_runtime_network_hash_mismatch() {
         let mut manifest = runtime_manifest();
         manifest.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0x99; 32]);
@@ -608,12 +582,9 @@ mod tests {
     #[test]
     fn hosted_descriptor_rejects_rpc_network_hash_mismatch() {
         let descriptor = descriptor();
-        let network_info = NetworkInfo::new(
-            groundhog_json_rpc_types::NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
-                [0x99; 32],
-            )),
-            descriptor.genesis_hash,
-        );
+        let network_info = NetworkInfo::new(groundhog_json_rpc_types::NetworkHash::from(
+            groundhog_xdr::types::SHA256Hash::from([0x99; 32]),
+        ));
 
         let error = validate_network_info(&descriptor, &network_info)
             .expect_err("bug: RPC and faucet network hashes must match");
@@ -625,7 +596,7 @@ mod tests {
     fn hosted_signing_returns_the_validated_rpc_network_hash() {
         let descriptor = descriptor();
         let configured = groundhog_xdr::types::NetworkHash::from(descriptor.network_hash.0);
-        let network_info = NetworkInfo::new(descriptor.network_hash, descriptor.genesis_hash);
+        let network_info = NetworkInfo::new(descriptor.network_hash);
 
         let network_hash = validated_signing_network_hash(&configured, &network_info)
             .expect("bug: matching signing identity should resolve");
@@ -639,7 +610,7 @@ mod tests {
         let configured = groundhog_xdr::types::NetworkHash::from(
             groundhog_xdr::types::SHA256Hash::from([0x99; 32]),
         );
-        let network_info = NetworkInfo::new(descriptor.network_hash, descriptor.genesis_hash);
+        let network_info = NetworkInfo::new(descriptor.network_hash);
 
         let error = validated_signing_network_hash(&configured, &network_info)
             .expect_err("bug: stale signing identity should fail before signing");

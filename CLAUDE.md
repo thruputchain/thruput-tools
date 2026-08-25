@@ -545,7 +545,7 @@ history retains the design context for anything not currently active.
   CLI, gateway, and benchmark runs.
 - `docs/gateway/examples/runtime-manifest.hogd-dev.example.json` —
   example v2 runtime manifest shape. It is not runnable because endpoint
-  ports, genesis hash, wallet addresses, and hashes are runtime state.
+  ports, wallet addresses, and artifact hashes are runtime state.
 - `docs/gateway/open-questions.md` — cross-team open and resolved
   questions for the gateway design.
 - `docs/sim/README.md` — `hogsim` quickstart, existing-provider contract,

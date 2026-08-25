@@ -36,8 +36,6 @@ pub struct RuntimeManifest {
     pub network_hash: NetworkHashHex,
     /// x23 protocol string expected by backend services.
     pub protocol: String,
-    /// Hash of the materialized genesis state.
-    pub genesis_hash: SHA256Hash,
     /// Build metadata for the manifest producer.
     pub producer: RuntimeManifestProducer,
     /// Dial addresses for services available in this runtime.
@@ -334,7 +332,6 @@ mod tests {
                 "chainState": "fresh",
                 "networkHash": "4242424242424242424242424242424242424242424242424242424242424242",
                 "protocol": "hogp/test",
-                "genesisHash": prefixed_hex(0x42),
                 "producer": {
                     "binary": "hogd-dev",
                     "version": "0.1.0",
@@ -456,7 +453,6 @@ mod tests {
             chain_state: Some(RuntimeManifestChainState::Fresh),
             network_hash: crate::NetworkHashHex::from([0x42; 32]),
             protocol: "hogp/test".into(),
-            genesis_hash: hash(0x42),
             producer: RuntimeManifestProducer {
                 binary: "hogd-dev".into(),
                 version: "0.1.0".into(),

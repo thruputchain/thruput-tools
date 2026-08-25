@@ -122,8 +122,8 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
     );
     assert_eq!(
         schemas["NetworkInfo"]["required"],
-        serde_json::json!(["networkHash", "genesisHash"]),
-        "NetworkInfo should require both identity fields"
+        serde_json::json!(["networkHash"]),
+        "NetworkInfo should require only the signing-domain identity"
     );
     assert_eq!(
         schemas["Hex0x_SHA256Hash"]["pattern"], "^0x[0-9a-f]{64}$",

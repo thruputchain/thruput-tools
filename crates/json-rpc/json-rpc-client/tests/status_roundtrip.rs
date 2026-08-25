@@ -31,10 +31,9 @@ const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
 const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
 
 fn test_network_info() -> NetworkInfo {
-    NetworkInfo::new(
-        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
-        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
-    )
+    NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+        [0x07; 32],
+    )))
 }
 
 #[derive(Clone)]

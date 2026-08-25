@@ -531,10 +531,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     fn test_network_info() -> NetworkInfo {
-        NetworkInfo::new(
-            NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
-            Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
-        )
+        NetworkInfo::new(NetworkHash::from(groundhog_xdr::types::SHA256Hash::from(
+            [0x07; 32],
+        )))
     }
 
     #[async_trait::async_trait]

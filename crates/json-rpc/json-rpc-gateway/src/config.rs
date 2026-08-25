@@ -165,7 +165,7 @@ pub struct GatewayConfig {
     /// Hash of the network name bound into transaction signatures.
     pub network_hash: Option<NetworkHashHex>,
 
-    /// Hash of the materialized genesis state.
+    /// Materialized genesis hash used only by the hosted faucet adapter.
     pub genesis_hash: Option<SHA256Hash>,
 
     /// Optional hosted faucet base URL. The airdrop RPC is absent when unset.
@@ -318,14 +318,9 @@ impl GatewayConfig {
             .network_hash
             .as_ref()
             .ok_or(NetworkIdentityConfigError::MissingNetworkHash)?;
-        let genesis_hash = self
-            .genesis_hash
-            .ok_or(NetworkIdentityConfigError::MissingGenesisHash)?;
-
-        Ok(NetworkInfo::new(
-            NetworkHash::from(network_hash.to_network_hash().into_inner()),
-            genesis_hash,
-        ))
+        Ok(NetworkInfo::new(NetworkHash::from(
+            network_hash.to_network_hash().into_inner(),
+        )))
     }
 
     pub(crate) fn request_timeout(&self) -> Duration {
@@ -371,7 +366,6 @@ impl GatewayConfig {
         }
         let defaults = GatewayConfig::default();
         let network_hash = Some(manifest.network_hash.clone());
-        let genesis_hash = Some(manifest.genesis_hash);
         let scheduler_address = manifest.endpoints.scheduler.to_string();
         let indexer_address = manifest.endpoints.indexer.map(|addr| addr.to_string());
         let db_gateway_address = manifest.endpoints.db_gateway.map(|addr| addr.to_string());
@@ -383,12 +377,6 @@ impl GatewayConfig {
             &self.network_hash,
             &defaults.network_hash,
             &network_hash,
-        )?;
-        reject_manifest_conflict(
-            "genesis_hash",
-            &self.genesis_hash,
-            &defaults.genesis_hash,
-            &genesis_hash,
         )?;
         reject_manifest_conflict(
             "scheduler_address",
@@ -422,7 +410,6 @@ impl GatewayConfig {
         )?;
 
         self.network_hash = network_hash;
-        self.genesis_hash = genesis_hash;
         self.scheduler_address = scheduler_address;
         self.indexer_address = indexer_address;
         self.db_gateway_address = db_gateway_address;
@@ -438,9 +425,6 @@ pub enum NetworkIdentityConfigError {
     /// No protocol network hash was configured.
     #[error("missing required gateway field `network_hash`")]
     MissingNetworkHash,
-    /// No materialized genesis hash was configured.
-    #[error("missing required gateway field `genesis_hash`")]
-    MissingGenesisHash,
 }
 
 fn reject_manifest_conflict<T>(
@@ -574,10 +558,8 @@ mod tests {
     #[test]
     fn gateway_network_identity_is_required_and_preserved() {
         let expected_network_hash = NetworkHashHex::from([0x12; 32]);
-        let expected_genesis_hash = hash(0x24);
         let config = GatewayConfig {
             network_hash: Some(expected_network_hash),
-            genesis_hash: Some(expected_genesis_hash),
             ..GatewayConfig::default()
         };
 
@@ -586,22 +568,13 @@ mod tests {
             .expect("bug: complete gateway identity should resolve");
 
         assert_eq!(network_info.network_hash.as_ref(), &[0x12; 32]);
-        assert_eq!(network_info.genesis_hash, expected_genesis_hash);
     }
 
     #[test]
-    fn gateway_network_identity_rejects_missing_fields() {
+    fn gateway_network_identity_rejects_missing_network_hash() {
         assert_eq!(
             GatewayConfig::default().network_info(),
             Err(NetworkIdentityConfigError::MissingNetworkHash)
-        );
-        assert_eq!(
-            GatewayConfig {
-                network_hash: Some(NetworkHashHex::from([0x12; 32])),
-                ..GatewayConfig::default()
-            }
-            .network_info(),
-            Err(NetworkIdentityConfigError::MissingGenesisHash)
         );
     }
 
@@ -642,7 +615,6 @@ network_hash = "0x1234"
 
         assert_eq!(config.scheduler_address, "127.0.0.1:1000");
         assert_eq!(config.network_hash, Some(manifest.network_hash.clone()));
-        assert_eq!(config.genesis_hash, Some(manifest.genesis_hash));
         assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
         assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
         assert_eq!(
@@ -767,17 +739,6 @@ network_hash = "0x1234"
                 field: "network_hash",
             })
         );
-
-        let mut genesis_config = GatewayConfig {
-            genesis_hash: Some(hash(0x41)),
-            ..GatewayConfig::default()
-        };
-        assert_eq!(
-            genesis_config.apply_runtime_manifest(&manifest),
-            Err(RuntimeManifestConfigError::TomlConflict {
-                field: "genesis_hash",
-            })
-        );
     }
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
@@ -787,7 +748,6 @@ network_hash = "0x1234"
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
-            "genesisHash": hash(0x42),
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0",
