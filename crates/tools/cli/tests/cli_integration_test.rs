@@ -2876,6 +2876,7 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--verbose"));
     assert!(stdout.contains("--verbose is also honored with --json"));
     assert!(stdout.contains("--hog-devnode-binary"));
+    assert!(stdout.contains("--contract-artifacts-dir <DIR>"));
     assert!(stdout.contains("--data-dir"));
     assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--dev-account-count"));

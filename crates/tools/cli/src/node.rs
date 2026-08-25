@@ -117,6 +117,8 @@ pub struct LocalNodeOptions {
     pub port: u16,
     /// Explicit hog-devnode binary path.
     pub hogd_dev_binary: Option<PathBuf>,
+    /// Contract artifact directories passed to hog-devnode in search order.
+    pub contract_artifact_directories: Vec<PathBuf>,
     /// Directory where hog-devnode persists recoverable node state.
     pub data_dir: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
@@ -468,6 +470,16 @@ fn local_runtime_state(
 fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBuf> {
     use groundhog_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary};
 
+    let artifact_config = HogdDevConfig::default()
+        .with_contract_artifact_directories(&options.contract_artifact_directories);
+    if let Some(root) = artifact_config
+        .contract_artifact_directories
+        .iter()
+        .find_map(|root| contract_artifacts_dir(root))
+    {
+        return Some(root);
+    }
+
     let hogd = options
         .hogd_dev_binary
         .clone()
@@ -494,12 +506,26 @@ pub(crate) fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf>
             .map(|ancestor| ancestor.join("built_contracts")),
     );
 
-    candidates.into_iter().find(|root| {
-        root.join("contracts")
-            .join(DEV_WALLET_ARTIFACT_FILENAME)
-            .is_file()
-            || root.join(DEV_WALLET_ARTIFACT_FILENAME).is_file()
-    })
+    candidates
+        .into_iter()
+        .find_map(|root| runtime_artifacts_dir(&root))
+}
+
+fn runtime_artifacts_dir(root: &Path) -> Option<PathBuf> {
+    let root = std::fs::canonicalize(root).ok()?;
+    (root
+        .join("contracts")
+        .join(DEV_WALLET_ARTIFACT_FILENAME)
+        .is_file()
+        || root.join(DEV_WALLET_ARTIFACT_FILENAME).is_file())
+    .then_some(root)
+}
+
+fn contract_artifacts_dir(root: &Path) -> Option<PathBuf> {
+    let root = std::fs::canonicalize(root).ok()?;
+    root.join(DEV_WALLET_ARTIFACT_FILENAME)
+        .is_file()
+        .then_some(root)
 }
 
 pub(crate) fn dev_wallet_artifact_for_binary(binary: &Path) -> Option<PathBuf> {
@@ -512,6 +538,10 @@ pub(crate) fn dev_wallet_artifact_for_binary(binary: &Path) -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "flat CLI options map directly to one supervisor configuration"
+)]
 fn local_node_config(
     options: LocalNodeOptions,
 ) -> Result<groundhog_node_supervisor::NodeSupervisorConfig, CliError> {
@@ -548,7 +578,8 @@ fn local_node_config(
         .hogd_dev_binary
         .map_or_else(HogdDevConfig::default, |binary| {
             HogdDevConfig::default().with_binary_path(binary)
-        });
+        })
+        .with_contract_artifact_directories(options.contract_artifact_directories);
     let hogd = match options.data_dir {
         Some(data_dir) => hogd.with_data_dir(data_dir).with_shutdown_grace(
             groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE,
@@ -817,9 +848,9 @@ mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, NODE_STARTUP_SCHEMA_VERSION,
         default_tracing_filter, dev_wallet_artifact_for_binary, hogd_dev_startup_payload,
-        local_node_config, local_node_pid_file, local_runtime_state_payload,
-        map_node_supervisor_error, rpc_client_address, runtime_artifacts_dir_for_binary,
-        test_local_runtime_state_result,
+        local_node_config, local_node_pid_file, local_node_runtime_artifacts_dir,
+        local_runtime_state_payload, map_node_supervisor_error, rpc_client_address,
+        runtime_artifacts_dir_for_binary, test_local_runtime_state_result,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -841,6 +872,7 @@ mod tests {
             host: None,
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
+            contract_artifact_directories: vec![PathBuf::from("/tmp/contracts")],
             data_dir: Some(PathBuf::from("/tmp/hog-devnode-data")),
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),
@@ -856,6 +888,10 @@ mod tests {
 
         assert_eq!(config.rpc_listen_address, "127.0.0.1:0");
         assert_eq!(config.hogd_dev.binary_path, Some(binary));
+        assert_eq!(
+            config.hogd_dev.contract_artifact_directories,
+            [PathBuf::from("/tmp/contracts")]
+        );
         assert_eq!(
             config.hogd_dev.data_dir.as_deref(),
             Some(std::path::Path::new("/tmp/hog-devnode-data"))
@@ -1042,6 +1078,25 @@ mod tests {
                 fs::canonicalize(contracts.join("dev_wallet.rv32a"))
                     .expect("bug: artifact fixture should resolve")
             )
+        );
+    }
+
+    #[test]
+    fn explicit_contract_artifact_directory_drives_runtime_discovery() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let contracts = tmp.path().join("custom-contracts");
+        fs::create_dir(&contracts).expect("bug: contracts fixture should be created");
+        fs::write(contracts.join("dev_wallet.rv32a"), [])
+            .expect("bug: artifact fixture should be written");
+
+        let resolved = local_node_runtime_artifacts_dir(&LocalNodeOptions {
+            contract_artifact_directories: vec![contracts.clone()],
+            ..LocalNodeOptions::default()
+        });
+
+        assert_eq!(
+            resolved,
+            Some(fs::canonicalize(contracts).expect("bug: fixture root should resolve"))
         );
     }
 
