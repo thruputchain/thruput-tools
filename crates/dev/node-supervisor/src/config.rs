@@ -84,7 +84,7 @@ pub struct LocalAirdropConfig {
     pub attempt_capacity: usize,
     /// Maximum concurrently advancing attempts.
     pub max_concurrency: usize,
-    /// Per-call backend operation timeout.
+    /// End-to-end backend deadline for one attempt advancement.
     pub request_timeout: Duration,
 }
 

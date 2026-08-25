@@ -623,7 +623,7 @@ mod tests {
 
     use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
     use groundhog_json_rpc_types::{
-        airdrop::{AirdropRequest, ClientNonce},
+        airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
         error::codes,
         hex::Hex0x,
     };
@@ -1815,6 +1815,20 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
             "supervisor with indexer should report hogd_dev_full backend planes"
         );
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .expect("bug: jsonrpsee http client builds");
+
+        let response = client
+            .request_airdrop(AirdropRequest {
+                recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+                client_nonce: ClientNonce::new(vec![0x99])
+                    .expect("bug: test client nonce should validate"),
+            })
+            .await
+            .expect("bug: full local runtime should expose airdrop");
+
+        assert!(matches!(response, AirdropAttemptResponse::Pending { .. }));
 
         handle.stop().await.expect("bug: clean shutdown");
     }

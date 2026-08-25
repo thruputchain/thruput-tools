@@ -271,12 +271,7 @@ impl LocalAirdropRpc {
                         self.block_driver.trigger_after_submit();
                     }
                     attempt.set_submitted(true)?;
-                    Ok(AirdropAttemptResponse::Pending {
-                        recipient,
-                        raw_amount: self.raw_amount.to_string(),
-                        tx_hash: Some(signed.tx_hash),
-                        retry_after_seconds: LOCAL_AIRDROP_RETRY_AFTER_SECONDS,
-                    })
+                    Ok(self.pending_response(recipient, signed.tx_hash))
                 }
                 Ok(TransactionStatus::RecentFailure { .. }) => {
                     attempt.set_submitted(false)?;
@@ -285,18 +280,33 @@ impl LocalAirdropRpc {
                             .into(),
                     ))
                 }
+                Ok(TransactionStatus::Unknown) => {
+                    attempt.set_submitted(false)?;
+                    match submit_error {
+                        Some(error) => Err(error),
+                        None => Ok(self.pending_response(recipient, signed.tx_hash)),
+                    }
+                }
                 Ok(_) => match submit_error {
                     Some(error) => Err(error),
-                    None => Ok(AirdropAttemptResponse::Pending {
-                        recipient,
-                        raw_amount: self.raw_amount.to_string(),
-                        tx_hash: Some(signed.tx_hash),
-                        retry_after_seconds: LOCAL_AIRDROP_RETRY_AFTER_SECONDS,
-                    }),
+                    None => Ok(self.pending_response(recipient, signed.tx_hash)),
                 },
                 Err(error) => Err(submit_error.unwrap_or_else(|| classify_backend_error(error))),
             },
             Err(error) => Err(classify_backend_error(error)),
+        }
+    }
+
+    fn pending_response(
+        &self,
+        recipient: ContractAddress,
+        tx_hash: TxHash,
+    ) -> AirdropAttemptResponse {
+        AirdropAttemptResponse::Pending {
+            recipient,
+            raw_amount: self.raw_amount.to_string(),
+            tx_hash: Some(tx_hash),
+            retry_after_seconds: LOCAL_AIRDROP_RETRY_AFTER_SECONDS,
         }
     }
 }
@@ -728,6 +738,59 @@ mod tests {
         assert_ne!(first.bytes, second.bytes);
     }
 
+    #[test]
+    fn local_context_rejects_wrong_faucet_role() {
+        let config = NodeSupervisorConfig::default();
+        let mut manifest = runtime_manifest(&config);
+        manifest.bootstrap_accounts[0].role = "local_user".into();
+
+        let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
+            .err()
+            .expect("wrong dev-0 role must fail validation");
+
+        assert!(error.contains("derivation does not match"));
+    }
+
+    #[test]
+    fn local_context_rejects_wrong_derivation_seed() {
+        let config = NodeSupervisorConfig::default();
+        let mut manifest = runtime_manifest(&config);
+        manifest.bootstrap_account_derivation.seed = "wrong-seed".into();
+
+        let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
+            .err()
+            .expect("wrong derivation seed must fail validation");
+
+        assert!(error.contains("derivation does not match"));
+    }
+
+    #[test]
+    fn local_context_rejects_wrong_faucet_public_key() {
+        let config = NodeSupervisorConfig::default();
+        let mut manifest = runtime_manifest(&config);
+        manifest.bootstrap_accounts[0].public_key =
+            Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x99; 32]));
+
+        let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
+            .err()
+            .expect("wrong faucet public key must fail validation");
+
+        assert!(error.contains("public key does not match"));
+    }
+
+    #[test]
+    fn local_context_rejects_malformed_wallet_entrypoint() {
+        let config = NodeSupervisorConfig::default();
+        let mut manifest = runtime_manifest(&config);
+        manifest.bootstrap.dev_wallet.do_action_entrypoint = "0x00".into();
+
+        let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
+            .err()
+            .expect("malformed wallet entrypoint must fail validation");
+
+        assert!(error.contains("invalid runtime dev-wallet doAction entrypoint"));
+    }
+
     #[tokio::test]
     async fn concurrent_same_key_constructs_and_submits_once() {
         let backend =
@@ -847,6 +910,86 @@ mod tests {
                 .expect("bug: submissions lock should be available")
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn accepted_unknown_retry_resubmits_exact_signed_bytes_without_reconstruction() {
+        let backend = Arc::new(
+            TestBackend::new(vec![Ok(()), Ok(())]).with_status_results(vec![
+                Ok(TransactionStatus::Unknown),
+                Ok(TransactionStatus::Pending),
+            ]),
+        );
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![4, 3, 2, 1],
+        });
+        let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
+        let request = test_request(13, 13);
+
+        let first = rpc.request(request.clone()).await;
+        let second = rpc.request(request).await;
+
+        assert!(matches!(
+            first,
+            Ok(AirdropAttemptResponse::Pending {
+                tx_hash: Some(hash),
+                ..
+            }) if hash == test_tx_hash()
+        ));
+        assert!(matches!(
+            second,
+            Ok(AirdropAttemptResponse::Pending {
+                tx_hash: Some(hash),
+                ..
+            }) if hash == test_tx_hash()
+        ));
+        assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *backend
+                .submissions
+                .lock()
+                .expect("bug: submissions lock should be available"),
+            vec![vec![4, 3, 2, 1], vec![4, 3, 2, 1]]
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_retry_with_ambiguous_submit_error_can_retry_again() {
+        let backend = Arc::new(
+            TestBackend::new(vec![
+                Ok(()),
+                Err(RpcServerError::BackendUnavailable("response lost".into())),
+                Ok(()),
+            ])
+            .with_status_results(vec![
+                Ok(TransactionStatus::Unknown),
+                Ok(TransactionStatus::Unknown),
+                Ok(TransactionStatus::Pending),
+            ]),
+        );
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![6, 7, 8, 9],
+        });
+        let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
+        let request = test_request(14, 14);
+
+        let first = rpc.request(request.clone()).await;
+        let second = rpc.request(request.clone()).await;
+        let third = rpc.request(request).await;
+
+        assert!(matches!(first, Ok(AirdropAttemptResponse::Pending { .. })));
+        assert!(matches!(second, Err(RpcServerError::BackendUnavailable(_))));
+        assert!(matches!(third, Ok(AirdropAttemptResponse::Pending { .. })));
+        assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *backend
+                .submissions
+                .lock()
+                .expect("bug: submissions lock should be available"),
+            vec![vec![6, 7, 8, 9]; 3]
         );
     }
 
@@ -1093,5 +1236,52 @@ mod tests {
 
     fn test_tx_hash() -> TxHash {
         TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xaa; 32])))
+    }
+
+    fn runtime_manifest(config: &NodeSupervisorConfig) -> RuntimeManifest {
+        let signer = derive_dev_account_signer(&config.hogd_dev.dev_account_seed, 0);
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2,
+            "kind": "hogd-dev-runtime",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
+            "protocol": "hogp/test",
+            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "producer": { "binary": "hogd-dev", "version": "0.1.0" },
+            "endpoints": { "scheduler": "127.0.0.1:1000" },
+            "bootstrapAccountDerivation": {
+                "scheme": "groundhog-bootstrap-account-v1",
+                "seed": config.hogd_dev.dev_account_seed,
+            },
+            "bootstrapAccounts": [{
+                "index": 0,
+                "role": "faucet",
+                "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+                "walletAddress": format!("0x{}", "11".repeat(32)),
+                "initialStorageTokens": "100000000",
+            }],
+            "bootstrap": {
+                "devWallet": {
+                    "contentHash": format!("0x{}", "51".repeat(32)),
+                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
+                    "artifactHint": "./dev_wallet.rv32a",
+                    "deployEntrypoint": "0xadac498222148e4f",
+                    "createWalletEntrypoint": "0x6372656174655761",
+                    "doActionEntrypoint": "0x646f416374696f6e",
+                },
+                "storageCostModel": {
+                    "hash": format!("0x{}", "53".repeat(32)),
+                    "baseDataItemCost": "12000",
+                    "bytestringCostPerByte": "10",
+                    "baseContractDeploymentCost": "12000",
+                    "contractDeploymentCostPerByte": "10",
+                    "authPerKeyCost": "1111",
+                    "rcqCostPerEntry": "8",
+                    "replayCacheCostPerEntry": "7",
+                    "balanceCost": "1234",
+                },
+            },
+        }))
+        .expect("bug: runtime manifest fixture should deserialize")
     }
 }
