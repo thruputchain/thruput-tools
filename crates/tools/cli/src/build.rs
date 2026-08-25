@@ -8,6 +8,9 @@ use std::process::Command;
 
 pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 
+/// Schema version of the `build --json` data payload.
+pub const BUILD_JSON_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
     pub project_name: String,
@@ -57,19 +60,20 @@ pub fn run(
     print.json(&crate::result::CommandResult::new(
         "build",
         json!({
-            "project_name": result.project_name,
-            "project_root": result.project_root,
+            "schemaVersion": BUILD_JSON_SCHEMA_VERSION,
+            "projectName": result.project_name,
+            "projectRoot": result.project_root,
             "target": result.target,
             "elf": result.elf,
             "rv32": result.rv32,
             "metadata": result.metadata,
-            "spec_json": result.spec_json,
-            "spec_xdr": result.spec_xdr,
-            "bindings_ts": result.bindings_ts,
-            "size_bytes": result.size_bytes,
+            "specJson": result.spec_json,
+            "specXdr": result.spec_xdr,
+            "bindingsTs": result.bindings_ts,
+            "sizeBytes": result.size_bytes,
             "profile": result.profile,
-            "cargo_stdout": result.cargo_stdout,
-            "cargo_stderr": result.cargo_stderr,
+            "cargoStdout": result.cargo_stdout,
+            "cargoStderr": result.cargo_stderr,
         }),
     ))?;
     Ok(())

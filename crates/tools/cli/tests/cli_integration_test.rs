@@ -1909,7 +1909,8 @@ fn new_json_outputs_structured_payload() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "new");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["project_name"], "json-project");
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["projectName"], "json-project");
     assert_eq!(stdout["data"]["template"], "counter");
 }
 
@@ -2129,7 +2130,7 @@ fn init_json_delegates_to_status() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "status");
     assert_eq!(stdout["data"]["environment"]["cargo"], true);
-    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], false);
+    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], false);
     assert!(!stdout["warnings"].as_array().unwrap().is_empty());
 }
 
@@ -2273,16 +2274,20 @@ fn status_json_outputs_structured_payload() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "status");
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::status::STATUS_JSON_SCHEMA_VERSION
+    );
     assert!(stdout["data"]["environment"]["cargo"].as_bool().unwrap());
-    assert!(stdout["data"]["environment"]["rust_toolchain"]["available"].is_boolean());
-    assert!(stdout["data"]["environment"]["rust_toolchain"]["rust_src"].is_string());
-    assert!(stdout["data"]["environment"]["rv32_target"].is_string());
+    assert!(stdout["data"]["environment"]["rustToolchain"]["available"].is_boolean());
+    assert!(stdout["data"]["environment"]["rustToolchain"]["rustSrc"].is_string());
+    assert!(stdout["data"]["environment"]["rv32Target"].is_string());
     assert!(stdout["data"]["environment"]["devnode"]["reachable"].is_boolean());
-    assert!(stdout["data"]["environment"]["dev_wallet_artifact"]["valid"].is_boolean());
+    assert!(stdout["data"]["environment"]["devWalletArtifact"]["valid"].is_boolean());
     assert!(stdout["data"]["environment"].get("wasm_target").is_none());
     assert!(stdout["data"]["environment"].get("wasm_opt").is_none());
     assert!(
-        !stdout["data"]["credentials"]["executor_credentials"]
+        !stdout["data"]["credentials"]["executorCredentials"]
             .as_bool()
             .unwrap()
     );
@@ -2341,9 +2346,9 @@ fn status_json_reports_project_default_wallet_and_dangling_finding() {
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let project = &stdout["data"]["project"];
-    assert_eq!(project["project_default_wallet"], "missing");
-    assert_eq!(project["effective_default_wallet"], "missing");
-    assert_eq!(project["default_wallet_source"], "project");
+    assert_eq!(project["projectDefaultWallet"], "missing");
+    assert_eq!(project["effectiveDefaultWallet"], "missing");
+    assert_eq!(project["defaultWalletSource"], "project");
     assert!(
         stdout["warnings"]
             .as_array()
@@ -2372,7 +2377,7 @@ fn status_json_reports_reachable_devnode() {
     assert_eq!(status["reachable"], true);
     assert_eq!(status["path"], devnode.display().to_string());
     assert_eq!(status["version"], "0.1.12");
-    let artifact = &stdout["data"]["environment"]["dev_wallet_artifact"];
+    let artifact = &stdout["data"]["environment"]["devWalletArtifact"];
     assert_eq!(artifact["available"], true);
     assert_eq!(artifact["valid"], true);
     assert!(
@@ -2495,7 +2500,7 @@ fn status_json_detects_mock_executor_auth_from_environment() {
         .unwrap();
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], true);
+    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], true);
     assert_eq!(stdout["data"]["credentials"]["source"], "environment");
     assert!(
         stdout["warnings"]
@@ -2527,7 +2532,7 @@ fn status_json_detects_mock_executor_auth_from_config() {
         .unwrap();
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], true);
+    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], true);
     assert_eq!(stdout["data"]["credentials"]["source"], "config");
 }
 
@@ -2545,7 +2550,7 @@ fn status_json_rejects_empty_mock_executor_user() {
         .unwrap();
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], false);
+    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], false);
     assert!(stdout["data"]["credentials"].get("source").is_none());
     assert!(
         stdout["warnings"]
@@ -2728,21 +2733,22 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "build");
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::build::BUILD_JSON_SCHEMA_VERSION
+    );
     assert_eq!(stdout["data"]["target"], "rv32");
     assert_eq!(stdout["data"]["elf"], raw_elf.display().to_string());
     assert_eq!(stdout["data"]["rv32"], rv32.display().to_string());
     assert_eq!(stdout["data"]["metadata"], metadata.display().to_string());
-    assert_eq!(
-        stdout["data"]["bindings_ts"],
-        bindings.display().to_string()
-    );
+    assert_eq!(stdout["data"]["bindingsTs"], bindings.display().to_string());
     assert!(
         std::fs::read_to_string(bindings)
             .unwrap()
             .contains("Counter")
     );
     // v4 stores only the high-water prefix, so the artifact is well under 64 KiB.
-    assert!(stdout["data"]["size_bytes"].as_u64().unwrap() < 64 * 1024);
+    assert!(stdout["data"]["sizeBytes"].as_u64().unwrap() < 64 * 1024);
 }
 
 #[cfg(unix)]
@@ -6563,10 +6569,11 @@ fn storage_json_reads_latest_item() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "storage");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["key"], key);
-    assert_eq!(stdout["data"]["block_height"], 12);
+    assert_eq!(stdout["data"]["blockHeight"], 12);
     assert_eq!(stdout["data"]["item"]["kind"], "bytestring");
     assert_eq!(
         stdout["data"]["item"]["bytes"],
@@ -6609,11 +6616,12 @@ fn balance_json_reads_native_hog_balance() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], "alice");
     assert_eq!(stdout["data"]["address"], address);
-    assert_eq!(stdout["data"]["raw_balance"], "123456789");
-    assert_eq!(stdout["data"]["balance_hog"], "12.3456789");
+    assert_eq!(stdout["data"]["rawBalance"], "123456789");
+    assert_eq!(stdout["data"]["balanceHog"], "12.3456789");
     assert_eq!(stdout["data"]["height"], 34);
 }
 
@@ -6648,9 +6656,9 @@ fn balance_json_uses_global_default_profile_when_profile_omitted() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["address"], address);
-    assert_eq!(stdout["data"]["balance_hog"], "7");
+    assert_eq!(stdout["data"]["balanceHog"], "7");
 }
 
 #[test]
@@ -6685,10 +6693,10 @@ fn balance_json_cli_rpc_url_overrides_profile() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], address);
     assert_eq!(stdout["data"]["address"], address);
-    assert_eq!(stdout["data"]["raw_balance"], "42");
+    assert_eq!(stdout["data"]["rawBalance"], "42");
 }
 
 #[test]
@@ -6810,8 +6818,8 @@ fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
-    assert_eq!(stdout["data"]["block_height"], 12);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+    assert_eq!(stdout["data"]["blockHeight"], 12);
 }
 
 #[test]
@@ -6848,8 +6856,8 @@ fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
-    assert_eq!(stdout["data"]["block_height"], 12);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+    assert_eq!(stdout["data"]["blockHeight"], 12);
 }
 
 #[test]

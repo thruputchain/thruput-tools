@@ -14,6 +14,9 @@ use crate::hog;
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
+/// Schema version of the `balance --json` data payload.
+pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 1;
+
 /// Read native HOG balance for a wallet, contract, dev account, or address.
 pub fn run(
     target: &str,
@@ -43,11 +46,12 @@ pub fn run(
     print.json(&CommandResult::new(
         cmd,
         json!({
-            "rpc_url": rpc_url,
+            "schemaVersion": BALANCE_JSON_SCHEMA_VERSION,
+            "rpcUrl": rpc_url,
             "target": target,
             "address": address_hex,
-            "raw_balance": balance.raw_balance,
-            "balance_hog": balance_hog,
+            "rawBalance": balance.raw_balance,
+            "balanceHog": balance_hog,
             "height": balance.height,
         }),
     ))?;

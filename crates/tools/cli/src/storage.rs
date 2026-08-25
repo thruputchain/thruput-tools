@@ -11,6 +11,9 @@ use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
+/// Schema version of the `storage --json` data payload.
+pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 1;
+
 /// Read the latest committed storage item at a contract address/key pair.
 pub fn run(
     address: &str,
@@ -42,10 +45,11 @@ pub fn run(
     print.json(&CommandResult::new(
         cmd,
         json!({
-            "rpc_url": rpc_url,
+            "schemaVersion": STORAGE_JSON_SCHEMA_VERSION,
+            "rpcUrl": rpc_url,
             "address": address_hex,
             "key": key_hex,
-            "block_height": read.block_height,
+            "blockHeight": read.block_height,
             "item": read.item,
         }),
     ))?;

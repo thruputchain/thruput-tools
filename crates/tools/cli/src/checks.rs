@@ -43,6 +43,7 @@ pub enum RustTargetStatus {
 
 /// Active Rust toolchain and required component status.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RustToolchainStatus {
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,6 +67,7 @@ pub struct DevnodeStatus {
 
 /// Resolved and validated dev-wallet runtime artifact.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DevWalletArtifactStatus {
     pub available: bool,
     pub valid: bool,
@@ -79,6 +81,7 @@ pub struct DevWalletArtifactStatus {
 
 /// Environment tool checks.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvironmentStatus {
     pub cargo: bool,
     pub rust_toolchain: RustToolchainStatus,
@@ -93,6 +96,7 @@ pub use crate::keys::KeySummary;
 
 /// Key inventory and global default selection.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct KeyStatus {
     pub keys: Vec<KeySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,6 +105,7 @@ pub struct KeyStatus {
 
 /// Mock-executor FFI download credential availability.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CredentialStatus {
     pub executor_credentials: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
