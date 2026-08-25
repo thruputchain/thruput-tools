@@ -762,13 +762,13 @@ fn resolve_airdrop_recipient(
     recipient: &str,
 ) -> Result<String, CliError> {
     if let Some(wallet) = profile.resolve_wallet(recipient) {
-        return Ok(wallet);
+        return parse_contract_address(&wallet).map(|address| format_contract_address(&address));
     }
     if recipient.starts_with("0x") {
-        parse_contract_address(recipient).map_err(|_| {
+        let address = parse_contract_address(recipient).map_err(|_| {
             CliError::Other("wallet address must be a 0x-prefixed 64-character hex string".into())
         })?;
-        return Ok(recipient.to_owned());
+        return Ok(format_contract_address(&address));
     }
     if let Some(index) = dev_keys::dev_key_index(recipient) {
         let address = lookup_dev_account_address(profile, recipient, index)?;
@@ -892,8 +892,8 @@ mod tests {
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, ensure_local_airdrop_success,
         lock_remote_airdrop_attempt, observe_post_airdrop_balance,
-        prepare_remote_airdrop_with_descriptor, resolve_airdrop_backend, resolve_airdrop_recipient,
-        validate_remote_airdrop_amount,
+        prepare_remote_airdrop_with_descriptor, remote_airdrop_attempt_path,
+        resolve_airdrop_backend, resolve_airdrop_recipient, validate_remote_airdrop_amount,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
@@ -930,7 +930,7 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
-                address: format!("0x{}", "ab".repeat(32)),
+                address: format!("0x{}", "aB".repeat(32)),
                 owner_public_key: format!("0x{}", "ef".repeat(32)),
             },
         );
@@ -941,10 +941,28 @@ mod tests {
             format!("0x{}", "ab".repeat(32))
         );
         assert_eq!(
-            resolve_airdrop_recipient(&profile, &format!("0x{}", "cd".repeat(32))).unwrap(),
+            resolve_airdrop_recipient(&profile, &format!("0x{}", "cD".repeat(32))).unwrap(),
             format!("0x{}", "cd".repeat(32))
         );
         assert!(resolve_airdrop_recipient(&profile, "missing").is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn recipient_hex_casing_selects_the_same_attempt_path() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+        let profile = test_profile(BTreeMap::new());
+        let lower = resolve_airdrop_recipient(&profile, &format!("0x{}", "ab".repeat(32)))
+            .expect("bug: lowercase recipient should resolve");
+        let mixed = resolve_airdrop_recipient(&profile, &format!("0x{}", "aB".repeat(32)))
+            .expect("bug: mixed-case recipient should resolve");
+
+        assert_eq!(lower, mixed);
+        assert_eq!(
+            remote_airdrop_attempt_path(&profile.name, &lower, "devnet", "0xgenesis").unwrap(),
+            remote_airdrop_attempt_path(&profile.name, &mixed, "devnet", "0xgenesis").unwrap()
+        );
     }
 
     #[test]
