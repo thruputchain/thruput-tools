@@ -580,6 +580,5 @@ history retains the design context for anything not currently active.
   them.
 - The CLI wraps the Rust/RV32 build workflow and integrates with
   the gateway client for deploy, call, and status commands.
-- Submission through chuckd is not a target architecture; the gateway
-  submits directly to hogd scheduler, and the old configurable
-  `chuckd_coordinator` backend was deleted.
+- The gateway submits directly to hogd scheduler; submission through
+  chuckd is not a target architecture.

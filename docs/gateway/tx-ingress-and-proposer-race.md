@@ -220,10 +220,7 @@ should use them directly where possible.
 That means the direct-to-`hogd` submission path now has a concrete typed Rust
 surface.
 
-### The `chuckd` submit backend was deleted
+### Submission is direct-to-scheduler
 
-There was never a generated x23 "submit unvetted to chuckd" surface in
-`protocol-rs`, and the design settled on the gateway talking directly to
-hogd scheduler. The configurable `submission_backend` (and its
-`chuckd_coordinator` option) was removed from `hog-gateway`; submission is
-direct-to-scheduler only.
+The gateway submits directly to hogd scheduler over that typed surface;
+there is no alternative submission route.

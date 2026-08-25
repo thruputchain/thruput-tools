@@ -95,11 +95,6 @@ Most query paths already exist. Gaps:
   but is stubbed (`IgnoreNotify`). Phase 2 needs this wired to a
   broadcast channel that the gateway can subscribe to. See `open-questions.md`.
 
-- ~~A concrete Rust surface for a chuckd submit backend~~: resolved by
-  deletion. Submission goes directly to hogd scheduler; the
-  `chuckd_coordinator` option (which never had a working transport) was
-  removed from the gateway config.
-
 ---
 
 ## Transaction Submission
@@ -110,11 +105,9 @@ This keeps the public ingress as close as possible to the authoritative
 mempool admission point and has a concrete generated Rust client path via
 `protocol-rs`.
 
-A `chuckd_coordinator` relay option was previously sketched as a
-deployment-time alternative but never had a working transport; it was
-deleted rather than kept configurable. The component that first accepts
-internet-originated transactions (the gateway) owns rate limiting, dedupe,
-backpressure, overload shedding, and any future QoS policy.
+As the component that first accepts internet-originated transactions,
+the gateway owns rate limiting, dedupe, backpressure, overload shedding,
+and any future QoS policy.
 
 ### Client-facing submit semantics
 
