@@ -11,7 +11,7 @@ use groundhog_json_rpc_server::{
     RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight, ContractAddress, NetworkHash,
     block::{BlockInfo, ChainTip},
     events::{
         BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventPage,
@@ -37,6 +37,13 @@ const EVENT_CURSOR: &[u8] = &[0x01, 0x02, 0x03];
 const TIP_HASH: [u8; 32] = [0xaa; 32];
 
 type StorageRead = (ContractAddress, [u8; 32]);
+
+fn test_network_info() -> NetworkInfo {
+    NetworkInfo::new(
+        NetworkHash::from(groundhog_xdr::types::SHA256Hash::from([0x07; 32])),
+        Hex0x(groundhog_xdr::types::SHA256Hash::from([0x42; 32])),
+    )
+}
 
 /// Read/chain backend returning fully-populated canned payloads and
 /// recording the queries it was dispatched with.
@@ -115,13 +122,6 @@ impl SubmitPlane for PopulatedReadBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for PopulatedReadBackend {
-    async fn network_info(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<NetworkInfo, RpcServerError> {
-        Err(RpcServerError::NotImplemented("networkInfo".into()))
-    }
-
     async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Ok(ChainTip {
             height: BlockHeight::from(42),
@@ -227,8 +227,12 @@ async fn start_server(backend: PopulatedReadBackend) -> (HttpClient, ServerHandl
     let addr = server
         .local_addr()
         .expect("bug: test server local address should be available");
-    let rpc =
-        GroundhogRpcServer::unified(backend, RpcServerConfig::default(), BuildInfo::for_tests());
+    let rpc = GroundhogRpcServer::unified(
+        backend,
+        test_network_info(),
+        RpcServerConfig::default(),
+        BuildInfo::for_tests(),
+    );
     let handle = server.start(rpc.into_rpc());
     let client = HttpClientBuilder::default()
         .build(format!("http://{addr}"))
