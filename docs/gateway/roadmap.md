@@ -20,8 +20,8 @@ Scope:
 
 - dedicated `hog-gateway` service as the only public ingress
 - private-network connectivity from gateway to validator components
-- `submission_backend` remains configurable so we do not hard-bake the internal
-  submit hop too early
+- submission goes directly to hogd scheduler (the configurable
+  `submission_backend` was deleted once the direct path was settled)
 - API surface for the initial read + submit methods
 - explicit admission layer in the gateway, even if v1 policy is simple
 

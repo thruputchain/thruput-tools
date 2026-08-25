@@ -4,24 +4,6 @@ use serde::Deserialize;
 
 use groundhog_json_rpc_types::{NetworkHashHex, runtime_manifest::RuntimeManifest};
 
-/// Backend used for transaction submission.
-///
-/// This only affects `groundhog_sendRawTransaction`. Read paths still use
-/// hogd scheduler/indexer directly.
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SubmissionBackend {
-    /// Gateway forwards signed transactions straight to hogd scheduler.
-    #[default]
-    HogdScheduler,
-
-    /// Gateway forwards signed transactions to chuckd, which relays them to hogd.
-    ///
-    /// Parses for config-file compatibility, but this build has no chuckd
-    /// submission transport: selecting it fails gateway startup.
-    ChuckdCoordinator,
-}
-
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -212,9 +194,6 @@ pub struct GatewayConfig {
     /// after receiving a shutdown signal.
     pub shutdown_grace_ms: u64,
 
-    /// Backend used for `groundhog_sendRawTransaction`.
-    pub submission_backend: SubmissionBackend,
-
     /// x23 RPC address for hogd scheduler.
     ///
     /// Required for scheduler-backed submission and for read paths such as
@@ -263,13 +242,6 @@ pub struct GatewayConfig {
     /// Gas budget assigned to backend `groundhog_view` execution.
     pub view_gas_limit: u64,
 
-    /// x23 RPC address for coordinator (for block/CV queries).
-    ///
-    /// Also used for tx submission when `submission_backend=chuckd_coordinator`.
-    /// Optional if block data comes from indexer and tx submission goes direct
-    /// to hogd scheduler. See `docs/gateway/system-design.md`.
-    pub coordinator_address: Option<String>,
-
     /// Per-page cap on `getEvents` responses; requests with `limit`
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
@@ -305,7 +277,6 @@ impl Default for GatewayConfig {
             backend_connect_timeout_ms: 30_000,
             scheduler_reconnect_grace_ms: 30_000,
             shutdown_grace_ms: 10_000,
-            submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
             expected_network_hash: None,
             indexer_address: Some("127.0.0.1:9001".into()),
@@ -315,7 +286,6 @@ impl Default for GatewayConfig {
             hogd_protocol_override: None,
             max_view_calldata_bytes: 64 * 1024,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
-            coordinator_address: None,
             max_events_per_page: 200,
             max_transactions_per_page: 200,
             max_cursor_bytes: 256,

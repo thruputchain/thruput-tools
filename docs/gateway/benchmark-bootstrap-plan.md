@@ -498,14 +498,12 @@ shape in a portable way.
 - Build a non-product harness that starts full hogd and optionally chuckd from a
   bootstrap manifest.
 - Emit the same runtime manifest as `hogd-dev`.
-- Use `submission_backend = hogd_scheduler` or `chuckd_coordinator` in the
-  gateway's manifest-derived config depending on the selected topology.
 - Keep the harness compatible with both possible hogd deployment styles:
   separate component binaries/processes, or one stitched binary running a
   selected role via flags.
 
-Deliverable: gateway benchmarking can compare direct-hogd and chuckd-routed
-submission paths without changing `groundhog node` semantics.
+Deliverable: gateway benchmarking against a full hogd topology without
+changing `groundhog node` semantics.
 
 Phase dependency: Phase 1 is the keystone. Phases 2 and 3 can proceed in
 parallel once the runtime manifest exists. Phase 4 must precede Phase 5 because

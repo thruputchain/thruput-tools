@@ -204,16 +204,7 @@ impl GatewayContext {
     /// indexer, `DbGateway`, and `ViewGateway` outages or intro timeouts degrade
     /// to `None`; reachable backends that reject the intro probe fail startup as
     /// configuration or protocol mismatches.
-    ///
-    /// Fails startup when `config.submission_backend` selects
-    /// `chuckd_coordinator`: this build has no chuckd submission transport, so
-    /// accepting the selection would silently route submissions nowhere.
     pub async fn new(config: GatewayConfig, metrics: GatewayMetrics) -> Result<Self, ConnectError> {
-        if config.submission_backend == crate::config::SubmissionBackend::ChuckdCoordinator {
-            return Err(ConnectError::NotImplemented {
-                service: "chuckd_coordinator submission backend",
-            });
-        }
         let config = Arc::new(config);
 
         // `FixedSerialPool` is 1 in-flight per connection by choice (FIFO
@@ -1155,25 +1146,6 @@ mod tests {
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
         (addr, handle)
-    }
-
-    #[tokio::test]
-    async fn chuckd_coordinator_submission_backend_fails_startup() {
-        let config = GatewayConfig {
-            submission_backend: crate::config::SubmissionBackend::ChuckdCoordinator,
-            ..GatewayConfig::default()
-        };
-
-        let Err(error) = GatewayContext::new(config, GatewayMetrics::for_tests()).await else {
-            panic!("bug: chuckd_coordinator selection must fail startup");
-        };
-
-        match error {
-            ConnectError::NotImplemented { service } => {
-                assert_eq!(service, "chuckd_coordinator submission backend");
-            }
-            other => panic!("expected NotImplemented, got {other:?}"),
-        }
     }
 
     #[tokio::test]

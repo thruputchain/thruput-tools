@@ -83,12 +83,6 @@ pub enum ConnectError {
         addr: String,
         timeout: Duration,
     },
-
-    /// The configuration selected a backend this build has no
-    /// implementation for. A hard startup failure: no connection is
-    /// attempted.
-    #[error("{service} is not implemented in this build")]
-    NotImplemented { service: &'static str },
 }
 
 /// Establish a connection pool and construct the typed client. Fails
