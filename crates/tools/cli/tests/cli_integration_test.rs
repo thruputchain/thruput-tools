@@ -4289,20 +4289,16 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "airdrop");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(
-        stdout["data"]["schemaVersion"],
-        groundhog_cli::airdrop::AIRDROP_JSON_SCHEMA_VERSION
-    );
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
-    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
-    assert_eq!(stdout["data"]["recipient_wallet"], recipient_wallet);
-    assert_eq!(stdout["data"]["amount_hog"], "1.25");
-    assert_eq!(stdout["data"]["raw_amount"], "12500000");
+    assert_eq!(stdout["data"]["recipientWallet"], recipient_wallet);
+    assert_eq!(stdout["data"]["amountHog"], "1.25");
+    assert_eq!(stdout["data"]["rawAmount"], "12500000");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
-    assert!(stdout["data"].get("signed_tx").is_none());
+    assert!(stdout["data"].get("signedTx").is_none());
 }
 
 #[test]
@@ -4381,9 +4377,10 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["mode"], "remote");
-    assert_eq!(stdout["data"]["recipient_wallet"], recipient);
-    assert_eq!(stdout["data"]["raw_amount"], "25000000");
-    assert_eq!(stdout["data"]["tx_hash"], format!("0x{}", "22".repeat(32)));
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["recipientWallet"], recipient);
+    assert_eq!(stdout["data"]["rawAmount"], "25000000");
+    assert_eq!(stdout["data"]["txHash"], format!("0x{}", "22".repeat(32)));
 }
 
 #[test]

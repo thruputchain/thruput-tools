@@ -39,7 +39,8 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 2;
+/// Schema version of the `airdrop --json` data payload.
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 3;
 const DEFAULT_AIRDROP_HOG: &str = "10";
 const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
@@ -197,14 +198,14 @@ fn run_local_airdrop(
             "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
             "mode": "local",
             "recipient": prepared.recipient_input,
-            "recipient_wallet": prepared.recipient_wallet,
-            "amount_hog": prepared.amount_hog,
-            "raw_amount": prepared.raw_amount.to_string(),
+            "recipientWallet": prepared.recipient_wallet,
+            "amountHog": prepared.amount_hog,
+            "rawAmount": prepared.raw_amount.to_string(),
             "faucet": {
                 "key": prepared.faucet_key_name,
                 "role": prepared.faucet_role,
             },
-            "tx_hash": tx_hash,
+            "txHash": tx_hash,
             "height": receipt.height,
             "status": receipt.status,
             "observations": observations,
@@ -301,8 +302,8 @@ fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print
             ));
             Ok(json!({
                 "status": "observed",
-                "raw_balance": balance.raw_balance,
-                "balance_hog": hog::format_amount(raw),
+                "rawBalance": balance.raw_balance,
+                "balanceHog": hog::format_amount(raw),
                 "height": balance.height,
             }))
         });
@@ -388,19 +389,19 @@ fn run_remote_airdrop(
             "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
             "mode": "remote",
             "recipient": prepared.recipient_input,
-            "recipient_wallet": prepared.recipient_wallet,
-            "faucet_url": prepared.faucet_url,
-            "rpc_url": prepared.rpc_url,
-            "raw_amount": raw_amount,
+            "recipientWallet": prepared.recipient_wallet,
+            "faucetUrl": prepared.faucet_url,
+            "rpcUrl": prepared.rpc_url,
+            "rawAmount": raw_amount,
             "policy": {
-                "raw_amount": prepared.airdrop_policy.raw_amount,
-                "amount_hog": prepared.amount_hog,
-                "recipient_cooldown_seconds": prepared.airdrop_policy.recipient_cooldown_seconds,
-                "client_quota_max": prepared.airdrop_policy.client_quota_max,
-                "client_quota_window_seconds": prepared.airdrop_policy.client_quota_window_seconds,
-                "max_pending_per_recipient": prepared.airdrop_policy.max_pending_per_recipient,
+                "rawAmount": prepared.airdrop_policy.raw_amount,
+                "amountHog": prepared.amount_hog,
+                "recipientCooldownSeconds": prepared.airdrop_policy.recipient_cooldown_seconds,
+                "clientQuotaMax": prepared.airdrop_policy.client_quota_max,
+                "clientQuotaWindowSeconds": prepared.airdrop_policy.client_quota_window_seconds,
+                "maxPendingPerRecipient": prepared.airdrop_policy.max_pending_per_recipient,
             },
-            "tx_hash": tx_hash,
+            "txHash": tx_hash,
             "height": height,
             "status": status,
         }),
@@ -893,13 +894,13 @@ fn print_dry_run(
                 cmd,
                 json!({
                     "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-                    "dry_run": true,
+                    "dryRun": true,
                     "submitted": false,
                     "mode": "local",
                     "recipient": prepared.recipient_input,
-                    "recipient_wallet": prepared.recipient_wallet,
-                    "amount_hog": prepared.amount_hog,
-                    "raw_amount": prepared.raw_amount.to_string(),
+                    "recipientWallet": prepared.recipient_wallet,
+                    "amountHog": prepared.amount_hog,
+                    "rawAmount": prepared.raw_amount.to_string(),
                     "faucet": {
                         "key": prepared.faucet_key_name,
                         "role": prepared.faucet_role,
@@ -919,14 +920,14 @@ fn print_dry_run(
                 cmd,
                 json!({
                     "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-                    "dry_run": true,
+                    "dryRun": true,
                     "submitted": false,
                     "mode": "remote",
                     "recipient": prepared.recipient_input,
-                    "recipient_wallet": prepared.recipient_wallet,
-                    "faucet_url": prepared.faucet_url,
-                    "rpc_url": prepared.rpc_url,
-                    "planned_requests": [
+                    "recipientWallet": prepared.recipient_wallet,
+                    "faucetUrl": prepared.faucet_url,
+                    "rpcUrl": prepared.rpc_url,
+                    "plannedRequests": [
                         "groundhog_requestAirdrop"
                     ],
                 }),
@@ -953,18 +954,18 @@ fn print_remote_dry_run(
         cmd,
         json!({
             "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-            "dry_run": true,
+            "dryRun": true,
             "submitted": false,
             "mode": "remote",
             "recipient": prepared.recipient_input,
-            "recipient_wallet": prepared.recipient_wallet,
-            "faucet_url": prepared.faucet_url,
-            "rpc_url": prepared.rpc_url,
-            "planned_requests": [
+            "recipientWallet": prepared.recipient_wallet,
+            "faucetUrl": prepared.faucet_url,
+            "rpcUrl": prepared.rpc_url,
+            "plannedRequests": [
                 "GET /v1/network",
                 "groundhog_requestAirdrop"
             ],
-            "idempotency_key": "profile + recipient + networkId + genesisHash + clientNonce",
+            "idempotencyKey": "profile + recipient + networkId + genesisHash + clientNonce",
         }),
     ))
 }
