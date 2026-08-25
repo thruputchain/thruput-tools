@@ -7,6 +7,9 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+/// Schema version of the `new --json` data payload.
+pub const NEW_JSON_SCHEMA_VERSION: u32 = 1;
+
 /// Create a new contract project in a subdirectory of
 /// the current working directory.
 pub fn run(name: &str, template: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
@@ -48,6 +51,7 @@ pub fn run_in(
         cmd,
         warnings,
         json!({
+            "schemaVersion": NEW_JSON_SCHEMA_VERSION,
             "projectName": name,
             "template": template,
             "path": dir,

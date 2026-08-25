@@ -1909,6 +1909,10 @@ fn new_json_outputs_structured_payload() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "new");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
+    assert_eq!(groundhog_cli::new::NEW_JSON_SCHEMA_VERSION, 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert!(stdout["data"].get("project_name").is_none());
+    assert!(stdout["data"].get("config_path").is_none());
     assert_eq!(stdout["data"]["projectName"], "json-project");
     assert_eq!(stdout["data"]["template"], "counter");
 }
@@ -6568,6 +6572,10 @@ fn storage_json_reads_latest_item() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "storage");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(groundhog_cli::storage::STORAGE_JSON_SCHEMA_VERSION, 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert!(stdout["data"].get("rpc_url").is_none());
+    assert!(stdout["data"].get("block_height").is_none());
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["address"], address);
     assert_eq!(stdout["data"]["key"], key);
@@ -6614,6 +6622,11 @@ fn balance_json_reads_native_hog_balance() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
+    assert_eq!(groundhog_cli::balance::BALANCE_JSON_SCHEMA_VERSION, 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    for old_key in ["rpc_url", "raw_balance", "balance_hog"] {
+        assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
+    }
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], "alice");
     assert_eq!(stdout["data"]["address"], address);
