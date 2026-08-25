@@ -42,31 +42,42 @@ impl FaucetConfig {
         airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
         wallet_prefund_submitter: Arc<dyn airdrop::AirdropSubmitter>,
         wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
-    ) -> Self {
-        let descriptor_airdrop_raw_amount = network_descriptor
+    ) -> Result<Self, config::FaucetConfigError> {
+        let descriptor_airdrop = network_descriptor
             .airdrop
             .as_ref()
-            .expect("faucet network descriptor must advertise airdrop policy")
-            .raw_amount
-            .parse::<u128>()
-            .expect("airdrop amount in network descriptor must be a valid u128");
-        assert_eq!(
-            airdrop_submitter.raw_amount(),
-            descriptor_airdrop_raw_amount,
-            "airdrop submitter amount must match network descriptor"
-        );
+            .ok_or(config::FaucetConfigError::MissingAirdropDescriptor)?;
+        let descriptor_airdrop_raw_amount =
+            descriptor_airdrop.raw_amount.parse::<u128>().map_err(|_| {
+                config::FaucetConfigError::InvalidDescriptorAmount {
+                    field: "airdrop.rawAmount",
+                    value: descriptor_airdrop.raw_amount.clone(),
+                }
+            })?;
+        if airdrop_submitter.raw_amount() != descriptor_airdrop_raw_amount {
+            return Err(config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "airdrop submitter",
+                expected: descriptor_airdrop_raw_amount,
+                actual: airdrop_submitter.raw_amount(),
+            });
+        }
         let descriptor_prefund_raw_amount = network_descriptor
             .wallet_create
             .prefund_raw_amount
             .parse::<u128>()
-            .expect("wallet prefund amount in network descriptor must be a valid u128");
-        assert_eq!(
-            wallet_prefund_submitter.raw_amount(),
-            descriptor_prefund_raw_amount,
-            "wallet prefund submitter amount must match network descriptor"
-        );
+            .map_err(|_| config::FaucetConfigError::InvalidDescriptorAmount {
+                field: "walletCreate.prefundRawAmount",
+                value: network_descriptor.wallet_create.prefund_raw_amount.clone(),
+            })?;
+        if wallet_prefund_submitter.raw_amount() != descriptor_prefund_raw_amount {
+            return Err(config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "wallet prefund submitter",
+                expected: descriptor_prefund_raw_amount,
+                actual: wallet_prefund_submitter.raw_amount(),
+            });
+        }
 
-        Self {
+        Ok(Self {
             listen_address: DEFAULT_LISTEN_ADDRESS.to_owned(),
             cors_allowed_origins: Vec::new(),
             network_descriptor,
@@ -75,7 +86,7 @@ impl FaucetConfig {
             wallet_create_submitter,
             policy_config: config::PolicyRuntimeConfig::default(),
             policy_store: Arc::new(policy::InMemoryFaucetPolicyStore::new()),
-        }
+        })
     }
 }
 
@@ -323,7 +334,8 @@ mod tests {
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
-        ))
+        )
+        .expect("bug: test faucet config should build"))
         .oneshot(
             Request::builder()
                 .uri("/v1/network")
@@ -524,14 +536,68 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "airdrop submitter amount must match network descriptor")]
     fn airdrop_submitter_amount_must_match_network_descriptor() {
-        FaucetConfig::new(
+        let error = FaucetConfig::new(
             test_network_descriptor(),
             Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000")),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect_err("bug: mismatched airdrop amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "airdrop submitter",
+                expected: 100_000_000,
+                actual: 200_000_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn faucet_config_requires_airdrop_descriptor() {
+        let mut descriptor = test_network_descriptor();
+        descriptor.airdrop = None;
+
+        let error = FaucetConfig::new(
+            descriptor,
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        )
+        .expect_err("bug: missing airdrop descriptor should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::MissingAirdropDescriptor
+        ));
+    }
+
+    #[test]
+    fn faucet_config_rejects_invalid_airdrop_descriptor_amount() {
+        let mut descriptor = test_network_descriptor();
+        descriptor
+            .airdrop
+            .as_mut()
+            .expect("bug: test descriptor should advertise airdrops")
+            .raw_amount = "invalid".into();
+
+        let error = FaucetConfig::new(
+            descriptor,
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        )
+        .expect_err("bug: invalid airdrop descriptor amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::InvalidDescriptorAmount {
+                field: "airdrop.rawAmount",
+                ref value,
+            } if value == "invalid"
+        ));
     }
 
     #[tokio::test]
@@ -569,7 +635,8 @@ mod tests {
             airdrop.clone(),
             prefund.clone(),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect("bug: test faucet config should build");
 
         let wallet_response = wallet_create_request(&config).await;
 
@@ -597,14 +664,45 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "wallet prefund submitter amount must match network descriptor")]
     fn faucet_config_rejects_wallet_prefund_amount_mismatch() {
-        let _ = FaucetConfig::new(
+        let error = FaucetConfig::new(
             test_network_descriptor(),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000")),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect_err("bug: mismatched prefund amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::SubmitterAmountMismatch {
+                submitter: "wallet prefund submitter",
+                expected: 100_000_000,
+                actual: 200_000_000,
+            }
+        ));
+    }
+
+    #[test]
+    fn faucet_config_rejects_invalid_prefund_descriptor_amount() {
+        let mut descriptor = test_network_descriptor();
+        descriptor.wallet_create.prefund_raw_amount = "invalid".into();
+
+        let error = FaucetConfig::new(
+            descriptor,
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        )
+        .expect_err("bug: invalid prefund descriptor amount should fail");
+
+        assert!(matches!(
+            error,
+            crate::config::FaucetConfigError::InvalidDescriptorAmount {
+                field: "walletCreate.prefundRawAmount",
+                ref value,
+            } if value == "invalid"
+        ));
     }
 
     #[tokio::test]
@@ -1213,7 +1311,8 @@ mod tests {
             Arc::new(MockAirdropSubmitter::failure()),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
-        ))
+        )
+        .expect("bug: test faucet config should build"))
         .oneshot(request_with_connect_info(
             Request::builder()
                 .method("POST")
@@ -1482,7 +1581,8 @@ mod tests {
             airdrop.clone(),
             airdrop.clone(),
             Arc::new(MockWalletCreateSubmitter::success()),
-        );
+        )
+        .expect("bug: test faucet config should build");
         config.policy_config.wallet_create.owner_quota_max = 0;
 
         let response = wallet_create_request(&config).await;
@@ -1680,7 +1780,8 @@ mod tests {
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::failure()),
-        ))
+        )
+        .expect("bug: test faucet config should build"))
         .oneshot(request_with_connect_info(
             Request::builder()
                 .method("POST")
@@ -1723,6 +1824,7 @@ mod tests {
             airdrop_submitter,
             Arc::new(MockWalletCreateSubmitter::success()),
         )
+        .expect("bug: test faucet config should build")
     }
 
     fn test_config_with_submitters(
@@ -1735,6 +1837,7 @@ mod tests {
             airdrop_submitter,
             wallet_create_submitter,
         )
+        .expect("bug: test faucet config should build")
     }
 
     async fn wallet_create_request(config: &FaucetConfig) -> axum::response::Response {
