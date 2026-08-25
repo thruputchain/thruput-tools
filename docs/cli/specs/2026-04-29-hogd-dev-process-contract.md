@@ -69,8 +69,13 @@ hog-devnode \
   --listen-host 127.0.0.1 \
   --scheduler-port 0 \
   --readiness stdout \
+  [--contract-artifacts-dir <DIR>]... \
   --bootstrap-manifest /tmp/groundhog-hogd-bootstrap-.../bootstrap-manifest.json
 ```
+
+Each `groundhog node --contract-artifacts-dir <DIR>` is resolved to an absolute
+path and forwarded in command-line order. The first directory containing
+`dev_wallet.rv32a` is also recorded for subsequent local wallet creation.
 
 `groundhog node --data-dir <DIR>` additionally passes `--data-dir <DIR>` and
 requests recoverable persistent state. Without it, the child remains ephemeral.

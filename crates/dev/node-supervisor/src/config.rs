@@ -363,6 +363,8 @@ pub struct HogdDevConfig {
     /// When unset, the supervisor falls back to the documented hogd-dev binary
     /// lookup order.
     pub binary_path: Option<PathBuf>,
+    /// Contract artifact directories searched by hog-devnode before its defaults.
+    pub contract_artifact_directories: Vec<PathBuf>,
     /// Directory where hog-devnode persists recoverable node state.
     ///
     /// When unset, hog-devnode runs with ephemeral state.
@@ -398,6 +400,7 @@ impl Default for HogdDevConfig {
     fn default() -> Self {
         Self {
             binary_path: None,
+            contract_artifact_directories: Vec::new(),
             data_dir: None,
             log_level: None,
             listen_host: DEFAULT_HOGD_DEV_LISTEN_HOST.to_string(),
@@ -420,10 +423,25 @@ impl HogdDevConfig {
         self
     }
 
+    /// Return a copy with explicit contract artifact search directories.
+    #[must_use]
+    pub fn with_contract_artifact_directories<I, P>(mut self, directories: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.contract_artifact_directories = directories
+            .into_iter()
+            .map(Into::into)
+            .map(resolve_path)
+            .collect();
+        self
+    }
+
     /// Return a copy with a directory for persistent hog-devnode state.
     #[must_use]
     pub fn with_data_dir(mut self, data_dir: impl Into<PathBuf>) -> Self {
-        self.data_dir = Some(resolve_data_dir(data_dir.into()));
+        self.data_dir = Some(resolve_path(data_dir.into()));
         self
     }
 
@@ -518,7 +536,7 @@ impl HogdDevConfig {
     }
 }
 
-fn resolve_data_dir(path: PathBuf) -> PathBuf {
+fn resolve_path(path: PathBuf) -> PathBuf {
     let expanded = match path.strip_prefix(Path::new("~")) {
         Ok(rest) => std::env::var_os("HOME")
             .map(PathBuf::from)
@@ -552,6 +570,23 @@ mod tests {
             assert_eq!(
                 expanded.data_dir,
                 Some(PathBuf::from(home).join("groundhog-test-data"))
+            );
+        }
+    }
+
+    #[test]
+    fn contract_artifact_directories_are_absolute_and_expand_home() {
+        let relative = HogdDevConfig::default()
+            .with_contract_artifact_directories(["groundhog-test-contracts"]);
+        assert!(relative.contract_artifact_directories[0].is_absolute());
+        assert!(relative.contract_artifact_directories[0].ends_with("groundhog-test-contracts"));
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let expanded = HogdDevConfig::default()
+                .with_contract_artifact_directories(["~/groundhog-test-contracts"]);
+            assert_eq!(
+                expanded.contract_artifact_directories,
+                [PathBuf::from(home).join("groundhog-test-contracts")]
             );
         }
     }

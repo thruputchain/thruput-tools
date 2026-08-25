@@ -607,6 +607,8 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
         .stdout_piped()
         .stderr_piped();
 
+    spec = append_contract_artifact_directories(spec, &config.contract_artifact_directories);
+
     if let Some(data_dir) = &config.data_dir {
         spec = spec.args([
             OsString::from("--data-dir"),
@@ -646,6 +648,8 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
         .stdout_piped()
         .stderr_piped();
 
+    spec = append_contract_artifact_directories(spec, &config.contract_artifact_directories);
+
     if let Some(log_level) = config.log_level {
         spec = spec.args([
             OsString::from("--log-level"),
@@ -670,6 +674,19 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
     #[cfg(unix)]
     let spec = spec.process_group(0);
 
+    spec
+}
+
+fn append_contract_artifact_directories(
+    mut spec: ChildProcessSpec,
+    directories: &[PathBuf],
+) -> ChildProcessSpec {
+    for directory in directories {
+        spec = spec.args([
+            OsString::from("--contract-artifacts-dir"),
+            directory.as_os_str().to_owned(),
+        ]);
+    }
     spec
 }
 
@@ -1805,6 +1822,35 @@ mod tests {
                 .position(|arg| arg == "--ramdb-bytes")
                 .expect("--ramdb-bytes forwarded");
             assert_eq!(args[flag_index + 1], OsString::from("2147483648"));
+        }
+    }
+
+    #[test]
+    fn contract_artifact_directories_are_forwarded_in_order() {
+        let config = HogdDevConfig::default()
+            .with_contract_artifact_directories(["/tmp/contracts-a", "/tmp/contracts-b"]);
+
+        let supervisor_spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            "/tmp/hog-devnode",
+            &config,
+            "/tmp/bootstrap-manifest.json",
+        );
+        let compat_spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
+
+        for spec in [supervisor_spec, compat_spec] {
+            let forwarded = spec
+                .program_args()
+                .windows(2)
+                .filter(|args| args[0] == "--contract-artifacts-dir")
+                .map(|args| args[1].clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                forwarded,
+                [
+                    OsString::from("/tmp/contracts-a"),
+                    OsString::from("/tmp/contracts-b"),
+                ]
+            );
         }
     }
 

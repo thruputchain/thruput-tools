@@ -465,6 +465,7 @@ groundhog node --port 9546
 groundhog node --host 0.0.0.0 --port 9545
 groundhog node --dev-account-hog 2500000.5
 groundhog node --hog-devnode-binary /path/to/hog-devnode
+groundhog node --hog-devnode-binary /path/to/hog-devnode --contract-artifacts-dir /path/to/built_contracts
 groundhog node --hog-devnode-binary /path/to/hog-devnode --hogd-protocol hogp/<hash>
 groundhog node --rpc-max-connections 2000
 groundhog node -v
@@ -479,6 +480,9 @@ reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
 `--rpc-max-connections` controls the public JSON-RPC simultaneous connection
 cap; the default is 2000.
+`--contract-artifacts-dir` may be repeated. Each directory is forwarded to
+hog-devnode in command-line order, and the first directory containing
+`dev_wallet.rv32a` is recorded for later local wallet creation.
 
 The public JSON-RPC listener binds to `127.0.0.1` by default. Use `--host`
 when the node runs across a container or VM boundary. For example, run

@@ -384,6 +384,9 @@ enum Command {
         /// Explicit hog-devnode binary path
         #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
         hogd_dev_binary: Option<std::path::PathBuf>,
+        /// Contract artifact directory passed to hog-devnode; may be repeated
+        #[arg(long = "contract-artifacts-dir", value_name = "DIR")]
+        contract_artifact_directories: Vec<PathBuf>,
         /// Directory for persistent hog-devnode state; omit for an ephemeral node
         #[arg(long, value_name = "DIR")]
         data_dir: Option<PathBuf>,
@@ -1274,6 +1277,7 @@ fn main() {
             dev_account_count,
             dev_account_hog,
             hogd_dev_binary,
+            contract_artifact_directories,
             data_dir,
             hogd_protocol,
             startup_timeout_secs,
@@ -1286,6 +1290,7 @@ fn main() {
             options.host = Some(host);
             options.port = port;
             options.hogd_dev_binary = hogd_dev_binary;
+            options.contract_artifact_directories = contract_artifact_directories;
             options.data_dir = data_dir;
             options.hogd_protocol = hogd_protocol;
             options.startup_timeout = startup_timeout_secs.map(std::time::Duration::from_secs);
@@ -1678,6 +1683,32 @@ mod tests {
             Command::Node { data_dir, .. } => {
                 assert_eq!(data_dir, Some(PathBuf::from("/tmp/groundhog")));
             }
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_contract_artifact_directories_are_repeatable() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "node",
+            "--contract-artifacts-dir",
+            "/tmp/contracts-a",
+            "--contract-artifacts-dir",
+            "/tmp/contracts-b",
+        ]);
+
+        match cli.command {
+            Command::Node {
+                contract_artifact_directories,
+                ..
+            } => assert_eq!(
+                contract_artifact_directories,
+                [
+                    PathBuf::from("/tmp/contracts-a"),
+                    PathBuf::from("/tmp/contracts-b"),
+                ]
+            ),
             _ => panic!("expected node command"),
         }
     }
