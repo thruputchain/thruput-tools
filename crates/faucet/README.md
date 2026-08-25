@@ -91,9 +91,10 @@ but never include the secret payload.
 - `POST /v1/airdrop` funds an existing address using the configured airdrop amount.
 - `POST /v1/create-wallet` prefunds and sponsors Devnet wallet creation.
 
-`POST /v1/airdrop` and `POST /v1/create-wallet` require `clientNonce`,
-`networkId`, and `genesisHash` so retries are scoped to the chain instance the
-client used.
+`POST /v1/airdrop` requires `clientNonce`, `networkId`, `networkHash`, and
+`genesisHash`. `POST /v1/create-wallet` requires `clientNonce`, `networkId`, and
+`genesisHash`. These identities scope retries to the network and chain instance
+the client validated.
 
 ## Policy State
 
@@ -102,8 +103,10 @@ counters and idempotency records. The current deployment model assumes one
 faucet instance.
 
 Accepted transactions remain pending until the backend reports a receipt or a
-definitive invalid status. They count toward the bounded attempt capacity while
-their outcome is ambiguous. At capacity, the faucet rejects new attempt keys
+definitive invalid status. Submission calls that return without a definitive
+acceptance result are also retained as ambiguous rather than resubmitted. Both
+count toward the bounded attempt capacity while their outcome is unresolved. At
+capacity, the faucet rejects new attempt keys
 but continues serving existing keys. This fail-closed behavior prevents an
 expired idempotency record from submitting a second transfer. Operators should
 investigate sustained capacity errors before restarting because a restart also

@@ -37,7 +37,7 @@ This work does not:
 | D7 | Keep recipient, pending-attempt, and idempotency policy in the faucet. | REST and RPC must share the same authoritative policy state. |
 | D8 | Give configured gateway source IPs a finite quota override in the existing faucet policy. | The faucet sees one gateway IP for all proxied users; the default client quota is too small, while an unlimited exemption is unsafe. |
 | D9 | Keep local airdrops unlimited by default. | Local tests and examples should create accounts without public-service quotas. |
-| D10 | Land network information and airdrop as sequential wire-format additions. | The network-information issue is a prerequisite for airdrop and bumps the wire format to `3.2.0`; the subsequent airdrop addition bumps it to `3.3.0`. |
+| D10 | Publish the combined network-information and airdrop surface as wire format `4.0.0`. | `origin/main` already exposes `NetworkInfo { networkHash }` at `3.2.0`. Making `genesisHash` required is a breaking result-shape change, so the rebased work requires a major bump; the additive airdrop method ships in the same version. |
 
 ## Architecture
 
@@ -59,7 +59,7 @@ existing faucet service
 authoritative transaction submission
 ```
 
-The gateway does not hold faucet signing material or duplicate faucet policy. It supplies the faucet's configured `networkId` and `genesisHash`, forwards the caller's `recipient` and `clientNonce`, and translates the existing response.
+The gateway does not hold faucet signing material or duplicate faucet policy. It supplies the faucet's configured `networkId` and startup-held `networkHash` and `genesisHash`, forwards the caller's `recipient` and `clientNonce`, and translates the existing response.
 
 ### Localnet
 
@@ -76,6 +76,8 @@ authoritative transaction submission
 ```
 
 The node supervisor derives and validates `dev-0` once during startup. The RPC handler receives the validated signer; it does not re-read or re-validate the runtime manifest per request.
+
+The hosted CLI calls `groundhog_requestAirdrop` and retains its generated `clientNonce` across retries. Its local administrative path remains direct because it supports caller-selected amounts and faucet-balance preflight, which are intentionally outside the fixed-amount public RPC contract.
 
 ## Network Information
 
@@ -172,7 +174,7 @@ Rules:
 - `clientNonce` is non-empty and at most 32 bytes.
 - Clients should generate 16 cryptographically random bytes.
 - The caller does not select the amount.
-- The gateway supplies its faucet-specific `networkId` and startup `genesisHash` when calling the hosted faucet.
+- The gateway supplies its faucet-specific `networkId` and startup-held `networkHash` and `genesisHash` when calling the hosted faucet.
 
 The 32-byte bound should be applied in the shared faucet request validator so REST and RPC accept the same nonce values. The current CLI already generates 16 bytes.
 
@@ -269,7 +271,7 @@ unconfigured deployment does not register the method.
 
 For each request, the adapter:
 
-1. adds the configured `networkId` and `genesisHash`;
+1. adds the configured `networkId`, `networkHash`, and `genesisHash`;
 2. posts the existing request to `POST /v1/airdrop`;
 3. preserves pending and succeeded responses; and
 4. maps REST failures to the existing JSON-RPC error catalog.
@@ -283,6 +285,7 @@ The forwarded REST body is exactly:
   "recipient": "0x1111111111111111111111111111111111111111111111111111111111111111",
   "clientNonce": "0x0123456789abcdef0123456789abcdef",
   "networkId": "devnet-preview",
+  "networkHash": "0x3333333333333333333333333333333333333333333333333333333333333333",
   "genesisHash": "0x2222222222222222222222222222222222222222222222222222222222222222"
 }
 ```
@@ -300,6 +303,8 @@ The local server reuses the current CLI local-airdrop construction path rather t
 | Submission | Existing validated transaction-submission path |
 | Receipt polling | Existing transaction-receipt backend |
 | Raw amount | Validated supervisor option, default 10 HOG (`100000000` raw units at seven decimals) |
+
+The local method is registered only for the full indexer-backed topology, where both submission and authoritative receipt lookup are available. Scheduler-only and storage-only topologies omit the optional method and return standard JSON-RPC `Method not found`.
 
 The handler builds and signs the same dev-wallet HOG transfer as `groundhog airdrop`, submits it
 through the in-process backend, and returns the shared `AirdropAttemptResponse`. A bounded
@@ -439,18 +444,18 @@ Logs must not include secret keys or full untrusted forwarding headers.
 - OpenRPC represents `AirdropAttemptResponse` as a tagged `pending` or `succeeded` union.
 - Nonces over 32 bytes are rejected by the shared validator.
 - OpenRPC contains both methods and their documented errors.
-- `groundhog_networkInfo` bumps `WIRE_FORMAT_VERSION` from `3.1.0` to `3.2.0`.
-- The subsequent `groundhog_requestAirdrop` addition bumps it from `3.2.0` to `3.3.0`.
+- `origin/main` exposes `groundhog_networkInfo` with required `networkHash` at wire format `3.2.0`.
+- This change adds required `genesisHash` to that result and adds `groundhog_requestAirdrop`, producing wire format `4.0.0`.
 
 ## Implementation Sequence
 
-1. Add `NetworkInfo` and its always-registered RPC module; update OpenRPC and bump the wire format to `3.2.0`.
+1. Extend `NetworkInfo` with `genesisHash` and keep its RPC module always registered.
 2. Promote the existing faucet airdrop response into a tagged union in `json-rpc-types`; add the RPC airdrop request type and optionally registered module.
 3. Add gateway `network_hash` and `genesis_hash` startup identity; scope `network_id` to hosted faucet configuration, validate reachable descriptors, and preserve degraded startup when the faucet is unavailable.
 4. Implement the hosted adapter by calling the existing `POST /v1/airdrop` endpoint.
 5. Extract the current CLI HOG transaction helpers into the publishable signing/tooling layer and implement the process-local `dev-0` adapter.
 6. Add finite per-IP quota overrides to the existing faucet client-quota configuration and policy lookup.
-7. Update airdrop OpenRPC method/error mappings and snapshots; bump the wire format to `3.3.0`.
+7. Update airdrop OpenRPC method/error mappings and snapshots; bump the wire format to `4.0.0`.
 8. Hand the generated RPC contract to the separate TypeScript client workstream.
 
 ## Acceptance Criteria
