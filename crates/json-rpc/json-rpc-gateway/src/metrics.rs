@@ -582,6 +582,11 @@ impl GatewayMetrics {
                 .with_label_values(&[backend.as_str()])
                 .set(value);
         }
+        if let Some(up) = snapshot.named_backend_up("faucet") {
+            self.backend_up
+                .with_label_values(&["faucet"])
+                .set(if up { 1.0 } else { 0.0 });
+        }
 
         self.chain_tip_height
             .set(snapshot.chain_tip_height().unwrap_or(f64::NAN));
@@ -638,7 +643,10 @@ mod tests {
 
     #[tokio::test]
     async fn core_metrics_render_health_status_backend_and_build_info() {
-        let config = GatewayConfig::default();
+        let config = GatewayConfig {
+            faucet_url: Some("https://faucet.example".into()),
+            ..GatewayConfig::default()
+        };
         let build_version = BuildVersion::new("test-version", Some("test-platform"));
         let health = GatewayHealth::new(&config, build_version, Some("test-commit"));
         let snapshot = health.snapshot().await;
@@ -651,6 +659,7 @@ mod tests {
         assert!(body.contains("groundhog_gateway_health_status{status=\"starting\"} 1"));
         assert!(body.contains("groundhog_gateway_health_status{status=\"ok\"} 0"));
         assert!(body.contains("groundhog_gateway_backend_up{backend=\"scheduler\"} 0"));
+        assert!(body.contains("groundhog_gateway_backend_up{backend=\"faucet\"} 0"));
         assert!(body.contains("groundhog_gateway_chain_tip_height NaN"));
         assert!(body.contains("groundhog_gateway_chain_tip_age_seconds NaN"));
         assert!(body.contains(

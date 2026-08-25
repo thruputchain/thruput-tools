@@ -1,15 +1,21 @@
 const API_BASE = normalizeApiBase(
   import.meta.env.VITE_GROUNDHOG_FAUCET_API_BASE,
 )
+const AIRDROP_POLL_TIMEOUT_MS = 10 * 60 * 1000
+const pendingAirdropNonces = new Map<string, string>()
 
 export type NetworkDescriptor = {
   networkId: string
+  networkHash: string
   genesisHash: string
   endpoints: {
     rpcUrl: string
   }
   nativeHog: {
     decimals: number
+  }
+  airdrop: {
+    rawAmount: string
   }
   walletCreate: {
     prefundRawAmount: string
@@ -49,21 +55,60 @@ export async function requestAirdrop(
   descriptor: NetworkDescriptor,
 ) {
   ensureApiBase()
-  const response = await fetch(apiUrl("/v1/airdrop"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const attemptKey = `${descriptor.networkId}:${descriptor.genesisHash}:${recipient}`
+  const clientNonce = retainedClientNonce(attemptKey)
+  const deadline = Date.now() + AIRDROP_POLL_TIMEOUT_MS
+
+  while (true) {
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) {
+      throw pendingTimeoutError()
+    }
+    let response: Response
+    let payload: unknown
+    try {
+      response = await fetch(apiUrl("/v1/airdrop"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient,
+          clientNonce,
+          networkId: descriptor.networkId,
+          networkHash: descriptor.networkHash,
+          genesisHash: descriptor.genesisHash,
+        }),
+        signal: AbortSignal.timeout(remainingMs),
+      })
+      payload = await readJsonResponse(response, "airdrop response")
+    } catch (error) {
+      if (
+        error instanceof DOMException &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+      ) {
+        throw pendingTimeoutError()
+      }
+      throw error
+    }
+    if (!response.ok || hasErrorEnvelope(payload)) {
+      throw new Error(
+        errorMessageFromPayload(payload, "Faucet request failed."),
+      )
+    }
+    const result = parseAirdropAttempt(
+      payload,
       recipient,
-      clientNonce: randomClientNonce(),
-      networkId: descriptor.networkId,
-      genesisHash: descriptor.genesisHash,
-    }),
-  })
-  const payload = await readJsonResponse(response, "airdrop response")
-  if (!response.ok) {
-    throw new Error(errorMessageFromPayload(payload, "Faucet request failed."))
+      descriptor.airdrop.rawAmount,
+    )
+    if (result.attemptStatus === "succeeded") {
+      clearRetainedClientNonce(attemptKey)
+      return result
+    }
+    const retryDelayMs = Math.max(result.retryAfterSeconds * 1000, 250)
+    if (Date.now() + retryDelayMs > deadline) {
+      throw pendingTimeoutError()
+    }
+    await sleep(retryDelayMs)
   }
-  return parseAirdropSuccess(payload)
 }
 
 export function formatHogAmount(rawAmount: string, decimals: number) {
@@ -135,12 +180,19 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
   }
   const endpoints = payload.endpoints
   const nativeHog = payload.nativeHog
+  const airdrop = payload.airdrop
   const walletCreate = payload.walletCreate
-  if (!isRecord(endpoints) || !isRecord(nativeHog) || !isRecord(walletCreate)) {
+  if (
+    !isRecord(endpoints) ||
+    !isRecord(nativeHog) ||
+    !isRecord(airdrop) ||
+    !isRecord(walletCreate)
+  ) {
     throw new Error("Faucet metadata is missing required sections.")
   }
   const descriptor: NetworkDescriptor = {
     networkId: requireString(payload.networkId, "networkId"),
+    networkHash: requireHexHash(payload.networkHash, "networkHash"),
     genesisHash: requireHexHash(payload.genesisHash, "genesisHash"),
     endpoints: {
       rpcUrl: requireString(endpoints.rpcUrl, "endpoints.rpcUrl"),
@@ -150,6 +202,9 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
         nativeHog.decimals,
         "nativeHog.decimals",
       ),
+    },
+    airdrop: {
+      rawAmount: requireDecimalString(airdrop.rawAmount, "airdrop.rawAmount"),
     },
     walletCreate: {
       prefundRawAmount: requireDecimalString(
@@ -161,9 +216,41 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
   return descriptor
 }
 
-function parseAirdropSuccess(payload: unknown): AirdropSuccess {
+function parseAirdropAttempt(
+  payload: unknown,
+  expectedRecipient: string,
+  expectedRawAmount: string,
+):
+  | (AirdropSuccess & { attemptStatus: "succeeded" })
+  | { attemptStatus: "pending"; retryAfterSeconds: number } {
   if (!isRecord(payload)) {
     throw new Error("The airdrop response had an unexpected shape.")
+  }
+  const attemptStatus = requireString(payload.attemptStatus, "attemptStatus")
+  const recipient = requireHexHash(payload.recipient, "recipient")
+  const rawAmount = requireDecimalString(payload.rawAmount, "rawAmount")
+  if (recipient.toLowerCase() !== expectedRecipient.toLowerCase()) {
+    throw new Error("The airdrop response recipient did not match the request.")
+  }
+  if (BigInt(rawAmount) !== BigInt(expectedRawAmount)) {
+    throw new Error(
+      "The airdrop response amount did not match faucet metadata.",
+    )
+  }
+  if (attemptStatus === "pending") {
+    if (payload.txHash !== undefined) {
+      requireHexHash(payload.txHash, "txHash")
+    }
+    return {
+      attemptStatus,
+      retryAfterSeconds: requireNonNegativeInteger(
+        payload.retryAfterSeconds,
+        "retryAfterSeconds",
+      ),
+    }
+  }
+  if (attemptStatus !== "succeeded") {
+    throw new Error("The airdrop response had an unknown attempt status.")
   }
   const status = payload.status
   if (!isRecord(status)) {
@@ -174,8 +261,9 @@ function parseAirdropSuccess(payload: unknown): AirdropSuccess {
     throw new Error("The airdrop transaction did not commit successfully.")
   }
   return {
-    recipient: requireHexHash(payload.recipient, "recipient"),
-    rawAmount: requireDecimalString(payload.rawAmount, "rawAmount"),
+    attemptStatus,
+    recipient,
+    rawAmount,
     txHash: requireHexHash(payload.txHash, "txHash"),
     height: requireNonNegativeInteger(payload.height, "height"),
     status: {
@@ -201,6 +289,10 @@ function errorMessageFromPayload(payload: unknown, fallback: string) {
       ? ` Try again in ${retryAfterSeconds}s.`
       : ""
   return `${message}${retryAfter}`
+}
+
+function hasErrorEnvelope(payload: unknown) {
+  return isRecord(payload) && isRecord(payload.error)
 }
 
 function requireString(value: unknown, field: string) {
@@ -241,4 +333,50 @@ function randomClientNonce() {
   const bytes = new Uint8Array(16)
   crypto.getRandomValues(bytes)
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+}
+
+function retainedClientNonce(attemptKey: string) {
+  const existing = pendingAirdropNonces.get(attemptKey)
+  if (existing) {
+    return existing
+  }
+  const storageKey = nonceStorageKey(attemptKey)
+  try {
+    const stored = sessionStorage.getItem(storageKey)
+    if (stored && /^0x(?:[0-9a-fA-F]{2}){1,32}$/.test(stored)) {
+      pendingAirdropNonces.set(attemptKey, stored)
+      return stored
+    }
+  } catch {
+    // In-memory retention still protects retries when storage is unavailable.
+  }
+  const nonce = randomClientNonce()
+  pendingAirdropNonces.set(attemptKey, nonce)
+  try {
+    sessionStorage.setItem(storageKey, nonce)
+  } catch {
+    // In-memory retention still protects retries when storage is unavailable.
+  }
+  return nonce
+}
+
+function clearRetainedClientNonce(attemptKey: string) {
+  pendingAirdropNonces.delete(attemptKey)
+  try {
+    sessionStorage.removeItem(nonceStorageKey(attemptKey))
+  } catch {
+    // The successful attempt is still cleared from in-memory state.
+  }
+}
+
+function nonceStorageKey(attemptKey: string) {
+  return `groundhog-faucet:airdrop:${attemptKey}`
+}
+
+function pendingTimeoutError() {
+  return new Error("The airdrop is still pending. Try again shortly.")
+}
+
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::hex::HexBytes;
 use crate::receipt::ExecStatus;
 use crate::transaction::TxHash;
-use crate::{BlockHeight, ContractAddress, SHA256Hash};
+use crate::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
 
 /// Maximum size of an airdrop idempotency nonce.
 pub const MAX_CLIENT_NONCE_BYTES: usize = 32;
@@ -93,6 +93,8 @@ pub struct HostedAirdropRequest {
     pub client_nonce: ClientNonce,
     /// Logical network identifier advertised by the gateway.
     pub network_id: String,
+    /// Hash of the network name bound into transaction signatures.
+    pub network_hash: NetworkHash,
     /// Genesis hash advertised by the gateway.
     pub genesis_hash: SHA256Hash,
 }

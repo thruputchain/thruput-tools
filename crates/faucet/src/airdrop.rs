@@ -39,6 +39,18 @@ const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 const AIRDROP_SUBMIT_AMOUNT_MISMATCH: &str = "airdrop_submit_amount_mismatch";
 const MAX_RETAINED_AIRDROP_ATTEMPTS: usize = 10_000;
 const MAX_CONCURRENT_AIRDROP_EXECUTIONS: usize = 64;
+const AIRDROP_EXECUTION_TIMEOUT: Duration = Duration::from_mins(10);
+
+enum ReplaceAttemptError {
+    Stale,
+    Store(PolicyStoreError, u64),
+}
+
+enum ExecutionReservation {
+    Permit(OwnedSemaphorePermit),
+    Existing(Box<AirdropAttempt>),
+}
+
 #[derive(Clone)]
 pub(crate) struct AirdropService {
     network_descriptor: NetworkDescriptor,
@@ -70,23 +82,13 @@ impl AirdropService {
         peer: Option<SocketAddr>,
         request: HostedAirdropRequest,
     ) -> Response {
-        if request.network_id != self.network_descriptor.network_id
-            || request.genesis_hash.0 != self.network_descriptor.genesis_hash.0
-        {
+        if !self.request_matches_network(&request) {
             return error_response(
                 StatusCode::BAD_REQUEST,
                 "airdrop_network_mismatch",
                 "airdrop request does not match this faucet network",
             );
         }
-        let Ok(execution_permit) = self.execution.clone().try_acquire_owned() else {
-            return error_response_with_retry_after(
-                StatusCode::TOO_MANY_REQUESTS,
-                "airdrop_capacity_exceeded",
-                "airdrop execution capacity reached",
-                Some(1),
-            );
-        };
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
             genesis_hash: hex_string(request.genesis_hash.0),
@@ -97,6 +99,15 @@ impl AirdropService {
         if let Err(error) = self.policy_store.expire(now) {
             return policy_store_error_response(&error);
         }
+        let execution_permit = match self.reserve_execution_for_new_attempt(&key) {
+            Ok(ExecutionReservation::Permit(permit)) => permit,
+            Ok(ExecutionReservation::Existing(attempt)) => {
+                return self
+                    .start_or_observe_airdrop_attempt(request, *attempt, None)
+                    .await;
+            }
+            Err(response) => return *response,
+        };
         let (client_identity, client_quota_max, client_quota_window) =
             self.airdrop_client_quota(&headers, peer);
         let attempt = AirdropAttempt {
@@ -104,6 +115,7 @@ impl AirdropService {
             client_identity: client_identity.clone(),
             raw_amount: self.submitter.raw_amount().to_string(),
             status: AirdropAttemptStatus::Pending,
+            execution_id: 0,
             tx_hash: None,
             height: None,
             error_code: None,
@@ -133,11 +145,11 @@ impl AirdropService {
             now,
         ) {
             Ok(AdmitAirdropAttemptResult::Inserted) => {
-                self.spawn_submit_airdrop_attempt(request, attempt, execution_permit)
+                self.start_or_observe_airdrop_attempt(request, attempt, Some(execution_permit))
                     .await
             }
             Ok(AdmitAirdropAttemptResult::Existing(attempt)) => {
-                self.existing_airdrop_attempt(&request, *attempt, execution_permit)
+                self.start_or_observe_airdrop_attempt(request, *attempt, Some(execution_permit))
                     .await
             }
             Ok(AdmitAirdropAttemptResult::PendingLimitReached) => error_response_with_retry_after(
@@ -164,45 +176,139 @@ impl AirdropService {
         }
     }
 
-    async fn existing_airdrop_attempt(
+    async fn start_or_observe_airdrop_attempt(
         &self,
-        request: &HostedAirdropRequest,
-        mut attempt: AirdropAttempt,
-        execution_permit: OwnedSemaphorePermit,
+        request: HostedAirdropRequest,
+        attempt: AirdropAttempt,
+        execution_permit: Option<OwnedSemaphorePermit>,
     ) -> Response {
         if attempt.error_code.as_deref() == Some(AIRDROP_SUBMIT_AMOUNT_MISMATCH) {
             return submit_amount_mismatch_response();
         }
-        match attempt.status {
+        let previous_status = match attempt.status {
             AirdropAttemptStatus::Succeeded => {
-                response_from_attempt(StatusCode::OK, request.recipient, attempt)
+                return response_from_attempt(StatusCode::OK, request.recipient, attempt);
             }
-            AirdropAttemptStatus::Pending => {
-                if attempt.tx_hash.is_some() {
-                    self.poll_airdrop_attempt(request.recipient, attempt).await
-                } else {
-                    response_from_attempt(StatusCode::ACCEPTED, request.recipient, attempt)
-                }
+            AirdropAttemptStatus::Executing | AirdropAttemptStatus::Ambiguous => {
+                return response_from_attempt(StatusCode::ACCEPTED, request.recipient, attempt);
             }
-            AirdropAttemptStatus::FailedRetryable => {
-                attempt = match self.policy_store.claim_airdrop_transition(
+            AirdropAttemptStatus::Pending | AirdropAttemptStatus::FailedRetryable => attempt.status,
+            AirdropAttemptStatus::FailedTerminal => {
+                return error_response(
+                    StatusCode::CONFLICT,
+                    "airdrop_attempt_terminal",
+                    "airdrop attempt cannot be retried",
+                );
+            }
+        };
+        let attempt = match self.policy_store.claim_airdrop_transition(
+            &attempt.key,
+            &[previous_status],
+            None,
+            AirdropAttemptStatus::Executing,
+            SystemTime::now(),
+        ) {
+            Ok(attempt) => attempt,
+            Err(PolicyStoreError::InvalidAirdropTransition { .. }) => {
+                return self.current_airdrop_attempt_response(request.recipient, &attempt.key);
+            }
+            Err(error) => return policy_store_error_response(&error),
+        };
+        let execution_permit = if let Some(execution_permit) = execution_permit {
+            execution_permit
+        } else {
+            let Ok(execution_permit) = self.execution.clone().try_acquire_owned() else {
+                match self.policy_store.claim_airdrop_transition(
                     &attempt.key,
-                    &[AirdropAttemptStatus::FailedRetryable],
-                    AirdropAttemptStatus::Pending,
+                    &[AirdropAttemptStatus::Executing],
+                    Some(attempt.execution_id),
+                    previous_status,
                     SystemTime::now(),
                 ) {
-                    Ok(attempt) => attempt,
+                    Ok(_) => {}
+                    Err(PolicyStoreError::InvalidAirdropTransition { .. }) => {
+                        return self
+                            .current_airdrop_attempt_response(request.recipient, &attempt.key);
+                    }
                     Err(error) => return policy_store_error_response(&error),
-                };
-                attempt.error_code = None;
-                self.spawn_submit_airdrop_attempt(request.clone(), attempt, execution_permit)
-                    .await
-            }
-            AirdropAttemptStatus::FailedTerminal => error_response(
+                }
+                return error_response_with_retry_after(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "airdrop_capacity_exceeded",
+                    "airdrop execution capacity reached",
+                    Some(1),
+                );
+            };
+            execution_permit
+        };
+        self.spawn_airdrop_worker(request, attempt, execution_permit)
+            .await
+    }
+
+    fn current_airdrop_attempt_response(
+        &self,
+        recipient: ContractAddress,
+        key: &AirdropAttemptKey,
+    ) -> Response {
+        match self.policy_store.get_airdrop_attempt(key) {
+            Ok(Some(attempt)) => match attempt.status {
+                AirdropAttemptStatus::Pending
+                | AirdropAttemptStatus::Executing
+                | AirdropAttemptStatus::Ambiguous => {
+                    response_from_attempt(StatusCode::ACCEPTED, recipient, attempt)
+                }
+                AirdropAttemptStatus::Succeeded => {
+                    response_from_attempt(StatusCode::OK, recipient, attempt)
+                }
+                AirdropAttemptStatus::FailedRetryable => error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "airdrop_submit_failed",
+                    "airdrop submission failed and may be retried",
+                ),
+                AirdropAttemptStatus::FailedTerminal => error_response(
+                    StatusCode::CONFLICT,
+                    "airdrop_attempt_terminal",
+                    "airdrop attempt cannot be retried",
+                ),
+            },
+            Ok(None) => error_response(
                 StatusCode::CONFLICT,
-                "airdrop_attempt_terminal",
-                "airdrop attempt cannot be retried",
+                "airdrop_attempt_conflict",
+                "airdrop attempt disappeared while processing",
             ),
+            Err(error) => policy_store_error_response(&error),
+        }
+    }
+
+    fn replace_executing_attempt(
+        &self,
+        attempt: AirdropAttempt,
+    ) -> Result<AirdropAttempt, ReplaceAttemptError> {
+        let execution_id = attempt.execution_id;
+        match self
+            .policy_store
+            .replace_airdrop_attempt_if_status(&[AirdropAttemptStatus::Executing], attempt)
+        {
+            Ok(attempt) => Ok(attempt),
+            Err(PolicyStoreError::InvalidAirdropTransition { .. }) => {
+                Err(ReplaceAttemptError::Stale)
+            }
+            Err(error) => Err(ReplaceAttemptError::Store(error, execution_id)),
+        }
+    }
+
+    fn replace_attempt_error_response(
+        &self,
+        recipient: ContractAddress,
+        key: &AirdropAttemptKey,
+        error: ReplaceAttemptError,
+    ) -> Response {
+        match error {
+            ReplaceAttemptError::Stale => self.current_airdrop_attempt_response(recipient, key),
+            ReplaceAttemptError::Store(error, execution_id) => {
+                self.release_execution_claim(key, execution_id);
+                policy_store_error_response(&error)
+            }
         }
     }
 
@@ -238,11 +344,43 @@ impl AirdropService {
         )
     }
 
+    fn request_matches_network(&self, request: &HostedAirdropRequest) -> bool {
+        request.network_id == self.network_descriptor.network_id
+            && request.network_hash == self.network_descriptor.network_hash
+            && request.genesis_hash.0 == self.network_descriptor.genesis_hash.0
+    }
+
+    fn reserve_execution_for_new_attempt(
+        &self,
+        key: &AirdropAttemptKey,
+    ) -> Result<ExecutionReservation, Box<Response>> {
+        match self.policy_store.get_airdrop_attempt(key) {
+            Ok(Some(attempt)) => return Ok(ExecutionReservation::Existing(Box::new(attempt))),
+            Ok(None) => {}
+            Err(error) => return Err(Box::new(policy_store_error_response(&error))),
+        }
+        if let Ok(permit) = self.execution.clone().try_acquire_owned() {
+            return Ok(ExecutionReservation::Permit(permit));
+        }
+        match self.policy_store.get_airdrop_attempt(key) {
+            Ok(Some(attempt)) => Ok(ExecutionReservation::Existing(Box::new(attempt))),
+            Ok(None) => Err(Box::new(error_response_with_retry_after(
+                StatusCode::TOO_MANY_REQUESTS,
+                "airdrop_capacity_exceeded",
+                "airdrop execution capacity reached",
+                Some(1),
+            ))),
+            Err(error) => Err(Box::new(policy_store_error_response(&error))),
+        }
+    }
+
     async fn submit_airdrop_attempt(
         &self,
         request: HostedAirdropRequest,
         mut attempt: AirdropAttempt,
     ) -> Response {
+        let key = attempt.key.clone();
+        attempt.error_code = None;
         match self.submitter.submit_airdrop(request.recipient).await {
             Ok(accepted) => {
                 let amount_matches =
@@ -253,51 +391,90 @@ impl AirdropService {
                 attempt.expires_at = None;
                 if !amount_matches {
                     attempt.error_code = Some(AIRDROP_SUBMIT_AMOUNT_MISMATCH.into());
+                    attempt.status = AirdropAttemptStatus::Pending;
                 }
-                let now = SystemTime::now();
-                attempt.updated_at = now;
-                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
-                    return policy_store_error_response(&error);
-                }
+                attempt.updated_at = SystemTime::now();
+                let attempt = match self.replace_executing_attempt(attempt) {
+                    Ok(attempt) => attempt,
+                    Err(error) => {
+                        return self.replace_attempt_error_response(request.recipient, &key, error);
+                    }
+                };
                 if !amount_matches {
                     return submit_amount_mismatch_response();
                 }
                 self.poll_airdrop_attempt(request.recipient, attempt).await
             }
             Err(error) => {
-                attempt.status = AirdropAttemptStatus::FailedRetryable;
+                let submission_outcome_is_ambiguous =
+                    matches!(&error, AirdropSubmitError::Submit(_));
+                attempt.status = if submission_outcome_is_ambiguous {
+                    AirdropAttemptStatus::Ambiguous
+                } else {
+                    AirdropAttemptStatus::FailedRetryable
+                };
                 attempt.error_code = Some(airdrop_error_code(&error).into());
                 let now = SystemTime::now();
                 attempt.updated_at = now;
-                attempt.expires_at = Some(
+                attempt.expires_at = (!submission_outcome_is_ambiguous).then(|| {
                     now.checked_add(Duration::from_secs(
                         self.policy_config.airdrop.recipient_cooldown_secs,
                     ))
-                    .unwrap_or(now),
-                );
-                let _ = self.policy_store.put_airdrop_attempt(attempt);
-                error.into_response()
+                    .unwrap_or(now)
+                });
+                match self.replace_executing_attempt(attempt) {
+                    Ok(_) => error.into_response(),
+                    Err(replace_error) => {
+                        self.replace_attempt_error_response(request.recipient, &key, replace_error)
+                    }
+                }
             }
         }
     }
 
-    async fn spawn_submit_airdrop_attempt(
+    async fn execute_airdrop_attempt(
+        &self,
+        request: HostedAirdropRequest,
+        attempt: AirdropAttempt,
+    ) -> Response {
+        if attempt.tx_hash.is_some() {
+            self.poll_airdrop_attempt(request.recipient, attempt).await
+        } else {
+            self.submit_airdrop_attempt(request, attempt).await
+        }
+    }
+
+    async fn spawn_airdrop_worker(
         &self,
         request: HostedAirdropRequest,
         attempt: AirdropAttempt,
         execution_permit: OwnedSemaphorePermit,
     ) -> Response {
         let service = self.clone();
+        let timeout_service = self.clone();
+        let timeout_key = attempt.key.clone();
+        let execution_id = attempt.execution_id;
         let recovery_service = self.clone();
         let recovery_key = attempt.key.clone();
-        let worker =
-            tokio::spawn(async move { service.submit_airdrop_attempt(request, attempt).await });
+        let worker = tokio::spawn(async move {
+            match tokio::time::timeout(
+                AIRDROP_EXECUTION_TIMEOUT,
+                service.execute_airdrop_attempt(request, attempt),
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(_) => timeout_service.timed_out_airdrop_task(&timeout_key, execution_id),
+            }
+        });
         // Keep panic recovery alive even if the client disconnects while the worker runs.
         let supervisor = tokio::spawn(async move {
             let _execution_permit = execution_permit;
             match worker.await {
                 Ok(response) => response,
-                Err(error) => recovery_service.failed_submission_task(&recovery_key, &error),
+                Err(error) => {
+                    recovery_service.failed_airdrop_task(&recovery_key, execution_id, &error)
+                }
             }
         });
         match supervisor.await {
@@ -313,12 +490,13 @@ impl AirdropService {
         }
     }
 
-    fn failed_submission_task(
+    fn failed_airdrop_task(
         &self,
         key: &AirdropAttemptKey,
+        execution_id: u64,
         error: &tokio::task::JoinError,
     ) -> Response {
-        tracing::error!(%error, "airdrop submission task failed");
+        tracing::error!(%error, "airdrop worker task failed");
         let mut attempt = match self.policy_store.get_airdrop_attempt(key) {
             Ok(Some(attempt)) => attempt,
             Ok(None) => {
@@ -330,21 +508,36 @@ impl AirdropService {
             }
             Err(error) => return policy_store_error_response(&error),
         };
-        if !matches!(attempt.status, AirdropAttemptStatus::Pending) || attempt.tx_hash.is_some() {
+        if attempt.status != AirdropAttemptStatus::Executing || attempt.execution_id != execution_id
+        {
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "airdrop_submit_failed",
                 "failed to submit airdrop transaction",
             );
         }
-        attempt.status = AirdropAttemptStatus::FailedTerminal;
+        attempt.status = if attempt.tx_hash.is_some() {
+            AirdropAttemptStatus::Pending
+        } else {
+            AirdropAttemptStatus::FailedTerminal
+        };
         attempt.error_code = Some("airdrop_submit_failed".into());
         let now = SystemTime::now();
         attempt.updated_at = now;
-        attempt.expires_at =
-            terminal_attempt_expiry(now, self.policy_config.airdrop.recipient_cooldown_secs);
-        if let Err(error) = self.policy_store.put_airdrop_attempt(attempt) {
-            return policy_store_error_response(&error);
+        attempt.expires_at = if attempt.tx_hash.is_some() {
+            None
+        } else {
+            terminal_attempt_expiry(now, self.policy_config.airdrop.recipient_cooldown_secs)
+        };
+        match self
+            .policy_store
+            .replace_airdrop_attempt_if_status(&[AirdropAttemptStatus::Executing], attempt)
+        {
+            Ok(_) | Err(PolicyStoreError::InvalidAirdropTransition { .. }) => {}
+            Err(error) => {
+                self.release_execution_claim(key, execution_id);
+                return policy_store_error_response(&error);
+            }
         }
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -353,12 +546,86 @@ impl AirdropService {
         )
     }
 
+    fn timed_out_airdrop_task(&self, key: &AirdropAttemptKey, execution_id: u64) -> Response {
+        tracing::error!("airdrop worker task timed out");
+        let mut attempt = match self.policy_store.get_airdrop_attempt(key) {
+            Ok(Some(attempt)) => attempt,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "airdrop_submit_failed",
+                    "airdrop transaction execution timed out",
+                );
+            }
+            Err(error) => return policy_store_error_response(&error),
+        };
+        if attempt.status != AirdropAttemptStatus::Executing || attempt.execution_id != execution_id
+        {
+            return error_response(
+                StatusCode::GATEWAY_TIMEOUT,
+                "airdrop_submit_failed",
+                "airdrop transaction execution timed out",
+            );
+        }
+        attempt.status = if attempt.tx_hash.is_some() {
+            AirdropAttemptStatus::Pending
+        } else {
+            AirdropAttemptStatus::Ambiguous
+        };
+        attempt.error_code = Some("airdrop_submit_failed".into());
+        attempt.updated_at = SystemTime::now();
+        attempt.expires_at = None;
+        match self
+            .policy_store
+            .replace_airdrop_attempt_if_status(&[AirdropAttemptStatus::Executing], attempt)
+        {
+            Ok(_) | Err(PolicyStoreError::InvalidAirdropTransition { .. }) => {}
+            Err(error) => {
+                self.release_execution_claim(key, execution_id);
+                return policy_store_error_response(&error);
+            }
+        }
+        error_response(
+            StatusCode::GATEWAY_TIMEOUT,
+            "airdrop_submit_failed",
+            "airdrop transaction execution timed out",
+        )
+    }
+
+    fn release_execution_claim(&self, key: &AirdropAttemptKey, execution_id: u64) {
+        match self.policy_store.claim_airdrop_transition(
+            key,
+            &[AirdropAttemptStatus::Executing],
+            Some(execution_id),
+            AirdropAttemptStatus::Pending,
+            SystemTime::now(),
+        ) {
+            Ok(_)
+            | Err(
+                PolicyStoreError::AttemptNotFound
+                | PolicyStoreError::InvalidAirdropTransition { .. },
+            ) => {}
+            Err(error) => tracing::error!(%error, "failed to release airdrop worker claim"),
+        }
+    }
+
     async fn poll_airdrop_attempt(
         &self,
         recipient: ContractAddress,
         mut attempt: AirdropAttempt,
     ) -> Response {
+        let key = attempt.key.clone();
         let Some(tx_hash) = attempt.tx_hash.as_deref().and_then(parse_tx_hash) else {
+            attempt.status = AirdropAttemptStatus::FailedTerminal;
+            attempt.error_code = Some("airdrop_attempt_state_invalid".into());
+            attempt.updated_at = SystemTime::now();
+            attempt.expires_at = terminal_attempt_expiry(
+                attempt.updated_at,
+                self.policy_config.airdrop.recipient_cooldown_secs,
+            );
+            let _ = self
+                .policy_store
+                .replace_airdrop_attempt_if_status(&[AirdropAttemptStatus::Executing], attempt);
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "airdrop_attempt_state_invalid",
@@ -376,10 +643,10 @@ impl AirdropService {
                     now,
                     self.policy_config.airdrop.recipient_cooldown_secs,
                 );
-                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
-                    return policy_store_error_response(&error);
+                match self.replace_executing_attempt(attempt) {
+                    Ok(attempt) => response_from_attempt(StatusCode::OK, recipient, attempt),
+                    Err(error) => self.replace_attempt_error_response(recipient, &key, error),
                 }
-                response_from_attempt(StatusCode::OK, recipient, attempt)
             }
             Ok(receipt) => {
                 attempt.status = AirdropAttemptStatus::FailedTerminal;
@@ -391,10 +658,10 @@ impl AirdropService {
                     now,
                     self.policy_config.airdrop.recipient_cooldown_secs,
                 );
-                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt) {
-                    return policy_store_error_response(&error);
+                match self.replace_executing_attempt(attempt) {
+                    Ok(_) => AirdropSubmitError::TransactionFailed { tx_hash }.into_response(),
+                    Err(error) => self.replace_attempt_error_response(recipient, &key, error),
                 }
-                AirdropSubmitError::TransactionFailed { tx_hash }.into_response()
             }
             Err(AirdropSubmitError::Poll(
                 groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
@@ -410,38 +677,32 @@ impl AirdropService {
                     now,
                     self.policy_config.airdrop.recipient_cooldown_secs,
                 );
-                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt) {
-                    return policy_store_error_response(&error);
+                match self.replace_executing_attempt(attempt) {
+                    Ok(_) => AirdropSubmitError::TransactionFailed { tx_hash }.into_response(),
+                    Err(error) => self.replace_attempt_error_response(recipient, &key, error),
                 }
-                AirdropSubmitError::TransactionFailed { tx_hash }.into_response()
             }
             Err(AirdropSubmitError::Poll(
                 groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout { .. },
-            )) => match self.policy_store.get_airdrop_attempt(&attempt.key) {
-                Ok(Some(current)) => match current.status {
-                    AirdropAttemptStatus::Pending => {
-                        response_from_attempt(StatusCode::ACCEPTED, recipient, current)
+            )) => {
+                attempt.status = AirdropAttemptStatus::Pending;
+                attempt.updated_at = SystemTime::now();
+                match self.replace_executing_attempt(attempt) {
+                    Ok(attempt) => response_from_attempt(StatusCode::ACCEPTED, recipient, attempt),
+                    Err(error) => self.replace_attempt_error_response(recipient, &key, error),
+                }
+            }
+            Err(error) => {
+                attempt.status = AirdropAttemptStatus::Pending;
+                attempt.error_code = Some(airdrop_error_code(&error).into());
+                attempt.updated_at = SystemTime::now();
+                match self.replace_executing_attempt(attempt) {
+                    Ok(_) => error.into_response(),
+                    Err(replace_error) => {
+                        self.replace_attempt_error_response(recipient, &key, replace_error)
                     }
-                    AirdropAttemptStatus::Succeeded => {
-                        response_from_attempt(StatusCode::OK, recipient, current)
-                    }
-                    AirdropAttemptStatus::FailedTerminal => {
-                        AirdropSubmitError::TransactionFailed { tx_hash }.into_response()
-                    }
-                    AirdropAttemptStatus::FailedRetryable => error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "airdrop_submit_failed",
-                        "airdrop submission failed and may be retried",
-                    ),
-                },
-                Ok(None) => error_response(
-                    StatusCode::CONFLICT,
-                    "airdrop_attempt_conflict",
-                    "airdrop attempt disappeared while polling",
-                ),
-                Err(error) => policy_store_error_response(&error),
-            },
-            Err(error) => error.into_response(),
+                }
+            }
         }
     }
 }
@@ -467,7 +728,12 @@ fn response_from_attempt(
 ) -> Response {
     let tx_hash = attempt.tx_hash.as_deref().and_then(parse_tx_hash);
     let response = match (attempt.status, attempt.height) {
-        (AirdropAttemptStatus::Pending, _) => AirdropAttemptResponse::Pending {
+        (
+            AirdropAttemptStatus::Pending
+            | AirdropAttemptStatus::Executing
+            | AirdropAttemptStatus::Ambiguous,
+            _,
+        ) => AirdropAttemptResponse::Pending {
             recipient,
             raw_amount: attempt.raw_amount,
             tx_hash,
@@ -513,7 +779,9 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
             "airdrop_attempt_conflict",
             "airdrop attempt state changed while processing",
         ),
-        PolicyStoreError::LockPoisoned => error_response(
+        PolicyStoreError::LockPoisoned
+        | PolicyStoreError::QuotaWindowTooLarge
+        | PolicyStoreError::AirdropExecutionIdExhausted => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "faucet_policy_store_unavailable",
             "faucet policy store is unavailable",
@@ -625,7 +893,7 @@ pub enum AirdropSubmitError {
     SignTransaction(String),
     /// The signed faucet transaction was not accepted.
     #[error("failed to submit airdrop transaction: {0}")]
-    Submit(#[from] groundhog_json_rpc_client::SubmitTransactionError),
+    Submit(String),
     /// The accepted faucet transaction could not be confirmed.
     #[error("failed to confirm airdrop transaction: {0}")]
     Poll(#[from] groundhog_json_rpc_client::PollTransactionReceiptError),
@@ -791,7 +1059,9 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             &self.network_hash,
         )
         .map_err(|error| AirdropSubmitError::SignTransaction(error.to_string()))?;
-        let tx_hash = submit_transaction(&self.rpc_url, &tx_hex).await?;
+        let tx_hash = submit_transaction(&self.rpc_url, &tx_hex)
+            .await
+            .map_err(|error| AirdropSubmitError::Submit(error.to_string()))?;
         Ok(AcceptedAirdrop {
             raw_amount: self.raw_amount.to_string(),
             tx_hash,
@@ -870,7 +1140,9 @@ mod tests {
             "recipient": format!("0x{}", "11".repeat(32)),
             "clientNonce": "0x99",
             "networkId": "future-network",
+            "networkHash": format!("0x{}", "33".repeat(32)),
             "genesisHash": format!("0x{}", "22".repeat(32)),
+            "futureField": true,
         }))
         .expect("bug: public API requests should ignore unknown future fields");
 
@@ -883,6 +1155,7 @@ mod tests {
             "recipient": format!("0x{}", "11".repeat(32)),
             "clientNonce": format!("0x{}", "99".repeat(32)),
             "networkId": "future-network",
+            "networkHash": format!("0x{}", "33".repeat(32)),
             "genesisHash": format!("0x{}", "22".repeat(32)),
         }))
         .expect("bug: 32-byte client nonce should be valid");

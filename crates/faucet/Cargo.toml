@@ -49,4 +49,5 @@ aws-smithy-http-client = { workspace = true }
 aws-smithy-types = { workspace = true }
 http = { workspace = true }
 serial_test = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true, features = ["util"] }

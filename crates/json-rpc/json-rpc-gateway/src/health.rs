@@ -222,6 +222,10 @@ impl HealthSnapshot {
             .is_some_and(|health| health.up)
     }
 
+    pub(crate) fn named_backend_up(&self, backend: &'static str) -> Option<bool> {
+        self.backends.get(backend).map(|health| health.up)
+    }
+
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn chain_tip_height(&self) -> Option<f64> {
         let height = self.chain_tip.height.as_ref()?;

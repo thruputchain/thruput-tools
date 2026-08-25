@@ -1012,7 +1012,9 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
                 "wallet-create attempt state changed while processing",
             )
         }
-        PolicyStoreError::LockPoisoned => error_response(
+        PolicyStoreError::LockPoisoned
+        | PolicyStoreError::QuotaWindowTooLarge
+        | PolicyStoreError::AirdropExecutionIdExhausted => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "faucet_policy_store_unavailable",
             "faucet policy store is unavailable",

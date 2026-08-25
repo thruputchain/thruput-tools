@@ -263,29 +263,20 @@ impl HostedAirdrop {
         request: AirdropRequest,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
         let deadline = tokio::time::Instant::now() + self.inner.request_timeout;
-        tokio::time::timeout_at(deadline, self.ensure_validated())
-            .await
-            .map_err(|_| RpcServerError::BackendTimeout)?
-            .map_err(map_probe_error)?;
         let _permit = self
             .inner
             .admission
             .try_acquire()
             .map_err(|_| RpcServerError::Overloaded("faucet request limit reached".into()))?;
-        let validation = tokio::time::timeout_at(deadline, self.inner.validation.read())
+        tokio::time::timeout_at(deadline, self.ensure_validated())
             .await
-            .map_err(|_| RpcServerError::BackendTimeout)?;
-        if !validation.validated {
-            return Err(map_probe_error(
-                validation.last_error.clone().unwrap_or_else(|| {
-                    ProbeError::Unavailable("descriptor validation did not complete".into())
-                }),
-            ));
-        }
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(map_probe_error)?;
         let hosted = HostedAirdropRequest {
             recipient: request.recipient,
             client_nonce: request.client_nonce,
             network_id: self.inner.network_id.clone(),
+            network_hash: self.inner.network.network_hash,
             genesis_hash: self.inner.network.genesis_hash,
         };
         let url = endpoint(&self.inner.base_url, "v1/airdrop")
@@ -303,7 +294,6 @@ impl HostedAirdrop {
         self.inner
             .metrics
             .observe_airdrop_request("hosted", outcome, started.elapsed());
-        drop(validation);
         result
     }
 
@@ -789,7 +779,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probe_lock_timeout_does_not_invalidate_active_forwarding() {
+    async fn slow_forward_does_not_block_a_readiness_probe() {
         let post_started = Arc::new(Notify::new());
         let release_post = Arc::new(Notify::new());
         let app = Router::new()
@@ -833,7 +823,7 @@ mod tests {
 
         let probe = facade.probe(Duration::from_millis(10)).await;
 
-        assert!(!probe.up);
+        assert!(probe.up);
         assert!(facade.is_validated().await);
         release_post.notify_one();
         active_request
@@ -843,7 +833,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn descriptor_invalidation_waits_for_active_forward_and_blocks_later_posts() {
+    async fn descriptor_invalidation_does_not_cancel_active_forward_and_blocks_later_posts() {
         let network_requests = Arc::new(AtomicUsize::new(0));
         let post_requests = Arc::new(AtomicUsize::new(0));
         let post_started = Arc::new(Notify::new());
@@ -907,16 +897,15 @@ mod tests {
             let facade = facade.clone();
             tokio::spawn(async move { facade.probe(Duration::from_secs(1)).await })
         };
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert_eq!(network_requests.load(Ordering::SeqCst), 1);
+        let probe = invalidation.await.expect("probe task should complete");
+        assert!(!probe.up);
+        assert_eq!(network_requests.load(Ordering::SeqCst), 2);
 
         release_post.notify_one();
         active_request
             .await
             .expect("request task should complete")
             .expect("request validated before descriptor changed");
-        let probe = invalidation.await.expect("probe task should complete");
-        assert!(!probe.up);
 
         let error = facade
             .request_airdrop(airdrop_request())
@@ -1150,6 +1139,7 @@ mod tests {
                 "recipient": format!("0x{}", "11".repeat(32)),
                 "clientNonce": "0x01",
                 "networkId": "devnet",
+                "networkHash": format!("0x{}", "12".repeat(32)),
                 "genesisHash": format!("0x{}", "42".repeat(32))
             })
         );
@@ -1224,12 +1214,32 @@ mod tests {
             ),
             (
                 StatusCode::TOO_MANY_REQUESTS,
+                "airdrop_quota_exceeded",
+                codes::OVERLOADED,
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
                 "airdrop_recipient_pending_limit_exceeded",
+                codes::OVERLOADED,
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "airdrop_capacity_exceeded",
+                codes::OVERLOADED,
+            ),
+            (
+                StatusCode::ACCEPTED,
+                "airdrop_already_pending",
                 codes::OVERLOADED,
             ),
             (
                 StatusCode::CONFLICT,
                 "airdrop_attempt_terminal",
+                codes::TX_REJECTED,
+            ),
+            (
+                StatusCode::BAD_GATEWAY,
+                "airdrop_transaction_failed",
                 codes::TX_REJECTED,
             ),
             (
@@ -1245,6 +1255,21 @@ mod tests {
             (
                 StatusCode::CONFLICT,
                 "airdrop_attempt_conflict",
+                codes::BACKEND_UNAVAILABLE,
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "airdrop_attempt_state_invalid",
+                codes::BACKEND_UNAVAILABLE,
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "faucet_policy_store_unavailable",
+                codes::BACKEND_UNAVAILABLE,
+            ),
+            (
+                StatusCode::BAD_GATEWAY,
+                "airdrop_submit_amount_mismatch",
                 codes::BACKEND_UNAVAILABLE,
             ),
             (

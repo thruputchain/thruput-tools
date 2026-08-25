@@ -83,6 +83,18 @@ impl FaucetConfigFile {
     ) -> Result<FaucetConfigParts, FaucetConfigError> {
         validate_airdrop_client_overrides(&self.policy.airdrop.client_overrides)?;
         validate_airdrop_terminal_retention(self.policy.airdrop.recipient_cooldown_secs)?;
+        validate_quota_window(
+            "policy.airdrop.ip_quota_window_secs",
+            self.policy.airdrop.ip_quota_window_secs,
+        )?;
+        validate_quota_window(
+            "policy.wallet_create.owner_quota_window_secs",
+            self.policy.wallet_create.owner_quota_window_secs,
+        )?;
+        validate_quota_window(
+            "policy.wallet_create.ip_quota_window_secs",
+            self.policy.wallet_create.ip_quota_window_secs,
+        )?;
         let wallet_create_prefund_raw_amount = self
             .network
             .wallet_create
@@ -288,6 +300,9 @@ pub enum FaucetConfigError {
     /// Terminal airdrop retention cannot be represented by the system clock.
     #[error("airdrop recipient cooldown uses an unrepresentable retention window")]
     AirdropTerminalRetentionTooLarge,
+    /// A default quota window cannot be represented by the system clock.
+    #[error("{field} uses an unrepresentable quota window")]
+    QuotaWindowTooLarge { field: &'static str },
     /// The configured faucet signing key could not be loaded safely.
     #[error(transparent)]
     SecretKey(#[from] FaucetSecretKeyLoadError),
@@ -349,6 +364,13 @@ fn validate_airdrop_terminal_retention(
             recipient_cooldown_secs.max(MIN_AIRDROP_TERMINAL_RETENTION_SECS),
         ))
         .ok_or(FaucetConfigError::AirdropTerminalRetentionTooLarge)
+        .map(|_| ())
+}
+
+fn validate_quota_window(field: &'static str, seconds: u64) -> Result<(), FaucetConfigError> {
+    SystemTime::now()
+        .checked_add(Duration::from_secs(seconds))
+        .ok_or(FaucetConfigError::QuotaWindowTooLarge { field })
         .map(|_| ())
 }
 
@@ -561,6 +583,7 @@ mod tests {
     use super::{
         AirdropClientOverride, AirdropConfig, FaucetConfigError, FaucetConfigFile,
         validate_airdrop_client_overrides, validate_airdrop_terminal_retention,
+        validate_quota_window,
     };
 
     struct TestKeyLoader;
@@ -631,6 +654,19 @@ mod tests {
         assert!(matches!(
             error,
             FaucetConfigError::AirdropTerminalRetentionTooLarge
+        ));
+    }
+
+    #[test]
+    fn default_policy_rejects_unrepresentable_quota_window() {
+        let error = validate_quota_window("policy.airdrop.ip_quota_window_secs", u64::MAX)
+            .expect_err("overflowing window must not disable quota enforcement");
+
+        assert!(matches!(
+            error,
+            FaucetConfigError::QuotaWindowTooLarge {
+                field: "policy.airdrop.ip_quota_window_secs"
+            }
         ));
     }
 
