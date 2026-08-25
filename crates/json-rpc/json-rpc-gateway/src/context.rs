@@ -190,17 +190,6 @@ pub struct GatewayContext {
     /// x23 RPC client to hogd `DbGateway`.
     pub db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
 
-    /// x23 RPC client to coordinator storage (optional).
-    /// Used for: block/CV queries and optional tx submission relay path.
-    // TODO: define the concrete chuckd submit/query client contract. protocol-rs
-    // currently gives us a generated scheduler client, but not an equivalent
-    // x23 unvetted-submit path into chuckd.
-    // pub coordinator: Option<...>,
-
-    /// Prometheus metrics for the gateway.
-    /// Phase 4: per-method histograms, counters, backend latency.
-    // TODO: pub metrics: Arc<GatewayMetrics>,
-
     /// Server configuration (timeouts, limits, backend addresses).
     pub config: Arc<GatewayConfig>,
 
@@ -216,9 +205,15 @@ impl GatewayContext {
     /// to `None`; reachable backends that reject the intro probe fail startup as
     /// configuration or protocol mismatches.
     ///
-    /// TODO: if `config.submission_backend` == `ChuckdCoordinator`,
-    /// require `coordinator_address` to be set.
+    /// Fails startup when `config.submission_backend` selects
+    /// `chuckd_coordinator`: this build has no chuckd submission transport, so
+    /// accepting the selection would silently route submissions nowhere.
     pub async fn new(config: GatewayConfig, metrics: GatewayMetrics) -> Result<Self, ConnectError> {
+        if config.submission_backend == crate::config::SubmissionBackend::ChuckdCoordinator {
+            return Err(ConnectError::NotImplemented {
+                service: "chuckd_coordinator submission backend",
+            });
+        }
         let config = Arc::new(config);
 
         // `FixedSerialPool` is 1 in-flight per connection by choice (FIFO
@@ -1160,6 +1155,25 @@ mod tests {
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
         (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn chuckd_coordinator_submission_backend_fails_startup() {
+        let config = GatewayConfig {
+            submission_backend: crate::config::SubmissionBackend::ChuckdCoordinator,
+            ..GatewayConfig::default()
+        };
+
+        let Err(error) = GatewayContext::new(config, GatewayMetrics::for_tests()).await else {
+            panic!("bug: chuckd_coordinator selection must fail startup");
+        };
+
+        match error {
+            ConnectError::NotImplemented { service } => {
+                assert_eq!(service, "chuckd_coordinator submission backend");
+            }
+            other => panic!("expected NotImplemented, got {other:?}"),
+        }
     }
 
     #[tokio::test]
