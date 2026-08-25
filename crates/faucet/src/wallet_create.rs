@@ -41,7 +41,7 @@ use crate::{
         FaucetPolicyStore, InsertWalletCreateAttemptResult, PolicyStoreError, QuotaCheck, QuotaKey,
         WalletCreateAttempt, WalletCreateAttemptKey, WalletCreateAttemptStatus, client_identity,
     },
-    utils::nonce_from_timestamp,
+    utils::next_nonce,
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
@@ -847,13 +847,15 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
         let create_calldata =
             create_wallet_calldata(&deploy_nonce, &self.wallet_contract_hash, owner_public_key)
                 .map_err(|error| WalletCreateError::EncodeCreateCalldata(error.to_string()))?;
+        let nonce =
+            next_nonce().map_err(|error| WalletCreateError::BuildTransaction(error.to_string()))?;
         let tx = build_deploy_transaction(BuildDeployTransaction {
             invoked_address: self.faucet_wallet_address,
             entrypoint: self.create_wallet_entrypoint,
             calldata: create_calldata,
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height,
-            nonce: nonce_from_timestamp(),
+            nonce,
             contracts_to_deploy: VecM(vec![contract]),
             auth_claim: source_address_auth_claim(),
         });
