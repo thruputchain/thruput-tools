@@ -1178,6 +1178,113 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
     );
 }
 
+/// What cargo says while it reads the registry has to reach the user.
+///
+/// The dependency-graph resolve is the first thing `groundhog build` runs
+/// that touches the registry, and it used to be captured whole: a registry
+/// that was slow, or not answering at all, left the build printing nothing
+/// with no way to tell a stall from progress. Drives the real binary against
+/// a `cargo` that reports registry work the way cargo does, and asserts that
+/// report lands on the build's own stderr.
+#[test]
+fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    write_scaffold_cargo_config(&project_root);
+    write_contract_toml(&project_root);
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+
+    let target_dir = project_root.join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    // `--no-deps` is the manifest-only call; the resolve is the one that
+    // reads the registry, and reports it on stderr the way cargo does.
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"metadata\" ]; then\n\
+             \x20 case \" $* \" in\n\
+             \x20   *\" --no-deps \"*) printf '%s' '{metadata_json}'; exit 0 ;;\n\
+             \x20 esac\n\
+             \x20 echo '    Updating `groundhog` index' >&2\n\
+             \x20 echo '    Blocking waiting for file lock on package cache' >&2\n\
+             \x20 printf '%s' '{{\"packages\":[],\"resolve\":{{\"nodes\":[]}}}}'\n\
+             \x20 exit 0\n\
+             fi\n\
+             if [ \"$1\" = \"config\" ]; then\n\
+             \x20 printf '%s' '[\"-C\",\"link-arg=-Tgroundhog-rv32.ld\"]'\n\
+             \x20 exit 0\n\
+             fi\n\
+             /bin/mkdir -p '{}'\n\
+             /bin/cp '{}' '{}'\n",
+            raw_elf
+                .parent()
+                .expect("bug: raw ELF parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let path = match env::var_os("PATH") {
+        Some(existing) => {
+            let mut entries = vec![fake_bin.clone()];
+            entries.extend(env::split_paths(&existing));
+            env::join_paths(entries).expect("bug: PATH should join")
+        }
+        None => fake_bin.clone().into_os_string(),
+    };
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .args(["build", "-p", "demo-contract"])
+        .current_dir(&project_root)
+        .env("PATH", path)
+        .output()
+        .expect("bug: groundhog binary should run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "build failed: {stderr}");
+    assert!(
+        stderr.contains("Updating `groundhog` index"),
+        "expected cargo's registry progress to be relayed, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Blocking waiting for file lock on package cache"),
+        "expected the wait cargo never ends to be visible, got: {stderr}"
+    );
+}
+
 /// Build an ELF whose raw spec section carries `format`, with a body that is
 /// deliberately not decodable: the format check must fire before any fragment
 /// byte is read, and well-formed bytes would let a too-late check pass.
