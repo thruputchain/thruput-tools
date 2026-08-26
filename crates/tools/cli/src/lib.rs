@@ -84,6 +84,14 @@ pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command) {
 /// reported failure and exited. The next build would then wait on a lock held
 /// by a process nobody can see, which is the hang relaying cargo's output is
 /// meant to make impossible.
+///
+/// Signals cargo itself, not the tree beneath it. Cargo runs in the CLI's own
+/// process group so that a terminal's Ctrl-C reaches it — the way a user ends
+/// a wait this code deliberately does not bound. Isolating cargo in a group
+/// of its own would let its children be killed with it, but that interrupt
+/// would no longer arrive, which is the worse trade: cargo owns the locks
+/// that matter and killing it releases them, while a compiler left over from
+/// an interrupted build finishes on its own.
 pub(crate) fn stop_cargo(child: &mut std::process::Child) {
     let _ = child.kill();
     let _ = child.wait();
