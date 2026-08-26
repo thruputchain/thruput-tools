@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{
 };
 use serde_json::json;
 
-use crate::account_resolution::resolve_address_target;
+use crate::account_resolution::resolve_address_target_or_default_wallet;
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
@@ -19,7 +19,7 @@ pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
 pub fn run(
-    target: &str,
+    target: Option<&str>,
     project_start: &Path,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
@@ -33,7 +33,7 @@ pub fn run(
         .ok_or(CliError::MissingRpcUrl)?
         .to_owned();
 
-    let address = resolve_address_target(&resolved_profile, target)?;
+    let (target, address) = resolve_address_target_or_default_wallet(&resolved_profile, target)?;
     let address_hex = format_contract_address(&address);
     let address = ContractAddress::from(address);
 

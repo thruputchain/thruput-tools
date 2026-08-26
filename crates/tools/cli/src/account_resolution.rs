@@ -319,6 +319,24 @@ pub(crate) fn resolve_address_target(
     })
 }
 
+/// Resolve an explicit address target or the profile's effective wallet.
+pub(crate) fn resolve_address_target_or_default_wallet(
+    profile: &ResolvedProfile,
+    target: Option<&str>,
+) -> Result<(String, groundhog_xdr::types::ContractAddress), CliError> {
+    if let Some(target) = target {
+        return resolve_address_target(profile, target).map(|address| (target.to_owned(), address));
+    }
+    if let Some(wallet_name) = profile.default_wallet.as_deref() {
+        return resolve_address_target(profile, wallet_name)
+            .map(|address| (wallet_name.to_owned(), address));
+    }
+
+    let sender = resolve_sender_account(profile, None)?;
+    let target = sender.wallet_name.unwrap_or(sender.key_name);
+    Ok((target, sender.wallet_address))
+}
+
 /// Resolve a contract alias or an explicitly prefixed direct address.
 pub(crate) fn resolve_contract_target(
     profile: &ResolvedProfile,

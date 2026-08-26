@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::account_resolution::{
-    LocalBootstrapRole, lookup_dev_account_address, resolve_local_bootstrap_account,
+    LocalBootstrapRole, lookup_dev_account_address, resolve_address_target_or_default_wallet,
+    resolve_local_bootstrap_account,
 };
 use crate::balance::{
     LocalFundingProjection, confirm_low_faucet_balance, fetch_balance_blocking,
@@ -104,7 +106,7 @@ struct LoadedRemoteAirdropAttempt {
 
 #[expect(clippy::too_many_arguments, reason = "CLI command boundary")]
 pub fn run(
-    recipient: &str,
+    recipient: Option<&str>,
     amount: Option<&str>,
     dry_run: bool,
     yes: bool,
@@ -114,13 +116,19 @@ pub fn run(
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
+    let recipient = if let Some(recipient) = recipient {
+        Cow::Borrowed(recipient)
+    } else {
+        let profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
+        Cow::Owned(resolve_address_target_or_default_wallet(&profile, None)?.0)
+    };
     if dry_run
         && let Some(prepared) =
-            prepare_remote_airdrop_dry_run(&cwd, recipient, amount, profile, overrides)?
+            prepare_remote_airdrop_dry_run(&cwd, recipient.as_ref(), amount, profile, overrides)?
     {
         return print_remote_dry_run(&prepared, cmd, print);
     }
-    let prepared = prepare_airdrop(&cwd, recipient, amount, profile, overrides)?;
+    let prepared = prepare_airdrop(&cwd, recipient.as_ref(), amount, profile, overrides)?;
 
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
