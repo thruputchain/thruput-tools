@@ -5,7 +5,9 @@ use serde::Deserialize;
 use groundhog_json_rpc_types::{
     NetworkHash, NetworkHashHex, SHA256Hash,
     network_info::NetworkInfo,
-    runtime_manifest::{HOGD_DEV_RUNTIME_MANIFEST_KIND, RuntimeManifest},
+    runtime_manifest::{
+        HOGD_DEV_RUNTIME_MANIFEST_KIND, HOSTED_DEVNET_RUNTIME_MANIFEST_KIND, RuntimeManifest,
+    },
 };
 
 /// Backend names used by readiness policy.
@@ -356,13 +358,16 @@ impl GatewayConfig {
                 actual: manifest.schema_version,
             });
         }
-        if manifest.kind != HOGD_DEV_RUNTIME_MANIFEST_KIND {
-            return Err(RuntimeManifestConfigError::UnexpectedKind {
-                actual: manifest.kind.clone(),
-            });
-        }
-        if manifest.chain_state.is_none() {
-            return Err(RuntimeManifestConfigError::MissingChainState);
+        match manifest.kind.as_str() {
+            HOGD_DEV_RUNTIME_MANIFEST_KIND if manifest.chain_state.is_none() => {
+                return Err(RuntimeManifestConfigError::MissingChainState);
+            }
+            HOGD_DEV_RUNTIME_MANIFEST_KIND | HOSTED_DEVNET_RUNTIME_MANIFEST_KIND => {}
+            _ => {
+                return Err(RuntimeManifestConfigError::UnexpectedKind {
+                    actual: manifest.kind.clone(),
+                });
+            }
         }
         let defaults = GatewayConfig::default();
         let network_hash = Some(manifest.network_hash.clone());
@@ -452,8 +457,11 @@ pub enum RuntimeManifestConfigError {
         actual: u32,
     },
 
-    /// The manifest was not produced by hog-devnode.
-    #[error("unexpected runtime manifest kind `{actual}`; expected `hogd-dev-runtime`")]
+    /// The manifest was not produced by a supported runtime.
+    #[error(
+        "unexpected runtime manifest kind `{actual}`; expected `hogd-dev-runtime` or \
+         `hosted-devnet-runtime`"
+    )]
     UnexpectedKind {
         /// Actual manifest kind.
         actual: String,
@@ -681,6 +689,33 @@ network_hash = "0x1234"
             GatewayConfig::default().apply_runtime_manifest(&missing_chain_state),
             Err(RuntimeManifestConfigError::MissingChainState)
         );
+    }
+
+    #[test]
+    fn hosted_runtime_manifest_configures_gateway_without_chain_state() {
+        let mut config = GatewayConfig::default();
+        let mut manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+            "indexer": "127.0.0.1:1001",
+            "dbGateway": "127.0.0.1:1002",
+            "viewGateway": "127.0.0.1:1003",
+        }));
+        manifest.kind = "hosted-devnet-runtime".into();
+        manifest.chain_state = None;
+
+        config
+            .apply_runtime_manifest(&manifest)
+            .expect("bug: hosted runtime manifest should configure gateway");
+
+        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.network_hash, Some(manifest.network_hash.clone()));
+        assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
+        assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
+        assert_eq!(
+            config.view_gateway_address.as_deref(),
+            Some("127.0.0.1:1003")
+        );
+        assert_eq!(config.hogd_protocol_override.as_deref(), Some("hogp/test"));
     }
 
     #[test]
