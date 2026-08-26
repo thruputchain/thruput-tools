@@ -546,8 +546,20 @@ fn run_cargo_metadata(command: &mut Command, print: &Print) -> Result<Vec<u8>, C
         .stderr
         .take()
         .expect("bug: child stderr is piped above");
-    let captured = crate::capture_cargo_stderr(stderr_pipe, relay).map_err(failed)?;
-    let status = child.wait().map_err(failed)?;
+    let captured = match crate::capture_cargo_stderr(stderr_pipe, relay) {
+        Ok(captured) => captured,
+        Err(error) => {
+            crate::stop_cargo(&mut child);
+            return Err(failed(error));
+        }
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            crate::stop_cargo(&mut child);
+            return Err(failed(error));
+        }
+    };
     if !status.success() {
         return Err(CliError::CargoMetadataFailed(
             String::from_utf8_lossy(&captured).trim().to_string(),

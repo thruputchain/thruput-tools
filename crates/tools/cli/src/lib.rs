@@ -76,6 +76,19 @@ pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command) {
     }
 }
 
+/// Stop and reap a cargo subprocess we can no longer follow.
+///
+/// Dropping a `Child` neither kills nor waits for it, so returning early from
+/// a post-spawn failure would leave cargo running unattended — still working
+/// the registry, still holding the package-cache lock — after the CLI has
+/// reported failure and exited. The next build would then wait on a lock held
+/// by a process nobody can see, which is the hang relaying cargo's output is
+/// meant to make impossible.
+pub(crate) fn stop_cargo(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Keep a copy of a cargo subprocess's stderr, relaying it to the user as it
 /// arrives when `relay` is set.
 ///
@@ -134,8 +147,20 @@ pub fn run_cargo(
             .stderr
             .take()
             .expect("bug: child stderr is piped above");
-        let captured = capture_cargo_stderr(stderr_pipe, true)?;
-        let status = child.wait()?;
+        let captured = match capture_cargo_stderr(stderr_pipe, true) {
+            Ok(captured) => captured,
+            Err(error) => {
+                stop_cargo(&mut child);
+                return Err(error.into());
+            }
+        };
+        let status = match child.wait() {
+            Ok(status) => status,
+            Err(error) => {
+                stop_cargo(&mut child);
+                return Err(error.into());
+            }
+        };
         if !status.success() {
             return Err(CliError::CargoFailedWithOutput {
                 code: status.code().unwrap_or(1),
