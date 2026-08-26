@@ -535,6 +535,13 @@ mod tests {
             panic!("bug: status tests should not load genesis")
         }
 
+        async fn schedulercoord_commit_genesis_ceremony(
+            &self,
+            _request: groundhog_scheduler::GenesisCeremonyRequest,
+        ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
+            panic!("bug: status tests should not commit a genesis ceremony")
+        }
+
         async fn schedcoord_lookup_transactions(
             &self,
             _arg0: TransactionHashBatch,

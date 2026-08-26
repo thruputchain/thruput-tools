@@ -967,6 +967,13 @@ mod tests {
             Ok(DbSchedResult::DbSchedResultOK)
         }
 
+        async fn schedulercoord_commit_genesis_ceremony(
+            &self,
+            _request: groundhog_scheduler::GenesisCeremonyRequest,
+        ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
+            Err(ProgramError::msg("not implemented in fake"))
+        }
+
         async fn schedcoord_lookup_transactions(
             &self,
             hashes: TransactionHashBatch,

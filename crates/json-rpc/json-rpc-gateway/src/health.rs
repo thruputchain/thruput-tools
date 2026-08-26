@@ -1996,6 +1996,13 @@ mod tests {
             panic!("health probe test should not load genesis")
         }
 
+        async fn schedulercoord_commit_genesis_ceremony(
+            &self,
+            _request: groundhog_scheduler::GenesisCeremonyRequest,
+        ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
+            panic!("health probe test should not commit a genesis ceremony")
+        }
+
         async fn schedcoord_lookup_transactions(
             &self,
             hashes: TransactionHashBatch,
