@@ -14,6 +14,9 @@ pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 2;
 /// Runtime manifest family emitted by hog-devnode.
 pub const HOGD_DEV_RUNTIME_MANIFEST_KIND: &str = "hogd-dev-runtime";
 
+/// Runtime manifest family emitted by chuckd hosted bootstrap.
+pub const HOSTED_DEVNET_RUNTIME_MANIFEST_KIND: &str = "hosted-devnet-runtime";
+
 /// Runtime role assigned to the fixed local faucet account.
 pub const BOOTSTRAP_ACCOUNT_ROLE_FAUCET: &str = "faucet";
 
@@ -27,7 +30,8 @@ pub const BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER: &str = "local_user";
 pub struct RuntimeManifest {
     /// Version of this JSON contract.
     pub schema_version: u32,
-    /// Producer family, for example [`HOGD_DEV_RUNTIME_MANIFEST_KIND`].
+    /// Producer family, for example [`HOGD_DEV_RUNTIME_MANIFEST_KIND`] or
+    /// [`HOSTED_DEVNET_RUNTIME_MANIFEST_KIND`].
     pub kind: String,
     /// Whether this process initialized a new chain or recovered a committed chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
