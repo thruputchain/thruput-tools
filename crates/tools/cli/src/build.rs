@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 
@@ -508,6 +508,70 @@ impl DependencyPackage {
     }
 }
 
+/// Run a `cargo metadata` call, relaying cargo's progress as it arrives.
+///
+/// `Command::output` withholds that progress until the call returns, which is
+/// what turned a registry outage into a build that printed nothing while
+/// cargo waited — retrying an unreachable index, or blocking on the
+/// package-cache lock, which it holds with no timeout at all. Relaying it
+/// keeps a slow or stalled registry legible while it happens, so the wait is
+/// the user's to end rather than something the build hides.
+///
+/// Deliberately not bounded by a deadline: cargo already times out its own
+/// requests, and a stall is indistinguishable from a slow link by the clock
+/// alone — a resolve that is merely crawling over bad wifi must not be
+/// failed out from under a build that would have finished.
+///
+/// Cargo's stdout is staged through a file rather than a pipe, because the
+/// metadata document runs to megabytes and a pipe nobody is draining would
+/// stop cargo mid-write.
+fn run_cargo_metadata(command: &mut Command, print: &Print) -> Result<Vec<u8>, CliError> {
+    fn failed(error: impl std::fmt::Display) -> CliError {
+        CliError::CargoMetadataFailed(error.to_string())
+    }
+
+    let staged_stdout = tempfile::NamedTempFile::new().map_err(failed)?;
+    let relay = !print.is_json() && !print.is_quiet();
+    if relay {
+        crate::keep_cargo_color(command);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(staged_stdout.reopen().map_err(failed)?)
+        .stderr(Stdio::piped());
+    print.trace_command(command);
+
+    let mut child = command.spawn().map_err(failed)?;
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .expect("bug: child stderr is piped above");
+    let captured = match crate::capture_cargo_stderr(stderr_pipe, relay) {
+        Ok(captured) => captured,
+        Err(error) => {
+            crate::stop_cargo(&mut child);
+            return Err(failed(error));
+        }
+    };
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            crate::stop_cargo(&mut child);
+            return Err(failed(error));
+        }
+    };
+    if !status.success() {
+        return Err(CliError::CargoMetadataFailed(
+            String::from_utf8_lossy(&captured).trim().to_string(),
+        ));
+    }
+
+    let mut reader = fs::File::open(staged_stdout.path()).map_err(failed)?;
+    let mut metadata = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut metadata).map_err(failed)?;
+    Ok(metadata)
+}
+
 /// Run `cargo metadata` over the resolved dependency graph.
 ///
 /// Deliberately a separate call from [`cargo_metadata_with_artifacts`], which
@@ -518,21 +582,16 @@ impl DependencyPackage {
 /// [`ManifestFlags`] explicitly: resolving the graph is exactly what those
 /// flags restrict, and dropping them here would let a `--locked` build's
 /// preflight rewrite the lockfile or an `--offline` build reach the network.
-fn cargo_metadata_with_deps(flags: ManifestFlags) -> Result<DependencyMetadata, CliError> {
+fn cargo_metadata_with_deps(
+    flags: ManifestFlags,
+    print: &Print,
+) -> Result<DependencyMetadata, CliError> {
     let mut command = Command::new("cargo");
     command.arg("metadata").arg("--format-version").arg("1");
     flags.apply_to_command(&mut command);
 
-    let output = command
-        .output()
-        .map_err(|e| CliError::CargoMetadataFailed(e.to_string()))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::CargoMetadataFailed(stderr.trim().to_string()));
-    }
-
-    serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
+    let stdout = run_cargo_metadata(&mut command, print)?;
+    serde_json::from_slice(&stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
 
 /// Refuse a contract whose SDK writes a raw spec format this CLI cannot read.
@@ -606,12 +665,18 @@ fn check_dependency_raw_spec_format(
 /// Groundhog contract and is left alone. An unavailable dependency graph
 /// warns rather than refuses, so an offline or vendored build still
 /// completes: only a format this build genuinely cannot read is a hard error.
+///
+/// This is the first thing a build does that reads the registry, so it is
+/// also where a registry problem first shows up. Cargo says what it is
+/// waiting on, and this relays it rather than deciding on the user's behalf
+/// how long that wait is allowed to be.
 fn check_contract_raw_spec_format(
     pkg_name: &str,
     cargo_args: &[String],
     print: &Print,
 ) -> Result<(), CliError> {
-    match cargo_metadata_with_deps(ManifestFlags::from_cargo_args(cargo_args)) {
+    print.status("Resolving the dependency graph...");
+    match cargo_metadata_with_deps(ManifestFlags::from_cargo_args(cargo_args), print) {
         Ok(metadata) => check_dependency_raw_spec_format(&metadata, pkg_name),
         Err(error) => {
             print.warn(format_args!(

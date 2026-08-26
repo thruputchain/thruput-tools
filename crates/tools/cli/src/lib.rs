@@ -64,6 +64,64 @@ pub fn require_cargo() -> Result<(), CliError> {
     Ok(())
 }
 
+/// Ask cargo for color back when its output is piped through us.
+///
+/// Piping stderr is what lets cargo's output be relayed and kept at the same
+/// time, and it is also what makes cargo drop color, so restore it when our
+/// own stderr is a terminal and the user has not already chosen.
+pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command) {
+    use std::io::IsTerminal;
+    if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
+        cmd.env("CARGO_TERM_COLOR", "always");
+    }
+}
+
+/// Stop and reap a cargo subprocess we can no longer follow.
+///
+/// Dropping a `Child` neither kills nor waits for it, so returning early from
+/// a post-spawn failure would leave cargo running unattended — still working
+/// the registry, still holding the package-cache lock — after the CLI has
+/// reported failure and exited. The next build would then wait on a lock held
+/// by a process nobody can see, which is the hang relaying cargo's output is
+/// meant to make impossible.
+///
+/// Signals cargo itself, not the tree beneath it. Cargo runs in the CLI's own
+/// process group so that a terminal's Ctrl-C reaches it — the way a user ends
+/// a wait this code deliberately does not bound. Isolating cargo in a group
+/// of its own would let its children be killed with it, but that interrupt
+/// would no longer arrive, which is the worse trade: cargo owns the locks
+/// that matter and killing it releases them, while a compiler left over from
+/// an interrupted build finishes on its own.
+pub(crate) fn stop_cargo(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Keep a copy of a cargo subprocess's stderr, relaying it to the user as it
+/// arrives when `relay` is set.
+///
+/// Reading to end is also what keeps cargo running — a pipe nobody drains
+/// stops it mid-write — so this must run before the child is waited on. The
+/// copy is what lets a failure report what cargo actually said.
+pub(crate) fn capture_cargo_stderr(
+    mut pipe: impl std::io::Read,
+    relay: bool,
+) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut captured = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = pipe.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(captured);
+        }
+        if relay {
+            std::io::stderr().write_all(&chunk[..read])?;
+        }
+        captured.extend_from_slice(&chunk[..read]);
+    }
+}
+
 /// Run a cargo subprocess, capturing output when JSON mode
 /// is active and streaming to the terminal otherwise.
 pub fn run_cargo(
@@ -90,27 +148,27 @@ pub fn run_cargo(
         // example a link error naming the Groundhog linker script). Piping
         // stderr would otherwise turn cargo's color off, so ask for it back
         // when our own stderr is a terminal and the user has not chosen.
-        use std::io::{IsTerminal, Read, Write};
-        if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
-            cmd.env("CARGO_TERM_COLOR", "always");
-        }
+        keep_cargo_color(cmd);
         cmd.stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn()?;
-        let mut stderr_pipe = child
+        let stderr_pipe = child
             .stderr
             .take()
             .expect("bug: child stderr is piped above");
-        let mut captured = Vec::new();
-        let mut chunk = [0u8; 8192];
-        loop {
-            let read = stderr_pipe.read(&mut chunk)?;
-            if read == 0 {
-                break;
+        let captured = match capture_cargo_stderr(stderr_pipe, true) {
+            Ok(captured) => captured,
+            Err(error) => {
+                stop_cargo(&mut child);
+                return Err(error.into());
             }
-            std::io::stderr().write_all(&chunk[..read])?;
-            captured.extend_from_slice(&chunk[..read]);
-        }
-        let status = child.wait()?;
+        };
+        let status = match child.wait() {
+            Ok(status) => status,
+            Err(error) => {
+                stop_cargo(&mut child);
+                return Err(error.into());
+            }
+        };
         if !status.success() {
             return Err(CliError::CargoFailedWithOutput {
                 code: status.code().unwrap_or(1),
