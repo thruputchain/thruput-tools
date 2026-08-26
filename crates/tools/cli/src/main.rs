@@ -285,8 +285,8 @@ enum Command {
     },
     /// Request HOG funding for a wallet
     Airdrop {
-        /// Wallet name, dev-N wallet, or direct 0x-prefixed wallet address
-        recipient: String,
+        /// Wallet name, dev-N wallet, or direct address (default: effective wallet)
+        recipient: Option<String>,
         /// Amount in HOG, with up to 7 decimal places
         #[arg(long)]
         amount: Option<String>,
@@ -304,8 +304,8 @@ enum Command {
     },
     /// Read native HOG balance for an address, wallet, contract, or dev account
     Balance {
-        /// Wallet name, contract alias, dev-N account, or direct 0x-prefixed address
-        target: String,
+        /// Wallet name, contract alias, dev-N account, or address (default: effective wallet)
+        target: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -746,8 +746,8 @@ enum TxCommand {
                        Receipts are not fetched; inspect selected hashes with `groundhog tx show`."
     )]
     List {
-        /// Wallet name, contract alias, dev-N account, or direct address
-        target: String,
+        /// Wallet name, contract alias, dev-N account, or address (default: effective wallet)
+        target: Option<String>,
         /// Number of transaction references to request (default: 50)
         #[arg(long, allow_hyphen_values = true)]
         limit: Option<String>,
@@ -1197,7 +1197,7 @@ fn main() {
             profile,
             target_args,
         } => groundhog_cli::airdrop::run(
-            &recipient,
+            recipient.as_deref(),
             amount.as_deref(),
             dry_run,
             yes,
@@ -1214,7 +1214,7 @@ fn main() {
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
                 groundhog_cli::balance::run(
-                    &target,
+                    target.as_deref(),
                     &cwd,
                     profile.as_deref(),
                     &target_args.into(),
@@ -1387,7 +1387,7 @@ fn main() {
                 .map_err(groundhog_cli::CliError::Io)
                 .and_then(|cwd| {
                     groundhog_cli::tx::list(
-                        &target,
+                        target.as_deref(),
                         limit.as_deref(),
                         cursor.as_deref(),
                         &cwd,
@@ -1930,7 +1930,7 @@ mod tests {
                 profile,
                 ..
             } => {
-                assert_eq!(recipient, "alice");
+                assert_eq!(recipient.as_deref(), Some("alice"));
                 assert_eq!(amount.as_deref(), Some("1.5"));
                 assert!(dry_run);
                 assert_eq!(profile, None);
@@ -2050,7 +2050,7 @@ mod tests {
                         target_args,
                     },
             } => {
-                assert_eq!(target, "alice");
+                assert_eq!(target.as_deref(), Some("alice"));
                 assert_eq!(limit.as_deref(), Some("25"));
                 assert_eq!(cursor.as_deref(), Some("0xaabb"));
                 assert_eq!(profile.as_deref(), Some("devnet"));

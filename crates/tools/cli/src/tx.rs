@@ -9,7 +9,7 @@ use groundhog_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
 };
 
-use crate::account_resolution::resolve_address_target;
+use crate::account_resolution::resolve_address_target_or_default_wallet;
 use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
@@ -77,7 +77,7 @@ pub fn show(
 /// List one page of root-invocation transaction history for an address.
 #[expect(clippy::too_many_arguments)]
 pub fn list(
-    target_input: &str,
+    target_input: Option<&str>,
     limit_input: Option<&str>,
     cursor_input: Option<&str>,
     project_start: &Path,
@@ -94,7 +94,7 @@ pub fn list(
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?
         .to_owned();
-    let address = resolve_address_target(&profile, target_input)?;
+    let (target_input, address) = resolve_address_target_or_default_wallet(&profile, target_input)?;
     let address_hex = format_contract_address(&address);
 
     let query = AddressTransactionQuery {
@@ -109,7 +109,7 @@ pub fn list(
     let page = rt.block_on(fetch_transaction_page(&rpc_url, query))?;
 
     if !print.is_json() {
-        print_list(target_input, &address_hex, &page, print);
+        print_list(&target_input, &address_hex, &page, print);
     }
     print.json(&CommandResult::with_warnings(
         cmd,
@@ -125,7 +125,7 @@ pub fn list(
             schema_version: TX_LIST_JSON_SCHEMA_VERSION,
             profile: profile.name,
             rpc_url,
-            target_input: target_input.to_owned(),
+            target_input,
             address: ContractAddress::from(address),
             refs: page.refs,
             cursor: page.cursor,

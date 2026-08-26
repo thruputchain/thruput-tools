@@ -4244,7 +4244,7 @@ fn wallet_rm_rejects_dangling_same_named_inherited_default() {
 }
 
 #[test]
-fn airdrop_dry_run_json_outputs_prepared_transaction() {
+fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -4258,21 +4258,14 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_wallet = \"alice\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
     .unwrap();
 
     let output = groundhog()
-        .args([
-            "--json",
-            "airdrop",
-            "alice",
-            "--amount",
-            "1.25",
-            "--dry-run",
-        ])
+        .args(["--json", "airdrop", "--amount", "1.25", "--dry-run"])
         .current_dir(&project)
         .output()
         .unwrap();
@@ -6645,7 +6638,7 @@ fn storage_json_reads_latest_item() {
 }
 
 #[test]
-fn balance_json_reads_native_hog_balance() {
+fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -6656,13 +6649,13 @@ fn balance_json_reads_native_hog_balance() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_wallet = \"alice\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
 
     let output = groundhog()
-        .args(["--json", "balance", "alice"])
+        .args(["--json", "balance"])
         .current_dir(&project)
         .output()
         .unwrap();
@@ -8932,7 +8925,7 @@ fn tx_list_help_describes_one_page_root_invocation_history() {
 }
 
 #[test]
-fn tx_list_json_uses_wallet_first_resolution_and_default_query() {
+fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     let tmp = TempDir::new().unwrap();
     let wallet_address = format!("0x{}", "11".repeat(32));
     let contract_address = format!("0x{}", "22".repeat(32));
@@ -8940,7 +8933,7 @@ fn tx_list_json_uses_wallet_first_resolution_and_default_query() {
     std::fs::write(
         tmp.path().join("groundhog.toml"),
         format!(
-            "[profile.devnet]\nrpc_url = \"http://127.0.0.1:1\"\n\
+            "[profile.devnet]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_wallet = \"alice\"\n\
              [profile.devnet.wallets.alice]\naddress = \"{wallet_address}\"\nowner_public_key = \"{owner}\"\n\
              [profile.devnet.contracts]\nalice = \"{contract_address}\"\n"
         ),
@@ -8971,7 +8964,6 @@ fn tx_list_json_uses_wallet_first_resolution_and_default_query() {
             "--json",
             "tx",
             "list",
-            "alice",
             "--profile",
             "devnet",
             "--rpc-url",
