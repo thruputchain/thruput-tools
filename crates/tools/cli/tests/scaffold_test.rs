@@ -107,13 +107,19 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    // Must be an SDK whose raw spec format this CLI reads, or `groundhog new`
-    // scaffolds a project that `groundhog build` refuses at the preflight.
-    assert!(cargo.contains(r#"sdk = { version = "0.23.1", registry = "groundhog" }"#));
+    // The version pins live once, in the `scaffold` constants; here we assert
+    // they were substituted (no placeholder survives below) and land on the
+    // right dependencies.
+    assert!(cargo.contains(&format!(
+        r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
+        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
+    )));
     assert!(cargo.contains("groundhog-integration-test = ["));
-    // Generated projects resolve outside this workspace, so this must name a
-    // client version that is already available in the Groundhog registry.
-    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.10.2""#));
+    assert!(cargo.contains(&format!(
+        r#"groundhog-json-rpc-client = {{ version = "{}""#,
+        groundhog_cli::scaffold::SCAFFOLD_JSON_RPC_CLIENT_VERSION
+    )));
+    assert!(!cargo.contains("{{"), "unsubstituted template placeholder");
     assert!(cargo.contains("optional = true"));
     assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
@@ -167,8 +173,16 @@ fn scaffold_counter_creates_expected_files() {
     assert_scaffold_cargo_config(&dir);
 
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
+    assert!(toolchain.contains(&format!(
+        "channel = \"{}\"",
+        groundhog_cli::scaffold::SCAFFOLD_TOOLCHAIN_CHANNEL
+    )));
     assert!(toolchain.contains(r#"targets = ["riscv32im-unknown-none-elf"]"#));
     assert!(!toolchain.contains("wasm"));
+    assert!(
+        !toolchain.contains("{{"),
+        "unsubstituted template placeholder"
+    );
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));

@@ -31,10 +31,10 @@ dev = ["sdk/dev"]
 groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 [dependencies]
-sdk = { version = "0.23.1", registry = "groundhog" }
+sdk = { version = "{{SDK_VERSION}}", registry = "groundhog" }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
-groundhog-json-rpc-client = { version = "0.10.2", registry = "groundhog", optional = true }
+groundhog-json-rpc-client = { version = "{{JSON_RPC_CLIENT_VERSION}}", registry = "groundhog", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 # The self-dependency is deliberate: it turns the `dev` feature (and so
