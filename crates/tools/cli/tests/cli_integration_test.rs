@@ -589,6 +589,40 @@ fn version_flag_does_not_claim_mismatched_bundle() {
             source_commit.map_or("unavailable", |commit| &commit[..8])
         )
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_reason = source_commit.map_or_else(
+        || "binary does not carry a source commit for groundhog-rpc".to_owned(),
+        |commit| {
+            format!(
+                "bundle manifest expects groundhog-rpc source commit not-this-build, binary reports {commit}"
+            )
+        },
+    );
+    assert!(
+        stderr.contains(&format!(
+            "warning: bundle manifest mismatch: {expected_reason}"
+        )),
+        "missing precise mismatch diagnostic; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn bundle_mismatch_does_not_corrupt_json_error_output() {
+    let directory = TempDir::new().unwrap();
+    let output = groundhog()
+        .env(
+            "GROUNDHOG_BUNDLE_MANIFEST",
+            directory.path().join("missing-bundle-manifest.json"),
+        )
+        .args(["--json", "config", "get", "missing"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr)
+        .expect("mismatched bundle must not add plain text to JSON stderr");
+    assert_eq!(stderr["ok"], false);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("bundle manifest mismatch"));
 }
 
 #[test]
@@ -7907,12 +7941,9 @@ fn completion_json_outputs_structured_payload() {
     assert_eq!(stdout["command"], "completion");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
     assert_eq!(stdout["data"]["shell"], "bash");
-    assert!(
-        stdout["data"]["script"]
-            .as_str()
-            .unwrap()
-            .contains("groundhog")
-    );
+    let script = stdout["data"]["script"].as_str().unwrap();
+    assert!(script.contains("groundhog"));
+    assert!(script.contains("--version"));
 }
 
 #[test]

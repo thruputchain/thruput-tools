@@ -1705,6 +1705,7 @@ name = "groundhog-node-supervisor"
 version = "0.10.5"
 dependencies = [
  "async-trait",
+ "groundhog-bundle-identity",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",

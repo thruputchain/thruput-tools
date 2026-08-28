@@ -57,6 +57,16 @@ pub mod wallet;
 pub use error::CliError;
 pub use print::Print;
 
+const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
+
+/// Discover the validated release identity for the `groundhog` client binary.
+pub fn bundle_identity() -> groundhog_bundle_identity::BundleIdentity {
+    groundhog_bundle_identity::BundleIdentity::discover(
+        groundhog_bundle_identity::BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
+        BUILD_VERSION,
+    )
+}
+
 /// Check that `cargo` is on PATH, returning a helpful error
 /// if not found.
 pub fn require_cargo() -> Result<(), CliError> {

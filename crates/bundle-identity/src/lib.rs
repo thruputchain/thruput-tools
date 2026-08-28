@@ -122,6 +122,11 @@ impl BundleIdentity {
             BundleStatus::Unbundled | BundleStatus::Matched(_) => None,
         }
     }
+
+    /// Return a mismatch diagnostic with terminal controls rendered as visible escapes.
+    pub fn terminal_safe_mismatch_reason(&self) -> Option<String> {
+        self.mismatch_reason().map(terminal_safe)
+    }
 }
 
 impl fmt::Display for BundleIdentity {
@@ -387,6 +392,27 @@ fn abbreviate_commit(commit: &str) -> &str {
     commit.get(..8).unwrap_or(commit)
 }
 
+fn terminal_safe(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -486,6 +512,20 @@ mod tests {
 
         assert_eq!(identity.to_string(), "0.10.4 (commit 373bec4b)");
         assert_eq!(identity.release_version(), None);
+    }
+
+    #[test]
+    fn mismatch_diagnostic_escapes_terminal_controls() {
+        let (_directory, path) = write_manifest("0.10.4", "wrong\n\u{1b}\u{202e}commit");
+        let identity = BundleIdentity::from_manifest_path(client_subject(), build(), &path);
+
+        let diagnostic = identity
+            .terminal_safe_mismatch_reason()
+            .expect("bug: source commit mismatch should have a diagnostic");
+        assert!(diagnostic.contains(r"wrong\n\u{1b}\u{202e}commit"));
+        assert!(!diagnostic.contains('\n'));
+        assert!(!diagnostic.contains('\u{1b}'));
+        assert!(!diagnostic.contains('\u{202e}'));
     }
 
     #[test]

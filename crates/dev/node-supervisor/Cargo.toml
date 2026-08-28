@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+groundhog-bundle-identity = { workspace = true }
 groundhog-json-rpc-api = { workspace = true }
 groundhog-json-rpc-types = { workspace = true }
 groundhog-json-rpc-server = { workspace = true }

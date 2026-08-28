@@ -97,6 +97,37 @@ fn version_flag_reports_validated_release_identity() {
 }
 
 #[test]
+fn version_flag_reports_precise_manifest_mismatch_on_stderr() {
+    let (_directory, manifest_path, _digest) = write_manifest("not-this-build");
+    let output = Command::new(env!("CARGO_BIN_EXE_hog-gateway"))
+        .arg("--version")
+        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest_path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("bundle manifest mismatch"),
+        "stdout should retain the stable summary"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected_reason = embedded_source_commit().map_or_else(
+        || "binary does not carry a source commit for groundhog-rpc".to_owned(),
+        |commit| {
+            format!(
+                "bundle manifest expects groundhog-rpc source commit not-this-build, binary reports {commit}"
+            )
+        },
+    );
+    assert!(
+        stderr.contains(&format!(
+            "warning: bundle manifest mismatch: {expected_reason}"
+        )),
+        "missing precise mismatch diagnostic; stderr: {stderr}"
+    );
+}
+
+#[test]
 fn startup_logs_validated_release_identity() {
     let Some(source_commit) = embedded_source_commit() else {
         return;

@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_json_rpc_types::bootstrap_manifest::{
     BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestDevWallet,
@@ -141,6 +142,8 @@ pub struct NodeSupervisorConfig {
     pub block_driver: BlockDriverConfig,
     /// Optional local airdrop behavior and resource bounds.
     pub local_airdrop: LocalAirdropConfig,
+    /// Validated release identity supplied by the binary embedding the supervisor.
+    pub bundle_identity: Option<BundleIdentity>,
 }
 
 impl Default for NodeSupervisorConfig {
@@ -154,6 +157,7 @@ impl Default for NodeSupervisorConfig {
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
             block_driver: BlockDriverConfig::default(),
             local_airdrop: LocalAirdropConfig::default(),
+            bundle_identity: None,
         }
     }
 }
@@ -223,6 +227,13 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub const fn with_local_airdrop(mut self, local_airdrop: LocalAirdropConfig) -> Self {
         self.local_airdrop = local_airdrop;
+        self
+    }
+
+    /// Return a copy bound to the embedding binary's validated release identity.
+    #[must_use]
+    pub fn with_bundle_identity(mut self, bundle_identity: BundleIdentity) -> Self {
+        self.bundle_identity = Some(bundle_identity);
         self
     }
 }

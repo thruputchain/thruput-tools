@@ -16,7 +16,7 @@ mod tip_coalescer;
 
 use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
@@ -33,14 +33,7 @@ const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
-#[command(
-    name = "hog-gateway",
-    version = BundleIdentity::discover(
-        BundleSubject::component("groundhog-rpc"),
-        BUILD_VERSION,
-    ).to_string(),
-    about = "Groundhog JSON-RPC gateway"
-)]
+#[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
     /// Path to TOML config file
     #[arg(long)]
@@ -128,9 +121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .from_env_lossy();
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let cli = Cli::parse();
     let bundle_identity =
         BundleIdentity::discover(BundleSubject::component("groundhog-rpc"), BUILD_VERSION);
+    let cli = parse_cli(&bundle_identity);
 
     tracing::info!(
         component_version = bundle_identity.build_version().crate_version(),
@@ -265,6 +258,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     shutdown_result?;
 
     Ok(())
+}
+
+fn cli_command(bundle_identity: &BundleIdentity) -> clap::Command {
+    Cli::command().version(bundle_identity.to_string())
+}
+
+fn parse_cli(bundle_identity: &BundleIdentity) -> Cli {
+    let matches = match cli_command(bundle_identity).try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => {
+            if error.kind() == clap::error::ErrorKind::DisplayVersion
+                && let Some(reason) = bundle_identity.terminal_safe_mismatch_reason()
+            {
+                eprintln!("warning: bundle manifest mismatch: {reason}");
+            }
+            error.exit()
+        }
+    };
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
 }
 
 fn apply_identity_cli_overrides(config: &mut GatewayConfig, cli: &Cli) {

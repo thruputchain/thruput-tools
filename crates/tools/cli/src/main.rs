@@ -1,20 +1,14 @@
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::Print;
 use groundhog_cli::result::CommandResult;
 use serde_json::json;
 use std::path::PathBuf;
 
-const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
-
 #[derive(Parser)]
 #[command(
     name = "groundhog",
-    about = "Groundhog smart contract development tools",
-    version = groundhog_bundle_identity::BundleIdentity::discover(
-        groundhog_bundle_identity::BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
-        BUILD_VERSION,
-    ).to_string()
+    about = "Groundhog smart contract development tools"
 )]
 struct Cli {
     #[command(flatten)]
@@ -945,9 +939,29 @@ impl WalletCommand {
     }
 }
 
+fn cli_command(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> clap::Command {
+    Cli::command().version(bundle_identity.to_string())
+}
+
+fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli {
+    let matches = match cli_command(bundle_identity).try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => {
+            if error.kind() == clap::error::ErrorKind::DisplayVersion
+                && let Some(reason) = bundle_identity.terminal_safe_mismatch_reason()
+            {
+                eprintln!("warning: bundle manifest mismatch: {reason}");
+            }
+            error.exit()
+        }
+    };
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
-    let cli = Cli::parse();
+    let bundle_identity = groundhog_cli::bundle_identity();
+    let cli = parse_cli(&bundle_identity);
     let print = Print::new(cli.global.quiet, cli.global.json)
         .with_command_trace(cli.global.show_cargo_commands);
     let cmd_name = cli.command.command_name();
@@ -1303,6 +1317,7 @@ fn main() {
             options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
             options.rpc_max_connections = rpc_max_connections;
             options.ramdb_bytes = ramdb_bytes;
+            options.bundle_identity = Some(bundle_identity.clone());
             groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
         }
         Command::Chain { command } => match command {
@@ -1464,7 +1479,12 @@ fn main() {
         Command::Completion { shell } => {
             let mut output = Vec::new();
             let shell_name = shell.to_string();
-            clap_complete::generate(shell, &mut Cli::command(), "groundhog", &mut output);
+            clap_complete::generate(
+                shell,
+                &mut cli_command(&bundle_identity),
+                "groundhog",
+                &mut output,
+            );
 
             if print.is_json() {
                 print.json(&CommandResult::new(
