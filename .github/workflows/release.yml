@@ -31,7 +31,7 @@ jobs:
             machine: x86_64
             platform: linux
             release_target: x86_64-unknown-linux-gnu
-            runner: namespace-profile-chuckd-rs-linux
+            runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
             release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
           - architecture: arm64
@@ -211,7 +211,7 @@ jobs:
 
   assemble:
     needs: build
-    runs-on: namespace-profile-chuckd-rs-linux
+    runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
     steps:
@@ -256,7 +256,7 @@ jobs:
   publish:
     if: github.event_name != 'pull_request'
     needs: assemble
-    runs-on: namespace-profile-chuckd-rs-linux
+    runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: write
     steps:
