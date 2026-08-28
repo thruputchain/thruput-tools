@@ -154,7 +154,6 @@ pub fn build_rv32_project(
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
     check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
-    let rv32_feature = rv32_entrypoints_feature(&metadata, pkg_name);
     let package_root = metadata
         .packages
         .iter()
@@ -191,7 +190,7 @@ pub fn build_rv32_project(
         .arg("--release")
         .arg("--no-default-features")
         .arg("--features")
-        .arg(rv32_feature)
+        .arg(RV32_ENTRYPOINTS_FEATURE)
         .arg("--target")
         .arg(RV32_TARGET_TRIPLE)
         .arg("-p")
@@ -251,12 +250,7 @@ pub fn build_rv32_project(
             memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
-            build_flags: Some(rv32_build_flags(
-                pkg_name,
-                rv32_feature,
-                cargo_args,
-                stack_size,
-            )),
+            build_flags: Some(rv32_build_flags(pkg_name, cargo_args, stack_size)),
         });
     fs::write(&rv32, &lowered.artifact)?;
     if let Err(error) = fs::write(&lower_metadata, lower_metadata_doc) {
@@ -310,29 +304,9 @@ pub fn build_rv32_project(
 }
 
 /// The feature the rv32 build enables so the `#[contract]` macro emits guest
-/// entrypoints and the bin wrapper target becomes buildable.
-///
-/// `entrypoints` is the canonical name (it is what the macro's cfg matches and
-/// what current scaffolds declare). Projects scaffolded while the CLI also
-/// built WASM gate their bin on a `rv32-entrypoints` wrapper feature instead,
-/// so prefer that name whenever the manifest still declares it.
-fn rv32_entrypoints_feature(metadata: &CargoMetadata, pkg_name: &str) -> &'static str {
-    metadata
-        .packages
-        .iter()
-        .find(|package| package.name == pkg_name)
-        .and_then(|package| manifest_has_feature(&package.manifest_path, "rv32-entrypoints"))
-        .unwrap_or("entrypoints")
-}
-
-fn manifest_has_feature(manifest_path: &Path, feature: &str) -> Option<&'static str> {
-    let contents = fs::read_to_string(manifest_path).ok()?;
-    let manifest = toml::from_str::<toml::Value>(&contents).ok()?;
-    manifest
-        .get("features")
-        .and_then(|features| features.get(feature))
-        .map(|_| "rv32-entrypoints")
-}
+/// entrypoints and the bin wrapper target becomes buildable. The macro's cfg
+/// matches this literal name, so it is not configurable per project.
+const RV32_ENTRYPOINTS_FEATURE: &str = "entrypoints";
 
 /// The cargo invocation recorded in the `.rv32.json` sidecar.
 ///
@@ -341,12 +315,7 @@ fn manifest_has_feature(manifest_path: &Path, feature: &str) -> Option<&'static 
 /// recorded command reproduces the artifact without embedding the absolute
 /// path of the machine that built it. It cannot be omitted: the overlay
 /// carries `build-std`, which changes codegen.
-fn rv32_build_flags(
-    pkg_name: &str,
-    rv32_feature: &str,
-    cargo_args: &[String],
-    stack_size: Option<u32>,
-) -> String {
+fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], stack_size: Option<u32>) -> String {
     let mut flags = vec![
         "cargo".to_string(),
         "--config".to_string(),
@@ -360,7 +329,7 @@ fn rv32_build_flags(
         "--release".to_string(),
         "--no-default-features".to_string(),
         "--features".to_string(),
-        rv32_feature.to_string(),
+        RV32_ENTRYPOINTS_FEATURE.to_string(),
         "--target".to_string(),
         RV32_TARGET_TRIPLE.to_string(),
         "-p".to_string(),
@@ -879,11 +848,9 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CargoMetadata, MetadataPackage, Rv32ConfigCheck, classify_rv32_config_probe,
-        member_leftover_cargo_config, parse_stack_size, rv32_entrypoints_feature,
-        rv32_linker_script, stack_size_defsym_ignored,
+        Rv32ConfigCheck, classify_rv32_config_probe, member_leftover_cargo_config,
+        parse_stack_size, rv32_linker_script, stack_size_defsym_ignored,
     };
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn tokens(raw: &[&str]) -> Vec<String> {
@@ -1029,51 +996,6 @@ mod tests {
         assert!(!stack_size_defsym_ignored(0x7000, 4, 0x6000));
         // No stored data at all: nothing to infer, stay quiet.
         assert!(!stack_size_defsym_ignored(0, 0, 0x6000));
-    }
-
-    #[test]
-    fn rv32_feature_prefers_legacy_wrapper_feature_when_declared() {
-        let tmp = TempDir::new().expect("bug: tempdir should be created");
-        let manifest = tmp.path().join("Cargo.toml");
-        std::fs::write(
-            &manifest,
-            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
-        )
-        .expect("bug: manifest should be written");
-        let metadata = metadata_for(manifest);
-
-        assert_eq!(
-            rv32_entrypoints_feature(&metadata, "demo"),
-            "rv32-entrypoints"
-        );
-    }
-
-    #[test]
-    fn rv32_feature_uses_entrypoints_for_current_manifests() {
-        let tmp = TempDir::new().expect("bug: tempdir should be created");
-        let manifest = tmp.path().join("Cargo.toml");
-        std::fs::write(
-            &manifest,
-            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
-        )
-        .expect("bug: manifest should be written");
-        let metadata = metadata_for(manifest);
-
-        assert_eq!(rv32_entrypoints_feature(&metadata, "demo"), "entrypoints");
-    }
-
-    fn metadata_for(manifest_path: PathBuf) -> CargoMetadata {
-        CargoMetadata {
-            workspace_root: manifest_path
-                .parent()
-                .expect("bug: manifest should have parent")
-                .to_path_buf(),
-            target_directory: PathBuf::from("target"),
-            packages: vec![MetadataPackage {
-                name: "demo".into(),
-                manifest_path,
-            }],
-        }
     }
 }
 
