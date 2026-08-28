@@ -309,6 +309,13 @@ pub fn build_rv32_project(
     })
 }
 
+/// The feature the rv32 build enables so the `#[contract]` macro emits guest
+/// entrypoints and the bin wrapper target becomes buildable.
+///
+/// `entrypoints` is the canonical name (it is what the macro's cfg matches and
+/// what current scaffolds declare). Projects scaffolded while the CLI also
+/// built WASM gate their bin on a `rv32-entrypoints` wrapper feature instead,
+/// so prefer that name whenever the manifest still declares it.
 fn rv32_entrypoints_feature(metadata: &CargoMetadata, pkg_name: &str) -> &'static str {
     metadata
         .packages
@@ -1025,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn rv32_feature_prefers_new_wrapper_feature_when_present() {
+    fn rv32_feature_prefers_legacy_wrapper_feature_when_declared() {
         let tmp = TempDir::new().expect("bug: tempdir should be created");
         let manifest = tmp.path().join("Cargo.toml");
         std::fs::write(
@@ -1042,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn rv32_feature_falls_back_for_legacy_entrypoints_only_manifests() {
+    fn rv32_feature_uses_entrypoints_for_current_manifests() {
         let tmp = TempDir::new().expect("bug: tempdir should be created");
         let manifest = tmp.path().join("Cargo.toml");
         std::fs::write(

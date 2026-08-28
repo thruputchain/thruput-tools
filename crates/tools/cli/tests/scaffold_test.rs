@@ -124,8 +124,14 @@ fn scaffold_counter_creates_expected_files() {
     // `release/<snake_name>`.
     assert!(cargo.contains("[[bin]]"));
     assert!(cargo.contains(r#"name = "my_counter""#));
-    assert!(cargo.contains(r#"rv32-entrypoints = ["entrypoints"]"#));
-    assert!(cargo.contains(r#"required-features = ["rv32-entrypoints"]"#));
+    // `entrypoints` is the name the #[contract] macro's cfg matches; the
+    // WASM-era `rv32-entrypoints` wrapper is gone from new scaffolds, and
+    // `dev` must not be a default feature — a dependent crate would drag
+    // `sdk/dev` (std) into guest builds through feature unification.
+    assert!(cargo.contains(r#"required-features = ["entrypoints"]"#));
+    assert!(!cargo.contains("rv32-entrypoints"));
+    assert!(!cargo.contains("default = "));
+    assert!(!cargo.contains("cdylib"));
     // The host test harness must not try to link the no_std bin when the
     // entrypoints feature is enabled.
     assert!(cargo.contains("test = false"));
