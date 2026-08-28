@@ -343,11 +343,11 @@ mod tests {
 
     use async_trait::async_trait;
     use groundhog_indexer::{
-        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPage, EventQuery,
-        IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
+        EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        TransactionPage, TransactionQuery, TransactionRefPage, TxInfoOutcome,
+        TransactionPageResult, TransactionQuery, TransactionRefPageResult, TxInfoOutcome,
     };
     use groundhog_scheduler::{
         ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult,
@@ -420,28 +420,28 @@ mod tests {
             panic!("bug: status tests should not query blocks")
         }
 
-        async fn get_events(&self, _arg0: EventQuery) -> Result<EventPage, ProgramError> {
+        async fn get_events(&self, _arg0: EventQuery) -> Result<EventPageResult, ProgramError> {
             panic!("bug: status tests should not query events")
         }
 
         async fn get_transactions(
             &self,
             _arg0: TransactionQuery,
-        ) -> Result<TransactionPage, ProgramError> {
+        ) -> Result<TransactionPageResult, ProgramError> {
             panic!("bug: status tests should not query transactions")
         }
 
         async fn get_transactions_by_address(
             &self,
             _arg0: AddressTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("bug: status tests should not query transactions by address")
         }
 
         async fn get_transactions_by_block(
             &self,
             _arg0: BlockTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("bug: status tests should not query transactions by block")
         }
     }

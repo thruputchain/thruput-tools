@@ -924,7 +924,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
         assert_eq!(
             serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
-            "0xffad887bb79d1ccb9d42920cdcb1bb4c80f8cb49ec42d85b71282ea208b02a2f"
+            "0xe0b0468f28980b4982a63bea1018c0ec2bb12e8bd41b5f43dd1ac5fefb31cfe9"
         );
 
         let airdrop_error = client

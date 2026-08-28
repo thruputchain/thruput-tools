@@ -833,10 +833,10 @@ mod tests {
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
     use groundhog_indexer::{
-        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery,
-        EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
-        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoResult,
+        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
+        EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
+        TransactionQuery, TransactionRefPageResult, TxInfoResult,
     };
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
@@ -948,28 +948,28 @@ mod tests {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
-        async fn get_events(&self, _arg0: EventQuery) -> Result<IdxEventPage, ProgramError> {
+        async fn get_events(&self, _arg0: EventQuery) -> Result<EventPageResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
         async fn get_transactions(
             &self,
             _arg0: TransactionQuery,
-        ) -> Result<IdxTransactionPage, ProgramError> {
+        ) -> Result<TransactionPageResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
         async fn get_transactions_by_address(
             &self,
             _arg0: AddressTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
         async fn get_transactions_by_block(
             &self,
             _arg0: BlockTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
     }
