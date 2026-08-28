@@ -38,8 +38,32 @@ fn write_opaque_rv32_artifact(root: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
+fn write_bundle_manifest(path: &std::path::Path, version: &str, source_commit: &str) {
+    use sha2::{Digest, Sha256};
+
+    let canonical = format!(
+        "{{\"bundle\":{{\"version\":\"0.1.25-rc.4\"}},\"clients\":{{\"groundhog\":{{\"assetRole\":\"cli\",\"component\":\"groundhog-rpc\",\"sourceCommit\":\"{source_commit}\",\"version\":\"{version}\"}}}},\"components\":{{\"groundhog-rpc\":{{\"active\":true,\"sourceCommit\":\"{source_commit}\",\"version\":\"{version}\"}}}},\"schema\":\"groundhog-bundle-v1\"}}\n"
+    );
+    let digest = format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    );
+    let mut manifest: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+    manifest["bundle"]["manifestDigest"] = serde_json::Value::String(digest);
+    std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
+fn embedded_source_commit() -> Option<&'static str> {
+    let commit = groundhog_build_info::build_version!().source_commit();
+    if let Ok(required) = std::env::var("GROUNDHOG_SOURCE_COMMIT") {
+        assert_eq!(commit, Some(required.as_str()));
+    }
+    commit
+}
+
 fn groundhog() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command.env_remove("GROUNDHOG_BUNDLE_MANIFEST");
     let config_home = std::env::temp_dir().join(format!(
         "groundhog-cli-test-config-{}-{}",
         std::process::id(),
@@ -473,7 +497,98 @@ fn version_flag_works() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let expected = groundhog_build_info::build_version!();
-    assert_eq!(stdout, format!("groundhog {expected}\n"));
+    let commit = expected
+        .source_commit()
+        .map_or("unavailable", |commit| &commit[..8]);
+    assert_eq!(
+        stdout,
+        format!("groundhog {} (commit {commit})\n", expected.crate_version())
+    );
+}
+
+#[test]
+fn version_flag_reports_matching_bundle_as_release() {
+    let directory = TempDir::new().unwrap();
+    let manifest = directory.path().join("bundle-manifest.json");
+    let Some(source_commit) = embedded_source_commit() else {
+        return;
+    };
+    write_bundle_manifest(&manifest, env!("CARGO_PKG_VERSION"), source_commit);
+
+    let output = groundhog()
+        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest)
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "groundhog {} (commit {}, release 0.1.25-rc.4)\n",
+            env!("CARGO_PKG_VERSION"),
+            &source_commit[..8]
+        )
+    );
+}
+
+#[test]
+fn version_flag_discovers_executable_relative_bundle_manifest() {
+    let directory = TempDir::new().unwrap();
+    let bin_dir = directory.path().join("bin");
+    let share_dir = directory.path().join("share/groundhog");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::create_dir_all(&share_dir).unwrap();
+    let installed_cli = bin_dir.join("groundhog");
+    std::fs::copy(env!("CARGO_BIN_EXE_groundhog"), &installed_cli).unwrap();
+    let Some(source_commit) = embedded_source_commit() else {
+        return;
+    };
+    write_bundle_manifest(
+        &share_dir.join("bundle-manifest.json"),
+        env!("CARGO_PKG_VERSION"),
+        source_commit,
+    );
+
+    let output = Command::new(installed_cli)
+        .env_remove("GROUNDHOG_BUNDLE_MANIFEST")
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "groundhog {} (commit {}, release 0.1.25-rc.4)\n",
+            env!("CARGO_PKG_VERSION"),
+            &source_commit[..8]
+        )
+    );
+}
+
+#[test]
+fn version_flag_does_not_claim_mismatched_bundle() {
+    let directory = TempDir::new().unwrap();
+    let manifest = directory.path().join("bundle-manifest.json");
+    write_bundle_manifest(&manifest, env!("CARGO_PKG_VERSION"), "not-this-build");
+    let source_commit = embedded_source_commit();
+
+    let output = groundhog()
+        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest)
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "groundhog {} (commit {}, bundle manifest mismatch)\n",
+            env!("CARGO_PKG_VERSION"),
+            source_commit.map_or("unavailable", |commit| &commit[..8])
+        )
+    );
 }
 
 #[test]

@@ -75,7 +75,7 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-      - name: Verify crate and platform version reporting
+      - name: Verify component version and source reporting
         run: |
           set -euo pipefail
 
@@ -93,26 +93,28 @@ jobs:
             groundhog-sim:hogsim
             groundhog-faucet:groundhog-faucet
           )
+          source_commit=$(git rev-parse HEAD)
+          export GROUNDHOG_SOURCE_COMMIT="$source_commit"
 
-          verify_versions() {
-            local suffix="$1"
-            for target in "${targets[@]}"; do
-              package=${target%%:*}
-              app=${target#*:}
-              crate_id=$(cargo pkgid --locked -p "$package")
-              crate_version=${crate_id##*[@#]}
-              test -n "$crate_version"
-              test "$("target/debug/$app" --version)" = "$app $crate_version$suffix"
-            done
-          }
+          cargo test --quiet --locked -p groundhog-cli \
+            --test cli_integration_test version_flag
+          cargo test --quiet --locked -p groundhog-json-rpc-gateway \
+            --test version_identity
 
           env -u GROUNDHOG_DISTRIBUTION_VERSION \
             cargo build --quiet --locked "${package_args[@]}" --bins
-          verify_versions ""
-
-          GROUNDHOG_DISTRIBUTION_VERSION=0.0.0-ci \
-            cargo build --quiet --locked "${package_args[@]}" --bins
-          verify_versions " (platform 0.0.0-ci)"
+          for target in "${targets[@]}"; do
+            package=${target%%:*}
+            app=${target#*:}
+            crate_id=$(cargo pkgid --locked -p "$package")
+            crate_version=${crate_id##*[@#]}
+            test -n "$crate_version"
+            expected_version="$crate_version"
+            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+              expected_version="$crate_version (commit ${source_commit:0:8})"
+            fi
+            test "$("target/debug/$app" --version)" = "$app $expected_version"
+          done
 
   cli-smoke:
     name: CLI smoke (new + cargo test + groundhog test)

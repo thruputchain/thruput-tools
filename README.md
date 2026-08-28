@@ -245,9 +245,11 @@ Current and historical design notes for the JSON-RPC surface:
 The OpenRPC artifact uses its own SemVer in `info.version`, sourced from
 `groundhog_json_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
 version. SDKs should pin on `wireFormat` from `groundhog_version`;
-`implementation` identifies the serving crate build and optional
-`platformVersion` identifies the packaging release. These diagnostic versions
-do not define the JSON-RPC contract.
+`implementation` and `commitHash` identify the serving component build.
+Optional `releaseVersion` and `bundleManifestDigest` identify its containing
+release only after the installed bundle manifest matches that build. The
+legacy optional `platformVersion` field remains readable for compatibility.
+These diagnostic values do not define the JSON-RPC contract.
 
 ### Mini-Glossary
 

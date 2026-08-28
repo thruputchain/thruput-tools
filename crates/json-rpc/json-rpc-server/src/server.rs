@@ -4,6 +4,7 @@ use std::{future::Future, sync::Arc};
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 
+use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -36,6 +37,8 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     network_info: NetworkInfo,
     config: RpcServerConfig,
     build_info: BuildInfo,
+    release_version: Option<String>,
+    bundle_manifest_digest: Option<String>,
     tip_probe: TipProbe,
 }
 
@@ -81,7 +84,7 @@ impl BuildInfo {
         }
     }
 
-    /// Create build metadata with separate crate and packaging-platform versions.
+    /// Create build metadata with separate crate and legacy packaging-platform versions.
     pub const fn from_build_version(
         build_version: BuildVersion,
         commit_hash: Option<&'static str>,
@@ -89,16 +92,16 @@ impl BuildInfo {
         Self {
             implementation_version: build_version.crate_version(),
             platform_version: build_version.platform_version(),
-            commit_hash,
+            commit_hash: match build_version.source_commit() {
+                Some(source_commit) => Some(source_commit),
+                None => commit_hash,
+            },
         }
     }
 
     /// Build metadata suitable for unit tests and in-process fixtures.
     pub const fn for_tests() -> Self {
-        Self::from_build_version(
-            BuildVersion::new("test", Some("test-platform")),
-            Some("test-commit"),
-        )
+        Self::from_build_version(BuildVersion::new("test", None), Some("test-commit"))
     }
 }
 
@@ -121,8 +124,28 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
             network_info,
             config,
             build_info,
+            release_version: None,
+            bundle_manifest_digest: None,
             tip_probe: TipProbe::default(),
         }
+    }
+
+    /// Bind this server to the validated release identity of its running component.
+    #[must_use]
+    pub fn with_bundle_identity(mut self, identity: &BundleIdentity) -> Self {
+        let build_version = identity.build_version();
+        self.build_info =
+            BuildInfo::new(build_version.crate_version(), build_version.source_commit());
+        self.release_version = identity.release_version().map(str::to_owned);
+        self.bundle_manifest_digest = identity.bundle_manifest_digest().map(str::to_owned);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_release_identity(mut self) -> Self {
+        self.release_version = Some("0.1.25-rc.4".to_owned());
+        self.bundle_manifest_digest = Some("sha256:test-manifest".to_owned());
+        self
     }
 
     fn request_context(&self) -> RpcRequestContext {
@@ -407,7 +430,11 @@ where
                 self.build_info.implementation_version,
                 self.build_info.commit_hash,
             )
-            .with_platform_version(self.build_info.platform_version))
+            .with_platform_version(self.build_info.platform_version)
+            .with_release_identity(
+                self.release_version.clone(),
+                self.bundle_manifest_digest.clone(),
+            ))
         })
         .await
     }
@@ -1380,11 +1407,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             mock.clone(),
             test_network_info(),
             RpcServerConfig::default(),
-            BuildInfo::from_build_version(
-                BuildVersion::new("9.8.7", Some("1.2.3")),
-                Some("abc123"),
-            ),
-        );
+            BuildInfo::for_tests(),
+        )
+        .with_test_release_identity();
 
         let version = server
             .version()
@@ -1392,9 +1417,14 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: version metadata should be infallible");
 
         assert_eq!(version.wire_format, WIRE_FORMAT_VERSION);
-        assert_eq!(version.implementation, "9.8.7");
-        assert_eq!(version.platform_version.as_deref(), Some("1.2.3"));
-        assert_eq!(version.commit_hash.as_deref(), Some("abc123"));
+        assert_eq!(version.implementation, "test");
+        assert_eq!(version.platform_version, None);
+        assert_eq!(version.release_version.as_deref(), Some("0.1.25-rc.4"));
+        assert_eq!(
+            version.bundle_manifest_digest.as_deref(),
+            Some("sha256:test-manifest")
+        );
+        assert_eq!(version.commit_hash.as_deref(), Some("test-commit"));
         assert!(mock.submitted.lock().await.is_empty());
         assert_eq!(*mock.event_calls.lock().await, 0);
     }

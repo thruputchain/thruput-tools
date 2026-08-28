@@ -11,7 +11,10 @@ const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::
 #[command(
     name = "groundhog",
     about = "Groundhog smart contract development tools",
-    version = BUILD_VERSION.to_string()
+    version = groundhog_bundle_identity::BundleIdentity::discover(
+        groundhog_bundle_identity::BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
+        BUILD_VERSION,
+    ).to_string()
 )]
 struct Cli {
     #[command(flatten)]

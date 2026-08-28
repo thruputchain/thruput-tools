@@ -1,0 +1,25 @@
+[package]
+name = "groundhog-bundle-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Runtime Groundhog bundle identity validation"
+
+[dependencies]
+groundhog-build-info = { workspace = true }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

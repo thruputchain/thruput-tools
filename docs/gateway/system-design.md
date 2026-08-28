@@ -404,9 +404,15 @@ remain a later phase.
 | `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | In OpenRPC; gateway handler is not wired yet |
 | `groundhog_getStorageAt(address, key) → StorageItemRead` | DbGateway | Requires `db_gateway` endpoint |
 | `groundhog_view(request) → ViewResponse` | ViewGateway | Requires `view_gateway` endpoint |
-| `groundhog_version() → VersionInfo` | gateway build metadata | Reports wire-format, crate implementation, and optional platform-release versions |
+| `groundhog_version() → VersionInfo` | gateway build metadata | Reports wire format and component identity; includes release version and bundle-manifest digest only after a validated manifest match |
 
 Plus `rpc.discover` for free from jsonrpsee's OpenRPC generation.
+
+At startup, `hog-gateway` logs its component version and source commit. When it
+finds a valid installed `bundle-manifest.json` whose `groundhog-rpc` component
+matches that build, the log and `groundhog_version` also include the containing
+release version and manifest digest. Loose binaries keep reporting their
+component identity without claiming a release.
 
 Admission policy for this phase should stay intentionally minimal: basic rate
 limits, dedupe, bounded queues, and overload shedding. Mainnet-grade QoS and

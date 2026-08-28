@@ -1,55 +1,53 @@
-// Keep in sync with crates/dev/node-supervisor/build.rs.
+use std::env;
+use std::fs;
 use std::path::Path;
-use std::process::Command;
+
+const SOURCE_COMMIT_ENV: &str = "GROUNDHOG_SOURCE_COMMIT";
 
 fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .unwrap_or(manifest_dir);
-    watch_git_head(repo_root);
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output();
-
-    let Ok(output) = output else {
-        return;
-    };
-    if !output.status.success() {
+    println!("cargo:rerun-if-env-changed={SOURCE_COMMIT_ENV}");
+    if let Some(commit) = env::var_os(SOURCE_COMMIT_ENV) {
+        let commit = commit.to_string_lossy();
+        assert_valid_commit(&commit, SOURCE_COMMIT_ENV);
+        println!("cargo:rustc-env=GIT_COMMIT={commit}");
         return;
     }
 
-    let commit = String::from_utf8_lossy(&output.stdout);
-    let commit = commit.trim();
-    if !commit.is_empty() {
+    if let Some(commit) = packaged_source_commit(manifest_dir) {
         println!("cargo:rustc-env=GIT_COMMIT={commit}");
+    } else {
+        // Do not let an ambient variable bypass the explicit/package provenance boundary.
+        println!("cargo:rustc-env=GIT_COMMIT=");
     }
 }
 
-fn watch_git_head(repo_root: &Path) {
-    let git_dir = repo_root.join(".git");
-    let head_path = git_dir.join("HEAD");
-    println!("cargo:rerun-if-changed={}", head_path.display());
-
-    let Ok(head) = std::fs::read_to_string(&head_path) else {
-        return;
-    };
-    let Some(reference) = head.trim().strip_prefix("ref: ") else {
-        return;
-    };
-    println!(
-        "cargo:rerun-if-changed={}",
-        git_dir.join(reference).display()
-    );
-
-    let packed_refs = git_dir.join("packed-refs");
-    if packed_refs.exists() {
-        println!("cargo:rerun-if-changed={}", packed_refs.display());
+fn packaged_source_commit(manifest_dir: &Path) -> Option<String> {
+    let path = manifest_dir.join(".cargo_vcs_info.json");
+    if !path.is_file() {
+        return None;
     }
+    println!("cargo:rerun-if-changed={}", path.display());
+    let contents = fs::read(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&contents).ok()?;
+    let git = value.get("git")?;
+    if git.get("dirty").and_then(serde_json::Value::as_bool) == Some(true) {
+        return None;
+    }
+    let commit = git.get("sha1")?.as_str()?.to_owned();
+    is_valid_commit(&commit).then_some(commit)
+}
+
+fn assert_valid_commit(commit: &str, source: &str) {
+    assert!(
+        is_valid_commit(commit),
+        "{source} must be a 40-character lowercase Git commit, got {commit:?}"
+    );
+}
+
+fn is_valid_commit(commit: &str) -> bool {
+    commit.len() == 40
+        && commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }

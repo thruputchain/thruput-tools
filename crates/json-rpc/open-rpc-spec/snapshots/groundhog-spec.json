@@ -1163,6 +1163,13 @@
       "VersionInfo": {
         "description": "Runtime version information for a JSON-RPC server implementation.",
         "properties": {
+          "bundleManifestDigest": {
+            "description": "Digest of the validated installed bundle manifest, when release identity is available.\nConsumers must not branch on this field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "commitHash": {
             "description": "Diagnostic-only Git commit hash this server was built from, when available.\nConsumers must not branch on this field.",
             "type": [
@@ -1176,6 +1183,13 @@
           },
           "platformVersion": {
             "description": "Platform release this binary was packaged for, when available.\nConsumers must not branch on this field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "releaseVersion": {
+            "description": "Release containing this binary, after validation against its installed bundle manifest.\nConsumers must not branch on this field.",
             "type": [
               "string",
               "null"
@@ -1256,7 +1270,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "4.0.0"
+    "version": "4.1.0"
   },
   "methods": [
     {

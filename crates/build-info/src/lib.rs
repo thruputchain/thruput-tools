@@ -2,16 +2,16 @@
 
 use std::fmt;
 
-/// Crate and packaging-platform versions carried by a binary build.
+/// Immutable metadata carried by a component binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildVersion {
     crate_version: &'static str,
     platform_version: Option<&'static str>,
+    source_commit: Option<&'static str>,
 }
 
 impl BuildVersion {
-    /// Create build-version metadata from its two independent dimensions.
-    /// An empty platform version is treated as unavailable.
+    /// Create build-version metadata with an optional legacy platform stamp.
     pub const fn new(crate_version: &'static str, platform_version: Option<&'static str>) -> Self {
         let platform_version = match platform_version {
             Some(value) if value.is_empty() => None,
@@ -20,6 +20,21 @@ impl BuildVersion {
         Self {
             crate_version,
             platform_version,
+            source_commit: None,
+        }
+    }
+
+    /// Attach the source commit embedded when the component was built.
+    #[must_use]
+    pub const fn with_source_commit(self, source_commit: Option<&'static str>) -> Self {
+        let source_commit = match source_commit {
+            Some(value) if value.is_empty() => None,
+            value => value,
+        };
+        Self {
+            crate_version: self.crate_version,
+            platform_version: self.platform_version,
+            source_commit,
         }
     }
 
@@ -28,9 +43,14 @@ impl BuildVersion {
         self.crate_version
     }
 
-    /// Return the platform release this binary was packaged for, when set.
+    /// Return the legacy compile-time platform stamp, when set.
     pub const fn platform_version(self) -> Option<&'static str> {
         self.platform_version
+    }
+
+    /// Return the source commit embedded when the component was built.
+    pub const fn source_commit(self) -> Option<&'static str> {
+        self.source_commit
     }
 }
 
@@ -44,7 +64,7 @@ impl fmt::Display for BuildVersion {
     }
 }
 
-/// Capture the calling crate's version and optional platform packaging version.
+/// Capture the calling crate's component version, legacy platform stamp, and source commit.
 #[macro_export]
 macro_rules! build_version {
     () => {
@@ -52,6 +72,7 @@ macro_rules! build_version {
             env!("CARGO_PKG_VERSION"),
             option_env!("GROUNDHOG_DISTRIBUTION_VERSION"),
         )
+        .with_source_commit(option_env!("GIT_COMMIT"))
     };
 }
 
@@ -60,24 +81,26 @@ mod tests {
     use super::BuildVersion;
 
     #[test]
-    fn display_keeps_crate_and_platform_versions_distinct() {
+    fn display_keeps_crate_and_legacy_platform_versions_distinct() {
         let version = BuildVersion::new("0.9.6", Some("0.1.23"));
 
         assert_eq!(version.to_string(), "0.9.6 (platform 0.1.23)");
         assert_eq!(version.crate_version(), "0.9.6");
         assert_eq!(version.platform_version(), Some("0.1.23"));
+        assert_eq!(version.source_commit(), None);
     }
 
     #[test]
-    fn display_omits_platform_for_unbundled_builds() {
+    fn display_omits_unavailable_legacy_platform_version() {
         assert_eq!(BuildVersion::new("0.9.6", None).to_string(), "0.9.6");
+        assert_eq!(BuildVersion::new("0.9.6", Some("")).to_string(), "0.9.6");
     }
 
     #[test]
-    fn empty_platform_version_is_unavailable() {
-        let version = BuildVersion::new("0.9.6", Some(""));
+    fn source_commit_is_independent_of_display_version() {
+        let version = BuildVersion::new("0.9.6", None).with_source_commit(Some("abc123"));
 
-        assert_eq!(version.platform_version(), None);
+        assert_eq!(version.source_commit(), Some("abc123"));
         assert_eq!(version.to_string(), "0.9.6");
     }
 }

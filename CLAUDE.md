@@ -381,9 +381,12 @@ fields, or errors. Bump patch for documentation, description, or
 example refinements only.
 
 The `groundhog_version` RPC exposes `wireFormat`, `implementation`, optional
-`platformVersion`, and `commitHash`. SDKs and other consumers may branch on
-`wireFormat` only; the other fields are diagnostic. `implementation` is the
-serving crate version; `platformVersion` is the packaging release when present.
+`releaseVersion`, optional `bundleManifestDigest`, and `commitHash`. It still
+accepts the legacy optional `platformVersion` field from older servers, but the
+gateway no longer emits it. SDKs and other consumers may branch on `wireFormat`
+only; the other fields are diagnostic. `implementation` and `commitHash`
+identify the serving component build. The release fields are present only when
+that build matches a validated installed bundle manifest.
 
 ## CLI Patterns
 

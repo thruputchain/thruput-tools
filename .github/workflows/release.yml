@@ -13,8 +13,8 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://groundhog.dev/crates/api/v1/crates/
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
-  PLATFORM_RELEASE_VERSION: "0.1.25-rc.1"
   RELEASE_CRATES: >-
+    groundhog-bundle-identity
     groundhog-cli
     groundhog-rv32-lower
 
@@ -67,10 +67,6 @@ jobs:
           crate_id=$(cargo pkgid --locked -p groundhog-cli)
           crate_version=${crate_id##*[@#]}
           test -n "$crate_version"
-          if [ -z "$PLATFORM_RELEASE_VERSION" ]; then
-            echo "PLATFORM_RELEASE_VERSION must not be empty"
-            exit 1
-          fi
           echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
 
       - name: Verify native architecture
@@ -103,10 +99,11 @@ jobs:
             echo "OK: ${crate}@${VERSION} exists in the groundhog registry"
           done
 
-      - name: Verify platform-release version wiring
+      - name: Verify component version and source wiring
         if: github.event_name == 'pull_request' && matrix.architecture == 'x86_64'
         run: |
-          export GROUNDHOG_DISTRIBUTION_VERSION="$PLATFORM_RELEASE_VERSION"
+          source_commit=$(git rev-parse HEAD)
+          export GROUNDHOG_SOURCE_COMMIT="$source_commit"
           cargo build --locked --release \
             -p groundhog-json-rpc-gateway \
             -p groundhog-cli \
@@ -115,9 +112,12 @@ jobs:
             -p groundhog-faucet \
             --bins
 
-          expected_version="$CRATE_VERSION (platform $PLATFORM_RELEASE_VERSION)"
           for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
-            test "$(target/release/$app --version)" = "$app $expected_version"
+            app_version="$CRATE_VERSION"
+            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+              app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
+            fi
+            test "$(target/release/$app --version)" = "$app $app_version"
           done
 
       - name: Build release binaries
@@ -126,15 +126,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          source_commit=$(git rev-parse HEAD)
+          export GROUNDHOG_SOURCE_COMMIT="$source_commit"
           expected_version="$CRATE_VERSION"
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            # A runner-inherited value must not label ordinary PR artifacts as platform releases.
-            unset GROUNDHOG_DISTRIBUTION_VERSION
-          else
-            export GROUNDHOG_DISTRIBUTION_VERSION="$PLATFORM_RELEASE_VERSION"
-            expected_version="$expected_version (platform $PLATFORM_RELEASE_VERSION)"
-          fi
+          # A runner-inherited legacy stamp must not label loose component artifacts as releases.
+          unset GROUNDHOG_DISTRIBUTION_VERSION
           echo "EXPECTED_BINARY_VERSION=$expected_version" >> "$GITHUB_ENV"
+          echo "EXPECTED_SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
           package_args=()
           for app in $RELEASE_APPS; do
@@ -197,7 +195,11 @@ jobs:
             test -x "$verify_dir/$archive_base/$app"
             test -f "$verify_dir/$archive_base/README.md"
             test -f "$verify_dir/$archive_base/LICENSE"
-            test "$("$verify_dir/$archive_base/$app" --version)" = "$app ${EXPECTED_BINARY_VERSION}"
+            expected_version=${EXPECTED_BINARY_VERSION}
+            if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
+              expected_version="$CRATE_VERSION (commit ${EXPECTED_SOURCE_COMMIT:0:8})"
+            fi
+            test "$("$verify_dir/$archive_base/$app" --version)" = "$app $expected_version"
           done
 
       - name: Upload release artifacts

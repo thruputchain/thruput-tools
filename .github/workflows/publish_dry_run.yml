@@ -12,6 +12,7 @@ env:
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
   PUBLISH_PACKAGES: >-
     groundhog-build-info
+    groundhog-bundle-identity
     groundhog-json-rpc-types
     groundhog-open-rpc
     groundhog-open-rpc-macros

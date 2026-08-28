@@ -154,7 +154,9 @@ async fn version_roundtrips_with_camel_case_json_shape() {
         groundhog_json_rpc_api::WIRE_FORMAT_VERSION
     );
     assert_eq!(version.implementation, "test");
-    assert_eq!(version.platform_version.as_deref(), Some("test-platform"));
+    assert_eq!(version.platform_version, None);
+    assert_eq!(version.release_version, None);
+    assert_eq!(version.bundle_manifest_digest, None);
     assert_eq!(version.commit_hash.as_deref(), Some("test-commit"));
     assert_eq!(network_info.network_hash.as_ref(), &[0x07; 32]);
 
@@ -164,7 +166,9 @@ async fn version_roundtrips_with_camel_case_json_shape() {
         groundhog_json_rpc_api::WIRE_FORMAT_VERSION
     );
     assert_eq!(json["implementation"], "test");
-    assert_eq!(json["platformVersion"], "test-platform");
+    assert_eq!(json["platformVersion"], serde_json::Value::Null);
+    assert_eq!(json["releaseVersion"], serde_json::Value::Null);
+    assert_eq!(json["bundleManifestDigest"], serde_json::Value::Null);
     assert_eq!(json["commitHash"], "test-commit");
     assert_eq!(json["wire_format"], serde_json::Value::Null);
     assert_eq!(json["commit_hash"], serde_json::Value::Null);
