@@ -18,7 +18,7 @@ env:
 jobs:
   dependency-policy:
     name: Dependency policy (${{ matrix.check }})
-    runs-on: namespace-profile-chuckd-rs-linux
+    runs-on: namespace-profile-hogd-linux-2604
     strategy:
       matrix:
         check:
@@ -40,7 +40,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: namespace-profile-chuckd-rs-linux
+    runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
     steps:
@@ -57,7 +57,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: namespace-profile-chuckd-rs-linux
+    runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
     steps:
@@ -118,7 +118,7 @@ jobs:
 
   cli-smoke:
     name: CLI smoke (new + cargo test + groundhog test)
-    runs-on: namespace-profile-chuckd-rs-linux
+    runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
     steps:
