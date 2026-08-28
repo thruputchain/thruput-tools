@@ -180,7 +180,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Metrics registry ---
-    let metrics = metrics::GatewayMetrics::new(BUILD_VERSION, option_env!("GIT_COMMIT"))?;
+    let metrics = metrics::GatewayMetrics::new(
+        BUILD_VERSION,
+        bundle_identity.build_version().source_commit(),
+    )?;
     metrics.set_rpc_connections_limit(config.max_connections);
 
     // --- Context (backend connections) ---
@@ -196,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health = health::GatewayHealth::new_with_airdrop(
         &ctx.config,
         BUILD_VERSION,
-        option_env!("GIT_COMMIT"),
+        bundle_identity.build_version().source_commit(),
         airdrop.clone(),
     );
     let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
