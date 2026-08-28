@@ -139,6 +139,9 @@ pub struct LocalNodeOptions {
     pub rpc_max_connections: Option<u32>,
     /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
     pub ramdb_bytes: Option<u64>,
+    /// Validated release identity supplied by an embedding client process.
+    /// When absent, the `groundhog` client identity is discovered while building the config.
+    pub bundle_identity: Option<groundhog_bundle_identity::BundleIdentity>,
 }
 
 /// PID-file behavior for local hogd-dev startup.
@@ -574,6 +577,10 @@ fn local_node_config(
         ));
     }
 
+    let bundle_identity = options
+        .bundle_identity
+        .clone()
+        .unwrap_or_else(crate::bundle_identity);
     let hogd = options
         .hogd_dev_binary
         .map_or_else(HogdDevConfig::default, |binary| {
@@ -619,7 +626,8 @@ fn local_node_config(
     };
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(rpc_listen_address(options.host, options.port))
-        .with_hogd_dev(hogd);
+        .with_hogd_dev(hogd)
+        .with_bundle_identity(bundle_identity);
     let config = match options.rpc_max_connections {
         Some(max_connections) => config.with_rpc_max_connections(max_connections),
         None => config,
@@ -868,6 +876,10 @@ mod tests {
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
         let binary = PathBuf::from("/tmp/hog-devnode-test");
+        let supplied_identity = groundhog_bundle_identity::BundleIdentity::unbundled(
+            groundhog_build_info::BuildVersion::new("9.8.7-test", None)
+                .with_source_commit(Some("373bec4b9dd9b99abae4f23b82f4e35df61273d1")),
+        );
         let config = local_node_config(LocalNodeOptions {
             host: None,
             port: 0,
@@ -883,6 +895,7 @@ mod tests {
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
             ramdb_bytes: Some(2_147_483_648),
+            bundle_identity: Some(supplied_identity.clone()),
         })
         .expect("bug: local node config should build");
 
@@ -918,6 +931,7 @@ mod tests {
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
+        assert_eq!(config.bundle_identity.as_ref(), Some(&supplied_identity));
     }
 
     #[test]

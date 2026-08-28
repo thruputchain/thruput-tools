@@ -9,6 +9,7 @@
 
 use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
+use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
@@ -149,6 +150,16 @@ impl NodeSupervisorHandle {
     /// process behind.
     #[tracing::instrument(skip_all, fields(rpc_listen = %config.rpc_listen_address))]
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
+        if let Some(identity) = &config.bundle_identity {
+            tracing::info!(
+                component_version = identity.build_version().crate_version(),
+                source_commit = ?identity.build_version().source_commit(),
+                release_version = ?identity.release_version(),
+                bundle_manifest_digest = ?identity.bundle_manifest_digest(),
+                bundle_manifest_mismatch_reason = ?identity.mismatch_reason(),
+                "Groundhog release identity",
+            );
+        }
         config
             .local_airdrop
             .validate()
@@ -372,14 +383,12 @@ async fn start_rpc_server(
             scheduler_backend,
             read,
             view,
-            RpcServerOptions {
+            rpc_server_options(
+                config,
                 network_info,
-                local_airdrop: Some(local_airdrop),
-                backend_planes: BackendPlanes::hogd_dev_full(view_status),
-                view_gas_limit: config.view_gas_limit,
-                block_driver_config: config.block_driver,
-                rpc_max_connections: config.rpc_max_connections,
-            },
+                Some(local_airdrop),
+                BackendPlanes::hogd_dev_full(view_status),
+            ),
         )
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
@@ -395,14 +404,12 @@ async fn start_rpc_server(
             scheduler_backend,
             read,
             view,
-            RpcServerOptions {
+            rpc_server_options(
+                config,
                 network_info,
-                local_airdrop: None,
-                backend_planes: BackendPlanes::hogd_dev_storage_only(view_status),
-                view_gas_limit: config.view_gas_limit,
-                block_driver_config: config.block_driver,
-                rpc_max_connections: config.rpc_max_connections,
-            },
+                None,
+                BackendPlanes::hogd_dev_storage_only(view_status),
+            ),
         )
         .await
     } else {
@@ -416,19 +423,34 @@ async fn start_rpc_server(
             scheduler_backend,
             StubBackend::new(),
             view,
-            RpcServerOptions {
+            rpc_server_options(
+                config,
                 network_info,
-                local_airdrop: None,
-                backend_planes: BackendPlanes {
+                None,
+                BackendPlanes {
                     view: view_status,
                     ..BackendPlanes::hogd_dev_scheduler_only()
                 },
-                view_gas_limit: config.view_gas_limit,
-                block_driver_config: config.block_driver,
-                rpc_max_connections: config.rpc_max_connections,
-            },
+            ),
         )
         .await
+    }
+}
+
+fn rpc_server_options(
+    config: &NodeSupervisorConfig,
+    network_info: NetworkInfo,
+    local_airdrop: Option<LocalAirdropContext>,
+    backend_planes: BackendPlanes,
+) -> RpcServerOptions {
+    RpcServerOptions {
+        network_info,
+        local_airdrop,
+        backend_planes,
+        view_gas_limit: config.view_gas_limit,
+        block_driver_config: config.block_driver,
+        rpc_max_connections: config.rpc_max_connections,
+        bundle_identity: config.bundle_identity.clone(),
     }
 }
 
@@ -451,6 +473,7 @@ struct RpcServerOptions {
     view_gas_limit: u64,
     block_driver_config: BlockDriverConfig,
     rpc_max_connections: u32,
+    bundle_identity: Option<BundleIdentity>,
 }
 
 async fn start_rpc_server_with_read<R, V>(
@@ -471,6 +494,7 @@ where
         view_gas_limit,
         block_driver_config,
         rpc_max_connections,
+        bundle_identity,
     } = options;
     ensure_rpc_nofile_limit(rpc_max_connections)?;
     let server_config = ServerConfig::builder()
@@ -514,6 +538,10 @@ where
             option_env!("GIT_COMMIT"),
         ),
     );
+    let core_rpc = match bundle_identity.as_ref() {
+        Some(identity) => core_rpc.with_bundle_identity(identity),
+        None => core_rpc,
+    };
     let mut module = RpcModule::new(());
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
@@ -619,9 +647,14 @@ struct StartedRpcServer {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::{
+        fs,
+        time::{Duration, Instant},
+    };
 
+    use groundhog_bundle_identity::{BundleIdentity, BundleSubject};
     use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+    use groundhog_json_rpc_server::BuildVersion;
     use groundhog_json_rpc_types::{
         airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
         error::codes,
@@ -630,6 +663,7 @@ mod tests {
     use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
 
     use super::*;
@@ -653,6 +687,38 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     const CANONICAL_HASH_VECTOR_TX_HASH_JSON: &str =
         "0x9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+
+    fn write_matching_client_manifest() -> (TempDir, BundleIdentity, String) {
+        const VERSION: &str = "9.8.7-test";
+        const COMMIT: &str = "373bec4b9dd9b99abae4f23b82f4e35df61273d1";
+        const RELEASE: &str = "0.1.25-rc.4";
+
+        let canonical = format!(
+            "{{\"bundle\":{{\"version\":\"{RELEASE}\"}},\"clients\":{{\"groundhog\":{{\"assetRole\":\"cli\",\"component\":\"groundhog-rpc\",\"sourceCommit\":\"{COMMIT}\",\"version\":\"{VERSION}\"}}}},\"components\":{{\"groundhog-rpc\":{{\"active\":true,\"sourceCommit\":\"{COMMIT}\",\"version\":\"{VERSION}\"}}}},\"schema\":\"groundhog-bundle-v1\"}}\n"
+        );
+        let digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(canonical.as_bytes()))
+        );
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&canonical).expect("bug: canonical manifest should parse");
+        manifest["bundle"]["manifestDigest"] = serde_json::Value::String(digest.clone());
+
+        let directory = TempDir::new().expect("bug: tempdir creates");
+        let path = directory.path().join("bundle-manifest.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&manifest).expect("bug: manifest should serialize"),
+        )
+        .expect("bug: manifest should write");
+        let identity = BundleIdentity::from_manifest_path(
+            BundleSubject::client("groundhog", "groundhog-rpc", "cli"),
+            BuildVersion::new(VERSION, None).with_source_commit(Some(COMMIT)),
+            &path,
+        );
+        assert_eq!(identity.release_version(), Some(RELEASE));
+        (directory, identity, digest)
+    }
 
     #[tokio::test]
     async fn invalid_local_airdrop_config_is_rejected_before_child_start() {
@@ -808,9 +874,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .with_binary_path(fake_hogd_dev_binary())
             .with_startup_timeout(Duration::from_secs(5))
             .with_shutdown_grace(Duration::from_secs(2));
+        let (_manifest_directory, bundle_identity, manifest_digest) =
+            write_matching_client_manifest();
         let config = NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
-            .with_hogd_dev(hogd);
+            .with_hogd_dev(hogd)
+            .with_bundle_identity(bundle_identity);
         let handle = NodeSupervisorHandle::start(config)
             .await
             .expect("bug: supervisor should start against fake hogd-dev");
@@ -829,6 +898,21 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .await
             .expect("bug: networkInfo should use immutable manifest identity");
         assert_eq!(network_info.network_hash.as_ref(), &[0; 32]);
+
+        let version = client
+            .version()
+            .await
+            .expect("bug: version should report the embedding client identity");
+        assert_eq!(version.implementation, "9.8.7-test");
+        assert_eq!(
+            version.commit_hash.as_deref(),
+            Some("373bec4b9dd9b99abae4f23b82f4e35df61273d1")
+        );
+        assert_eq!(version.release_version.as_deref(), Some("0.1.25-rc.4"));
+        assert_eq!(
+            version.bundle_manifest_digest.as_deref(),
+            Some(manifest_digest.as_str())
+        );
 
         let tip = client
             .chain_tip()

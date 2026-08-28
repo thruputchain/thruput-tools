@@ -16,13 +16,14 @@ mod tip_coalescer;
 
 use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use tokio::io::AsyncReadExt;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::backend::GatewayBackend;
 use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
+use groundhog_bundle_identity::{BundleIdentity, BundleSubject};
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_json_rpc_types::{NetworkHashHex, SHA256Hash};
@@ -32,11 +33,7 @@ const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
-#[command(
-    name = "hog-gateway",
-    version = BUILD_VERSION.to_string(),
-    about = "Groundhog JSON-RPC gateway"
-)]
+#[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
     /// Path to TOML config file
     #[arg(long)]
@@ -119,11 +116,23 @@ struct Cli {
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Observability ---
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let cli = Cli::parse();
+    let bundle_identity =
+        BundleIdentity::discover(BundleSubject::component("groundhog-rpc"), BUILD_VERSION);
+    let cli = parse_cli(&bundle_identity);
+
+    tracing::info!(
+        component_version = bundle_identity.build_version().crate_version(),
+        source_commit = ?bundle_identity.build_version().source_commit(),
+        release_version = ?bundle_identity.release_version(),
+        bundle_manifest_digest = ?bundle_identity.bundle_manifest_digest(),
+        bundle_manifest_mismatch_reason = ?bundle_identity.mismatch_reason(),
+        "Groundhog release identity",
+    );
 
     // --- Configuration ---
     let mut config = match &cli.config {
@@ -164,7 +173,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Metrics registry ---
-    let metrics = metrics::GatewayMetrics::new(BUILD_VERSION, option_env!("GIT_COMMIT"))?;
+    let metrics = metrics::GatewayMetrics::new(
+        BUILD_VERSION,
+        bundle_identity.build_version().source_commit(),
+    )?;
     metrics.set_rpc_connections_limit(config.max_connections);
 
     // --- Context (backend connections) ---
@@ -180,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health = health::GatewayHealth::new_with_airdrop(
         &ctx.config,
         BUILD_VERSION,
-        option_env!("GIT_COMMIT"),
+        bundle_identity.build_version().source_commit(),
         airdrop.clone(),
     );
     let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -222,8 +234,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         GatewayBackend::new(ctx.clone()),
         network_info,
         rpc_config,
-        BuildInfo::from_build_version(BUILD_VERSION, option_env!("GIT_COMMIT")),
-    );
+        BuildInfo::new(BUILD_VERSION.crate_version(), BUILD_VERSION.source_commit()),
+    )
+    .with_bundle_identity(&bundle_identity);
     let mut rpc = api_impl.into_rpc().remove_context();
     airdrop::merge_rpc(&mut rpc, airdrop)?;
     let handle = server.start(rpc);
@@ -245,6 +258,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     shutdown_result?;
 
     Ok(())
+}
+
+fn cli_command(bundle_identity: &BundleIdentity) -> clap::Command {
+    Cli::command().version(bundle_identity.to_string())
+}
+
+fn parse_cli(bundle_identity: &BundleIdentity) -> Cli {
+    let matches = match cli_command(bundle_identity).try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => {
+            if error.kind() == clap::error::ErrorKind::DisplayVersion
+                && let Some(reason) = bundle_identity.terminal_safe_mismatch_reason()
+            {
+                eprintln!("warning: bundle manifest mismatch: {reason}");
+            }
+            error.exit()
+        }
+    };
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
 }
 
 fn apply_identity_cli_overrides(config: &mut GatewayConfig, cli: &Cli) {

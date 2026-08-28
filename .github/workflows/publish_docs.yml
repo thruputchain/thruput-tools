@@ -17,6 +17,7 @@ on:
         required: false
         default: >-
           groundhog-build-info
+          groundhog-bundle-identity
           groundhog-json-rpc-types
           groundhog-open-rpc
           groundhog-open-rpc-macros

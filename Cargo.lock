@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-bench"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
@@ -1400,11 +1400,23 @@ dependencies = [
 
 [[package]]
 name = "groundhog-build-info"
-version = "0.10.4"
+version = "0.10.5"
+
+[[package]]
+name = "groundhog-bundle-identity"
+version = "0.10.5"
+dependencies = [
+ "groundhog-build-info",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+]
 
 [[package]]
 name = "groundhog-cli"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "base64",
  "clap",
@@ -1412,6 +1424,7 @@ dependencies = [
  "fs2",
  "getrandom 0.2.17",
  "groundhog-build-info",
+ "groundhog-bundle-identity",
  "groundhog-contract-spec",
  "groundhog-contract-util",
  "groundhog-erc20-if",
@@ -1530,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1565,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-types",
@@ -1576,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1593,13 +1606,14 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "axum",
  "bytes",
  "clap",
  "groundhog-build-info",
+ "groundhog-bundle-identity",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
@@ -1611,12 +1625,15 @@ dependencies = [
  "groundhog_scheduler",
  "groundhog_scp",
  "groundhog_view",
+ "hex",
  "jsonrpsee",
  "prometheus",
  "reqwest",
  "rpc_driver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.20",
  "time",
  "tokio",
@@ -1630,10 +1647,11 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "groundhog-build-info",
+ "groundhog-bundle-identity",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-types",
  "groundhog-xdr",
@@ -1649,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1684,9 +1702,10 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
+ "groundhog-bundle-identity",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
@@ -1719,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "schemars",
  "serde",
@@ -1728,7 +1747,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1740,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1751,7 +1770,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-artifact"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1759,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-lower"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1786,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
@@ -1802,7 +1821,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1862,7 +1881,7 @@ checksum = "33c301065c917652ce5189318791f2d55d955266092b2bd9f6c14fade8c54446"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
@@ -1907,7 +1926,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "rpc_driver",
