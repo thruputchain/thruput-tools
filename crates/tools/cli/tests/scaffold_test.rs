@@ -83,6 +83,31 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     );
 }
 
+fn assert_counter_manifest(cargo: &str) {
+    assert!(cargo.contains(r#"name = "my-counter""#));
+    assert!(cargo.contains("registry = \"groundhog\""));
+    assert!(!cargo.contains("sdk/spec"));
+    // The version pins live once, in the `scaffold` constants; here we assert
+    // they were substituted (no placeholder survives below) and land on the
+    // right dependencies.
+    assert!(cargo.contains(&format!(
+        r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
+        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
+    )));
+    assert!(cargo.contains("groundhog-integration-test = ["));
+    assert!(cargo.contains(
+        r#"[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]"#
+    ));
+    assert!(cargo.contains(&format!(
+        "version = \"{}\"",
+        groundhog_cli::scaffold::SCAFFOLD_JSON_RPC_CLIENT_VERSION
+    )));
+    assert!(!cargo.contains("{{"), "unsubstituted template placeholder");
+    assert!(cargo.contains("optional = true"));
+    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
+    assert!(!cargo.contains(r#"features = ["storage"]"#));
+}
+
 #[test]
 fn scaffold_counter_creates_expected_files() {
     let tmp = TempDir::new().unwrap();
@@ -104,25 +129,7 @@ fn scaffold_counter_creates_expected_files() {
     assert_rv32_only_test_scaffold(&dir);
 
     let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-    assert!(cargo.contains(r#"name = "my-counter""#));
-    assert!(cargo.contains("registry = \"groundhog\""));
-    assert!(!cargo.contains("sdk/spec"));
-    // The version pins live once, in the `scaffold` constants; here we assert
-    // they were substituted (no placeholder survives below) and land on the
-    // right dependencies.
-    assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
-        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
-    )));
-    assert!(cargo.contains("groundhog-integration-test = ["));
-    assert!(cargo.contains(&format!(
-        r#"groundhog-json-rpc-client = {{ version = "{}""#,
-        groundhog_cli::scaffold::SCAFFOLD_JSON_RPC_CLIENT_VERSION
-    )));
-    assert!(!cargo.contains("{{"), "unsubstituted template placeholder");
-    assert!(cargo.contains("optional = true"));
-    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
-    assert!(!cargo.contains(r#"features = ["storage"]"#));
+    assert_counter_manifest(&cargo);
 
     assert_integration_scaffold(&dir);
     // RV32 bin wrapper target: the bin name must be the snake-case package
