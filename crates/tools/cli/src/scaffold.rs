@@ -25,13 +25,14 @@ const STUB_TEST_RV32: &str = include_str!("../templates/stub/test_rv32.rs.tmpl")
 /// SDK version pinned into scaffolded projects.
 ///
 /// Generated projects resolve outside this workspace, so this must be a
-/// version already published to the Groundhog registry, and one whose raw
-/// spec format this CLI reads — otherwise `groundhog build` refuses the
-/// fresh scaffold at the preflight. Bump together with
+/// version published to the Groundhog registry, and one whose raw spec
+/// format this CLI reads — otherwise `groundhog build` refuses the fresh
+/// scaffold at the preflight. Bump together with
 /// [`SCAFFOLD_TOOLCHAIN_CHANNEL`] when a new SDK release is validated on a
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
-/// against the real registry, so an incompatible pair fails there.
-pub const SCAFFOLD_SDK_VERSION: &str = "0.23.1";
+/// against the real registry, so an unpublished or incompatible pin fails
+/// there (and stays red until the pinned SDK is published).
+pub const SCAFFOLD_SDK_VERSION: &str = "0.24.0";
 
 /// `groundhog-json-rpc-client` version pinned into scaffolded projects.
 ///
@@ -42,7 +43,7 @@ pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.10.2";
 /// Toolchain channel pinned into scaffolded projects' `rust-toolchain.toml`.
 ///
 /// Keep in step with the nightly [`SCAFFOLD_SDK_VERSION`] is validated on.
-pub const SCAFFOLD_TOOLCHAIN_CHANNEL: &str = "nightly-2026-05-01";
+pub const SCAFFOLD_TOOLCHAIN_CHANNEL: &str = "nightly-2026-07-01";
 
 /// Convert a kebab-case name to `snake_case`.
 pub(crate) fn to_snake(name: &str) -> String {
