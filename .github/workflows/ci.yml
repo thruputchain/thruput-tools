@@ -142,6 +142,16 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: groundhog new my-counter
 
+      # A release PR advances the scaffold to a client version that does not
+      # exist in the registry until after merge. Exercise that exact source
+      # without weakening the version emitted for real generated projects.
+      - name: Use checked-out RPC client before registry publication
+        working-directory: ${{ runner.temp }}/my-counter
+        run: |
+          printf '\n[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]\ngroundhog-json-rpc-client = { path = "%s" }\n' \
+            "$GITHUB_WORKSPACE/crates/json-rpc/json-rpc-client" \
+            >> .cargo/config.toml
+
       - name: Host tests (cargo test)
         working-directory: ${{ runner.temp }}/my-counter
         run: cargo test

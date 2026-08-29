@@ -18,7 +18,9 @@ use groundhog_db_gateway::{
     DbGateway_DbGateway1_Client, DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayResult,
 };
 use groundhog_indexer::{
+    EventPage as IndexerEventPage, EventPageResult,
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
+    IndexerQueryOutcome, TransactionRefPage as IndexerTransactionRefPage, TransactionRefPageResult,
     TxInfoOutcome, TxInfoResult,
 };
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
@@ -52,6 +54,39 @@ use crate::{
 const HOGD_DEV_POOL_SIZE: usize = 2;
 const TOPIC_SIZE: usize = 32;
 const MAX_TOPICS: u32 = 3;
+
+fn indexer_query_error(outcome: i32) -> RpcServerError {
+    let message = if outcome == IndexerQueryOutcome::IndexerQueryNotReady.0 {
+        "hogd-dev indexer query backend is not ready".to_string()
+    } else if outcome == IndexerQueryOutcome::IndexerQueryInternalFailure.0 {
+        "hogd-dev indexer query backend failed internally".to_string()
+    } else {
+        format!("hogd-dev indexer returned unexpected query outcome: {outcome}")
+    };
+    RpcServerError::BackendUnavailable(message)
+}
+
+fn indexer_event_page(result: EventPageResult) -> Result<IndexerEventPage, RpcServerError> {
+    match result {
+        EventPageResult::IndexerQueryOk { page } => Ok(page),
+        EventPageResult::Default { outcome } => Err(indexer_query_error(outcome)),
+        _ => Err(RpcServerError::BackendUnavailable(
+            "hogd-dev indexer returned an unknown event-page result".into(),
+        )),
+    }
+}
+
+fn indexer_transaction_ref_page(
+    result: TransactionRefPageResult,
+) -> Result<IndexerTransactionRefPage, RpcServerError> {
+    match result {
+        TransactionRefPageResult::IndexerQueryOk { page } => Ok(page),
+        TransactionRefPageResult::Default { outcome } => Err(indexer_query_error(outcome)),
+        _ => Err(RpcServerError::BackendUnavailable(
+            "hogd-dev indexer returned an unknown transaction-page result".into(),
+        )),
+    }
+}
 
 /// Indexer-backed read plane for hogd-dev.
 ///
@@ -414,13 +449,14 @@ impl ReadPlane for HogdDevReadBackend {
     ) -> Result<EventPage, RpcServerError> {
         within_request_deadline(context, async {
             let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
-            let page = self
+            let result = self
                 .indexer
                 .get_events(&wire_query)
                 .await
                 .map_err(|source| {
                     RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
                 })?;
+            let page = indexer_event_page(result)?;
 
             let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
             for identified in &page.events.0 {
@@ -461,13 +497,14 @@ impl ReadPlane for HogdDevReadBackend {
     ) -> Result<TransactionRefPage, RpcServerError> {
         within_request_deadline(context, async {
             let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
-            let page = self
+            let result = self
                 .indexer
                 .get_transactions_by_address(&wire_query)
                 .await
                 .map_err(|source| {
                     RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
                 })?;
+            let page = indexer_transaction_ref_page(result)?;
             Ok(page.into())
         })
         .await
@@ -758,12 +795,12 @@ mod tests {
         DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
-        AddressTransactionQuery, EventPage as IdxEventPage,
+        AddressTransactionQuery, EventPage as IdxEventPage, EventPageResult,
         IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfo,
-        TxInfoResult,
+        IndexerQueryOutcome, TransactionPage as IdxTransactionPage, TransactionPageResult,
+        TransactionQuery, TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
     use groundhog_json_rpc_types::{
@@ -821,6 +858,28 @@ mod tests {
             }
             other => panic!("expected DeterministicError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn event_query_backend_failure_is_not_an_empty_page() {
+        let error = super::indexer_event_page(EventPageResult::Default {
+            outcome: IndexerQueryOutcome::IndexerQueryNotReady.0,
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
+        assert!(error.to_string().contains("not ready"));
+    }
+
+    #[test]
+    fn transaction_query_backend_failure_is_not_an_empty_page() {
+        let error = super::indexer_transaction_ref_page(TransactionRefPageResult::Default {
+            outcome: IndexerQueryOutcome::IndexerQueryInternalFailure.0,
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
+        assert!(error.to_string().contains("failed internally"));
     }
 
     // These constants mirror the fake_hogd_dev fixture. Defined here so the
@@ -1193,55 +1252,61 @@ mod tests {
         async fn get_events(
             &self,
             arg0: groundhog_indexer::EventQuery,
-        ) -> Result<IdxEventPage, ProgramError> {
+        ) -> Result<EventPageResult, ProgramError> {
             if self.mode == FakeIndexerMode::RpcFail {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));
             }
             let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0)?;
-            Ok(IdxEventPage {
-                events: VecM(events.clone()),
-                cursor: BytesM(next_cursor.clone()),
-                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
-                oldest_block: IdxBlockHeight::from(0_i64),
+            Ok(EventPageResult::IndexerQueryOk {
+                page: IdxEventPage {
+                    events: VecM(events.clone()),
+                    cursor: BytesM(next_cursor.clone()),
+                    latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                    oldest_block: IdxBlockHeight::from(0_i64),
+                },
             })
         }
 
         async fn get_transactions(
             &self,
             _arg0: TransactionQuery,
-        ) -> Result<IdxTransactionPage, ProgramError> {
+        ) -> Result<TransactionPageResult, ProgramError> {
             if self.mode == FakeIndexerMode::RpcFail {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));
             }
             // No canned transaction-list dataset; report an exhausted stream.
-            Ok(IdxTransactionPage {
-                transactions: VecM(vec![]),
-                cursor: BytesM(vec![]),
-                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
-                oldest_block: IdxBlockHeight::from(0_i64),
+            Ok(TransactionPageResult::IndexerQueryOk {
+                page: IdxTransactionPage {
+                    transactions: VecM(vec![]),
+                    cursor: BytesM(vec![]),
+                    latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                    oldest_block: IdxBlockHeight::from(0_i64),
+                },
             })
         }
 
         async fn get_transactions_by_address(
             &self,
             _arg0: AddressTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             if self.mode == FakeIndexerMode::RpcFail {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));
             }
             // No canned per-address dataset; report an exhausted stream.
-            Ok(TransactionRefPage {
-                refs: VecM(vec![]),
-                cursor: BytesM(vec![]),
-                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
-                oldest_block: IdxBlockHeight::from(0_i64),
+            Ok(TransactionRefPageResult::IndexerQueryOk {
+                page: TransactionRefPage {
+                    refs: VecM(vec![]),
+                    cursor: BytesM(vec![]),
+                    latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                    oldest_block: IdxBlockHeight::from(0_i64),
+                },
             })
         }
 
         async fn get_transactions_by_block(
             &self,
             _query: groundhog_indexer::BlockTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             Err(ProgramError::msg("not implemented in fake indexer"))
         }
     }

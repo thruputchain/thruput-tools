@@ -96,6 +96,7 @@ fn canned_block_info() -> BlockInfo {
         block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x71; 32])),
         protocol: groundhog_xdr::types::Protocol::from(4),
         network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x72; 32])),
+        config_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x79; 32])),
         proposer: Hex0x(groundhog_xdr::validator::ValidatorID::from([0x73; 32])),
         block_timepoint: groundhog_xdr::types::TimePoint::from(1_700_000_000),
         block_height: BlockHeight::from(33),

@@ -30,6 +30,8 @@ pub struct BlockInfo {
     pub block_hash: BlockHash,
     pub protocol: Protocol,
     pub network_hash: NetworkHash,
+    /// Hash of the post-block network configuration committed by consensus.
+    pub config_hash: SHA256Hash,
     pub proposer: ValidatorID,
     pub block_timepoint: TimePoint,
     pub block_height: BlockHeight,
@@ -81,6 +83,7 @@ impl TryFrom<ConsensusValue> for BlockInfo {
         let ProposalHeader {
             ext,
             network_hash,
+            config_hash,
             proposer,
             block_timepoint,
             block_height,
@@ -94,6 +97,7 @@ impl TryFrom<ConsensusValue> for BlockInfo {
             block_hash,
             protocol,
             network_hash: Hex0x(network_hash.into_inner()),
+            config_hash: Hex0x(config_hash.into_inner()),
             proposer: Hex0x(proposer),
             block_timepoint,
             block_height,

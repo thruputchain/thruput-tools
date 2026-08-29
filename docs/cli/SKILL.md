@@ -123,7 +123,7 @@ dev = ["sdk/dev"]
 
 [dependencies]
 # Authoritative pin: SCAFFOLD_SDK_VERSION in crates/tools/cli/src/scaffold.rs.
-sdk = { version = "0.24.0", registry = "groundhog" }
+sdk = { version = "0.24.1", registry = "groundhog" }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }

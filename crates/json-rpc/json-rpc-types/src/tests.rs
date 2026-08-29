@@ -89,7 +89,7 @@ mod wire_format {
     use groundhog_xdr::{
         header::ProposalHeader,
         types::{
-            ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
+            ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
             SHA256Hash as XdrHash, StorageShortHash, TimePoint, TxsHash,
         },
         validator::ValidatorID,
@@ -114,6 +114,7 @@ mod wire_format {
             proposal_header: ProposalHeader {
                 ext: ExtensionPoint::_0,
                 network_hash: NetworkHash::new(XdrHash::from([1; 32])),
+                config_hash: ConfigHash::new(XdrHash::from([8; 32])),
                 proposer: ValidatorID::new([2; 32]),
                 block_timepoint: TimePoint::new(123),
                 block_height: BlockHeight::from(99i64),
@@ -490,6 +491,7 @@ mod wire_format {
         );
         assert_eq!(v["protocol"], 1);
         assert_eq!(v["networkHash"], format!("0x{}", "01".repeat(32)));
+        assert_eq!(v["configHash"], format!("0x{}", "08".repeat(32)));
         assert_eq!(v["proposer"], format!("0x{}", "02".repeat(32)));
         assert_eq!(v["blockTimepoint"], 123);
         assert_eq!(v["blockHeight"], 99);
@@ -511,7 +513,7 @@ mod wire_format {
             .expect("bug: valid consensus value should hash");
         assert_eq!(
             serde_json::to_value(hash).expect("bug: hash should serialize"),
-            "0xe5557e634c3ea1dd2a28038dbf721ef874c465dab6d11c55002e22cf16776fa8"
+            "0x77027501d110d5b4b92b76f64f3953f3f7a41f1280e31ae7de433e3f9677f9b0"
         );
     }
 
