@@ -277,6 +277,10 @@
           "blockTimepoint": {
             "$ref": "#/components/schemas/TimePoint"
           },
+          "configHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Hash of the post-block network configuration committed by consensus."
+          },
           "eventsHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
           },
@@ -313,6 +317,7 @@
           "blockHash",
           "protocol",
           "networkHash",
+          "configHash",
           "proposer",
           "blockTimepoint",
           "blockHeight",
@@ -1270,7 +1275,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "4.1.0"
+    "version": "5.0.0"
   },
   "methods": [
     {

@@ -1616,11 +1616,10 @@ mod tests {
         DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
-        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery,
-        EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
-        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoOutcome,
-        TxInfoResult,
+        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
+        EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
+        TransactionQuery, TransactionRefPageResult, TxInfoOutcome, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
     use groundhog_json_rpc_types::{
@@ -1649,10 +1648,12 @@ mod tests {
         genesis::GenesisConfiguration,
         header::{ProposalContext, ProposalHeader},
         invoke_flag::InvokeFlag,
+        network_config::NetworkConfig,
         transaction::{Invocation, InvocationFrameOutput},
         types::{
-            ConsensusValueHash, ContractAddress, EventsHash, ExtensionPoint, NetworkHash,
-            Protocol as ConsensusProtocol, SHA256Hash, StorageShortHash, TimePoint, TxsHash,
+            ConfigHash, ConsensusValueHash, ContractAddress, EventsHash, ExtensionPoint,
+            NetworkHash, Protocol as ConsensusProtocol, SHA256Hash, StorageShortHash, TimePoint,
+            TxsHash,
         },
         validator::ValidatorID,
         view::TransactionViewQuery,
@@ -1724,28 +1725,28 @@ mod tests {
             panic!("probe isolation test should only issue transaction lookups")
         }
 
-        async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
+        async fn get_events(&self, _query: EventQuery) -> Result<EventPageResult, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
 
         async fn get_transactions(
             &self,
             _query: TransactionQuery,
-        ) -> Result<IdxTransactionPage, ProgramError> {
+        ) -> Result<TransactionPageResult, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
 
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
 
         async fn get_transactions_by_block(
             &self,
             _query: BlockTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
     }
@@ -1819,6 +1820,11 @@ mod tests {
                 contract_size: 0,
                 contract_type: ContractType::kNative,
             },
+            network_config: NetworkConfig {
+                ext: ExtensionPoint::_0,
+                max_sha256_buffers: 0,
+                max_cross_invoke_depth: 0,
+            },
             value: ConsensusValue {
                 protocol: ConsensusProtocol::new(0),
                 ext: ExtensionPoint::_0,
@@ -1826,6 +1832,7 @@ mod tests {
                 proposal_header: ProposalHeader {
                     ext: ExtensionPoint::_0,
                     network_hash: NetworkHash::new(SHA256Hash::from(network_hash)),
+                    config_hash: ConfigHash::new(SHA256Hash::from([0; 32])),
                     proposer: ValidatorID::new([0x40; 32]),
                     block_timepoint: TimePoint::new(1),
                     block_height: 1.into(),
@@ -2038,28 +2045,28 @@ mod tests {
             panic!("lifecycle test should not query blocks")
         }
 
-        async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
+        async fn get_events(&self, _query: EventQuery) -> Result<EventPageResult, ProgramError> {
             panic!("lifecycle test should not query events")
         }
 
         async fn get_transactions(
             &self,
             _query: TransactionQuery,
-        ) -> Result<IdxTransactionPage, ProgramError> {
+        ) -> Result<TransactionPageResult, ProgramError> {
             panic!("lifecycle test should not query transactions")
         }
 
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("lifecycle test should not query transactions by address")
         }
 
         async fn get_transactions_by_block(
             &self,
             _query: BlockTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("lifecycle test should not query transactions by block")
         }
     }
@@ -2300,28 +2307,28 @@ mod tests {
             panic!("reconnect test should not issue indexer data RPCs")
         }
 
-        async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
+        async fn get_events(&self, _query: EventQuery) -> Result<EventPageResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
 
         async fn get_transactions(
             &self,
             _query: TransactionQuery,
-        ) -> Result<IdxTransactionPage, ProgramError> {
+        ) -> Result<TransactionPageResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
 
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
 
         async fn get_transactions_by_block(
             &self,
             _query: BlockTransactionQuery,
-        ) -> Result<TransactionRefPage, ProgramError> {
+        ) -> Result<TransactionRefPageResult, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
     }

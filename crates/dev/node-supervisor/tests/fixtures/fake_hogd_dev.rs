@@ -20,9 +20,11 @@ use groundhog_db_gateway::{
     DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
 use groundhog_indexer::{
-    AddressTransactionQuery, EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+    AddressTransactionQuery, EventPage, EventPageResult, EventQuery,
+    IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-    TransactionPage, TransactionQuery, TransactionRefPage, TxInfo, TxInfoResult,
+    TransactionPage, TransactionPageResult, TransactionQuery, TransactionRefPage,
+    TransactionRefPageResult, TxInfo, TxInfoResult,
 };
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
@@ -39,13 +41,14 @@ use groundhog_xdr::event::IdentifiedEvent;
 use groundhog_xdr::genesis::GenesisConfiguration;
 use groundhog_xdr::header::{ProposalContext, ProposalHeader};
 use groundhog_xdr::network::ProtocolCommit;
+use groundhog_xdr::network_config::NetworkConfig;
 use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::transaction::{
     OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
 };
 use groundhog_xdr::types::{
-    BlockHeight, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint, NetworkHash,
-    Protocol, SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
+    BlockHeight, ConfigHash, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint,
+    NetworkHash, Protocol, SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
 };
 use groundhog_xdr::validator::ValidatorID;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
@@ -798,6 +801,11 @@ impl FakeScheduler {
                 contract_size: 0,
                 contract_type: ContractType::kNative,
             },
+            network_config: NetworkConfig {
+                ext: ExtensionPoint::_0,
+                max_sha256_buffers: 0,
+                max_cross_invoke_depth: 0,
+            },
             value: ConsensusValue {
                 protocol: Protocol::new(0),
                 ext: ExtensionPoint::_0,
@@ -833,6 +841,7 @@ fn fake_proposal_header_with_network_hash(
     ProposalHeader {
         ext: ExtensionPoint::_0,
         network_hash: NetworkHash::new(SHA256Hash::from(network_hash)),
+        config_hash: ConfigHash::new(SHA256Hash::from([0; 32])),
         proposer,
         block_timepoint,
         block_height: BlockHeight::from(height),
@@ -1466,16 +1475,18 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn get_events(&self, arg0: EventQuery) -> Result<EventPage, ProgramError> {
+    async fn get_events(&self, arg0: EventQuery) -> Result<EventPageResult, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
         let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0)?;
-        Ok(EventPage {
-            events: VecM(events.clone()),
-            cursor: BytesM(next_cursor.clone()),
-            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
-            oldest_block: BlockHeight::from(0_i64),
+        Ok(EventPageResult::IndexerQueryOk {
+            page: EventPage {
+                events: VecM(events.clone()),
+                cursor: BytesM(next_cursor.clone()),
+                latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: BlockHeight::from(0_i64),
+            },
         })
     }
 
@@ -1483,16 +1494,18 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     async fn get_transactions(
         &self,
         _arg0: TransactionQuery,
-    ) -> Result<TransactionPage, ProgramError> {
+    ) -> Result<TransactionPageResult, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
         // No canned transaction-list dataset; report an exhausted stream.
-        Ok(TransactionPage {
-            transactions: VecM(vec![]),
-            cursor: BytesM(vec![]),
-            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
-            oldest_block: BlockHeight::from(0_i64),
+        Ok(TransactionPageResult::IndexerQueryOk {
+            page: TransactionPage {
+                transactions: VecM(vec![]),
+                cursor: BytesM(vec![]),
+                latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: BlockHeight::from(0_i64),
+            },
         })
     }
 
@@ -1500,16 +1513,18 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     async fn get_transactions_by_address(
         &self,
         _arg0: AddressTransactionQuery,
-    ) -> Result<TransactionRefPage, ProgramError> {
+    ) -> Result<TransactionRefPageResult, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
         // No canned per-address dataset; report an exhausted stream.
-        Ok(TransactionRefPage {
-            refs: VecM(vec![]),
-            cursor: BytesM(vec![]),
-            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
-            oldest_block: BlockHeight::from(0_i64),
+        Ok(TransactionRefPageResult::IndexerQueryOk {
+            page: TransactionRefPage {
+                refs: VecM(vec![]),
+                cursor: BytesM(vec![]),
+                latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: BlockHeight::from(0_i64),
+            },
         })
     }
 
@@ -1517,7 +1532,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     async fn get_transactions_by_block(
         &self,
         _query: groundhog_indexer::BlockTransactionQuery,
-    ) -> Result<TransactionRefPage, ProgramError> {
+    ) -> Result<TransactionRefPageResult, ProgramError> {
         Err(ProgramError::msg(
             "fake indexer does not serve transactions by block",
         ))
@@ -1610,6 +1625,15 @@ mod tests {
         }
     }
 
+    fn expect_event_page(
+        result: groundhog_indexer::EventPageResult,
+    ) -> groundhog_indexer::EventPage {
+        match result {
+            groundhog_indexer::EventPageResult::IndexerQueryOk { page } => page,
+            other => panic!("expected successful event page, got {other:?}"),
+        }
+    }
+
     // --- get_transaction_info tests ---
 
     #[tokio::test]
@@ -1695,10 +1719,12 @@ mod tests {
         let client = make_client(addr).await;
 
         // Act
-        let page = client
-            .get_events(&empty_event_query())
-            .await
-            .expect("bug: get_events should succeed");
+        let page = expect_event_page(
+            client
+                .get_events(&empty_event_query())
+                .await
+                .expect("bug: get_events should succeed"),
+        );
 
         // Assert
         assert_eq!(page.events.0.len(), 2, "first page should have 2 events");
@@ -1720,10 +1746,12 @@ mod tests {
         let client = make_client(addr).await;
 
         // Act
-        let page = client
-            .get_events(&event_query_with_cursor(CANNED_EVENT_CURSOR))
-            .await
-            .expect("bug: get_events page 2 should succeed");
+        let page = expect_event_page(
+            client
+                .get_events(&event_query_with_cursor(CANNED_EVENT_CURSOR))
+                .await
+                .expect("bug: get_events page 2 should succeed"),
+        );
 
         // Assert
         assert_eq!(page.events.0.len(), 1, "second page should have 1 event");
@@ -1740,14 +1768,18 @@ mod tests {
         let client = make_client(addr).await;
 
         // Act: walk all pages
-        let page1 = client
-            .get_events(&empty_event_query())
-            .await
-            .expect("bug: page 1 should succeed");
-        let page2 = client
-            .get_events(&event_query_with_cursor(page1.cursor.0.as_slice()))
-            .await
-            .expect("bug: page 2 should succeed");
+        let page1 = expect_event_page(
+            client
+                .get_events(&empty_event_query())
+                .await
+                .expect("bug: page 1 should succeed"),
+        );
+        let page2 = expect_event_page(
+            client
+                .get_events(&event_query_with_cursor(page1.cursor.0.as_slice()))
+                .await
+                .expect("bug: page 2 should succeed"),
+        );
 
         // Assert: all three events collected across two pages
         let total = page1.events.0.len() + page2.events.0.len();
