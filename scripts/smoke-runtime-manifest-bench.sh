@@ -176,7 +176,12 @@ import sys
 text = open(sys.argv[1], encoding="utf-8").read()
 match = re.search(r'protocol_commit\[\]\s*=\s*(?:u8)?"([0-9a-fA-F]+)"', text)
 if match:
-    print(f"hogp/{match.group(1)[:12]}")
+    token = f"hogp/{match.group(1)[:15]}"
+    # hogd derives the same 20 bytes; anything else is rejected outright now
+    # that ProtocolCommit is a fixed-width array.
+    if len(token) != 20:
+        sys.exit(f"derived protocol token {token!r} is {len(token)} bytes, want 20")
+    print(token)
 PY
 )"
         if [[ -n "$protocol" ]]; then
