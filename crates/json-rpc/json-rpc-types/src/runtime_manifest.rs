@@ -335,7 +335,7 @@ mod tests {
                 "kind": "hogd-dev-runtime",
                 "chainState": "fresh",
                 "networkHash": "4242424242424242424242424242424242424242424242424242424242424242",
-                "protocol": "hogp/test",
+                "protocol": "hogp/test00000000000",
                 "producer": {
                     "binary": "hogd-dev",
                     "version": "0.1.0",
@@ -456,7 +456,7 @@ mod tests {
             kind: "hogd-dev-runtime".into(),
             chain_state: Some(RuntimeManifestChainState::Fresh),
             network_hash: crate::NetworkHashHex::from([0x42; 32]),
-            protocol: "hogp/test".into(),
+            protocol: "hogp/test00000000000".into(),
             producer: RuntimeManifestProducer {
                 binary: "hogd-dev".into(),
                 version: "0.1.0".into(),

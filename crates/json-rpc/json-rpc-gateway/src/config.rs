@@ -629,7 +629,10 @@ network_hash = "0x1234"
             config.view_gateway_address.as_deref(),
             Some("127.0.0.1:1003")
         );
-        assert_eq!(config.hogd_protocol_override.as_deref(), Some("hogp/test"));
+        assert_eq!(
+            config.hogd_protocol_override.as_deref(),
+            Some("hogp/test00000000000")
+        );
     }
 
     #[test]
@@ -647,7 +650,10 @@ network_hash = "0x1234"
         assert_eq!(config.indexer_address, None);
         assert_eq!(config.db_gateway_address, None);
         assert_eq!(config.view_gateway_address, None);
-        assert_eq!(config.hogd_protocol_override.as_deref(), Some("hogp/test"));
+        assert_eq!(
+            config.hogd_protocol_override.as_deref(),
+            Some("hogp/test00000000000")
+        );
     }
 
     #[test]
@@ -715,7 +721,10 @@ network_hash = "0x1234"
             config.view_gateway_address.as_deref(),
             Some("127.0.0.1:1003")
         );
-        assert_eq!(config.hogd_protocol_override.as_deref(), Some("hogp/test"));
+        assert_eq!(
+            config.hogd_protocol_override.as_deref(),
+            Some("hogp/test00000000000")
+        );
     }
 
     #[test]
@@ -782,7 +791,7 @@ network_hash = "0x1234"
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0",

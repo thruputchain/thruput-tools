@@ -1196,8 +1196,8 @@ mod tests {
             outcome: 1,
             outcome_name: "ViewGatewayIntroMismatchedProtocol",
             is_protocol_mismatch: true,
-            protocol: "hogp/sent".to_string(),
-            expected_protocol: Some("hogp/expected".to_string()),
+            protocol: "hogp/sent00000000000".to_string(),
+            expected_protocol: Some("hogp/expected0000000".to_string()),
         };
         let cli_error = map_node_supervisor_error(&err);
 
@@ -1210,7 +1210,7 @@ mod tests {
             cli_error
                 .hint()
                 .expect("intro rejection should have a specific hint"),
-            "pass `--hogd-protocol=hogp/expected` to override, or rebuild groundhog node \
+            "pass `--hogd-protocol=hogp/expected0000000` to override, or rebuild groundhog node \
              against a matching groundhog-xdr"
         );
     }
@@ -1316,7 +1316,7 @@ mod tests {
           "kind": "hogd-dev-runtime",
           "chainState": "fresh",
           "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
-          "protocol": "hogp/test",
+          "protocol": "hogp/test00000000000",
           "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
           "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
           "endpoints": {"scheduler": "127.0.0.1:12345"},

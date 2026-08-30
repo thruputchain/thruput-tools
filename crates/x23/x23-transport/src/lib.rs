@@ -51,6 +51,12 @@ pub fn hogd_large_message_config() -> ConnectionConfig {
 pub enum ConnectError {
     /// The configured address could not be parsed as a `SocketAddr`.
     /// Treat this as a hard configuration failure.
+    /// The configured protocol override cannot name a protocol token.
+    #[error("invalid protocol override: {reason}")]
+    InvalidProtocolOverride {
+        /// Why the configured text cannot name a token.
+        reason: String,
+    },
     #[error("invalid address '{addr}': {source}")]
     BadAddress {
         addr: String,

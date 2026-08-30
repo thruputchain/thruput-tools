@@ -113,7 +113,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains("groundhog-integration-test = ["));
     // Generated projects resolve outside this workspace, so this must name a
     // client version that is already available in the Groundhog registry.
-    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.11.0""#));
+    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.12.0""#));
     assert!(cargo.contains("optional = true"));
     assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
