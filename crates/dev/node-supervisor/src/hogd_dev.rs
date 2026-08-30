@@ -1923,7 +1923,7 @@ mod tests {
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
         readiness.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32]);
 
-        let err = validate_runtime_identity(&readiness, "hogp/test")
+        let err = validate_runtime_identity(&readiness, "hogp/test00000000000")
             .expect_err("bug: a non-bootstrap network should fail closed");
         assert!(matches!(
             err,
@@ -1939,12 +1939,12 @@ mod tests {
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
 
-        let err = validate_runtime_identity(&readiness, "hogp/expected")
+        let err = validate_runtime_identity(&readiness, "hogp/expected0000000")
             .expect_err("bug: a protocol mismatch should fail closed");
         assert!(matches!(
             err,
             NodeSupervisorError::RuntimeProtocolMismatch { expected, observed }
-                if expected == "hogp/expected" && observed.as_deref() == Some("hogp/test")
+                if expected == "hogp/expected0000000" && observed.as_deref() == Some("hogp/test00000000000")
         ));
     }
 
@@ -2070,7 +2070,7 @@ mod tests {
             Some(RuntimeManifestChainState::Fresh)
         );
         assert_eq!(readiness.network_hash.as_str(), "00".repeat(32));
-        assert_eq!(readiness.protocol.as_deref(), Some("hogp/test"));
+        assert_eq!(readiness.protocol.as_deref(), Some("hogp/test00000000000"));
         assert_eq!(
             readiness.manifest_hash,
             pointer["manifestHash"].as_str().map(str::to_owned)
@@ -3132,7 +3132,7 @@ mod tests {
               "kind":"hogd-dev-runtime",
               "chainState":"fresh",
               "networkHash":"0000000000000000000000000000000000000000000000000000000000000000",
-              "protocol":"hogp/test",
+              "protocol":"hogp/test00000000000",
               "producer":{{"binary":"hog-devnode","version":"0.1.0","commitHash":"abcdef0"}},
               "endpoints":{endpoints},
               "bootstrapAccountDerivation":{{

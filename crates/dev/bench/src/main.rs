@@ -1462,7 +1462,7 @@ mod tests {
                 kind: "hogd-dev-runtime".into(),
                 chain_state: Some("fresh".into()),
                 network_hash: "22".repeat(32),
-                protocol: "hogp/abcdef012345".into(),
+                protocol: "hogp/abcdef012345000".into(),
                 producer: RuntimeProducerIdentity {
                     binary: "hog-devnode".into(),
                     version: "1.2.3".into(),
@@ -1543,7 +1543,7 @@ mod tests {
                     "kind": "hogd-dev-runtime",
                     "chainState": "fresh",
                     "networkHash": "22".repeat(32),
-                    "protocol": "hogp/abcdef012345",
+                    "protocol": "hogp/abcdef012345000",
                     "producer": {
                         "binary": "hog-devnode",
                         "version": "1.2.3",
@@ -1763,7 +1763,7 @@ mod tests {
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hogd-dev",
                 "version": "0.1.0",

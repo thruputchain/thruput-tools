@@ -75,7 +75,7 @@ impl HogdDevViewBackend {
         .await
         .map_err(|source| NodeSupervisorError::ViewGatewayConnect { endpoint, source })?;
 
-        let protocol = protocol_from_text(protocol_version);
+        let protocol = protocol_from_text(protocol_version)?;
         let intro_outcome = client.viewgateway_intro(&protocol).await.map_err(|e| {
             NodeSupervisorError::ViewGatewayRpc {
                 op: "viewgateway_intro",
@@ -527,8 +527,8 @@ mod tests {
 
         let result = HogdDevViewBackend::connect_optional(
             Some(addr),
-            "hogp/sent",
-            Some("hogp/expected"),
+            "hogp/sent00000000000",
+            Some("hogp/expected0000000"),
             Duration::from_secs(1),
         )
         .await;
@@ -551,11 +551,11 @@ mod tests {
                 );
                 assert_eq!(outcome_name, "ViewGatewayIntroMismatchedProtocol");
                 assert!(is_protocol_mismatch);
-                assert_eq!(protocol, "hogp/sent");
-                assert_eq!(expected_protocol.as_deref(), Some("hogp/expected"));
+                assert_eq!(protocol, "hogp/sent00000000000");
+                assert_eq!(expected_protocol.as_deref(), Some("hogp/expected0000000"));
                 assert!(message.contains("ViewGateway intro mismatch"));
-                assert!(message.contains("hogp/sent"));
-                assert!(message.contains("hogp/expected"));
+                assert!(message.contains("hogp/sent00000000000"));
+                assert!(message.contains("hogp/expected0000000"));
                 assert!(message.contains("ViewGatewayIntroMismatchedProtocol"));
             }
             other => panic!("expected ViewGateway intro rejection, got {other:?}"),

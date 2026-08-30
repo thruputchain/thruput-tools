@@ -11451,7 +11451,7 @@ fn spawn_network_descriptor_with_hash(
             "kind": "groundhog-network",
             "networkId": "devnet",
             "networkHash": format!("0x{network_hash}"),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "endpoints": { "rpcUrl": rpc_url },
             "nativeHog": {
@@ -12228,7 +12228,7 @@ fn write_runtime_manifest_with_seed(
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": "00".repeat(32),
-        "protocol": "hogp/test",
+        "protocol": "hogp/test00000000000",
         "genesisHash": format!("0x{}", "42".repeat(32)),
         "producer": {
             "binary": "hog-devnode",

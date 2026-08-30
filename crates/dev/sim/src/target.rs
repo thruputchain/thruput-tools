@@ -1395,7 +1395,7 @@ mod tests {
             .acquire(
                 &manifest,
                 TargetOverrides {
-                    hogd_protocol: Some("hogp/test".into()),
+                    hogd_protocol: Some("hogp/test00000000000".into()),
                     ..TargetOverrides::default()
                 },
                 context(),
@@ -1535,7 +1535,7 @@ mod tests {
         let args = local_node_args(LocalNodeArgOptions {
             required_accounts: 5,
             hogd_dev_binary: Some(std::path::Path::new("/tmp/hog-devnode")),
-            hogd_protocol: Some("hogp/test"),
+            hogd_protocol: Some("hogp/test00000000000"),
             block_driver: Some(TargetBlockDriverMode::Interval),
             block_interval_ms: Some(250),
             max_rpc_connections: Some(512),
@@ -1555,7 +1555,7 @@ mod tests {
                 "--hog-devnode-binary",
                 "/tmp/hog-devnode",
                 "--hogd-protocol",
-                "hogp/test",
+                "hogp/test00000000000",
                 "--block-driver",
                 "interval",
                 "--block-interval-ms",

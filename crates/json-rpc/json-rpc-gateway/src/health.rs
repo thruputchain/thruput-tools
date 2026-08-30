@@ -6,13 +6,11 @@ use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
 use groundhog_json_rpc_types::{
     BlockHeight, NetworkHashHex,
     block::{ChainTip, consensus_value_hash},
-    protocol_token::protocol_from_text,
 };
 use groundhog_scheduler::{DbTip, sched_coord::SchedulerGetTipResult};
 use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::ViewGatewayIntroOutcome;
 use groundhog_x23_transport::ConnectError;
-use groundhog_xdr::PROTOCOL_VERSION;
 use serde::Serialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
@@ -594,7 +592,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         spawn_once(&mut attempts.indexer, move || async move {
             let result = connect_optional_indexer(
                 ctx.config.indexer_address.as_deref(),
-                ctx.config.hogd_protocol_override.as_deref(),
+                Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
             )
@@ -632,7 +630,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
             let result = connect_optional_db_gateway(
                 ctx.config.db_gateway_address.as_deref(),
                 db_gateway_pool_size(&ctx.config),
-                ctx.config.hogd_protocol_override.as_deref(),
+                Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
             )
@@ -669,7 +667,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         spawn_once(&mut attempts.view_gateway, move || async move {
             let result = connect_optional_view_gateway(
                 ctx.config.view_gateway_address.as_deref(),
-                ctx.config.hogd_protocol_override.as_deref(),
+                Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
             )
@@ -857,10 +855,7 @@ async fn probe_backends(
 ) -> BackendProbeResults {
     let config = &ctx.config;
     let probe_timeout = backend_probe_timeout(config);
-    let protocol = config
-        .hogd_protocol_override
-        .as_deref()
-        .map_or(PROTOCOL_VERSION, protocol_from_text);
+    let protocol = ctx.protocol;
 
     let ProbeTimeouts {
         indexer: indexer_timeouts,
@@ -1638,6 +1633,7 @@ mod tests {
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
         ViewGatewayResult,
     };
+    use groundhog_xdr::PROTOCOL_VERSION;
     use groundhog_xdr::transaction::{
         OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
     };
@@ -2803,6 +2799,7 @@ mod tests {
         });
         let metrics = GatewayMetrics::for_tests();
         let ctx = Arc::new(GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -2878,6 +2875,7 @@ mod tests {
         });
         let metrics = GatewayMetrics::for_tests();
         let ctx = Arc::new(GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(scheduler))),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -3051,6 +3049,7 @@ mod tests {
         });
         let metrics = GatewayMetrics::for_tests();
         let ctx = Arc::new(GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -3151,6 +3150,7 @@ mod tests {
             ..GatewayConfig::default()
         });
         let ctx = Arc::new(GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -3216,6 +3216,7 @@ mod tests {
             .expect("scheduler connection should succeed")
             .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client))),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -3251,6 +3252,7 @@ mod tests {
             .expect("scheduler connection should succeed")
             .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client.clone()))),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
@@ -3323,6 +3325,7 @@ mod tests {
             ..GatewayConfig::default()
         });
         let ctx = GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(Some(indexer.clone()))),
             Arc::new(RwLock::new(Some(view_gateway.clone()))),

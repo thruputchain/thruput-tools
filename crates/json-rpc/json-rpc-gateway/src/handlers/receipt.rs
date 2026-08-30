@@ -336,6 +336,7 @@ pub async fn get_transaction_status(
 
 #[cfg(test)]
 mod tests {
+    use groundhog_xdr::PROTOCOL_VERSION;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -634,6 +635,7 @@ mod tests {
         .expect("bug: test indexer should connect");
 
         GatewayContext::assemble(
+            PROTOCOL_VERSION,
             Arc::new(RwLock::new(scheduler)),
             Arc::new(RwLock::new(
                 indexer.map(|client| BackendClient::new(client.clone(), client)),

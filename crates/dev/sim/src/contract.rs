@@ -1044,7 +1044,7 @@ mod tests {
             "schemaVersion": 2,
             "kind": "hosted-devnet-runtime",
             "networkHash": "11".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "chuckd",
                 "version": "0.1.0"

@@ -13,6 +13,7 @@ use groundhog_indexer::{
 };
 use groundhog_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
+use groundhog_scp::network::ProtocolCommit;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{
     ConnectError, hogd_large_message_config, try_connect, try_connect_with_canceled_call_policy,
@@ -150,6 +151,11 @@ impl Drop for AbortTaskOnDrop {
 /// the client out of the lock before making RPC calls, so the read
 /// guard is not held across `.await`.
 pub struct GatewayContext {
+    /// The protocol token this gateway offers at intro: the configured
+    /// override when there is one, otherwise this build's own. Resolved once
+    /// at construction, so nothing downstream re-parses operator text.
+    pub(crate) protocol: ProtocolCommit,
+
     /// x23 RPC client to hogd scheduler.
     /// Used for: `submit_unvetted`, `get_tip`, `lookup_transactions`, `size`.
     pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
@@ -227,7 +233,17 @@ impl GatewayContext {
         };
         let scheduler = Arc::new(RwLock::new(None));
 
-        let protocol_override = config.hogd_protocol_override.as_deref();
+        // Resolved once, here, so a malformed override fails startup with the
+        // text the operator wrote rather than reaching a backend as some other
+        // token and coming back as a protocol mismatch.
+        let protocol_override = config
+            .hogd_protocol_override
+            .as_deref()
+            .map(protocol_from_text)
+            .transpose()
+            .map_err(|source| ConnectError::InvalidProtocolOverride {
+                reason: source.to_string(),
+            })?;
 
         let indexer = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_indexer(
@@ -262,6 +278,7 @@ impl GatewayContext {
         )?));
 
         let context = Self::assemble(
+            protocol_override.unwrap_or(PROTOCOL_VERSION),
             scheduler,
             indexer,
             view_gateway,
@@ -281,6 +298,7 @@ impl GatewayContext {
     /// Assemble a context from already-connected (or absent) backend
     /// clients, spawning the batching and coalescing tasks.
     pub(crate) fn assemble(
+        protocol: ProtocolCommit,
         scheduler: Arc<RwLock<Option<SchedulerClient>>>,
         indexer: Arc<RwLock<Option<IndexerClient>>>,
         view_gateway: Arc<RwLock<Option<ViewGatewayClient>>>,
@@ -339,6 +357,7 @@ impl GatewayContext {
             scheduler_quarantine: Arc::new(RwLock::new(None)),
             indexer,
             batch_submitter,
+            protocol,
             storage_batcher,
             tip_coalescer,
             view_gateway,
@@ -461,7 +480,7 @@ where
 
 pub(crate) async fn connect_optional_indexer(
     address: Option<&str>,
-    protocol_override: Option<&str>,
+    protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<IndexerClient>, ConnectError> {
@@ -497,10 +516,9 @@ pub(crate) async fn connect_optional_indexer(
         });
     };
 
-    let protocol = protocol_override.map_or(PROTOCOL_VERSION, protocol_from_text);
-    // The text form of what is actually sent, padding included, so a mismatch
-    // message quotes the bytes the backend rejected rather than the raw
-    // override it was derived from.
+    let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
+    // The text form of what is actually sent, so a mismatch message quotes the
+    // bytes the backend rejected.
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
@@ -560,7 +578,7 @@ pub(crate) async fn connect_optional_indexer(
 pub(crate) async fn connect_optional_db_gateway(
     address: Option<&str>,
     pool_size: usize,
-    protocol_override: Option<&str>,
+    protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<DbGatewayClient>, ConnectError> {
@@ -596,10 +614,9 @@ pub(crate) async fn connect_optional_db_gateway(
         });
     };
 
-    let protocol = protocol_override.map_or(PROTOCOL_VERSION, protocol_from_text);
-    // The text form of what is actually sent, padding included, so a mismatch
-    // message quotes the bytes the backend rejected rather than the raw
-    // override it was derived from.
+    let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
+    // The text form of what is actually sent, so a mismatch message quotes the
+    // bytes the backend rejected.
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
@@ -656,7 +673,7 @@ pub(crate) async fn connect_optional_db_gateway(
 
 pub(crate) async fn connect_optional_view_gateway(
     address: Option<&str>,
-    protocol_override: Option<&str>,
+    protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<ViewGatewayClient>, ConnectError> {
@@ -692,10 +709,9 @@ pub(crate) async fn connect_optional_view_gateway(
         });
     };
 
-    let protocol = protocol_override.map_or(PROTOCOL_VERSION, protocol_from_text);
-    // The text form of what is actually sent, padding included, so a mismatch
-    // message quotes the bytes the backend rejected rather than the raw
-    // override it was derived from.
+    let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
+    // The text form of what is actually sent, so a mismatch message quotes the
+    // bytes the backend rejected.
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
@@ -929,7 +945,9 @@ mod tests {
         ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
             match self.mode {
                 IntroMode::Reject => Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol),
-                IntroMode::Expect(expected) if arg0 == protocol_from_text(expected) => {
+                IntroMode::Expect(expected)
+                    if protocol_from_text(expected).is_ok_and(|want| arg0 == want) =>
+                {
                     Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
                 }
                 IntroMode::Expect(_) => {
@@ -990,7 +1008,9 @@ mod tests {
             arg0: Protocol,
         ) -> Result<DbGatewayIntroOutcome, ProgramError> {
             match self.mode {
-                IntroMode::Expect(expected) if arg0 == protocol_from_text(expected) => {
+                IntroMode::Expect(expected)
+                    if protocol_from_text(expected).is_ok_and(|want| arg0 == want) =>
+                {
                     Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
                 }
                 IntroMode::Reject | IntroMode::Expect(_) => {
@@ -1018,7 +1038,7 @@ mod tests {
             &self,
             arg0: Protocol,
         ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
-            if arg0 == protocol_from_text(self.expected) {
+            if protocol_from_text(self.expected).is_ok_and(|want| arg0 == want) {
                 Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
             } else {
                 Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol)
@@ -1253,11 +1273,11 @@ mod tests {
 
     #[tokio::test]
     async fn configured_view_gateway_uses_protocol_override_for_startup_probe() {
-        let (addr, _server) = start_protocol_checking_view_gateway("hogp/test-smoke").await;
+        let (addr, _server) = start_protocol_checking_view_gateway("hogp/test-smoke00000").await;
 
         let client = connect_optional_view_gateway(
             Some(&addr.to_string()),
-            Some("hogp/test-smoke"),
+            Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
             None,
         )
@@ -1271,13 +1291,13 @@ mod tests {
     #[tokio::test]
     async fn configured_indexer_and_db_gateway_use_protocol_override_for_startup_probe() {
         let (indexer_addr, _indexer_server) =
-            start_test_indexer(IntroMode::Expect("hogp/test-smoke")).await;
+            start_test_indexer(IntroMode::Expect("hogp/test-smoke00000")).await;
         let (db_addr, _db_server) =
-            start_test_db_gateway(IntroMode::Expect("hogp/test-smoke")).await;
+            start_test_db_gateway(IntroMode::Expect("hogp/test-smoke00000")).await;
 
         let indexer = connect_optional_indexer(
             Some(&indexer_addr.to_string()),
-            Some("hogp/test-smoke"),
+            Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
             None,
         )
@@ -1287,7 +1307,7 @@ mod tests {
         let db_gateway = connect_optional_db_gateway(
             Some(&db_addr.to_string()),
             1,
-            Some("hogp/test-smoke"),
+            Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
             None,
         )

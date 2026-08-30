@@ -530,7 +530,7 @@ mod tests {
             "--hog-devnode-binary",
             "/tmp/hog-devnode",
             "--hogd-protocol",
-            "hogp/test",
+            "hogp/test00000000000",
             "--port",
             "0",
             "--startup-timeout-secs",
@@ -547,7 +547,7 @@ mod tests {
                     args.hogd_dev_binary,
                     Some(PathBuf::from("/tmp/hog-devnode"))
                 );
-                assert_eq!(args.hogd_protocol, Some("hogp/test".into()));
+                assert_eq!(args.hogd_protocol, Some("hogp/test00000000000".into()));
                 assert_eq!(args.port, Some(0));
                 assert_eq!(args.startup_timeout_secs, Some(5));
                 assert_eq!(

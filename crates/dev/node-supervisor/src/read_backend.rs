@@ -134,7 +134,7 @@ impl HogdDevReadBackend {
         // A wrong endpoint (e.g. wrong port, wrong service) would be reported
         // as full startup success but fail on every subsequent read call.
         tracing::debug!(%endpoint, "probing hogd-dev indexer with intro handshake");
-        let protocol = protocol_from_text(protocol_version);
+        let protocol = protocol_from_text(protocol_version)?;
         let intro_outcome = indexer
             .indexer_block_explorer_intro(&protocol)
             .await
@@ -564,7 +564,7 @@ async fn connect_db_gateway(
     .await
     .map_err(|source| NodeSupervisorError::DbGatewayConnect { endpoint, source })?;
 
-    let protocol = protocol_from_text(protocol_version);
+    let protocol = protocol_from_text(protocol_version)?;
     let intro_outcome =
         client
             .dbgateway_intro(&protocol)

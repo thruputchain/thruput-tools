@@ -935,7 +935,7 @@ mod tests {
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "producer": {
                 "binary": "hog-devnode",
                 "version": "0.1.0"
