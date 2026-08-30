@@ -13,7 +13,6 @@ use groundhog_indexer::{
 };
 use groundhog_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
-use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{
     ConnectError, hogd_large_message_config, try_connect, try_connect_with_canceled_call_policy,
@@ -498,9 +497,7 @@ pub(crate) async fn connect_optional_indexer(
         });
     };
 
-    let protocol = protocol_override
-        .map(protocol_from_text)
-        .unwrap_or(PROTOCOL_VERSION);
+    let protocol = protocol_override.map_or(PROTOCOL_VERSION, protocol_from_text);
     // The text form of what is actually sent, padding included, so a mismatch
     // message quotes the bytes the backend rejected rather than the raw
     // override it was derived from.
@@ -599,9 +596,7 @@ pub(crate) async fn connect_optional_db_gateway(
         });
     };
 
-    let protocol = protocol_override
-        .map(protocol_from_text)
-        .unwrap_or(PROTOCOL_VERSION);
+    let protocol = protocol_override.map_or(PROTOCOL_VERSION, protocol_from_text);
     // The text form of what is actually sent, padding included, so a mismatch
     // message quotes the bytes the backend rejected rather than the raw
     // override it was derived from.
@@ -697,9 +692,7 @@ pub(crate) async fn connect_optional_view_gateway(
         });
     };
 
-    let protocol = protocol_override
-        .map(protocol_from_text)
-        .unwrap_or(PROTOCOL_VERSION);
+    let protocol = protocol_override.map_or(PROTOCOL_VERSION, protocol_from_text);
     // The text form of what is actually sent, padding included, so a mismatch
     // message quotes the bytes the backend rejected rather than the raw
     // override it was derived from.
@@ -841,6 +834,7 @@ pub(crate) fn view_gateway_pool_size() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use groundhog_scp::network::ProtocolCommit as Protocol;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_trait::async_trait;
@@ -935,7 +929,7 @@ mod tests {
         ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
             match self.mode {
                 IntroMode::Reject => Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol),
-                IntroMode::Expect(expected) if arg0.0 == expected.as_bytes() => {
+                IntroMode::Expect(expected) if arg0 == protocol_from_text(expected) => {
                     Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
                 }
                 IntroMode::Expect(_) => {
@@ -996,7 +990,7 @@ mod tests {
             arg0: Protocol,
         ) -> Result<DbGatewayIntroOutcome, ProgramError> {
             match self.mode {
-                IntroMode::Expect(expected) if arg0.0 == expected.as_bytes() => {
+                IntroMode::Expect(expected) if arg0 == protocol_from_text(expected) => {
                     Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
                 }
                 IntroMode::Reject | IntroMode::Expect(_) => {
@@ -1024,7 +1018,7 @@ mod tests {
             &self,
             arg0: Protocol,
         ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
-            if arg0.0 == self.expected.as_bytes() {
+            if arg0 == protocol_from_text(self.expected) {
                 Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
             } else {
                 Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol)

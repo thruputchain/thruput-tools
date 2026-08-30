@@ -860,8 +860,7 @@ async fn probe_backends(
     let protocol = config
         .hogd_protocol_override
         .as_deref()
-        .map(protocol_from_text)
-        .unwrap_or(PROTOCOL_VERSION);
+        .map_or(PROTOCOL_VERSION, protocol_from_text);
 
     let ProbeTimeouts {
         indexer: indexer_timeouts,

@@ -4,12 +4,12 @@ use std::{fmt, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, ViewPlane};
+use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     events::EmittedEvent,
     hex::{Hex0x, HexBytes, Topic},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome, ViewGatewayResult};
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
@@ -20,7 +20,7 @@ use groundhog_xdr::{
     transaction::{Invocation, InvocationFrameOutput},
     view::TransactionViewQuery,
 };
-use xdr_common::{BytesM, StringM, VecM};
+use xdr_common::{BytesM, VecM};
 
 use crate::{
     NodeSupervisorError, request_deadline::within_request_deadline, stub_backend::StubBackend,
@@ -75,7 +75,7 @@ impl HogdDevViewBackend {
         .await
         .map_err(|source| NodeSupervisorError::ViewGatewayConnect { endpoint, source })?;
 
-        let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+        let protocol = protocol_from_text(protocol_version);
         let intro_outcome = client.viewgateway_intro(&protocol).await.map_err(|e| {
             NodeSupervisorError::ViewGatewayRpc {
                 op: "viewgateway_intro",
