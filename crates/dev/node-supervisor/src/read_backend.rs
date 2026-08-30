@@ -803,6 +803,7 @@ mod tests {
         TransactionQuery, TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+    use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_json_rpc_types::{
         events::{EventFilterList, EventQuery},
         hex::Hex0x,
@@ -2165,7 +2166,13 @@ mod tests {
         // Act
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            HogdDevReadBackend::connect(dead_addr, None, &sched_backend, PROTOCOL_VERSION, None),
+            HogdDevReadBackend::connect(
+                dead_addr,
+                None,
+                &sched_backend,
+                &protocol_text(&PROTOCOL_VERSION),
+                None,
+            ),
         )
         .await
         .expect("bug: connect to dead port should return promptly");

@@ -11,6 +11,7 @@ use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayIntroOutcome};
 use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
 };
+use groundhog_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
@@ -25,7 +26,6 @@ use tokio::{
     task::{AbortHandle, JoinHandle},
     time::Instant,
 };
-use xdr_common::StringM;
 
 use crate::config::{GatewayConfig, HealthBackend};
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
@@ -498,8 +498,13 @@ pub(crate) async fn connect_optional_indexer(
         });
     };
 
-    let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
-    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+    let protocol = protocol_override
+        .map(protocol_from_text)
+        .unwrap_or(PROTOCOL_VERSION);
+    // The text form of what is actually sent, padding included, so a mismatch
+    // message quotes the bytes the backend rejected rather than the raw
+    // override it was derived from.
+    let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
         intro_timeout,
@@ -541,7 +546,7 @@ pub(crate) async fn connect_optional_indexer(
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "indexer",
             addr: address.to_string(),
-            reason: indexer_intro_rejection_reason(outcome, protocol_version),
+            reason: indexer_intro_rejection_reason(outcome, &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
@@ -594,8 +599,13 @@ pub(crate) async fn connect_optional_db_gateway(
         });
     };
 
-    let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
-    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+    let protocol = protocol_override
+        .map(protocol_from_text)
+        .unwrap_or(PROTOCOL_VERSION);
+    // The text form of what is actually sent, padding included, so a mismatch
+    // message quotes the bytes the backend rejected rather than the raw
+    // override it was derived from.
+    let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
         intro_timeout,
@@ -635,7 +645,7 @@ pub(crate) async fn connect_optional_db_gateway(
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "db_gateway",
             addr: address.to_string(),
-            reason: db_gateway_intro_rejection_reason(outcome, protocol_version),
+            reason: db_gateway_intro_rejection_reason(outcome, &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
@@ -687,8 +697,13 @@ pub(crate) async fn connect_optional_view_gateway(
         });
     };
 
-    let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
-    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+    let protocol = protocol_override
+        .map(protocol_from_text)
+        .unwrap_or(PROTOCOL_VERSION);
+    // The text form of what is actually sent, padding included, so a mismatch
+    // message quotes the bytes the backend rejected rather than the raw
+    // override it was derived from.
+    let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
         intro_timeout,
@@ -728,7 +743,7 @@ pub(crate) async fn connect_optional_view_gateway(
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "view_gateway",
             addr: address.to_string(),
-            reason: view_gateway_intro_rejection_reason(outcome, protocol_version),
+            reason: view_gateway_intro_rejection_reason(outcome, &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
@@ -1185,7 +1200,7 @@ mod tests {
         match err {
             ConnectError::StartupRejected { reason, .. } => {
                 assert!(reason.contains("ViewGateway intro mismatch"));
-                assert!(reason.contains(PROTOCOL_VERSION));
+                assert!(reason.contains(&protocol_text(&PROTOCOL_VERSION)));
                 assert!(reason.contains("ViewGatewayIntroMismatchedProtocol"));
                 assert!(reason.contains("--hogd-protocol"));
             }
@@ -1207,7 +1222,7 @@ mod tests {
         match err {
             ConnectError::StartupRejected { reason, .. } => {
                 assert!(reason.contains("IndexerBlockExplorer intro mismatch"));
-                assert!(reason.contains(PROTOCOL_VERSION));
+                assert!(reason.contains(&protocol_text(&PROTOCOL_VERSION)));
                 assert!(reason.contains("IntroMismatchedProtocol"));
                 assert!(reason.contains("--hogd-protocol"));
             }
@@ -1234,7 +1249,7 @@ mod tests {
         match err {
             ConnectError::StartupRejected { reason, .. } => {
                 assert!(reason.contains("DbGateway intro mismatch"));
-                assert!(reason.contains(PROTOCOL_VERSION));
+                assert!(reason.contains(&protocol_text(&PROTOCOL_VERSION)));
                 assert!(reason.contains("DbGatewayIntroMismatchedProtocol"));
                 assert!(reason.contains("--hogd-protocol"));
             }

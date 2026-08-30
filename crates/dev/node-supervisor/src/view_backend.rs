@@ -293,6 +293,7 @@ mod tests {
     use groundhog_json_rpc_server::ViewPlane;
     use groundhog_json_rpc_types::ContractAddress;
     use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
@@ -468,7 +469,7 @@ mod tests {
     async fn connect_optional_without_endpoint_uses_stub() {
         let backend = HogdDevViewBackend::connect_optional(
             None,
-            PROTOCOL_VERSION,
+            &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_secs(1),
         )
@@ -496,7 +497,7 @@ mod tests {
             Duration::from_secs(5),
             HogdDevViewBackend::connect_optional(
                 Some(dead_addr),
-                PROTOCOL_VERSION,
+                &protocol_text(&PROTOCOL_VERSION),
                 None,
                 Duration::from_secs(1),
             ),
@@ -566,7 +567,7 @@ mod tests {
         let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
         let backend = HogdDevViewBackend::connect_optional(
             Some(addr),
-            PROTOCOL_VERSION,
+            &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_millis(10),
         )
@@ -588,7 +589,7 @@ mod tests {
         let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
         let backend = HogdDevViewBackend::connect_optional(
             Some(addr),
-            PROTOCOL_VERSION,
+            &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_secs(30),
         )

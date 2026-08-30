@@ -6,6 +6,7 @@ use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
 use groundhog_json_rpc_types::{
     BlockHeight, NetworkHashHex,
     block::{ChainTip, consensus_value_hash},
+    protocol_token::protocol_from_text,
 };
 use groundhog_scheduler::{DbTip, sched_coord::SchedulerGetTipResult};
 use groundhog_scp::network::ProtocolCommit as Protocol;
@@ -15,7 +16,6 @@ use groundhog_xdr::PROTOCOL_VERSION;
 use serde::Serialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
-use xdr_common::StringM;
 
 use crate::{
     airdrop::HostedAirdrop,
@@ -857,11 +857,11 @@ async fn probe_backends(
 ) -> BackendProbeResults {
     let config = &ctx.config;
     let probe_timeout = backend_probe_timeout(config);
-    let protocol_version = config
+    let protocol = config
         .hogd_protocol_override
         .as_deref()
+        .map(protocol_from_text)
         .unwrap_or(PROTOCOL_VERSION);
-    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
 
     let ProbeTimeouts {
         indexer: indexer_timeouts,
@@ -2811,7 +2811,7 @@ mod tests {
             config,
             metrics,
         ));
-        let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+        let protocol = PROTOCOL_VERSION;
         let mut reconnects = ReconnectAttempts::default();
         maintain_reconnects(&ctx, &mut reconnects).await;
         maintain_reconnects(&ctx, &mut reconnects).await;
@@ -3362,7 +3362,7 @@ mod tests {
         .await
         .expect("bug: handler pools should saturate");
 
-        let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+        let protocol = PROTOCOL_VERSION;
         let mut indexer_timeouts = 0;
         let mut db_gateway_timeouts = 0;
         let mut view_gateway_timeouts = 0;
