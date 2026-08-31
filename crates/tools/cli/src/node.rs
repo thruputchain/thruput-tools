@@ -491,7 +491,8 @@ fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBu
         });
     resolve_hogd_dev_binary(&hogd)
         .ok()
-        .and_then(|binary| runtime_artifacts_dir_for_binary(&binary))
+        .and_then(|binary| dev_wallet_artifact_for_binary(&binary))
+        .and_then(|artifact| artifact.parent().map(Path::to_path_buf))
 }
 
 pub(crate) fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf> {
@@ -892,7 +893,6 @@ mod tests {
     use std::{
         fs,
         net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-        os::unix::fs::PermissionsExt,
         path::PathBuf,
         time::Duration,
     };
@@ -1127,12 +1127,16 @@ mod tests {
         fs::create_dir_all(&binary_dir).expect("bug: binary dir should be created");
         let binary = binary_dir.join("hog-devnode");
         fs::write(&binary, []).expect("bug: binary fixture should be written");
-        let mut permissions = fs::metadata(&binary)
-            .expect("bug: binary fixture metadata should be readable")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&binary, permissions)
-            .expect("bug: binary fixture should be executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&binary)
+                .expect("bug: binary fixture metadata should be readable")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&binary, permissions)
+                .expect("bug: binary fixture should be executable");
+        }
 
         let contracts = tmp.path().join("usr/share/groundhog/contracts");
         fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
@@ -1140,6 +1144,14 @@ mod tests {
             .expect("bug: artifact fixture should be written");
 
         let user_directory = tmp.path().join("user-contracts");
+        assert_eq!(
+            local_node_runtime_artifacts_dir(&LocalNodeOptions {
+                hogd_dev_binary: Some(binary.clone()),
+                contract_artifact_directories: vec![user_directory.clone()],
+                ..LocalNodeOptions::default()
+            }),
+            Some(fs::canonicalize(&contracts).expect("bug: contracts fixture should resolve"))
+        );
         let config = local_node_config(LocalNodeOptions {
             hogd_dev_binary: Some(binary),
             contract_artifact_directories: vec![user_directory.clone()],
