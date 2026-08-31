@@ -31,7 +31,7 @@
 //!    24     4  flags                   (0)
 //!    28     4  entry_abi_version       (3)
 //!    32     4  syscall_abi_version     (1)
-//!    36     4  gas_table_version       (3)
+//!    36     4  gas_table_version       (4)
 //!    40     8  gas_schedule_digest
 //!    48     4  memory_bytes            (65536)
 //!    52     4  code_size
@@ -77,9 +77,12 @@ pub const SYSCALL_ABI_VERSION: u32 = 1;
 /// Gas-schedule table version.
 /// v3: hogd admitted canonical UNIMP (0xc0001073) as a deterministic
 /// invalid-instruction trap.
-pub const GAS_TABLE_VERSION: u32 = 3;
+/// v4: hogd repriced RV32IM from measurement rather than estimate. Multiply
+/// and divide fell (3 -> 1 and 8 -> 2), taken branches, `jalr`, and the
+/// halfword/word loads rose (1 -> 2, 3, and 3).
+pub const GAS_TABLE_VERSION: u32 = 4;
 /// Gas-schedule consensus digest (folds in instruction + host-syscall costs).
-pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
+pub const GAS_SCHEDULE_DIGEST: u64 = 0xac8a_efb0_0a99_7407;
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
@@ -116,7 +119,7 @@ const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory";
 const FLAGS_REQUIRED_VALUE: u32 = 0;
 
 /// Pinned v5 artifact-format contract fingerprint.
-pub const FORMAT_FINGERPRINT: u64 = 0x8e5c_af3e_9cd2_3b22;
+pub const FORMAT_FINGERPRINT: u64 = 0xcc78_e61a_463f_927e;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
