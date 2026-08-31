@@ -541,6 +541,29 @@ pub(crate) fn dev_wallet_artifact_for_binary(binary: &Path) -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
+fn with_discovered_contract_artifacts(
+    mut hogd: groundhog_node_supervisor::HogdDevConfig,
+) -> groundhog_node_supervisor::HogdDevConfig {
+    use groundhog_node_supervisor::resolve_hogd_dev_binary;
+
+    let Some(discovered) = resolve_hogd_dev_binary(&hogd)
+        .ok()
+        .and_then(|binary| dev_wallet_artifact_for_binary(&binary))
+        .and_then(|artifact| artifact.parent().map(Path::to_path_buf))
+    else {
+        return hogd;
+    };
+
+    if !hogd
+        .contract_artifact_directories
+        .iter()
+        .any(|directory| directory == &discovered)
+    {
+        hogd.contract_artifact_directories.push(discovered);
+    }
+    hogd
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "flat CLI options map directly to one supervisor configuration"
@@ -587,6 +610,7 @@ fn local_node_config(
             HogdDevConfig::default().with_binary_path(binary)
         })
         .with_contract_artifact_directories(options.contract_artifact_directories);
+    let hogd = with_discovered_contract_artifacts(hogd);
     let hogd = match options.data_dir {
         Some(data_dir) => hogd.with_data_dir(data_dir).with_shutdown_grace(
             groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE,
@@ -868,6 +892,7 @@ mod tests {
     use std::{
         fs,
         net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+        os::unix::fs::PermissionsExt,
         path::PathBuf,
         time::Duration,
     };
@@ -1092,6 +1117,42 @@ mod tests {
                 fs::canonicalize(contracts.join("dev_wallet.rv32a"))
                     .expect("bug: artifact fixture should resolve")
             )
+        );
+    }
+
+    #[test]
+    fn local_node_config_forwards_discovered_installed_contracts_after_user_directories() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let binary_dir = tmp.path().join("usr/bin");
+        fs::create_dir_all(&binary_dir).expect("bug: binary dir should be created");
+        let binary = binary_dir.join("hog-devnode");
+        fs::write(&binary, []).expect("bug: binary fixture should be written");
+        let mut permissions = fs::metadata(&binary)
+            .expect("bug: binary fixture metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions)
+            .expect("bug: binary fixture should be executable");
+
+        let contracts = tmp.path().join("usr/share/groundhog/contracts");
+        fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
+        fs::write(contracts.join("dev_wallet.rv32a"), [])
+            .expect("bug: artifact fixture should be written");
+
+        let user_directory = tmp.path().join("user-contracts");
+        let config = local_node_config(LocalNodeOptions {
+            hogd_dev_binary: Some(binary),
+            contract_artifact_directories: vec![user_directory.clone()],
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: installed local node config should build");
+
+        assert_eq!(
+            config.hogd_dev.contract_artifact_directories,
+            [
+                user_directory,
+                fs::canonicalize(contracts).expect("bug: contracts fixture should resolve"),
+            ]
         );
     }
 
