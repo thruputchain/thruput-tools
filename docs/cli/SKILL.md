@@ -75,7 +75,6 @@ mod implementation;
 
 pub use implementation::MyContract;
 pub use implementation::MyContractClient;
-pub use implementation::MyContractClientError;
 ```
 
 Rules:
@@ -219,8 +218,10 @@ impl MyContract {
 
 The macro generates:
 - a typed client, usually `<ContractType>Client`
-- a client error type, usually `<ContractType>ClientError`
 - entrypoints used by the deployed contract
+
+A caught exception is not decoded into a generated enum: `try_*` client
+methods return `CallError`, matched by selector with `match_exn!`.
 
 For native tests, the important helper comes from
 `sdk::declare_mock_contract!()`: `register_mock_contract(&env)`.
