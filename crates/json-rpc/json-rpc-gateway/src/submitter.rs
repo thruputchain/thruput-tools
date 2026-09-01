@@ -372,10 +372,12 @@ fn outcome_for_submit_result(result: &Result<(), GatewayError>) -> &'static str 
 
 fn result_for_scheduler_outcome(outcome: SchedGatewaySubmitOutcome) -> Result<(), GatewayError> {
     match outcome {
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted => Ok(()),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected => Err(GatewayError::TxRejected(
-            "scheduler rejected the signed transaction".into(),
-        )),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected => {
+            Err(GatewayError::TxRejected(
+                "scheduler rejected authentication for the signed transaction".into(),
+            ))
+        }
         SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(GatewayError::Overloaded(
             "scheduler could not admit the transaction; retry with backoff".into(),
         )),
@@ -489,7 +491,7 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .unwrap_or_else(|| {
-                    vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted; size]
+                    vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted; size]
                 });
             Ok(VecM(outcomes))
         }
@@ -514,7 +516,7 @@ mod tests {
                 Err(GatewayError::BackendTimeout)
             } else if self.valid.load(Ordering::SeqCst) {
                 Ok(VecM(vec![
-                    SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+                    SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
                 ]))
             } else {
                 Err(GatewayError::BackendUnavailable(
@@ -981,7 +983,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_submission_is_counted_if_caller_cancels() {
+    async fn admitted_submission_is_counted_if_caller_cancels() {
         let mock = MockSink::arc();
         let gate = mock.queue_gate();
         let metrics = GatewayMetrics::for_tests();
@@ -1067,8 +1069,8 @@ mod tests {
     async fn mixed_scheduler_outcomes_fan_out_by_transaction_position() {
         let mock = MockSink::arc();
         mock.queue_outcomes(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected,
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
             SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable,
             SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError,
         ]);
@@ -1093,11 +1095,11 @@ mod tests {
         processor.process(items).await;
 
         let rejected = replies.remove(0).await.expect("rejected reply");
-        let accepted = replies.remove(0).await.expect("accepted reply");
+        let admitted = replies.remove(0).await.expect("admitted reply");
         let retryable = replies.remove(0).await.expect("retryable reply");
         let internal = replies.remove(0).await.expect("internal reply");
         assert!(matches!(rejected, Err(GatewayError::TxRejected(_))));
-        assert!(accepted.is_ok());
+        assert!(admitted.is_ok());
         assert!(matches!(retryable, Err(GatewayError::Overloaded(_))));
         assert!(matches!(internal, Err(GatewayError::BackendUnavailable(_))));
         assert_eq!(mock.seen(), vec![4]);
@@ -1118,8 +1120,8 @@ mod tests {
     async fn outcome_cardinality_mismatch_fails_every_waiter() {
         let mock = MockSink::arc();
         mock.queue_outcomes(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected,
         ]);
         let processor = SubmitProcessor {
             sink: mock,

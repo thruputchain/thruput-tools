@@ -114,8 +114,8 @@ and any future QoS policy.
 
 `groundhog_sendRawTransaction` preserves this external contract:
 
-- success means the transaction was accepted by the authoritative
-  downstream mempool path
+- success means the transaction was admitted by the authoritative downstream
+  mempool path; it does not imply nomination or inclusion in a committed block
 - `TxRejected` means the exact signed transaction was definitely not admitted
 - retryable and internal admission outcomes map to overload and backend errors
 - an x23 RPC failure is indeterminate admission, not a rejection

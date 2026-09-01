@@ -73,7 +73,8 @@ simulator quickstart and result-artifact contract.
 - **Block data** → coordinator storage (TBD — see docs/gateway/system-design.md)
 
 `groundhog_sendRawTransaction` should only return success once the
-authoritative downstream mempool path accepted the tx.
+authoritative downstream mempool path admitted the transaction. Admission does
+not imply nomination or inclusion in a committed block.
 
 ### Dependencies
 

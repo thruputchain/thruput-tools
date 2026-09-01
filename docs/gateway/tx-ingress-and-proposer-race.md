@@ -182,7 +182,8 @@ is only a relay, the same game still exists one hop downstream.
 
 Regardless of backend choice, external submit semantics should remain:
 
-- success = accepted by the authoritative downstream mempool path
+- success = admitted by the authoritative downstream mempool path, not
+  nominated or committed
 - `TxRejected` = the exact signed transaction was definitely rejected by that
   path
 - retryable and internal admission outcomes = overload or backend failure, not

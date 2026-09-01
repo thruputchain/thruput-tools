@@ -318,10 +318,12 @@ fn result_for_single_submit(
         ));
     }
     match outcome {
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted => Ok(()),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected => Err(RpcServerError::TxRejected(
-            "scheduler rejected the signed transaction".into(),
-        )),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected => {
+            Err(RpcServerError::TxRejected(
+                "scheduler rejected authentication for the signed transaction".into(),
+            ))
+        }
         SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(RpcServerError::Overloaded(
             "scheduler could not admit the transaction; retry with backoff".into(),
         )),
@@ -369,8 +371,8 @@ mod tests {
         ));
         assert!(matches!(
             result_for_single_submit(VecM(vec![
-                SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
-                SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
+                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
             ])),
             Err(RpcServerError::BackendUnavailable(_))
         ));
@@ -378,13 +380,13 @@ mod tests {
 
     #[test]
     fn single_submit_maps_each_gateway_outcome() {
-        let accepted = result_for_single_submit(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+        let admitted = result_for_single_submit(VecM(vec![
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
         ]));
-        assert!(accepted.is_ok());
+        assert!(admitted.is_ok());
 
         let rejected = result_for_single_submit(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected,
         ]));
         assert!(matches!(rejected, Err(RpcServerError::TxRejected(_))));
 

@@ -981,7 +981,7 @@ mod tests {
             batch: ParallelSignedTransactionBatch,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
             Ok(VecM(vec![
-                SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted;
+                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted;
                 batch.segment_tokens.0.len()
             ]))
         }

@@ -1271,9 +1271,9 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
     ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
         self.0.admit_batch(&batch)?;
         let outcome = if self.0.mode == FakeSchedulerMode::GatewaySubmitRejected {
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected
         } else {
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted
         };
         Ok(VecM(vec![outcome; batch.segment_tokens.0.len()]))
     }
