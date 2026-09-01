@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{
     BlockHeight, NetworkHashHex,
     block::{ChainTip, consensus_value_hash},
 };
-use groundhog_scheduler::{DbTip, sched_coord::SchedulerGetTipResult};
+use groundhog_scheduler::{DbTip, ExpectedDBTip, RPCError};
 use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::ViewGatewayIntroOutcome;
 use groundhog_x23_transport::ConnectError;
@@ -409,7 +409,7 @@ impl SchedulerProbeState {
 }
 
 struct PendingSchedulerProbe {
-    handle: JoinHandle<Result<SchedulerGetTipResult, rpc_driver::RpcError>>,
+    handle: JoinHandle<Result<ExpectedDBTip, rpc_driver::RpcError>>,
     started_at: Instant,
     generation: u64,
 }
@@ -538,6 +538,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
                 connect_optional_scheduler(
                     &ctx.config.scheduler_address,
                     scheduler_pool_size(&ctx.config),
+                    ctx.protocol,
+                    Some(&ctx.metrics),
                 ),
             )
             .await;
@@ -987,7 +989,7 @@ async fn probe_scheduler(
     } else {
         let started_at = Instant::now();
         let probe_client = client.probe_client().clone();
-        let mut handle = tokio::spawn(async move { probe_client.schedcoord_get_tip().await });
+        let mut handle = tokio::spawn(async move { probe_client.schedgateway_get_tip().await });
         if let Ok(result) = tokio::time::timeout(probe_timeout, &mut handle).await {
             (
                 result.unwrap_or(Err(rpc_driver::RpcError::SystemError)),
@@ -997,7 +999,7 @@ async fn probe_scheduler(
         } else {
             ctx.metrics.observe_backend_request(
                 HealthBackend::Scheduler,
-                "schedcoord_get_tip",
+                "schedgateway_get_tip",
                 BackendRequestOutcome::Timeout,
                 started_at.elapsed(),
             );
@@ -1017,21 +1019,21 @@ async fn probe_scheduler(
         }
     };
     let outcome = match &rpc_result {
-        Ok(SchedulerGetTipResult::SchedulerGetTipOK { .. }) => BackendRequestOutcome::Ok,
+        Ok(ExpectedDBTip::kRPCNone { .. }) => BackendRequestOutcome::Ok,
         Ok(_) => BackendRequestOutcome::Rejected,
         Err(_) => BackendRequestOutcome::Error,
     };
     if record_outcome {
         ctx.metrics.observe_backend_request(
             HealthBackend::Scheduler,
-            "schedcoord_get_tip",
+            "schedgateway_get_tip",
             outcome,
             started_at.elapsed(),
         );
     }
 
     match rpc_result {
-        Ok(SchedulerGetTipResult::SchedulerGetTipOK { db_tip }) => {
+        Ok(ExpectedDBTip::kRPCNone { db_tip }) => {
             state.timeout_streak = 0;
             let result = successful_scheduler_probe(&db_tip, state);
             if result.identity_status == SchedulerIdentityStatus::Mismatch {
@@ -1039,7 +1041,7 @@ async fn probe_scheduler(
             }
             result
         }
-        Ok(SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock) => {
+        Ok(ExpectedDBTip::Default { error }) if RPCError(error) == RPCError::kRPCNotFound => {
             state.timeout_streak = 0;
             SchedulerProbeResult {
                 up: false,
@@ -1145,23 +1147,26 @@ async fn probe_quarantined_scheduler(
 ) -> Option<SchedulerProbeResult> {
     let quarantined = { ctx.scheduler_quarantine.read().await.clone() }?;
     let started_at = Instant::now();
-    let null_result = tokio::time::timeout(
+    let pending_count_result = tokio::time::timeout(
         probe_timeout,
-        quarantined.client.probe_client().schedulercoord_null(),
+        quarantined
+            .client
+            .probe_client()
+            .schedgateway_pending_tx_count(),
     )
     .await;
-    let outcome = match &null_result {
+    let outcome = match &pending_count_result {
         Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(())) => BackendRequestOutcome::Ok,
+        Ok(Ok(_)) => BackendRequestOutcome::Ok,
         Ok(Err(_)) => BackendRequestOutcome::Error,
     };
     ctx.metrics.observe_backend_request(
         HealthBackend::Scheduler,
-        "schedulercoord_null",
+        "schedgateway_pending_tx_count",
         outcome,
         started_at.elapsed(),
     );
-    if !matches!(null_result, Ok(Ok(()))) {
+    if !matches!(pending_count_result, Ok(Ok(_))) {
         *ctx.scheduler_quarantine.write().await = None;
         return Some(SchedulerProbeResult {
             up: false,
@@ -1194,18 +1199,18 @@ async fn probe_quarantined_scheduler_tip(
     let started_at = Instant::now();
     let rpc_result = tokio::time::timeout(
         probe_timeout,
-        quarantined.client.probe_client().schedcoord_get_tip(),
+        quarantined.client.probe_client().schedgateway_get_tip(),
     )
     .await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(SchedulerGetTipResult::SchedulerGetTipOK { .. })) => BackendRequestOutcome::Ok,
+        Ok(Ok(ExpectedDBTip::kRPCNone { .. })) => BackendRequestOutcome::Ok,
         Ok(Ok(_)) => BackendRequestOutcome::Rejected,
         Ok(Err(_)) => BackendRequestOutcome::Error,
     };
     ctx.metrics.observe_backend_request(
         HealthBackend::Scheduler,
-        "schedcoord_get_tip",
+        "schedgateway_get_tip",
         outcome,
         started_at.elapsed(),
     );
@@ -1225,8 +1230,8 @@ async fn probe_quarantined_scheduler_tip(
                 format!("scheduler quarantine tip probe failed: {error}"),
             ));
         }
-        Ok(Ok(SchedulerGetTipResult::SchedulerGetTipOK { db_tip })) => db_tip,
-        Ok(Ok(SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock)) => {
+        Ok(Ok(ExpectedDBTip::kRPCNone { db_tip })) => db_tip,
+        Ok(Ok(ExpectedDBTip::Default { error })) if RPCError(error) == RPCError::kRPCNotFound => {
             clear_quarantined_scheduler_if_current(ctx, generation).await;
             return Some(scheduler_probe_failure(
                 state,
@@ -1623,11 +1628,9 @@ mod tests {
         view::{RootInvocationOutput, ViewRequest},
     };
     use groundhog_scheduler::{
-        ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip,
-        ParallelSignedTransactionBatch, Proposal, ProposalTxsHash, RPCError,
-        SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult,
-        SchedulerValidationResult,
-        sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
+        ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
+        RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcomeBatch,
+        sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
@@ -1640,8 +1643,7 @@ mod tests {
     use groundhog_xdr::{
         auth_claim::{AuthClaim, AuthClaim_source_address_claim},
         contract::{ContractEntrypointID, ContractType, DeployedContractHash},
-        genesis::GenesisConfiguration,
-        header::{ProposalContext, ProposalHeader},
+        header::ProposalHeader,
         invoke_flag::InvokeFlag,
         network_config::NetworkConfig,
         transaction::{Invocation, InvocationFrameOutput},
@@ -1926,97 +1928,51 @@ mod tests {
     }
 
     #[async_trait]
-    impl SchedulerCoord_SchedulerCoord1 for TestScheduler {
-        async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
-            self.calls.null.fetch_add(1, Ordering::SeqCst);
-            if let NullBehavior::Wait(gate) = &self.null_behavior {
-                gate.notified().await;
-            }
-            Ok(())
-        }
-
-        async fn schedulercoord_intro_coord(
+    impl SchedGateway_SchedGateway1 for TestScheduler {
+        async fn schedgateway_intro(
             &self,
-            _card: groundhog_scheduler::CoordCard,
-        ) -> Result<CoordinatorRegistrationOutcome, ProgramError> {
-            panic!("health probe test should not call intro_coord")
+            _protocol: Protocol,
+        ) -> Result<SchedGatewayIntroOutcome, ProgramError> {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
         }
 
-        async fn schedulercoord_submit_unvetted(
+        async fn schedgateway_submit_tx_batch(
             &self,
             _batch: ParallelSignedTransactionBatch,
         ) -> Result<(), ProgramError> {
             panic!("health probe test should not submit")
         }
 
-        async fn schedulercoord_submit_unvetted_with_outcomes(
+        async fn schedgateway_submit_tx_batch_with_outcomes(
             &self,
             _batch: ParallelSignedTransactionBatch,
-        ) -> Result<groundhog_scheduler::SchedulerSubmitOutcomeBatch, ProgramError> {
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
             panic!("health probe test should not submit")
         }
 
-        async fn schedulercoord_submit_vetted(
-            &self,
-            _validator: ValidatorID,
-            _batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            panic!("health probe test should not submit")
-        }
-
-        async fn schedulercoord_propose_block(
-            &self,
-            _block: groundhog_scheduler::BlockID,
-            _context: ProposalContext,
-        ) -> Result<SchedulerProposalResult, ProgramError> {
-            panic!("health probe test should not propose")
-        }
-
-        async fn schedulercoord_validate_block(
-            &self,
-            _block: groundhog_scheduler::BlockID,
-            _proposal: Proposal,
-        ) -> Result<SchedulerValidationResult, ProgramError> {
-            panic!("health probe test should not validate")
-        }
-
-        async fn schedulercoord_commit_block(
-            &self,
-            _block: groundhog_scheduler::BlockID,
-            _value: ConsensusValue,
-        ) -> Result<SchedulerCommitOutcome, ProgramError> {
-            panic!("health probe test should not commit")
-        }
-
-        async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
+        async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
             self.calls.tip.fetch_add(1, Ordering::SeqCst);
             match self.tip_behavior {
                 TipBehavior::Pending => std::future::pending().await,
-                TipBehavior::Ready => Ok(SchedulerGetTipResult::SchedulerGetTipOK {
+                TipBehavior::Ready => Ok(ExpectedDBTip::kRPCNone {
                     db_tip: test_db_tip([0x41; 32]),
                 }),
             }
         }
 
-        async fn schedcoord_load_genesis_configuration(
-            &self,
-            _genesis: GenesisConfiguration,
-        ) -> Result<DbSchedResult, ProgramError> {
-            panic!("health probe test should not load genesis")
-        }
-
-        async fn schedulercoord_commit_genesis_ceremony(
-            &self,
-            _request: groundhog_scheduler::GenesisCeremonyRequest,
-        ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
-            panic!("health probe test should not commit a genesis ceremony")
-        }
-
-        async fn schedcoord_lookup_transactions(
+        async fn schedgateway_lookup_tx(
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             Ok(VecM(vec![None; hashes.0.len()]))
+        }
+
+        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+            self.calls.null.fetch_add(1, Ordering::SeqCst);
+            if let NullBehavior::Wait(gate) = &self.null_behavior {
+                gate.notified().await;
+            }
+            Ok(0)
         }
     }
 
@@ -2198,7 +2154,7 @@ mod tests {
 
                     let mut scheduler_services = ServiceMap::new();
                     scheduler_services.add_service(Box::new(
-                        SchedulerCoord_SchedulerCoord1_Dispatcher::new(Box::new(TestScheduler {
+                        SchedGateway_SchedGateway1_Dispatcher::new(Box::new(TestScheduler {
                             calls: SchedulerCallCounts::default(),
                             tip_behavior: TipBehavior::Ready,
                             null_behavior: NullBehavior::Ready,
@@ -2461,7 +2417,7 @@ mod tests {
             .expect("test scheduler should have a local address");
         let mut services = ServiceMap::new();
         let calls = SchedulerCallCounts::default();
-        services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
+        services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
             Box::new(TestScheduler {
                 calls: calls.clone(),
                 tip_behavior,
@@ -2863,10 +2819,11 @@ mod tests {
     async fn slow_optional_reconnect_keeps_degraded_readiness_fresh() {
         let (scheduler_addr, _scheduler_server, _) =
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
-        let scheduler = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
-            .await
-            .expect("scheduler connection should succeed")
-            .expect("scheduler should be connected");
+        let scheduler =
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+                .await
+                .expect("scheduler connection should succeed")
+                .expect("scheduler should be connected");
         let (indexer_addr, _indexer_server, intros, release) = start_slow_intro_indexer().await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
@@ -2971,10 +2928,11 @@ mod tests {
     async fn scheduler_request_deadline_fails_closed_before_worker_cancellation() {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
-            .await
-            .expect("scheduler connection should succeed")
-            .expect("scheduler should be connected");
+        let client =
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+                .await
+                .expect("scheduler connection should succeed")
+                .expect("scheduler should be connected");
         let metrics = GatewayMetrics::for_tests();
         let scheduler = Arc::new(RwLock::new(Some(client)));
         let sink =
@@ -2991,7 +2949,7 @@ mod tests {
         let snapshot = HealthSnapshot::for_test(HealthStatus::Error, None, &[]);
         let body = metrics.gather(&snapshot).expect("metrics should encode");
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"timeout\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"timeout\"} 1"
         ));
     }
 
@@ -2999,14 +2957,16 @@ mod tests {
     async fn old_scheduler_timeout_does_not_clear_new_generation() {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let old_client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
-            .await
-            .expect("old scheduler connection should succeed")
-            .expect("old scheduler should be connected");
-        let new_client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
-            .await
-            .expect("new scheduler connection should succeed")
-            .expect("new scheduler should be connected");
+        let old_client =
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+                .await
+                .expect("old scheduler connection should succeed")
+                .expect("old scheduler should be connected");
+        let new_client =
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+                .await
+                .expect("new scheduler connection should succeed")
+                .expect("new scheduler should be connected");
         let new_generation = new_client.generation();
         let scheduler = Arc::new(RwLock::new(Some(old_client)));
         let sink = Arc::new(SchedulerTipSink::new(
@@ -3136,10 +3096,10 @@ mod tests {
             .gather(&snapshot)
             .expect("metrics should encode");
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedulercoord_null\",outcome=\"ok\"} 3"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_pending_tx_count\",outcome=\"ok\"} 3"
         ));
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"timeout\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"timeout\"} 1"
         ));
     }
 
@@ -3218,10 +3178,11 @@ mod tests {
             view_gateway_address: None,
             ..GatewayConfig::default()
         });
-        let client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
-            .await
-            .expect("scheduler connection should succeed")
-            .expect("scheduler should be connected");
+        let client =
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+                .await
+                .expect("scheduler connection should succeed")
+                .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
             PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client))),
@@ -3254,10 +3215,11 @@ mod tests {
             ..GatewayConfig::default()
         });
         let metrics = GatewayMetrics::for_tests();
-        let client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
-            .await
-            .expect("scheduler connection should succeed")
-            .expect("scheduler should be connected");
+        let client =
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+                .await
+                .expect("scheduler connection should succeed")
+                .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
             PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client.clone()))),
@@ -3267,7 +3229,8 @@ mod tests {
             config,
             metrics,
         );
-        let blocking_call = tokio::spawn(async move { client.schedulercoord_null().await });
+        let blocking_call =
+            tokio::spawn(async move { client.schedgateway_pending_tx_count().await });
         tokio::time::timeout(Duration::from_secs(1), async {
             while calls.null.load(Ordering::SeqCst) == 0 {
                 tokio::task::yield_now().await;
@@ -3287,7 +3250,7 @@ mod tests {
             .await
             .expect("saturating scheduler call should finish")
             .unwrap()
-            .expect("scheduler null call should succeed");
+            .expect("scheduler pending-count call should succeed");
         assert_eq!(scheduler_state.timeout_streak, 0);
         assert!(ctx.scheduler.read().await.is_some());
     }

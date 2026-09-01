@@ -11,7 +11,7 @@ use crate::error::{self, GatewayError};
 /// Current chain tip: height + block hash.
 ///
 /// Routes through the per-gateway `TipCoalescer` so that concurrent
-/// client requests share a single in-flight `schedcoord_get_tip` RPC.
+/// client requests share a single in-flight `schedgateway_get_tip` RPC.
 /// See `crate::tip_coalescer` for the linearizable coalescing design.
 #[tracing::instrument(skip_all)]
 pub async fn chain_tip(

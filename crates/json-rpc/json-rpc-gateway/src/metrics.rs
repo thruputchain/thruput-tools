@@ -707,7 +707,7 @@ mod tests {
         ] {
             metrics.observe_backend_request(
                 HealthBackend::Scheduler,
-                "schedcoord_get_tip",
+                "schedgateway_get_tip",
                 outcome,
                 Duration::from_millis(3),
             );
@@ -723,13 +723,13 @@ mod tests {
         let body = metrics.gather(&snapshot).expect("metrics should encode");
 
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"ok\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"ok\"} 1"
         ));
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"error\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"error\"} 1"
         ));
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"timeout\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"timeout\"} 1"
         ));
         assert!(body.contains(
             "groundhog_gateway_backend_reconnects_total{backend=\"scheduler\",outcome=\"success\"} 1"
@@ -741,13 +741,13 @@ mod tests {
             "groundhog_gateway_backend_reconnects_total{backend=\"scheduler\",outcome=\"timeout\"} 1"
         ));
         assert!(body.contains(
-            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"rejected\"} 1"
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"rejected\"} 1"
         ));
         assert!(body.contains(
-            "groundhog_gateway_backend_request_duration_seconds_bucket{backend=\"scheduler\",operation=\"schedcoord_get_tip\",result=\"ok\",le=\"0.005\"} 1"
+            "groundhog_gateway_backend_request_duration_seconds_bucket{backend=\"scheduler\",operation=\"schedgateway_get_tip\",result=\"ok\",le=\"0.005\"} 1"
         ));
         assert!(body.contains(
-            "groundhog_gateway_backend_request_duration_seconds_count{backend=\"scheduler\",operation=\"schedcoord_get_tip\",result=\"error\"} 3"
+            "groundhog_gateway_backend_request_duration_seconds_count{backend=\"scheduler\",operation=\"schedgateway_get_tip\",result=\"error\"} 3"
         ));
         let expected_buckets = [
             0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
@@ -756,7 +756,7 @@ mod tests {
         for bucket in expected_buckets {
             assert!(
                 body.contains(&format!(
-                    "groundhog_gateway_backend_request_duration_seconds_bucket{{backend=\"scheduler\",operation=\"schedcoord_get_tip\",result=\"ok\",le=\"{bucket}\"}}"
+                    "groundhog_gateway_backend_request_duration_seconds_bucket{{backend=\"scheduler\",operation=\"schedgateway_get_tip\",result=\"ok\",le=\"{bucket}\"}}"
                 )),
                 "missing backend duration bucket {bucket}:\n{body}"
             );

@@ -3,7 +3,7 @@
 //! Drives the shared adaptive-batching machinery in `adaptive_batch.rs`
 //! with a tx-submission–specific processor: pack N client tx-byte blobs
 //! into one `ParallelSignedTransactionBatch`, call
-//! `schedulercoord_submit_unvetted_with_outcomes`, and fan out each
+//! `schedgateway_submit_tx_batch_with_outcomes`, and fan out each
 //! request-scoped result to its matching waiter.
 //!
 //! See `AdaptiveBatchConfig` for the dispatch policy (no timer,
@@ -16,7 +16,9 @@ use async_trait::async_trait;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
-use groundhog_scheduler::{ParallelBatch, SchedulerSubmitOutcome, SchedulerSubmitOutcomeBatch};
+use groundhog_scheduler::{
+    ParallelBatch, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
+};
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::{BytesM, VecM};
 
@@ -36,11 +38,11 @@ pub trait SubmitSink: Send + Sync + 'static {
         &self,
         batch: ParallelSignedTransactionBatch,
         deadline: Instant,
-    ) -> Result<SchedulerSubmitOutcomeBatch, GatewayError>;
+    ) -> Result<SchedGatewaySubmitOutcomeBatch, GatewayError>;
 }
 
 /// Production sink: forwards to the hogd scheduler's
-/// `schedulercoord_submit_unvetted_with_outcomes` RPC.
+/// `schedgateway_submit_tx_batch_with_outcomes` RPC.
 ///
 /// Holds a shared `Arc<RwLock<Option<Client>>>` so that scheduler
 /// reconnections in `GatewayContext` become visible on the next call.
@@ -70,7 +72,7 @@ impl SubmitSink for SchedulerSink {
         &self,
         batch: ParallelSignedTransactionBatch,
         deadline: Instant,
-    ) -> Result<SchedulerSubmitOutcomeBatch, GatewayError> {
+    ) -> Result<SchedGatewaySubmitOutcomeBatch, GatewayError> {
         let client = self.scheduler.read().await.clone();
         match client {
             None => Err(GatewayError::BackendUnavailable(
@@ -86,7 +88,7 @@ impl SubmitSink for SchedulerSink {
                     return Err(GatewayError::BackendTimeout);
                 }
                 let mut call = tokio::spawn(async move {
-                    c.schedulercoord_submit_unvetted_with_outcomes(&batch).await
+                    c.schedgateway_submit_tx_batch_with_outcomes(&batch).await
                 });
                 let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
                 let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
@@ -99,7 +101,7 @@ impl SubmitSink for SchedulerSink {
                 };
                 self.metrics.observe_backend_request(
                     crate::config::HealthBackend::Scheduler,
-                    "schedcoord_submit_unvetted",
+                    "schedgateway_submit_tx_batch_with_outcomes",
                     match &result {
                         Ok(Ok(_)) => BackendRequestOutcome::Ok,
                         Ok(Err(_)) => BackendRequestOutcome::Error,
@@ -368,16 +370,16 @@ fn outcome_for_submit_result(result: &Result<(), GatewayError>) -> &'static str 
     }
 }
 
-fn result_for_scheduler_outcome(outcome: SchedulerSubmitOutcome) -> Result<(), GatewayError> {
+fn result_for_scheduler_outcome(outcome: SchedGatewaySubmitOutcome) -> Result<(), GatewayError> {
     match outcome {
-        SchedulerSubmitOutcome::SchedulerSubmitAccepted => Ok(()),
-        SchedulerSubmitOutcome::SchedulerSubmitRejected => Err(GatewayError::TxRejected(
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted => Ok(()),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected => Err(GatewayError::TxRejected(
             "scheduler rejected the signed transaction".into(),
         )),
-        SchedulerSubmitOutcome::SchedulerSubmitRetryable => Err(GatewayError::Overloaded(
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(GatewayError::Overloaded(
             "scheduler could not admit the transaction; retry with backoff".into(),
         )),
-        SchedulerSubmitOutcome::SchedulerSubmitInternalError => Err(
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => Err(
             GatewayError::BackendUnavailable("scheduler admission dependency failed".into()),
         ),
         unknown => Err(GatewayError::BackendUnavailable(format!(
@@ -438,7 +440,7 @@ mod tests {
         seen: Mutex<Vec<usize>>,
         deadlines: Mutex<Vec<Instant>>,
         pending: Mutex<VecDeque<oneshot::Receiver<Result<(), GatewayError>>>>,
-        outcomes: Mutex<VecDeque<Vec<SchedulerSubmitOutcome>>>,
+        outcomes: Mutex<VecDeque<Vec<SchedGatewaySubmitOutcome>>>,
     }
 
     impl MockSink {
@@ -460,7 +462,7 @@ mod tests {
             self.deadlines.lock().unwrap().clone()
         }
 
-        fn queue_outcomes(&self, outcomes: Vec<SchedulerSubmitOutcome>) {
+        fn queue_outcomes(&self, outcomes: Vec<SchedGatewaySubmitOutcome>) {
             self.outcomes.lock().unwrap().push_back(outcomes);
         }
     }
@@ -471,7 +473,7 @@ mod tests {
             &self,
             batch: ParallelSignedTransactionBatch,
             deadline: Instant,
-        ) -> Result<SchedulerSubmitOutcomeBatch, GatewayError> {
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, GatewayError> {
             let size = batch.segment_bytes.0.len();
             self.seen.lock().unwrap().push(size);
             self.deadlines.lock().unwrap().push(deadline);
@@ -486,7 +488,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| vec![SchedulerSubmitOutcome::SchedulerSubmitAccepted; size]);
+                .unwrap_or_else(|| {
+                    vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted; size]
+                });
             Ok(VecM(outcomes))
         }
     }
@@ -503,13 +507,15 @@ mod tests {
             &self,
             _batch: ParallelSignedTransactionBatch,
             deadline: Instant,
-        ) -> Result<SchedulerSubmitOutcomeBatch, GatewayError> {
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, GatewayError> {
             self.deadlines.lock().unwrap().push(deadline);
             if deadline < self.cutoff {
                 self.valid.store(false, Ordering::SeqCst);
                 Err(GatewayError::BackendTimeout)
             } else if self.valid.load(Ordering::SeqCst) {
-                Ok(VecM(vec![SchedulerSubmitOutcome::SchedulerSubmitAccepted]))
+                Ok(VecM(vec![
+                    SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+                ]))
             } else {
                 Err(GatewayError::BackendUnavailable(
                     "scheduler invalidated by older timeout".into(),
@@ -1061,10 +1067,10 @@ mod tests {
     async fn mixed_scheduler_outcomes_fan_out_by_transaction_position() {
         let mock = MockSink::arc();
         mock.queue_outcomes(vec![
-            SchedulerSubmitOutcome::SchedulerSubmitRejected,
-            SchedulerSubmitOutcome::SchedulerSubmitAccepted,
-            SchedulerSubmitOutcome::SchedulerSubmitRetryable,
-            SchedulerSubmitOutcome::SchedulerSubmitInternalError,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError,
         ]);
         let metrics = GatewayMetrics::for_tests();
         let processor = SubmitProcessor {
@@ -1112,8 +1118,8 @@ mod tests {
     async fn outcome_cardinality_mismatch_fails_every_waiter() {
         let mock = MockSink::arc();
         mock.queue_outcomes(vec![
-            SchedulerSubmitOutcome::SchedulerSubmitAccepted,
-            SchedulerSubmitOutcome::SchedulerSubmitRejected,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted,
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected,
         ]);
         let processor = SubmitProcessor {
             sink: mock,
@@ -1143,7 +1149,7 @@ mod tests {
     #[test]
     fn unknown_scheduler_outcome_is_a_backend_error() {
         assert!(matches!(
-            result_for_scheduler_outcome(SchedulerSubmitOutcome(99)),
+            result_for_scheduler_outcome(SchedGatewaySubmitOutcome(99)),
             Err(GatewayError::BackendUnavailable(_))
         ));
     }

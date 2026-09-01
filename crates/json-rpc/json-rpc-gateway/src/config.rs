@@ -128,7 +128,7 @@ impl Default for AdaptiveBatchConfig {
 
 /// Request-coalescing config for `chainTip`.
 ///
-/// A single task serializes backend `schedcoord_get_tip` calls. While
+/// A single task serializes backend `schedgateway_get_tip` calls. While
 /// one call is in flight, subsequent `chainTip` requests accumulate in
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
@@ -205,7 +205,7 @@ pub struct GatewayConfig {
     /// connection pool.
     ///
     /// Older hogd schedulers accept TCP connections before coordinator
-    /// registration makes `schedcoord_get_tip` safe to call.
+    /// registration makes `schedgateway_get_tip` safe to call.
     pub scheduler_reconnect_grace_ms: u64,
 
     /// Maximum total time to drain gateway servers and background health work
