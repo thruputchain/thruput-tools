@@ -569,18 +569,16 @@ fn resolve_local_contract_metadata(
     package: Option<&str>,
     artifacts: &ArtifactOptions,
 ) -> Result<Option<ContractMetadata>, CliError> {
-    let Some(config_path) = find_project_config(cwd) else {
+    // Only a project has local sources worth scanning; outside one the caller
+    // reports that the method is unresolvable instead.
+    if find_project_config(cwd).is_none() {
         return Ok(None);
-    };
-    let Some(project_root) = config_path.parent() else {
-        return Ok(None);
-    };
-    // Resolved against the project root rather than the invocation directory
-    // so a call made from anywhere under the project selects the same package.
-    // In a workspace no package contains the project root, so `-p` is what
-    // makes this resolvable at all.
+    }
+    // Selected from the invocation directory, matching the spec path above, so
+    // one invocation cannot resolve two different packages.  A workspace root
+    // is contained by no member, which is what leaves `-p` to settle it.
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
-    let pkg_name = resolve_package(&metadata, package, project_root)?;
+    let pkg_name = resolve_package(&metadata, package, cwd)?;
     let selected = package_context(&metadata, pkg_name);
     let interface_specs =
         load_built_registered_interfaces(&selected.target_directory, &selected.name)?;
@@ -1818,6 +1816,28 @@ mod tests {
         assert_eq!(metadata.interface_name, "Erc20");
         assert_eq!(metadata.version, "9.9.9");
         assert_eq!(metadata.source, workspace_root.join("erc20/src/lib.rs"));
+    }
+
+    #[test]
+    #[serial]
+    fn member_directory_infers_its_own_package_without_a_flag() {
+        let workspace = create_temp_workspace();
+        let workspace_root = std::fs::canonicalize(workspace.path())
+            .expect("bug: workspace path should canonicalize");
+        let member_root = workspace_root.join("erc20");
+
+        let _cwd = CurrentDirGuard::enter(&member_root);
+        let metadata = resolve_local_contract_metadata(
+            &member_root,
+            "mint",
+            None,
+            &ArtifactOptions::default(),
+        )
+        .expect("bug: a member directory should select its own package")
+        .expect("bug: mint should resolve from the surrounding member");
+
+        assert_eq!(metadata.interface_name, "Erc20");
+        assert_eq!(metadata.source, member_root.join("src/lib.rs"));
     }
 
     #[test]
