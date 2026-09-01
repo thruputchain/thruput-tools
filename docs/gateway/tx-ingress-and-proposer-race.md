@@ -183,7 +183,11 @@ is only a relay, the same game still exists one hop downstream.
 Regardless of backend choice, external submit semantics should remain:
 
 - success = accepted by the authoritative downstream mempool path
-- failure = rejected by that path
+- `TxRejected` = the exact signed transaction was definitely rejected by that
+  path
+- retryable and internal admission outcomes = overload or backend failure, not
+  proof of rejection
+- transport failure = indeterminate admission, not rejection
 
 The gateway should not silently change `sendRawTransaction` into "accepted by a
 relay queue" when routed through `chuckd`.

@@ -35,7 +35,8 @@ pub async fn get_block_by_number(
 
 /// Number of transactions in the mempool.
 ///
-/// **Deferred** — no `size()` RPC on the scheduler interface yet.
+/// **Deferred** — the scheduler-gateway RPC exists, but standalone handler
+/// plumbing remains deferred. See `docs/gateway/open-questions.md`.
 #[tracing::instrument(skip_all)]
 pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, GatewayError> {
     Err(error::not_implemented("pendingTransactionCount"))
