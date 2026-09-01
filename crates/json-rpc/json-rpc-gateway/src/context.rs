@@ -174,8 +174,9 @@ pub struct GatewayContext {
     pub indexer: Arc<RwLock<Option<IndexerClient>>>,
 
     /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
-    /// incoming client submissions and packs them into `submit_unvetted`
-    /// RPCs to amortize per-call overhead at high load.
+    /// incoming client submissions and packs them into
+    /// `schedgateway_submit_tx_batch_with_outcomes` RPCs to amortize
+    /// per-call overhead at high load.
     pub batch_submitter: BatchSubmitter,
 
     /// Adaptive batching reader for `getStorageAt`. Accumulates

@@ -77,9 +77,10 @@ impl FromStr for HealthBackend {
 /// batch is in flight and drain together when it completes.
 ///
 /// Used for both `sendRawTransaction` (packing tx blobs into
-/// `submit_unvetted`) and `getStorageAt` (packing item reads into
-/// `dbgateway_get_items`); see `GatewayConfig::batch` and
-/// `GatewayConfig::storage` for the per-RPC tuning slots.
+/// `schedgateway_submit_tx_batch_with_outcomes`) and `getStorageAt`
+/// (packing item reads into `dbgateway_get_items`); see
+/// `GatewayConfig::batch` and `GatewayConfig::storage` for the per-RPC
+/// tuning slots.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdaptiveBatchConfig {
