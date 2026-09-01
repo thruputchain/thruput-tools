@@ -1949,6 +1949,13 @@ mod tests {
             panic!("health probe test should not submit")
         }
 
+        async fn schedulercoord_submit_unvetted_with_outcomes(
+            &self,
+            _batch: ParallelSignedTransactionBatch,
+        ) -> Result<groundhog_scheduler::SchedulerSubmitOutcomeBatch, ProgramError> {
+            panic!("health probe test should not submit")
+        }
+
         async fn schedulercoord_submit_vetted(
             &self,
             _validator: ValidatorID,

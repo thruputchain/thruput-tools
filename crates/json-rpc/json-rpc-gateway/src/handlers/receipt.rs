@@ -493,6 +493,13 @@ mod tests {
             panic!("bug: status tests should not submit")
         }
 
+        async fn schedulercoord_submit_unvetted_with_outcomes(
+            &self,
+            _arg0: ParallelSignedTransactionBatch,
+        ) -> Result<groundhog_scheduler::SchedulerSubmitOutcomeBatch, ProgramError> {
+            panic!("bug: status tests should not submit")
+        }
+
         async fn schedulercoord_submit_vetted(
             &self,
             _arg0: ValidatorID,
