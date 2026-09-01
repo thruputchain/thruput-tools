@@ -2821,6 +2821,7 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
         "target_directory": target_dir,
         "packages": [{
             "name": "demo-contract-rv32",
+            "version": "0.1.0",
             "manifest_path": tmp.path().join("Cargo.toml"),
         }],
     })
@@ -2925,6 +2926,7 @@ fn build_rv32_json_reports_lowerer_failure_details() {
         "target_directory": target_dir,
         "packages": [{
             "name": "demo-contract-rv32",
+            "version": "0.1.0",
             "manifest_path": tmp.path().join("Cargo.toml"),
         }],
     })
@@ -3259,6 +3261,7 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
         "target_directory": target_dir,
         "packages": [{
             "name": "demo-contract",
+            "version": "0.1.0",
             "manifest_path": tmp.path().join("Cargo.toml"),
         }],
     })
@@ -3344,6 +3347,7 @@ fn prepare_failed_rv32_test_fixture(tmp: &TempDir) -> std::path::PathBuf {
         "target_directory": tmp.path().join("target"),
         "packages": [{
             "name": "demo-contract",
+            "version": "0.1.0",
             "manifest_path": tmp.path().join("Cargo.toml"),
         }],
     })
@@ -3466,6 +3470,7 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
         "target_directory": target_dir,
         "packages": [{
             "name": "demo-contract",
+            "version": "0.1.0",
             "manifest_path": tmp.path().join("Cargo.toml"),
         }],
     })
