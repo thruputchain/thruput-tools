@@ -73,10 +73,10 @@ embedding it in chuckd or chuckd-rs. Reasons:
 |------|--------|-------------|-------|
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
-| Chain tip (height, hash) | hogd scheduler | `get_tip()` | |
-| Transaction submission | hogd scheduler | `submit_unvetted(batch)` | Direct to the authoritative mempool admission point |
-| Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
-| Pending tx count | hogd scheduler | `size()` | Atomic counter, includes runqueue + stranded |
+| Chain tip (height, hash) | hogd `SchedGateway` | `schedgateway_get_tip()` | |
+| Transaction submission | hogd `SchedGateway` | `schedgateway_submit_tx_batch_with_outcomes(batch)` | Returns one request-scoped admission outcome per exact signed transaction |
+| Transaction lookup (pending) | hogd `SchedGateway` | `schedgateway_lookup_tx(hashes)` | Returns `Option<SignedTransaction>` per hash |
+| Pending tx count | hogd `SchedGateway` | `schedgateway_pending_tx_count()` | Atomic counter, includes runqueue + stranded |
 | Latest committed storage | hogd DbGateway | `get_storage_at(address, key)` | Optional endpoint; required for `groundhog_getStorageAt` |
 | Sandboxed view execution | hogd ViewGateway | `view(TransactionViewQuery)` | Optional endpoint; required for `groundhog_view` |
 | Block/CV data by height or hash | chuckd coordinator | **TBD** — see open questions | `DiskStorage` exists but not exposed for queries |
@@ -99,11 +99,12 @@ Most query paths already exist. Gaps:
 
 ## Transaction Submission
 
-`groundhog_sendRawTransaction` forwards directly to hogd scheduler's
-`submit_unvetted`; read paths use hogd scheduler/indexer directly as well.
-This keeps the public ingress as close as possible to the authoritative
-mempool admission point and has a concrete generated Rust client path via
-`protocol-rs`.
+`groundhog_sendRawTransaction` forwards to hogd's public `SchedGateway`
+admission method; read paths use `SchedGateway` and the hogd indexer directly.
+The internal `SchedulerCoord` service remains reserved for coordinator
+operations such as genesis and block driving. This keeps public ingress close
+to the authoritative mempool admission point without exposing the coordinator
+protocol to gateway clients.
 
 As the component that first accepts internet-originated transactions,
 the gateway owns rate limiting, dedupe, backpressure, overload shedding,
@@ -115,7 +116,9 @@ and any future QoS policy.
 
 - success means the transaction was accepted by the authoritative
   downstream mempool path
-- failure means the transaction was rejected by that path
+- `TxRejected` means the exact signed transaction was definitely not admitted
+- retryable and internal admission outcomes map to overload and backend errors
+- an x23 RPC failure is indeterminate admission, not a rejection
 - transactions that can never commit because `blockExpiryHeight` is at
   or below the current chain tip are rejected with `TxRejected` before
   submission. The pre-check is best-effort: if the tip is unavailable

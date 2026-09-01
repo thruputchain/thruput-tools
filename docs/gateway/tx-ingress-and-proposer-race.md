@@ -213,14 +213,15 @@ should use them directly where possible.
 - `groundhog-xdr` provides generated Rust XDR types with `ReadXDR` /
   `WriteXDR` derives.
 - `groundhog_scheduler` provides generated x23 client/server bindings for
-  `SchedulerCoord`.
+  both the internal `SchedulerCoord` service and the public `SchedGateway`
+  service.
 - `ParallelSignedTransactionBatch` and related wrappers already exist in
   `groundhog_scheduler`.
 
 That means the direct-to-`hogd` submission path now has a concrete typed Rust
 surface.
 
-### Submission is direct-to-scheduler
+### Submission is direct-to-SchedGateway
 
-The gateway submits directly to hogd scheduler over that typed surface;
-there is no alternative submission route.
+The gateway submits directly to hogd's `SchedGateway` admission method over
+that typed surface; it does not fall back to the internal coordinator service.

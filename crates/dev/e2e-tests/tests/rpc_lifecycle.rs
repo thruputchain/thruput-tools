@@ -139,7 +139,8 @@ async fn invalid_hex_is_rejected() {
 #[ignore = "requires running hog-devnode local node or gateway"]
 async fn pending_transaction_count_returns_stub_or_value() {
     let c = client();
-    // May return NotImplemented (-32052) until a scheduler size RPC exists.
+    // Local node-supervisor uses SchedGateway; the standalone gateway handler
+    // may still return NotImplemented (-32052).
     let _result = c.pending_transaction_count().await;
     // Not asserting on success/failure while backend capabilities are evolving.
 }

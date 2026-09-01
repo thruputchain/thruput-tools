@@ -186,6 +186,19 @@ fn main() {
         Ok("ready") => run_ready(),
         Ok("dead-scheduler") => run_dead_scheduler(),
         Ok("scheduler-get-tip-error") => run_ready_with_scheduler(FakeSchedulerMode::GetTipError),
+        Ok("dead-scheduler-gateway") => run_dead_scheduler_gateway(),
+        Ok("scheduler-gateway-intro-rejected") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewayIntroRejected);
+        }
+        Ok("scheduler-gateway-submit-rejected") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewaySubmitRejected);
+        }
+        Ok("scheduler-gateway-network-hash-mismatch") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewayNetworkHashMismatch);
+        }
+        Ok("scheduler-gateway-tip-mismatch") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewayTipMismatch);
+        }
         Ok("scheduler-network-hash-mismatch") => {
             run_ready_with_scheduler(FakeSchedulerMode::NetworkHashMismatch);
         }
@@ -309,6 +322,20 @@ fn run_dead_scheduler() {
     println!(
         "{}",
         readiness_scheduler_only(dead_loopback_addr(), dead_loopback_addr())
+    );
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn run_dead_scheduler_gateway() {
+    install_sigterm_handler();
+    write_pid_file_if_requested();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, dead_loopback_addr())
     );
 
     while !TERMINATED.load(Ordering::SeqCst) {
@@ -833,6 +860,10 @@ enum FakeSchedulerMode {
     GetTipError,
     NetworkHashMismatch,
     NoGenesis,
+    GatewayIntroRejected,
+    GatewaySubmitRejected,
+    GatewayNetworkHashMismatch,
+    GatewayTipMismatch,
 }
 
 impl FakeSchedulerMode {
@@ -1169,7 +1200,10 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
             return Err(ProgramError::msg("fake get_tip failure"));
         }
         let call = self.get_tip_calls.fetch_add(1, Ordering::SeqCst);
-        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call >= 2 {
+        // Startup genesis validation is the first coordinator tip call. Public
+        // chainTip uses SchedGateway, so the next coordinator call belongs to
+        // the block driver and is the intended runtime failure.
+        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call >= 1 {
             return Err(ProgramError::msg("fake runtime get_tip failure"));
         }
 
@@ -1217,7 +1251,11 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
         &self,
         _protocol: ProtocolCommit,
     ) -> Result<SchedGatewayIntroOutcome, ProgramError> {
-        Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
+        if self.0.mode == FakeSchedulerMode::GatewayIntroRejected {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol)
+        } else {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
+        }
     }
 
     async fn schedgateway_submit_tx_batch(
@@ -1232,10 +1270,12 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
         batch: ParallelSignedTransactionBatch,
     ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
         self.0.admit_batch(&batch)?;
-        Ok(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted;
-            batch.segment_tokens.0.len()
-        ]))
+        let outcome = if self.0.mode == FakeSchedulerMode::GatewaySubmitRejected {
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitRejected
+        } else {
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAccepted
+        };
+        Ok(VecM(vec![outcome; batch.segment_tokens.0.len()]))
     }
 
     async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
@@ -1246,7 +1286,16 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
             .expect("bug: fake tip mutex poisoned")
             .clone()
         {
-            Some(db_tip) => Ok(ExpectedDBTip::kRPCNone { db_tip }),
+            Some(mut db_tip) => {
+                if self.0.mode == FakeSchedulerMode::GatewayNetworkHashMismatch {
+                    db_tip.value.proposal_header.network_hash =
+                        NetworkHash::new(SHA256Hash::from([0xff; 32]));
+                }
+                if self.0.mode == FakeSchedulerMode::GatewayTipMismatch {
+                    db_tip.id += 1;
+                }
+                Ok(ExpectedDBTip::kRPCNone { db_tip })
+            }
             None => Ok(ExpectedDBTip::Default {
                 error: RPCError::kRPCNotFound.0,
             }),

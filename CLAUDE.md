@@ -67,9 +67,9 @@ simulator quickstart and result-artifact contract.
 
 ### Gateway Data Flows
 
-- **Tx submission** → hogd scheduler (`submit_unvetted`) via x23
+- **Tx submission** → hogd `SchedGateway` (`schedgateway_submit_tx_batch_with_outcomes`) via x23
 - **Receipts/events** → hogd indexer (`get_transaction_info`, `get_contract_events`) via x23
-- **Chain state** → hogd scheduler (`get_tip`, `find_tx`, `size`) via x23
+- **Chain state** → hogd `SchedGateway` (`schedgateway_get_tip`, `schedgateway_lookup_tx`, `schedgateway_pending_tx_count`) via x23
 - **Block data** → coordinator storage (TBD — see docs/gateway/system-design.md)
 
 `groundhog_sendRawTransaction` should only return success once the

@@ -2,7 +2,7 @@
 //!
 //! Owns hogd-dev process supervision and the public JSON-RPC server. Backend
 //! adapters land by plane: chain and submit are backed by hogd-dev's
-//! `SchedulerCoord` endpoint; receipt/event reads are backed by hogd-dev's
+//! `SchedGateway` endpoint; receipt/event reads are backed by hogd-dev's
 //! `IndexerBlockExplorer` endpoint when advertised in readiness, and
 //! latest-state storage reads can be backed by hogd-dev's `DbGateway`
 //! endpoint independently.
@@ -57,7 +57,8 @@ pub enum SupervisorStop {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PlaneStatus {
-    /// The plane is backed by hogd-dev's `SchedulerCoord` x23 endpoint.
+    /// The public plane is backed by hogd-dev's `SchedGateway` x23 endpoint.
+    /// The serialized value remains `scheduler` for compatibility.
     Scheduler,
     /// The plane is backed by hogd-dev's `IndexerBlockExplorer` x23 endpoint.
     Indexer,
@@ -354,11 +355,7 @@ async fn start_rpc_server(
     })?;
     let network_hash = manifest.network_hash.to_network_hash().into_inner();
     let network_info = NetworkInfo::new(NetworkHash::from(network_hash));
-    let scheduler_backend =
-        HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
-    scheduler_backend
-        .require_dev_genesis(&readiness.network_hash)
-        .await?;
+    let scheduler_backend = connect_scheduler_backend(readiness, protocol_version).await?;
 
     let view = HogdDevViewBackend::connect_optional(
         readiness.endpoints.view_gateway,
@@ -377,7 +374,7 @@ async fn start_rpc_server(
         let read = HogdDevReadBackend::connect(
             indexer_addr,
             readiness.endpoints.db_gateway,
-            &scheduler_backend,
+            scheduler_backend.scheduler_gateway_client().clone(),
             protocol_version,
             readiness.protocol.as_deref(),
         )
@@ -439,6 +436,29 @@ async fn start_rpc_server(
         )
         .await
     }
+}
+
+async fn connect_scheduler_backend(
+    readiness: &HogdDevReadiness,
+    protocol_version: &str,
+) -> Result<HogdDevSchedulerBackend, NodeSupervisorError> {
+    let scheduler_gateway = readiness.endpoints.scheduler_gateway.ok_or_else(|| {
+        NodeSupervisorError::InvalidRuntimeManifest {
+            program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
+            reason: "hog-devnode runtime manifest is missing endpoints.schedulerGateway".to_owned(),
+        }
+    })?;
+    let scheduler_backend = HogdDevSchedulerBackend::connect(
+        readiness.endpoints.scheduler_coord,
+        scheduler_gateway,
+        protocol_version,
+        readiness.protocol.as_deref(),
+    )
+    .await?;
+    scheduler_backend
+        .require_dev_genesis(&readiness.network_hash)
+        .await?;
+    Ok(scheduler_backend)
 }
 
 fn rpc_server_options(
@@ -930,6 +950,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
             "0xe0b0468f28980b4982a63bea1018c0ec2bb12e8bd41b5f43dd1ac5fefb31cfe9"
         );
+        assert_eq!(
+            client
+                .pending_transaction_count()
+                .await
+                .expect("bug: pendingTransactionCount should use SchedGateway"),
+            0
+        );
 
         let airdrop_error = client
             .request_airdrop(AirdropRequest {
@@ -983,6 +1010,27 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
             "fake hogd-dev pid {pid} still alive after stop()",
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn scheduler_gateway_rejection_surfaces_tx_rejected_without_coordinator_fallback() {
+        let (_mode_guard, handle, client) = start_fake_with_block_driver(
+            "scheduler-gateway-submit-rejected",
+            BlockDriverConfig::manual(),
+        )
+        .await;
+
+        let error = client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect_err("bug: typed scheduler gateway rejection should fail submission");
+
+        assert!(
+            matches!(&error, ClientError::Call(object) if object.code() == codes::TX_REJECTED),
+            "expected TX_REJECTED from SchedGateway without coordinator fallback, got {error:?}",
+        );
+        handle.stop().await.expect("bug: clean shutdown");
     }
 
     #[tokio::test]
@@ -1505,6 +1553,61 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert!(
             matches!(err, NodeSupervisorError::SchedulerConnect { .. }),
             "expected SchedulerConnect, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_scheduler_gateway_connect_fails() {
+        let err = start_fake_supervisor_expect_error("dead-scheduler-gateway").await;
+
+        assert!(
+            matches!(err, NodeSupervisorError::SchedulerGatewayConnect { .. }),
+            "expected SchedulerGatewayConnect, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_scheduler_gateway_intro_is_rejected() {
+        let err = start_fake_supervisor_expect_error("scheduler-gateway-intro-rejected").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::ProtocolIntroRejected {
+                    service: "SchedGateway",
+                    is_protocol_mismatch: true,
+                    ..
+                }
+            ),
+            "expected SchedGateway protocol rejection, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rejects_scheduler_gateway_from_a_different_network() {
+        let err =
+            start_fake_supervisor_expect_error("scheduler-gateway-network-hash-mismatch").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::SchedulerNetworkHashMismatch { .. }
+            ),
+            "expected scheduler gateway network mismatch, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rejects_incoherent_scheduler_plane_tips() {
+        let err = start_fake_supervisor_expect_error("scheduler-gateway-tip-mismatch").await;
+
+        assert!(
+            matches!(err, NodeSupervisorError::SchedulerPlaneTipMismatch { .. }),
+            "expected scheduler plane tip mismatch, got {err:?}",
         );
     }
 

@@ -46,10 +46,11 @@ stream? [Petar, Geoff]
   `TxInfo` only contains `height` + `TxEventLog` (events). Deferred
   from Phase 1 — removed from `TransactionReceipt`. Add back when
   indexer support lands.
-- **`pendingTransactionCount` backend:** Maps to `scheduler.size()`,
-  which returns total tx count including runqueue + stranded. The public method
-  is in the OpenRPC surface; the gateway handler remains unwired until the
-  scheduler client path is plumbed through. (`hogd/mempool/scheduler.h:136`)
+- **`pendingTransactionCount` backend:** Maps to
+  `SchedGateway.schedgateway_pending_tx_count()`, which returns total tx count
+  including runqueue + stranded. The local node-supervisor path is wired through
+  the public scheduler gateway service; the standalone gateway handler remains
+  deferred.
 - **Method prefix:** The public namespace is `groundhog_*`. Local dev-account
   discovery is intentionally not an RPC namespace; current dev-key metadata
   discovery goes through runtime manifests.

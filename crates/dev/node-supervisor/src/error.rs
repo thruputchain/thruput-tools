@@ -444,6 +444,16 @@ pub enum NodeSupervisorError {
         source: ConnectError,
     },
 
+    /// The supervisor could not connect to hogd-dev's `SchedGateway` x23 endpoint.
+    #[error("failed to connect hogd-dev SchedGateway endpoint {endpoint}: {source}")]
+    SchedulerGatewayConnect {
+        /// `SchedGateway` endpoint advertised by hogd-dev readiness.
+        endpoint: std::net::SocketAddr,
+        /// x23 connection error.
+        #[source]
+        source: ConnectError,
+    },
+
     /// The scheduler tip belongs to a different network than the runtime manifest.
     #[error(
         "hogd-dev scheduler network hash mismatch: runtime manifest expected {expected}, scheduler reported {observed}"
@@ -455,10 +465,31 @@ pub enum NodeSupervisorError {
         observed: NetworkHashHex,
     },
 
+    /// The coordinator and public scheduler gateway advertised different startup tips.
+    #[error(
+        "hogd-dev scheduler planes disagree at startup: coordinator {coordinator}, gateway {gateway}"
+    )]
+    SchedulerPlaneTipMismatch {
+        /// Debug representation of the coordinator tip.
+        coordinator: String,
+        /// Debug representation of the scheduler gateway tip.
+        gateway: String,
+    },
+
     /// A hogd-dev scheduler RPC failed.
     #[error("hogd-dev scheduler RPC `{op}` failed: {source}")]
     SchedulerRpc {
         /// Scheduler RPC operation name.
+        op: &'static str,
+        /// x23 RPC error.
+        #[source]
+        source: rpc_driver::RpcError,
+    },
+
+    /// A hogd-dev scheduler gateway RPC failed during startup.
+    #[error("hogd-dev scheduler gateway RPC `{op}` failed: {source}")]
+    SchedulerGatewayRpc {
+        /// Scheduler gateway RPC operation name.
         op: &'static str,
         /// x23 RPC error.
         #[source]
