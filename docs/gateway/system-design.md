@@ -133,7 +133,7 @@ The goal is to establish the correct boundary:
 - dedicated public RPC gateway
 - private-network hop to validator components
 - one explicit admission layer in the gateway
-- a submission path that preserves mempool-acceptance semantics
+- a submission path that preserves mempool-admission semantics
 
 The v1 policy can stay intentionally simple:
 
@@ -398,13 +398,13 @@ remain a later phase.
 
 | Method | Data Source | Notes |
 |--------|-----------|-------|
-| `groundhog_sendRawTransaction(bytes) → TxHash` | hogd scheduler | Preserve mempool-acceptance semantics |
+| `groundhog_sendRawTransaction(bytes) → TxHash` | hogd `SchedGateway` | Return the hash only after `Admitted`; this does not imply nomination or commitment |
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
-| `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
-| `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |
+| `groundhog_getTransactionStatus(hash) → Status` | `SchedGateway.schedgateway_lookup_tx` + indexer | See lookup order above |
+| `groundhog_chainTip() → TipInfo` | `SchedGateway.schedgateway_get_tip` | |
 | `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** | In OpenRPC; handler is not implemented until a block query backend exists |
 | `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
-| `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | In OpenRPC; gateway handler is not wired yet |
+| `groundhog_pendingTransactionCount() → u64` | `SchedGateway.schedgateway_pending_tx_count` | In OpenRPC; gateway handler is not wired yet |
 | `groundhog_getStorageAt(address, key) → StorageItemRead` | DbGateway | Requires `db_gateway` endpoint |
 | `groundhog_view(request) → ViewResponse` | ViewGateway | Requires `view_gateway` endpoint |
 | `groundhog_version() → VersionInfo` | gateway build metadata | Reports wire format and component identity; includes release version and bundle-manifest digest only after a validated manifest match |
