@@ -388,6 +388,9 @@ pub struct CargoMetadata {
 #[derive(Debug, serde::Deserialize)]
 pub struct MetadataPackage {
     pub name: String,
+    /// Version cargo resolved for this package, with any workspace
+    /// inheritance already applied.
+    pub version: String,
     pub manifest_path: PathBuf,
 }
 
@@ -1064,6 +1067,7 @@ mod tests {
             target_directory: PathBuf::from("target"),
             packages: vec![MetadataPackage {
                 name: "demo".into(),
+                version: "0.1.0".into(),
                 manifest_path,
             }],
         }

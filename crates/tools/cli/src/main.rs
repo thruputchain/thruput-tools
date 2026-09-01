@@ -248,6 +248,9 @@ enum Command {
         method: String,
         /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
         args: Vec<String>,
+        /// Package whose contract metadata resolves the method (required in workspaces)
+        #[arg(short, long)]
+        package: Option<String>,
         /// Resolve, encode, and sign the transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -328,6 +331,9 @@ enum Command {
         /// Simulated caller address, or dev-N on local dev endpoints
         #[arg(long = "from")]
         from: Option<String>,
+        /// Package whose contract metadata resolves the method (required in workspaces)
+        #[arg(short, long)]
+        package: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -1164,6 +1170,7 @@ fn main() {
             contract,
             method,
             args,
+            package,
             dry_run,
             wallet,
             profile,
@@ -1180,6 +1187,7 @@ fn main() {
                     &contract,
                     &method,
                     &args,
+                    package.as_deref(),
                     dry_run,
                     wallet.as_deref(),
                     &artifacts,
@@ -1245,6 +1253,7 @@ fn main() {
             args,
             calldata,
             from,
+            package,
             profile,
             target_args,
             artifacts,
@@ -1261,6 +1270,7 @@ fn main() {
                     &args,
                     calldata.as_deref(),
                     from.as_deref(),
+                    package.as_deref(),
                     &artifacts,
                     &cwd,
                     profile.as_deref(),

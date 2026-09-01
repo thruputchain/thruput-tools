@@ -67,7 +67,7 @@ fn test_rejects_conflicting_target_dir_passthrough() {
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
@@ -179,7 +179,7 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
@@ -239,7 +239,7 @@ fn test_failed_rv32_tests_update_rerun_cache() {
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
@@ -317,7 +317,7 @@ fn test_cargo_test_invocation_omits_host_target() {
     let cargo = fake_bin.join("cargo");
     let args_log = tmp.path().join("test-args.log");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()

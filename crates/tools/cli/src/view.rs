@@ -31,6 +31,7 @@ pub fn run(
     args: &[String],
     calldata: Option<&str>,
     from: Option<&str>,
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
     project_start: &Path,
     profile: Option<&str>,
@@ -45,6 +46,7 @@ pub fn run(
         args,
         calldata,
         from,
+        package,
         artifacts,
         project_start,
         profile,
@@ -118,6 +120,7 @@ fn prepare_view(
     args: &[String],
     calldata: Option<&str>,
     from: Option<&str>,
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
     project_start: &Path,
     profile: Option<&str>,
@@ -133,7 +136,7 @@ fn prepare_view(
     let contract_address =
         ContractAddress::from(resolve_contract_target(&resolved_profile, contract)?);
     let contract_address_hex = format_contract_address(&contract_address);
-    let resolved = resolve_call(project_start, method, artifacts)?;
+    let resolved = resolve_call(project_start, method, package, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
     let caller = resolve_caller(&resolved_profile, from, rt)?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
