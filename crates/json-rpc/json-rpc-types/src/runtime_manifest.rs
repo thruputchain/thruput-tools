@@ -124,8 +124,16 @@ pub struct RuntimeManifestProducer {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestEndpoints {
-    /// Required mempool scheduler service.
+    /// Coordinator-facing scheduler service used by local orchestration.
     pub scheduler: SocketAddr,
+    /// Public gateway-facing scheduler service. Absent only in legacy schema-2
+    /// manifests produced before the scheduler gateway was advertised.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "optional_endpoint"
+    )]
+    pub scheduler_gateway: Option<SocketAddr>,
     /// Block explorer service, omitted when the read plane is unavailable.
     #[serde(
         default,
@@ -343,6 +351,7 @@ mod tests {
                 },
                 "endpoints": {
                     "scheduler": "127.0.0.1:1000",
+                    "schedulerGateway": "127.0.0.1:1010",
                     "indexer": "127.0.0.1:1001",
                     "dbGateway": "127.0.0.1:1002",
                     "viewGateway": "127.0.0.1:1003",
@@ -421,17 +430,23 @@ mod tests {
     }
 
     #[test]
-    fn runtime_manifest_allows_missing_additive_chain_state() {
+    fn runtime_manifest_allows_missing_additive_fields() {
         let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
-        value
-            .as_object_mut()
-            .expect("bug: manifest is an object")
-            .remove("chainState");
+        {
+            let object = value.as_object_mut().expect("bug: manifest is an object");
+            object.remove("chainState");
+            object
+                .get_mut("endpoints")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("bug: endpoints is an object")
+                .remove("schedulerGateway");
+        }
 
         let manifest = serde_json::from_value::<RuntimeManifest>(value)
             .expect("schema 2 compatibility should allow a missing additive field");
 
         assert_eq!(manifest.chain_state, None);
+        assert_eq!(manifest.endpoints.scheduler_gateway, None);
     }
 
     #[test]
@@ -464,6 +479,7 @@ mod tests {
             },
             endpoints: RuntimeManifestEndpoints {
                 scheduler: addr("127.0.0.1:1000"),
+                scheduler_gateway: Some(addr("127.0.0.1:1010")),
                 indexer: Some(addr("127.0.0.1:1001")),
                 db_gateway: Some(addr("127.0.0.1:1002")),
                 view_gateway: Some(addr("127.0.0.1:1003")),
@@ -507,6 +523,7 @@ mod tests {
     fn scheduler_only_manifest_omits_optional_endpoints() {
         let endpoints = RuntimeManifestEndpoints {
             scheduler: addr("127.0.0.1:1000"),
+            scheduler_gateway: Some(addr("127.0.0.1:1010")),
             indexer: None,
             db_gateway: None,
             view_gateway: None,
@@ -518,6 +535,7 @@ mod tests {
             value,
             json!({
                 "scheduler": "127.0.0.1:1000",
+                "schedulerGateway": "127.0.0.1:1010",
             })
         );
     }

@@ -11,9 +11,10 @@
   },
   "endpoints": {
     "scheduler": "127.0.0.1:61000",
-    "indexer": "127.0.0.1:61001",
-    "dbGateway": "127.0.0.1:61002",
-    "viewGateway": "127.0.0.1:61003"
+    "schedulerGateway": "127.0.0.1:61001",
+    "indexer": "127.0.0.1:61002",
+    "dbGateway": "127.0.0.1:61003",
+    "viewGateway": "127.0.0.1:61004"
   },
   "bootstrapAccountDerivation": {
     "scheme": "groundhog-bootstrap-account-v1",
