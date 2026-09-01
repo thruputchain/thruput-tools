@@ -109,7 +109,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(!cargo.contains("sdk/spec"));
     // Must be an SDK whose raw spec format this CLI reads, or `groundhog new`
     // scaffolds a project that `groundhog build` refuses at the preflight.
-    assert!(cargo.contains(r#"sdk = { version = "0.24.1", registry = "groundhog" }"#));
+    assert!(cargo.contains(r#"sdk = { version = "0.27.0", registry = "groundhog" }"#));
     assert!(cargo.contains("groundhog-integration-test = ["));
     // Generated projects resolve outside this workspace, so this must name a
     // client version that is already available in the Groundhog registry.
