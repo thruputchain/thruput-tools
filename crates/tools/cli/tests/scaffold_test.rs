@@ -117,10 +117,17 @@ fn assert_counter_manifest(cargo: &str) {
     // The version pins live once, in the `scaffold` constants; here we assert
     // they were substituted (no placeholder survives below) and land on the
     // right dependencies.
+    // `sdk` is declared once per target: plain on the guest, with `std` on
+    // the host so `cargo build` / `cargo check` work without `dev`.
     assert!(cargo.contains(&format!(
         r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
         groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
+    assert!(cargo.contains(&format!(
+        r#"sdk = {{ version = "{}", registry = "groundhog", features = ["std"] }}"#,
+        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
+    )));
+    assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));
     assert!(cargo.contains("groundhog-integration-test = ["));
     assert!(cargo.contains(
         r#"[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]"#

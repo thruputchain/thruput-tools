@@ -121,9 +121,12 @@ bench = false
 entrypoints = []
 dev = ["sdk/dev"]
 
-[dependencies]
 # Authoritative pin: SCAFFOLD_SDK_VERSION in crates/tools/cli/src/scaffold.rs.
+[target.'cfg(target_arch = "riscv32")'.dependencies]
 sdk = { version = "0.27.0", registry = "groundhog" }
+
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies]
+sdk = { version = "0.27.0", registry = "groundhog", features = ["std"] }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }
@@ -142,6 +145,11 @@ Guidance:
 - The self-referential dev-dependency is deliberate: it enables `dev`
   for `cargo test` builds only, keeping the library no_std for guest
   builds. Do not "simplify" it away.
+- `sdk` is declared once per target for the same reason: it requires
+  `std` on the host and forbids it on the guest. Declaring the host
+  dependency with `features = ["std"]` is what lets plain `cargo build`
+  / `cargo check` (and so rust-analyzer) succeed without `dev`. Do not
+  collapse the two entries into one `[dependencies]` line.
 - If another contract crate depends on this one, forward `dev` through
   the dependent's own feature (`dev = ["sdk/dev", "my-contract/dev"]`),
   the way the SDK's erc20 example forwards its interface crates'
