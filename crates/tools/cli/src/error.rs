@@ -667,7 +667,9 @@ impl CliError {
                 "check the standard proxy environment variables, then retry",
             )),
             Self::MissingRpcUrl => Some(Cow::Borrowed(
-                "set `rpc_url` in the selected profile in project or global config",
+                "run `groundhog init` to seed the default local and devnet profiles, or set \
+                 `rpc_url` for the selected profile with `groundhog config set rpc-url <url> \
+                 --profile <name> --global`",
             )),
             Self::ProfileConfigInvalid { .. } => Some(Cow::Borrowed(
                 "update the selected profile in project or global config, or choose a profile that matches the requested command",

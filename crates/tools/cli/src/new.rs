@@ -38,7 +38,22 @@ pub fn run_in(
     crate::scaffold::generate(dir, name, template)?;
     task.success(format_args!("Created project `{name}`"));
 
-    let warnings = scaffold_warnings();
+    // The scaffolded `[profile.devnet]` only names the network; its
+    // `rpc_url`/`faucet_url` come from the global config, which `groundhog
+    // init` seeds. Seed it here too so `groundhog new` followed by
+    // `groundhog deploy --profile devnet` works without a separate init.
+    let mut warnings = scaffold_warnings();
+    if let Err(error) = crate::config::initialize_global_profiles() {
+        warnings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "global_profiles_not_initialized",
+            message: format!("could not seed default profiles in the global config: {error}"),
+            hint: Some(Cow::Borrowed(
+                "run `groundhog init`, or set `rpc_url` for the devnet profile with \
+                 `groundhog config set rpc-url <url> --profile devnet --global`",
+            )),
+        });
+    }
     for warning in &warnings {
         print.warn(format_args!("{}: {}", warning.code, warning.message));
         if let Some(hint) = warning.hint.as_deref() {
