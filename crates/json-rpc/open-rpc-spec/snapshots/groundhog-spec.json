@@ -1274,6 +1274,11 @@
     }
   },
   "info": {
+    "description": "Public JSON-RPC surface of the Groundhog blockchain, served by hog-gateway and the local `groundhog node`. Byte values are 0x-prefixed lowercase hex, quantities are decimal JSON numbers, and cursors are opaque server-authored strings. `info.version` is the wire-format version reported by `groundhog_version.wireFormat`.",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
     "title": "Groundhog JSON-RPC",
     "version": "5.0.0"
   },
@@ -1511,7 +1516,7 @@
           ]
         }
       },
-      "summary": "Block data at a given height.",
+      "summary": "Block data at a given height. Not implemented by the devnet preview gateway: every call returns the `NotImplemented` error (-32052).",
       "tags": [
         {
           "name": "Core API"
@@ -1543,7 +1548,7 @@
           "type": "integer"
         }
       },
-      "summary": "Number of transactions in the mempool.",
+      "summary": "Number of transactions in the mempool. Not implemented by the devnet preview gateway: every call returns the `NotImplemented` error (-32052).",
       "tags": [
         {
           "name": "Core API"
@@ -1584,7 +1589,7 @@
           "$ref": "#/components/schemas/EventPage"
         }
       },
-      "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the Soroban-shaped filter / cursor / topic surface, with RPC-native `0x`-prefixed address and topic projections at the JSON boundary.",
+      "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the filter / cursor / topic surface, with RPC-native `0x`-prefixed address and topic projections at the JSON boundary.",
       "tags": [
         {
           "name": "Core API"

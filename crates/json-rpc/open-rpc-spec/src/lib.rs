@@ -16,8 +16,37 @@ pub fn build_spec() -> serde_json::Value {
     spec.module(GroundhogApiOpenRpc::module_doc);
     spec.module(AirdropApiOpenRpc::module_doc);
     let mut json = spec.to_json();
+    add_info_docs(&mut json);
     add_error_docs(&mut json);
     canonicalize(json)
+}
+
+/// Consumer-facing `info` metadata that the generator does not model.
+fn add_info_docs(spec: &mut serde_json::Value) {
+    let Some(info) = spec
+        .get_mut("info")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    info.insert(
+        "description".to_owned(),
+        serde_json::Value::String(
+            "Public JSON-RPC surface of the Groundhog blockchain, served by hog-gateway \
+             and the local `groundhog node`. Byte values are 0x-prefixed lowercase hex, \
+             quantities are decimal JSON numbers, and cursors are opaque server-authored \
+             strings. `info.version` is the wire-format version reported by \
+             `groundhog_version.wireFormat`."
+                .to_owned(),
+        ),
+    );
+    info.insert(
+        "license".to_owned(),
+        serde_json::json!({
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0",
+        }),
+    );
 }
 
 fn add_error_docs(spec: &mut serde_json::Value) {

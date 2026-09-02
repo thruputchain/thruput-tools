@@ -74,18 +74,20 @@ pub trait GroundhogApi {
     #[method(name = "networkInfo")]
     async fn network_info(&self) -> RpcResult<NetworkInfo>;
 
-    /// Block data at a given height.
+    /// Block data at a given height. Not implemented by the devnet preview
+    /// gateway: every call returns the `NotImplemented` error (-32052).
     #[method(name = "getBlockByNumber")]
     async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>>;
 
-    /// Number of transactions in the mempool.
+    /// Number of transactions in the mempool. Not implemented by the devnet
+    /// preview gateway: every call returns the `NotImplemented` error (-32052).
     #[method(name = "pendingTransactionCount")]
     async fn pending_transaction_count(&self) -> RpcResult<u64>;
 
     /// Paginated, filterable contract events. See `EventQuery` /
-    /// `EventPage` for the Soroban-shaped filter / cursor / topic
-    /// surface, with RPC-native `0x`-prefixed address and topic
-    /// projections at the JSON boundary.
+    /// `EventPage` for the filter / cursor / topic surface, with
+    /// RPC-native `0x`-prefixed address and topic projections at the
+    /// JSON boundary.
     #[method(name = "getEvents")]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
 
