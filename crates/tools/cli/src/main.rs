@@ -88,8 +88,8 @@ enum Command {
     },
     /// Interactive first-run setup wizard
     #[command(long_about = "Guided setup for new users: checks tools, \
-                      generates a signing key, stores mock-executor download credentials, \
-                      and optionally scaffolds a starter project.\n\n\
+                      generates a signing key, and optionally scaffolds a \
+                      starter project.\n\n\
                       With --json, delegates to `groundhog status \
                       --json`.\n\n\
                       Re-running when already configured is a \
@@ -97,8 +97,8 @@ enum Command {
     Init,
     /// Show RV32, devnode, keys, and project status
     #[command(long_about = "Non-interactive diagnostic. Reports \
-                      the RV32 toolchain, hog-devnode availability, keys, mock-executor \
-                      download authentication, and project config. Use --json for \
+                      the RV32 toolchain, hog-devnode availability, keys, optional \
+                      test-executor download credentials, and project config. Use --json for \
                       scripting.\n\n\
                       Exit code 0 means everything looks good; \
                       exit code 1 means at least one warning-level \

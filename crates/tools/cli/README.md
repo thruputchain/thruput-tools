@@ -129,10 +129,9 @@ the target rustflags.
 
 ### `groundhog init`
 
-Interactive first-run setup wizard. Checks your toolchain,
-generates a signing key, stores mock-executor download credentials,
-and optionally scaffolds a starter project. Re-running when already
-configured is a no-op.
+Interactive first-run setup wizard. Checks your toolchain, generates a
+signing key, and optionally scaffolds a starter project. Re-running when
+already configured is a no-op.
 
 ```bash
 groundhog init          # guided setup
@@ -143,10 +142,11 @@ groundhog init --json   # delegates to `groundhog status --json`
 
 Non-interactive diagnostic. Reports the active project Rust toolchain,
 `rust-src`, and RV32 target; resolves and probes `hog-devnode`; locates and
-validates its `dev_wallet.rv32a`; and checks keys, mock-executor download
-authentication, and project config. Authentication is available when
-`HOGD_FFI_PASSWORD` is set or credentials are stored in the global Groundhog
-config. Exits 0 when there are no warning-level findings, 1 when warnings exist.
+validates its `dev_wallet.rv32a`; and checks keys and project config. It also
+reports whether optional test-executor download credentials are present
+(`HOGD_FFI_PASSWORD`, or an `[executor]` table in the global Groundhog
+config); public builds do not need them, so their absence is informational.
+Exits 0 when there are no warning-level findings, 1 when warnings exist.
 
 ```bash
 groundhog status              # human-readable report
@@ -202,13 +202,13 @@ same profile, toolchain, and target directory. Run `groundhog build -p
 
 ### `groundhog test`
 
-Run contract tests against the test executor. During early access, follow the
-invite instructions to authenticate Cargo with the private Groundhog registry
-before building generated projects. The SDK downloads the mock-executor FFI using
-`HOGD_FFI_PASSWORD` and optional `HOGD_FFI_USER`. When those are absent,
-`groundhog test` injects credentials stored by `groundhog init` or written to the
-global Groundhog config. Environment variables take precedence. Tests target the
-host platform so they run natively.
+Run contract tests against the test executor. The SDK downloads the
+test-executor library on first build; that download is unauthenticated unless
+`HOGD_FFI_PASSWORD` (and optionally `HOGD_FFI_USER`) is set, or an `[executor]`
+table with `username` and `password` exists in the global Groundhog config,
+in which case `groundhog test` passes those credentials through. Environment
+variables take precedence. Tests target the host platform so they run
+natively.
 
 ```bash
 groundhog test                              # run all tests

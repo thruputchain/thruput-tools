@@ -2314,7 +2314,7 @@ fn init_human_output_shows_setup_sections() {
     assert!(stderr.contains("[1/5] Environment"));
     assert!(stderr.contains("[2/5] Profiles"));
     assert!(stderr.contains("[3/5] Signing key"));
-    assert!(stderr.contains("[4/5] Mock-executor download credentials"));
+    assert!(stderr.contains("[4/5] Test-executor download credentials (optional)"));
     assert!(stderr.contains("[5/5] Project"));
     assert!(stderr.contains("Setup Complete"));
     assert!(stderr.contains("Config:"));
@@ -2343,7 +2343,7 @@ fn init_human_output_points_to_created_project() {
         .stdin
         .as_mut()
         .unwrap()
-        .write_all(b"y\nn\ny\ndemo-contract\n")
+        .write_all(b"y\ny\ndemo-contract\n")
         .unwrap();
 
     let output = child.wait_with_output().unwrap();

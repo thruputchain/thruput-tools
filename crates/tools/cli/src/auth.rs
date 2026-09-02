@@ -1,9 +1,8 @@
-use crate::config::{self, ExecutorCredentials};
-use crate::{CliError, Print};
+use crate::CliError;
+use crate::config;
 use serde::Serialize;
 use std::env;
 use std::ffi::OsString;
-use std::io::{self, BufRead};
 use std::path::PathBuf;
 
 const FFI_USER_ENV: &str = "HOGD_FFI_USER";
@@ -30,20 +29,6 @@ pub fn cargo_config_path() -> Result<PathBuf, CliError> {
         .map(PathBuf::from)
         .or_else(|_| config::home_dir().map(|h| h.join(".cargo")))?;
     Ok(cargo_home.join("config.toml"))
-}
-
-/// Store mock-executor download credentials during `groundhog init`.
-pub(crate) fn configure_executor_credentials_from_init(print: &Print) -> Result<(), CliError> {
-    if print.is_json() {
-        return Err(CliError::JsonUnsupported("init"));
-    }
-
-    print.status(
-        "These are used by `groundhog test` when FFI credentials are not in the environment.",
-    );
-    save_executor_credentials_from_prompt(print)?;
-    print.status("\nCredentials saved.");
-    Ok(())
 }
 
 /// Resolve whether mock-executor FFI download credentials are available.
@@ -107,32 +92,10 @@ fn environment_credentials_available() -> bool {
     env::var_os(FFI_USER_ENV).is_none_or(|user| !user.is_empty())
 }
 
-fn save_executor_credentials_from_prompt(print: &Print) -> Result<(), CliError> {
-    let stdin = io::stdin();
-
-    print.prompt("FFI download username (optional): ")?;
-    let mut username = String::new();
-    stdin.lock().read_line(&mut username)?;
-    let username = username.trim().to_string();
-
-    let password = rpassword::prompt_password("FFI download password: ")
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    save_executor_credentials(username, password)
-}
-
-fn save_executor_credentials(username: String, password: String) -> Result<(), CliError> {
-    if password.is_empty() {
-        return Err(CliError::CredentialsEmpty);
-    }
-
-    config::save_executor_credentials(&ExecutorCredentials { username, password })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ExecutorCredentials;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -271,36 +234,5 @@ mod tests {
             env::remove_var(FFI_USER_ENV);
             env::remove_var("XDG_CONFIG_HOME");
         }
-    }
-
-    #[test]
-    #[serial]
-    fn password_only_credentials_can_be_saved() {
-        let tmp = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", tmp.path());
-        }
-
-        save_executor_credentials(String::new(), "secret".into()).unwrap();
-
-        assert_eq!(
-            config::load_executor_credentials().unwrap(),
-            Some(ExecutorCredentials {
-                username: String::new(),
-                password: "secret".into(),
-            })
-        );
-
-        unsafe {
-            env::remove_var("XDG_CONFIG_HOME");
-        }
-    }
-
-    #[test]
-    fn empty_password_is_rejected() {
-        assert!(matches!(
-            save_executor_credentials(String::new(), String::new()),
-            Err(CliError::CredentialsEmpty)
-        ));
     }
 }

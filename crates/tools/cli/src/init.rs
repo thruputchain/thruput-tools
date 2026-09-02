@@ -1,9 +1,10 @@
 //! `groundhog init` — interactive first-run wizard.
 //!
-//! Walks a new user through environment setup, key generation,
-//! mock-executor download credential storage, and optional project scaffolding. When
-//! everything is already configured, prints a short summary and
-//! exits. `init --json` delegates to `status --json`.
+//! Walks a new user through environment setup, key generation, and
+//! optional project scaffolding, and reports whether optional
+//! test-executor download credentials are present. When everything is
+//! already configured, prints a short summary and exits. `init --json`
+//! delegates to `status --json`.
 
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -29,13 +30,14 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     let report = crate::checks::collect_report(project_start, None)?;
     let has_project = report.project.config_path.is_some();
     let usable_default_key = usable_default_key_for_init(&report);
-    let has_credentials = report.credentials.executor_credentials;
 
     crate::config::initialize_global_profiles()?;
     let mut ui = InitUi::new(print);
     ui.render_intro();
 
-    if report.environment.cargo && usable_default_key.is_some() && has_credentials {
+    // Executor download credentials are optional (the SDK falls back to an
+    // unauthenticated download), so they do not gate readiness.
+    if report.environment.cargo && usable_default_key.is_some() {
         report_ready(project_start, usable_default_key, &mut ui)?;
         return Ok(());
     }
@@ -56,7 +58,7 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     handle_key_step(&report, usable_default_key, &mut ui)?;
 
     ui.begin_step(InitStep::ExecutorCredentials);
-    handle_credentials_step(&report, &mut ui)?;
+    handle_credentials_step(&report, &mut ui);
 
     ui.begin_step(InitStep::Project);
     let project_context = handle_scaffold_step(has_project, project_start, &report, &mut ui)?;
@@ -150,30 +152,20 @@ fn usable_default_key_for_init(
         .find(|key| key.name == global_default)
 }
 
-fn handle_credentials_step(
-    report: &crate::checks::StatusReport,
-    ui: &mut InitUi<'_>,
-) -> Result<(), CliError> {
+fn handle_credentials_step(report: &crate::checks::StatusReport, ui: &mut InitUi<'_>) {
     if report.credentials.executor_credentials {
-        ui.success("Mock-executor download credentials available");
+        ui.success("Test-executor download credentials available");
         ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
     } else {
-        ui.note("Mock-executor download credentials are not configured");
-        if !ui.print.is_quiet()
-            && confirm(
-                ui.print,
-                "Configure mock-executor download credentials now?",
-                true,
-            )?
-        {
-            crate::auth::configure_executor_credentials_from_init(ui.print)?;
-            ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
-        } else {
-            ui.finish_step(InitStep::ExecutorCredentials, StepState::Skipped);
-        }
+        // Public builds download the test executor without credentials;
+        // only authenticated internal builds need to configure any.
+        ui.note(
+            "Test-executor download credentials not configured (optional; \
+             set HOGD_FFI_PASSWORD or an [executor] table in the global \
+             config only if your build requires authentication)",
+        );
+        ui.finish_step(InitStep::ExecutorCredentials, StepState::Skipped);
     }
-
-    Ok(())
 }
 
 fn handle_scaffold_step(
@@ -271,7 +263,7 @@ impl InitStep {
             Self::Environment => "Environment",
             Self::Profiles => "Profiles",
             Self::SigningKey => "Signing key",
-            Self::ExecutorCredentials => "Mock-executor download credentials",
+            Self::ExecutorCredentials => "Test-executor download credentials (optional)",
             Self::Project => "Project",
         }
     }

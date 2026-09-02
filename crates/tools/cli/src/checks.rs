@@ -444,13 +444,18 @@ pub fn collect_report(
     );
 
     if !credentials.executor_credentials {
+        // The SDK downloads the test-executor library without
+        // authentication when no credentials are present, so this is
+        // informational: credentials only matter for authenticated
+        // internal builds.
         findings.push(Finding {
-            level: FindingLevel::Warn,
+            level: FindingLevel::Info,
             code: "no_credentials",
-            message: "mock-executor FFI download credentials not found".into(),
+            message: "test-executor download credentials not configured (optional)".into(),
             hint: Some(Cow::Borrowed(
-                "set HOGD_FFI_PASSWORD with HOGD_FFI_USER unset or \
-                 nonempty, or run `groundhog init` to store download credentials",
+                "only needed for authenticated builds: set HOGD_FFI_PASSWORD (with \
+                 HOGD_FFI_USER unset or nonempty) or add an [executor] table with \
+                 `username` and `password` to the global Groundhog config",
             )),
         });
     }
