@@ -272,6 +272,11 @@ fn scaffold_stub_has_empty_contract() {
     assert!(imp.contains("#[contract_exception]"));
 
     assert_rv32_only_test_scaffold(&dir);
+    // The stub renders its own tests/test.rs; keep it on the same
+    // clippy-clean shape as the counter's.
+    let test = fs::read_to_string(dir.join("tests/test.rs")).unwrap();
+    assert!(test.contains("*test_contract.as_hash()"));
+    assert!(!test.contains(".clone()"));
     let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
     assert!(test_rv32.contains("load_rv32_contract"));
     assert!(test_rv32.contains("CARGO_TARGET_DIR"));
