@@ -66,6 +66,12 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             Ok(format!("readonly [{}]", items.join(", ")))
         }
         ContractType::Named { named } => Ok(spec_string_text(named)?.to_owned()),
+        ContractType::SignedToken {
+            signed_token_preimage,
+        } => match signed_token_preimage.preimage_type.as_deref() {
+            Some(inner) => Ok(format!("SignedToken<{}>", ts_type_ref(inner)?)),
+            None => Ok("SignedToken".into()),
+        },
         _ => Err(CliError::SpecFailed(
             "contract spec contains an unsupported contract type".into(),
         )),
@@ -310,6 +316,8 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         spec,
         |ty| matches!(ty, ContractType::Array { array } if array.len > 3 && !matches!(array.element.as_ref(), ContractType::U8)),
     );
+    let uses_signed_token =
+        spec_uses_type(spec, |ty| matches!(ty, ContractType::SignedToken { .. }));
     let has_direct_event_topics = spec.events.iter().any(|event| {
         event
             .topics
@@ -378,6 +386,9 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
     }
     if uses_fixed_bytes {
         client_imports.push("type FixedBytes");
+    }
+    if uses_signed_token {
+        client_imports.push("type SignedToken");
     }
     if has_events {
         client_imports.extend(["defineContractEvent", "type DecodedContractEvent"]);
@@ -753,6 +764,18 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             Ok(format!(
                 "{{ v: ContractTypeKind.Named, named: s({}) }}",
                 ts_string_literal(name)
+            ))
+        }
+        ContractType::SignedToken {
+            signed_token_preimage,
+        } => {
+            let preimage = match signed_token_preimage.preimage_type.as_deref() {
+                Some(inner) => spec_type_to_ts_literal(inner)?,
+                None => "null".into(),
+            };
+            Ok(format!(
+                "{{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
+                 {{ preimage_type: {preimage} }} }}"
             ))
         }
         _ => Err(CliError::SpecFailed(
@@ -1646,6 +1669,17 @@ fn validate_contract_type(
                 )))
             }
         }
+        ContractType::SignedToken {
+            signed_token_preimage,
+        } => match signed_token_preimage.preimage_type.as_deref() {
+            Some(inner) => validate_contract_type(
+                inner,
+                false,
+                defined_types,
+                &format!("{location} signed-token preimage"),
+            ),
+            None => Ok(()),
+        },
         _ => Err(CliError::SpecFailed(format!(
             "{location} uses an unsupported contract type"
         ))),
@@ -1752,6 +1786,12 @@ fn contract_type_matches(
             ContractType::Tuple { tuple } => tuple
                 .iter()
                 .any(|item| contract_type_matches(item, predicate)),
+            ContractType::SignedToken {
+                signed_token_preimage,
+            } => signed_token_preimage
+                .preimage_type
+                .as_deref()
+                .is_some_and(|inner| contract_type_matches(inner, predicate)),
             _ => false,
         }
 }
@@ -1921,6 +1961,85 @@ mod tests {
             option_inner: Box::new(ContractType::U64),
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "bigint | null");
+    }
+
+    #[test]
+    fn maps_signed_token_types() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let opaque = ContractType::SignedToken {
+            signed_token_preimage: ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        assert_eq!(ts_type_ref(&opaque).unwrap(), "SignedToken");
+        assert_eq!(
+            spec_type_to_ts_literal(&opaque).unwrap(),
+            "{ v: ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } }"
+        );
+
+        let typed = ContractType::SignedToken {
+            signed_token_preimage: ContractSignedTokenPreimage {
+                preimage_type: Some(Box::new(ContractType::Named {
+                    named: spec_string("Auth"),
+                })),
+            },
+        };
+        assert_eq!(ts_type_ref(&typed).unwrap(), "SignedToken<Auth>");
+        assert_eq!(
+            spec_type_to_ts_literal(&typed).unwrap(),
+            "{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
+             { preimage_type: { v: ContractTypeKind.Named, named: s(\"Auth\") } } }"
+        );
+
+        let list = ContractType::Vector {
+            vector: ContractVectorType {
+                element: Box::new(opaque),
+                max_len: u32::MAX,
+            },
+        };
+        assert_eq!(ts_type_ref(&list).unwrap(), "SignedToken[]");
+    }
+
+    #[test]
+    fn generates_signed_token_returns_and_imports_the_type() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("authorize"),
+                args: vec![ContractField {
+                    name: spec_string("message"),
+                    ty: ContractType::Bytes,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Vector {
+                    vector: ContractVectorType {
+                        element: Box::new(ContractType::SignedToken {
+                            signed_token_preimage: ContractSignedTokenPreimage {
+                                preimage_type: None,
+                            },
+                        }),
+                        max_len: u32::MAX,
+                    },
+                },
+            }],
+            false,
+        );
+        let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
+        assert!(
+            output.contains("type SignedToken } from \"@groundhogchain/client/contract\""),
+            "SignedToken must be imported from the client runtime:\n{output}"
+        );
+        assert!(
+            output.contains("export type CounterAuthorizeResult = SignedToken[];"),
+            "return type must be a token placeholder list:\n{output}"
+        );
+        assert!(
+            output.contains(
+                "{ v: ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } }"
+            ),
+            "spec literal must carry the signed-token type:\n{output}"
+        );
     }
 
     #[test]
