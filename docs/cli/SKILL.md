@@ -123,7 +123,7 @@ default = ["dev"]
 dev = ["sdk/dev"]
 
 [dependencies]
-sdk = { version = "0.15.6", registry = "groundhog" }
+sdk = { version = "0.27.0", registry = "groundhog" }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }
@@ -311,17 +311,19 @@ concurrent transactions can coexist.
 Non-negative integer. This is the default choice for counters, balances,
 and amounts.
 
+`NNInt` holds an `i128` with a commit-time non-negativity floor.
+
 ```rust
 // Reading
-self.value.try_get() -> Option<i128>
-self.value.get() -> i128
+self.value.get() -> i128                        // aborts if never set
+self.value.try_get() -> Result<i128, LibraryExn>
 
 // Commuting writes
-self.value.strict_inc(delta)
-self.value.inc(delta)
+self.value.strict_inc(delta: i128)
+self.value.inc(delta: i128)
 
 // Absolute write
-self.value.set(value)
+self.value.set(value: i128)
 ```
 
 Rules:
@@ -329,18 +331,45 @@ Rules:
 - `strict_inc()` and `inc()` commute with one another.
 - `set()` conflicts with other writes unless all callers set the same value.
 - For decrements, use `self.value.strict_inc(-(amount as i128))`.
-- For safe reads, use `self.value.try_get().unwrap_or(0)`.
+- For a read that defaults a never-set slot to zero, use
+  `self.value.try_get().none_if_missing().unwrap_or(0)`. A bare
+  `try_get().unwrap_or(0)` maps *every* read error to zero, not just a
+  missing slot.
+- For a quantity of something -- a balance, a supply, an allowance --
+  prefer `Balance`, which wraps `NNInt` with `increase(u128)` /
+  `decrease(u128)`, a `get()` that defaults to zero, and failure on
+  overflow and overdraft in every profile. It avoids the `as i128` casts
+  and the negated decrement above.
 
 ### `Map<K, V>`
 
 Key-value store. Different keys are independent conflict domains.
 
+A `Map` is addressed, not enumerable: you take a handle to one entry and
+operate on it with that value type's own API.
+
 ```rust
-self.accounts.get(&key) -> V
-self.accounts.try_get(&key) -> Option<V>
-self.accounts.set(&key, &value)
-self.accounts.delete(&key)
+self.accounts.at(&key)                  // read handle
+self.accounts.at_mut(&key)              // write handle
+self.accounts.at_mut_exclusive(&key)    // write handle, conflicts with any other write
+self.accounts.at_disjoint_mut([&k1, &k2])  // several write handles at once
+
+// so, with Map<ContractAddress, Balance>:
+let amount = self.balances.at(owner).get();
+self.balances.at_mut(owner).increase(amount);        // aborts on overflow
+self.balances
+    .at_mut(owner)
+    .try_decrease(amount)                            // or report it
+    .unwrap_or_else(|_| throw(MyError::TooLarge));
+
+// and nested, with Map<K1, Map<K2, Balance>>:
+let allowed = self.allowances.at(owner).at(spender).get();
+let mut owner_allowances = self.allowances.at_mut(owner);
+let mut allowance = owner_allowances.at_mut(spender);
 ```
+
+There is no `Map::get`, `set`, or `delete`; a `Map` cannot enumerate its
+entries, which is also why it is not `Deletable`.
 
 Rules:
 - Use `Map<K, NNInt>` for per-user balances or counters.
@@ -364,18 +393,25 @@ Rules:
 - Do not use it for hot mutable state like balances or counters.
 - Concurrent writes to the same location conflict.
 
-### `Handle<T>`
+### `Value<T>`
 
-Typed reference to a serializable value.
+A single XDR-serializable value. This is what plain data goes in: a
+`#[storage]` field cannot be a bare `u64` or a `#[contract_type]` struct.
 
 ```rust
-let val = self.data.load();
-let mut val = self.data.load_mut();
+self.config.get() -> T                       // aborts if never set
+self.config.try_get() -> Result<T, LibraryExn>
+self.config.set(&value)
+self.config.set_exclusive(&value)            // conflicts with any other write
+let mut v = self.config.load_mut();          // mutate in place, flushed on drop
 ```
 
 Rules:
-- Use `load()` and `load_mut()`.
-- Do not instruct users to call `.get()` or `.set()` directly.
+- `T` must be XDR-encodable: a primitive, `ContractAddress`, or your own
+  type annotated `#[contract_type]`.
+- `set()` is last-write-wins across transactions; two transactions setting
+  different values conflict.
+- Use `load_mut()` when reading, mutating and writing back in one place.
 
 ## Storage Type Selection Guide
 
@@ -387,7 +423,7 @@ Rules:
 | Owner / admin address | `Bytestring` | written rarely, read often |
 | Config / settings | `Bytestring` | infrequent updates |
 | Approval mappings | `Map<K1, Map<K2, NNInt>>` | independent `(K1, K2)` pairs |
-| Append-style event data | `RetrocausalQueue` | inserts commute |
+| Append-style event data | `RCQ<T>` | inserts commute |
 
 ## SDK Utilities
 
@@ -415,11 +451,19 @@ Always flag these when you see them:
 1. `NNInt::set()` on balances or counters. Use `strict_inc()` or `inc()`.
 2. `Bytestring` for frequently updated state. Use `NNInt` or `Map<_, NNInt>`.
 3. Retry logic in contract code. The runtime and mempool handle exclusion.
-4. `Handle<T>.get()` or `.set()` directly. Use `load()` or `load_mut()`.
-5. `NNInt::get()` without handling unset state when zero/default is expected.
-6. Teaching stale native test patterns like `test_setup::register(...)` or
-   `env.setup_create_contract(&contract)` as the default path.
-7. Teaching `#[init]` as a required or default SDK attribute.
+4. `Value<T>::set()` in a read-modify-write sequence. Use `load_mut()`, which
+   mutates in place and flushes on drop.
+5. `NNInt::get()` or `Value::get()` where a never-set slot is expected: both
+   abort. Use `try_get().none_if_missing()`, and prefer `Balance` when the
+   value is a quantity (its `get()` defaults to zero).
+6. A bare `try_get().unwrap_or(0)`, which swallows every read error rather
+   than only a missing slot.
+7. Teaching stale native test patterns like `test_setup::register(...)` as the
+   default path. (`env.setup_create_contract(&contract)` is correct for the
+   rv32 tests the scaffold generates -- it is how `tests/test_rv32.rs` loads a
+   built artifact -- so flag it only in native tests, where
+   `register_mock_contract(&env)` is the path.)
+8. Teaching `#[init]` as a required or default SDK attribute.
 
 ## Build and Test Commands
 
