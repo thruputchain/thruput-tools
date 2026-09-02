@@ -68,24 +68,43 @@ pub fn run_in(
 /// which only a rustup-managed `cargo` honors.  A missing toolchain, target,
 /// or component is deliberately *not* reported: under rustup those install
 /// themselves on the first build, so warning about them would be noise.
+///
+/// The native test harness (`sdk/dev`) downloads a prebuilt executor library
+/// at build time, and that download is credential-gated during early access.
+/// A missing credential is reported here because the first thing the docs
+/// tell a new user to run is `cargo test`, which reads only the environment.
 fn scaffold_warnings() -> Vec<Finding> {
-    if crate::checks::cargo_is_rustup_managed() {
-        return Vec::new();
+    let mut warnings = Vec::new();
+    if !crate::checks::cargo_is_rustup_managed() {
+        warnings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "cargo_not_rustup_managed",
+            message: format!(
+                "the `cargo` on PATH is not rustup-managed, so this project's \
+                 rust-toolchain.toml is inert. It pins a nightly channel and the {} \
+                 target, neither of which a distro-packaged cargo will honor.",
+                crate::build::RV32_TARGET_TRIPLE,
+            ),
+            hint: Some(Cow::Borrowed(
+                "install rustup from https://rustup.rs and make sure its shims come before \
+                 any distro-packaged cargo on PATH, otherwise `groundhog build` will fail",
+            )),
+        });
     }
-    vec![Finding {
-        level: FindingLevel::Warn,
-        code: "cargo_not_rustup_managed",
-        message: format!(
-            "the `cargo` on PATH is not rustup-managed, so this project's \
-             rust-toolchain.toml is inert. It pins a nightly channel and the {} \
-             target, neither of which a distro-packaged cargo will honor.",
-            crate::build::RV32_TARGET_TRIPLE,
-        ),
-        hint: Some(Cow::Borrowed(
-            "install rustup from https://rustup.rs and make sure its shims come before \
-             any distro-packaged cargo on PATH, otherwise `groundhog build` will fail",
-        )),
-    }]
+    if matches!(crate::auth::executor_credential_source(), Ok(None)) {
+        warnings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "no_credentials",
+            message: "mock-executor download credentials not found; the project's \
+                      native tests need them to build"
+                .into(),
+            hint: Some(Cow::Borrowed(
+                "export HOGD_FFI_PASSWORD before `cargo test`, or run `groundhog init` to \
+                 store the credentials and use `groundhog test`, which supplies them",
+            )),
+        });
+    }
+    warnings
 }
 
 fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {

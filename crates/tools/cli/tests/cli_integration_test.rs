@@ -2044,6 +2044,7 @@ fn new_json_outputs_structured_payload() {
         .arg("--json")
         .arg("new")
         .arg("json-project")
+        .env("HOGD_FFI_PASSWORD", "test-credential")
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -2061,6 +2062,43 @@ fn new_json_outputs_structured_payload() {
     assert_eq!(stdout["data"]["schemaVersion"], 1);
     assert_eq!(stdout["data"]["projectName"], "json-project");
     assert_eq!(stdout["data"]["template"], "counter");
+}
+
+#[test]
+fn new_warns_when_executor_credentials_are_missing() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("new")
+        .arg("no-creds-project")
+        .env_remove("HOGD_FFI_PASSWORD")
+        .env_remove("HOGD_FFI_USER")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    // Scaffolding still succeeds: the warning is advisory, not fatal.
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(tmp.path().join("no-creds-project/Cargo.toml").exists());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    let warnings = stdout["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w["code"] == "no_credentials"),
+        "warnings: {warnings:?}"
+    );
+    let hint = warnings
+        .iter()
+        .find(|w| w["code"] == "no_credentials")
+        .and_then(|w| w["hint"].as_str())
+        .unwrap();
+    assert!(hint.contains("HOGD_FFI_PASSWORD"));
+    assert!(hint.contains("groundhog init"));
 }
 
 #[cfg(unix)]
@@ -2134,6 +2172,7 @@ fn scaffold_with_stub_cargo(
         .arg("new")
         .arg(project)
         .env("PATH", path_with_stub_cargo(&bin, cargo, rustup_present))
+        .env("HOGD_FFI_PASSWORD", "test-credential")
         .current_dir(&workspace)
         .output()
         .unwrap();
