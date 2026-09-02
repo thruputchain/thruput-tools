@@ -51,6 +51,13 @@ pub enum NodeSupervisorError {
         /// Human-readable validation failure.
         reason: &'static str,
     },
+    /// The configured protocol override is not the wire width of a token.
+    #[error("invalid protocol override: {source}")]
+    InvalidProtocolOverride {
+        /// Why the text cannot name a protocol token.
+        #[from]
+        source: groundhog_json_rpc_types::protocol_token::ProtocolTokenWidthError,
+    },
     /// A configured binary path does not exist.
     #[error("configured hog-devnode binary path does not exist: {}", path.display())]
     ConfiguredPathMissing {

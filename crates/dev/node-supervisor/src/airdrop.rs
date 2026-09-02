@@ -1245,7 +1245,7 @@ mod tests {
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": { "binary": "hogd-dev", "version": "0.1.0" },
             "endpoints": { "scheduler": "127.0.0.1:1000" },

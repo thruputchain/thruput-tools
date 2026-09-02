@@ -711,9 +711,15 @@ fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> 
         ));
     }
 
+    Ok(parse_installed_rust_toolchains(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+fn parse_installed_rust_toolchains(output: &str) -> (Vec<String>, Option<String>) {
     let mut installed = Vec::new();
     let mut default = None;
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
+    for line in output.lines() {
         let Some(name) = line.split_whitespace().next() else {
             continue;
         };
@@ -721,11 +727,19 @@ fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> 
             continue;
         }
         installed.push(name.to_string());
-        if line.contains("(default)") {
+        let is_default = line
+            .rsplit_once(" (")
+            .and_then(|(_, annotations)| annotations.strip_suffix(')'))
+            .is_some_and(|annotations| {
+                annotations
+                    .split(',')
+                    .any(|annotation| annotation.trim() == "default")
+            });
+        if is_default {
             default = Some(name.to_string());
         }
     }
-    Ok((installed, default))
+    (installed, default)
 }
 
 fn installed_rust_toolchains_command() -> std::process::Command {
@@ -1544,6 +1558,33 @@ mod tests {
                 .get_envs()
                 .any(|(name, value)| { name == "RUSTUP_TOOLCHAIN" && value.is_none() })
         );
+    }
+
+    #[test]
+    fn installed_toolchain_parser_recognizes_default_annotation() {
+        for annotations in ["default", "active, default"] {
+            let output = format!("1.93.0-aarch64-apple-darwin ({annotations})\n");
+            let (installed, default) = parse_installed_rust_toolchains(&output);
+
+            assert_eq!(installed, ["1.93.0-aarch64-apple-darwin"]);
+            assert_eq!(default.as_deref(), Some("1.93.0-aarch64-apple-darwin"));
+        }
+    }
+
+    #[test]
+    fn installed_toolchain_parser_ignores_incidental_default_text() {
+        let output = "my-default-toolchain-aarch64-apple-darwin (active)\n\
+                      nightly-aarch64-apple-darwin (active, defaultish)\n";
+        let (installed, default) = parse_installed_rust_toolchains(output);
+
+        assert_eq!(
+            installed,
+            [
+                "my-default-toolchain-aarch64-apple-darwin",
+                "nightly-aarch64-apple-darwin"
+            ]
+        );
+        assert_eq!(default, None);
     }
 
     #[test]

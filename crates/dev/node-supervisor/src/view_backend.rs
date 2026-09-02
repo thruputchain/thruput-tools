@@ -4,12 +4,12 @@ use std::{fmt, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, ViewPlane};
+use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     events::EmittedEvent,
     hex::{Hex0x, HexBytes, Topic},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome, ViewGatewayResult};
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
@@ -20,7 +20,7 @@ use groundhog_xdr::{
     transaction::{Invocation, InvocationFrameOutput},
     view::TransactionViewQuery,
 };
-use xdr_common::{BytesM, StringM, VecM};
+use xdr_common::{BytesM, VecM};
 
 use crate::{
     NodeSupervisorError, request_deadline::within_request_deadline, stub_backend::StubBackend,
@@ -75,7 +75,7 @@ impl HogdDevViewBackend {
         .await
         .map_err(|source| NodeSupervisorError::ViewGatewayConnect { endpoint, source })?;
 
-        let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+        let protocol = protocol_from_text(protocol_version)?;
         let intro_outcome = client.viewgateway_intro(&protocol).await.map_err(|e| {
             NodeSupervisorError::ViewGatewayRpc {
                 op: "viewgateway_intro",
@@ -293,6 +293,7 @@ mod tests {
     use groundhog_json_rpc_server::ViewPlane;
     use groundhog_json_rpc_types::ContractAddress;
     use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
@@ -468,7 +469,7 @@ mod tests {
     async fn connect_optional_without_endpoint_uses_stub() {
         let backend = HogdDevViewBackend::connect_optional(
             None,
-            PROTOCOL_VERSION,
+            &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_secs(1),
         )
@@ -496,7 +497,7 @@ mod tests {
             Duration::from_secs(5),
             HogdDevViewBackend::connect_optional(
                 Some(dead_addr),
-                PROTOCOL_VERSION,
+                &protocol_text(&PROTOCOL_VERSION),
                 None,
                 Duration::from_secs(1),
             ),
@@ -526,8 +527,8 @@ mod tests {
 
         let result = HogdDevViewBackend::connect_optional(
             Some(addr),
-            "hogp/sent",
-            Some("hogp/expected"),
+            "hogp/sent00000000000",
+            Some("hogp/expected0000000"),
             Duration::from_secs(1),
         )
         .await;
@@ -550,11 +551,11 @@ mod tests {
                 );
                 assert_eq!(outcome_name, "ViewGatewayIntroMismatchedProtocol");
                 assert!(is_protocol_mismatch);
-                assert_eq!(protocol, "hogp/sent");
-                assert_eq!(expected_protocol.as_deref(), Some("hogp/expected"));
+                assert_eq!(protocol, "hogp/sent00000000000");
+                assert_eq!(expected_protocol.as_deref(), Some("hogp/expected0000000"));
                 assert!(message.contains("ViewGateway intro mismatch"));
-                assert!(message.contains("hogp/sent"));
-                assert!(message.contains("hogp/expected"));
+                assert!(message.contains("hogp/sent00000000000"));
+                assert!(message.contains("hogp/expected0000000"));
                 assert!(message.contains("ViewGatewayIntroMismatchedProtocol"));
             }
             other => panic!("expected ViewGateway intro rejection, got {other:?}"),
@@ -566,7 +567,7 @@ mod tests {
         let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
         let backend = HogdDevViewBackend::connect_optional(
             Some(addr),
-            PROTOCOL_VERSION,
+            &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_millis(10),
         )
@@ -588,7 +589,7 @@ mod tests {
         let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
         let backend = HogdDevViewBackend::connect_optional(
             Some(addr),
-            PROTOCOL_VERSION,
+            &protocol_text(&PROTOCOL_VERSION),
             None,
             Duration::from_secs(30),
         )

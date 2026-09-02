@@ -12,6 +12,7 @@ use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_types::protocol_token::protocol_text;
 use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerConfig, ServerHandle};
@@ -166,10 +167,13 @@ impl NodeSupervisorHandle {
             .map_err(|reason| NodeSupervisorError::InvalidLocalAirdropConfig { reason })?;
         let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
+        // Text, not the wire array: this is checked against the runtime
+        // manifest's `protocol` JSON field and carried in error messages.
+        let default_protocol = protocol_text(&PROTOCOL_VERSION);
         let protocol_version = config
             .hogd_protocol_override
             .as_deref()
-            .unwrap_or(PROTOCOL_VERSION);
+            .unwrap_or(&default_protocol);
 
         match validate_runtime_identity(hogd.readiness(), protocol_version)
             .and_then(|()| validate_dev_accounts(hogd.readiness(), &config.hogd_dev))
@@ -2386,10 +2390,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 assert_eq!(outcome, 1);
                 assert_eq!(outcome_name, "DbGatewayIntroMismatchedProtocol");
                 assert!(is_protocol_mismatch);
-                assert_eq!(protocol, PROTOCOL_VERSION);
-                assert_eq!(expected_protocol.as_deref(), Some(PROTOCOL_VERSION));
+                assert_eq!(protocol, protocol_text(&PROTOCOL_VERSION));
+                assert_eq!(
+                    expected_protocol.as_deref(),
+                    Some(protocol_text(&PROTOCOL_VERSION).as_str())
+                );
                 assert!(message.contains("DbGateway intro mismatch"));
-                assert!(message.contains(PROTOCOL_VERSION));
+                assert!(message.contains(&protocol_text(&PROTOCOL_VERSION)));
                 assert!(message.contains("DbGatewayIntroMismatchedProtocol"));
             }
             other => panic!("expected ProtocolIntroRejected error, got {other:?}"),
@@ -2415,10 +2422,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 assert_eq!(outcome, 1);
                 assert_eq!(outcome_name, "IntroMismatchedProtocol");
                 assert!(is_protocol_mismatch);
-                assert_eq!(protocol, PROTOCOL_VERSION);
-                assert_eq!(expected_protocol.as_deref(), Some(PROTOCOL_VERSION));
+                assert_eq!(protocol, protocol_text(&PROTOCOL_VERSION));
+                assert_eq!(
+                    expected_protocol.as_deref(),
+                    Some(protocol_text(&PROTOCOL_VERSION).as_str())
+                );
                 assert!(message.contains("IndexerBlockExplorer intro mismatch"));
-                assert!(message.contains(PROTOCOL_VERSION));
+                assert!(message.contains(&protocol_text(&PROTOCOL_VERSION)));
                 assert!(message.contains("IntroMismatchedProtocol"));
             }
             other => panic!("expected ProtocolIntroRejected error, got {other:?}"),

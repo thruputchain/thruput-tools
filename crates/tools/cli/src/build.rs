@@ -364,6 +364,9 @@ pub struct CargoMetadata {
 #[derive(Debug, serde::Deserialize)]
 pub struct MetadataPackage {
     pub name: String,
+    /// Version cargo resolved for this package, with any workspace
+    /// inheritance already applied.
+    pub version: String,
     pub manifest_path: PathBuf,
 }
 

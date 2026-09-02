@@ -999,7 +999,7 @@ mod tests {
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": {
                 "binary": "hog-devnode",
@@ -1216,7 +1216,7 @@ mod tests {
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": {
                 "binary": "hog-devnode",

@@ -24,6 +24,7 @@ use groundhog_indexer::{
     TxInfoOutcome, TxInfoResult,
 };
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     ContractAddress,
     events::{EventPage, EventQuery, IdentifiedEvent},
@@ -36,7 +37,6 @@ use groundhog_json_rpc_types::{
     },
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
-use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use groundhog_xdr::{
     event::TxEmittedEvent,
@@ -134,7 +134,7 @@ impl HogdDevReadBackend {
         // A wrong endpoint (e.g. wrong port, wrong service) would be reported
         // as full startup success but fail on every subsequent read call.
         tracing::debug!(%endpoint, "probing hogd-dev indexer with intro handshake");
-        let protocol: Protocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
+        let protocol = protocol_from_text(protocol_version)?;
         let intro_outcome = indexer
             .indexer_block_explorer_intro(&protocol)
             .await
@@ -564,7 +564,7 @@ async fn connect_db_gateway(
     .await
     .map_err(|source| NodeSupervisorError::DbGatewayConnect { endpoint, source })?;
 
-    let protocol: Protocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
+    let protocol = protocol_from_text(protocol_version)?;
     let intro_outcome =
         client
             .dbgateway_intro(&protocol)
@@ -803,6 +803,7 @@ mod tests {
         TransactionQuery, TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
+    use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_json_rpc_types::{
         events::{EventFilterList, EventQuery},
         hex::Hex0x,
@@ -2165,7 +2166,13 @@ mod tests {
         // Act
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            HogdDevReadBackend::connect(dead_addr, None, &sched_backend, PROTOCOL_VERSION, None),
+            HogdDevReadBackend::connect(
+                dead_addr,
+                None,
+                &sched_backend,
+                &protocol_text(&PROTOCOL_VERSION),
+                None,
+            ),
         )
         .await
         .expect("bug: connect to dead port should return promptly");

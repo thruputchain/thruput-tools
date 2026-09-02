@@ -27,6 +27,7 @@ use groundhog_indexer::{
     TransactionRefPageResult, TxInfo, TxInfoResult,
 };
 use groundhog_json_rpc_types::hex::Hex0x;
+use groundhog_json_rpc_types::protocol_token::protocol_text;
 use groundhog_scheduler::{
     BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ParallelBatch,
     ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
@@ -556,7 +557,7 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": "00".repeat(32),
-        "protocol": PROTOCOL_VERSION,
+        "protocol": protocol_text(&PROTOCOL_VERSION),
         "producer": Value::Object(producer),
         "endpoints": endpoints,
         "bootstrapAccountDerivation": {

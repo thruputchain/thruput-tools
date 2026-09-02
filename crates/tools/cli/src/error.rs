@@ -634,7 +634,9 @@ impl CliError {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
             Self::NodeSupervisor(_) => Some(Cow::Borrowed(
-                "check `--hog-devnode-binary`, the hog-devnode process output, and the local node logs",
+                "check `--hog-devnode-binary`; if contract artifacts are installed elsewhere, \
+                 pass `--contract-artifacts-dir <DIR>`, then inspect the hog-devnode process \
+                 output and local node logs",
             )),
             Self::NodeSupervisorProtocolIntroRejected {
                 expected_protocol: Some(protocol),
@@ -1242,6 +1244,14 @@ mod tests {
         let error =
             CliError::Rv32LowerFailed(LowerError::Verify("code digest mismatch".to_string()));
         assert!(hint(&error).contains("bug"));
+    }
+
+    #[test]
+    fn node_supervisor_errors_hint_at_the_contract_artifact_directory_override() {
+        let error =
+            CliError::NodeSupervisor("hog-devnode exited before emitting readiness".to_string());
+
+        assert!(hint(&error).contains("--contract-artifacts-dir"));
     }
 
     #[test]

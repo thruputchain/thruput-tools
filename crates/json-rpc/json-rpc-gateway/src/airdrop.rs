@@ -1396,7 +1396,7 @@ mod tests {
             "kind": NETWORK_DESCRIPTOR_KIND,
             "networkId": network_id,
             "networkHash": format!("0x{}", "12".repeat(32)),
-            "protocol": "hogp/test",
+            "protocol": "hogp/test00000000000",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "endpoints": { "rpcUrl": "https://rpc.example" },
             "nativeHog": {
