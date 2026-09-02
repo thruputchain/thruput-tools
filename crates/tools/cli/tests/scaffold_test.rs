@@ -93,6 +93,7 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
             "groundhog build",
             "never bare cargo for RV32",
             r#"feature = "entrypoints""#,
+            "BOTH test commands",
             "tests/test_rv32.rs",
             "`dev` feature",
             "groundhog-integration-test",

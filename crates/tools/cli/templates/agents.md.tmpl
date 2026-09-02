@@ -9,8 +9,15 @@ they survive refactors. Do not "clean them up".
 
 - `groundhog build` — compiles the deployable artifact to
   `target/groundhog/{{PROJECT_NAME_SNAKE}}.rv32a`.
-- `groundhog test` — runs the RV32-executor tests in `tests/test_rv32.rs`
-  with the `dev` feature. Plain `cargo test` runs the host test targets.
+- Always run BOTH test commands before calling a change done — they cover
+  different things and neither replaces the other:
+  - `cargo test` — the unit tests (`tests/test.rs`), compiled for the host
+    and run against the in-process mock executor.
+  - `groundhog test` — the end-to-end tests (`tests/test_rv32.rs`, with
+    the `dev` feature): builds the deployable RV32 artifact and executes
+    it in the real RV32 executor. A passing unit test proves nothing
+    about the artifact — for one, release builds wrap on integer overflow
+    where host builds panic.
 - `groundhog test --integration` — RPC tests against an ephemeral local node.
 - A bare `cargo build --target riscv32im-unknown-none-elf` can never work:
   the required `build-std` flag lives in `.cargo/contract.toml`, which only
