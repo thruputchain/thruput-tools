@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 doctest = false
 test = false
 
@@ -15,23 +15,34 @@ test = false
 [[bin]]
 name = "{{PROJECT_NAME_SNAKE}}"
 path = "src/main.rs"
-required-features = ["rv32-entrypoints"]
+required-features = ["entrypoints"]
 test = false
 bench = false
 
+# Three of these feature names are contracts with the toolchain — do not
+# rename them:
+# - `entrypoints`: the #[contract] macro keys guest entrypoint codegen on
+#   this exact name, and `groundhog build` compiles the rv32 bin with it.
+# - `dev`: `groundhog test` runs host tests with `--features dev`.
+# - `groundhog-integration-test`: `groundhog test --integration` enables it.
 [features]
 entrypoints = []
-rv32-entrypoints = ["entrypoints"]
-default = ["dev"]
 dev = ["sdk/dev"]
 groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 [dependencies]
-sdk = { version = "0.27.0", registry = "groundhog" }
+sdk = { version = "{{SDK_VERSION}}", registry = "groundhog" }
 
 [target.'cfg(not(target_arch = "riscv32"))'.dependencies]
-groundhog-json-rpc-client = { version = "0.12.0", registry = "groundhog", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]
+version = "{{JSON_RPC_CLIENT_VERSION}}"
+registry = "groundhog"
+optional = true
+
+# The self-dependency is deliberate: it turns the `dev` feature (and so
+# `sdk/dev`, the native mock executor) on for `cargo test` builds only,
+# keeping the library itself no_std for guest builds.
 [dev-dependencies]
 {{PROJECT_NAME}} = { path = ".", features = ["dev"] }

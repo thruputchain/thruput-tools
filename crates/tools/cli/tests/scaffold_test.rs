@@ -83,6 +83,31 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     );
 }
 
+fn assert_counter_manifest(cargo: &str) {
+    assert!(cargo.contains(r#"name = "my-counter""#));
+    assert!(cargo.contains("registry = \"groundhog\""));
+    assert!(!cargo.contains("sdk/spec"));
+    // The version pins live once, in the `scaffold` constants; here we assert
+    // they were substituted (no placeholder survives below) and land on the
+    // right dependencies.
+    assert!(cargo.contains(&format!(
+        r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
+        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
+    )));
+    assert!(cargo.contains("groundhog-integration-test = ["));
+    assert!(cargo.contains(
+        r#"[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]"#
+    ));
+    assert!(cargo.contains(&format!(
+        "version = \"{}\"",
+        groundhog_cli::scaffold::SCAFFOLD_JSON_RPC_CLIENT_VERSION
+    )));
+    assert!(!cargo.contains("{{"), "unsubstituted template placeholder");
+    assert!(cargo.contains("optional = true"));
+    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
+    assert!(!cargo.contains(r#"features = ["storage"]"#));
+}
+
 #[test]
 fn scaffold_counter_creates_expected_files() {
     let tmp = TempDir::new().unwrap();
@@ -104,19 +129,7 @@ fn scaffold_counter_creates_expected_files() {
     assert_rv32_only_test_scaffold(&dir);
 
     let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-    assert!(cargo.contains(r#"name = "my-counter""#));
-    assert!(cargo.contains("registry = \"groundhog\""));
-    assert!(!cargo.contains("sdk/spec"));
-    // Must be an SDK whose raw spec format this CLI reads, or `groundhog new`
-    // scaffolds a project that `groundhog build` refuses at the preflight.
-    assert!(cargo.contains(r#"sdk = { version = "0.27.0", registry = "groundhog" }"#));
-    assert!(cargo.contains("groundhog-integration-test = ["));
-    // Generated projects resolve outside this workspace, so this must name a
-    // client version that is already available in the Groundhog registry.
-    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.12.0""#));
-    assert!(cargo.contains("optional = true"));
-    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
-    assert!(!cargo.contains(r#"features = ["storage"]"#));
+    assert_counter_manifest(&cargo);
 
     assert_integration_scaffold(&dir);
     // RV32 bin wrapper target: the bin name must be the snake-case package
@@ -124,8 +137,14 @@ fn scaffold_counter_creates_expected_files() {
     // `release/<snake_name>`.
     assert!(cargo.contains("[[bin]]"));
     assert!(cargo.contains(r#"name = "my_counter""#));
-    assert!(cargo.contains(r#"rv32-entrypoints = ["entrypoints"]"#));
-    assert!(cargo.contains(r#"required-features = ["rv32-entrypoints"]"#));
+    // `entrypoints` is the name the #[contract] macro's cfg matches; the
+    // WASM-era `rv32-entrypoints` wrapper is gone from new scaffolds, and
+    // `dev` must not be a default feature — a dependent crate would drag
+    // `sdk/dev` (std) into guest builds through feature unification.
+    assert!(cargo.contains(r#"required-features = ["entrypoints"]"#));
+    assert!(!cargo.contains("rv32-entrypoints"));
+    assert!(!cargo.contains("default = "));
+    assert!(!cargo.contains("cdylib"));
     // The host test harness must not try to link the no_std bin when the
     // entrypoints feature is enabled.
     assert!(cargo.contains("test = false"));
@@ -161,8 +180,16 @@ fn scaffold_counter_creates_expected_files() {
     assert_scaffold_cargo_config(&dir);
 
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
+    assert!(toolchain.contains(&format!(
+        "channel = \"{}\"",
+        groundhog_cli::scaffold::SCAFFOLD_TOOLCHAIN_CHANNEL
+    )));
     assert!(toolchain.contains(r#"targets = ["riscv32im-unknown-none-elf"]"#));
     assert!(!toolchain.contains("wasm"));
+    assert!(
+        !toolchain.contains("{{"),
+        "unsubstituted template placeholder"
+    );
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));

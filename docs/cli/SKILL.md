@@ -105,25 +105,24 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 doctest = false
 test = false
 
 [[bin]]
 name = "my_contract"
 path = "src/main.rs"
-required-features = ["rv32-entrypoints"]
+required-features = ["entrypoints"]
 test = false
 bench = false
 
 [features]
 entrypoints = []
-rv32-entrypoints = ["entrypoints"]
-default = ["dev"]
 dev = ["sdk/dev"]
 
 [dependencies]
-sdk = { version = "0.15.6", registry = "groundhog" }
+# Authoritative pin: SCAFFOLD_SDK_VERSION in crates/tools/cli/src/scaffold.rs.
+sdk = { version = "0.27.0", registry = "groundhog" }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }
@@ -131,6 +130,21 @@ my-contract = { path = ".", features = ["dev"] }
 
 Guidance:
 - Start with `sdk` only.
+- The feature names `entrypoints` and `dev` are contracts with the
+  toolchain, not conventions: the `#[contract]` macro keys guest
+  entrypoint codegen on the literal name `entrypoints` (and
+  `groundhog build` compiles the rv32 bin with it), while
+  `groundhog test` runs host tests with `--features dev`. Do not
+  rename either, and do not make `dev` a default feature — a crate
+  depending on this one would drag `sdk/dev` (std) into guest builds
+  through feature unification.
+- The self-referential dev-dependency is deliberate: it enables `dev`
+  for `cargo test` builds only, keeping the library no_std for guest
+  builds. Do not "simplify" it away.
+- If another contract crate depends on this one, forward `dev` through
+  the dependent's own feature (`dev = ["sdk/dev", "my-contract/dev"]`),
+  the way the SDK's erc20 example forwards its interface crates'
+  `dev` features.
 - Add `thiserror` only if the contract actually needs it.
 - Add `xdrs` only if the contract needs manual XDR derives or other
   direct `xdrs` usage.
