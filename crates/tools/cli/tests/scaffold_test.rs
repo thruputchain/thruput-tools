@@ -83,6 +83,30 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     );
 }
 
+/// Assert the scaffolded agent guide states the load-bearing toolchain
+/// contracts a coding agent must not refactor away.
+fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
+    let agents = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+    assert_contains_all(
+        &agents,
+        &[
+            "groundhog build",
+            "never bare cargo for RV32",
+            r#"feature = "entrypoints""#,
+            "--features dev",
+            "groundhog-integration-test",
+            "snake_case package name",
+            "unification",
+            "self-referential dev-dependency",
+            ".cargo/contract.toml",
+            "rust-toolchain.toml",
+            "region 'CODE' already defined",
+        ],
+    );
+    assert!(agents.contains(snake_name));
+    assert!(!agents.contains("{{"), "unsubstituted template placeholder");
+}
+
 fn assert_counter_manifest(cargo: &str) {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
@@ -119,6 +143,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(dir.join("Cargo.toml").exists());
     assert!(dir.join("build.rs").exists());
     assert!(dir.join(".gitignore").exists());
+    assert_agents_guide(&dir, "my_counter");
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
     assert!(dir.join(".cargo/config.toml").exists());

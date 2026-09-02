@@ -1,0 +1,71 @@
+# {{PROJECT_NAME}} — guide for coding agents
+
+This is a Groundhog smart contract: a `no_std` Rust library compiled to
+RV32 and deployed on-chain. Parts of this scaffold's shape are contracts
+with the Groundhog toolchain, not style choices. This file states them so
+they survive refactors. Do not "clean them up".
+
+## Build and test with the groundhog CLI — never bare cargo for RV32
+
+- `groundhog build` — compiles the deployable artifact to
+  `target/groundhog/{{PROJECT_NAME_SNAKE}}.rv32a`.
+- `groundhog test` — host tests (equivalent to `cargo test --features dev`
+  per test target). Plain `cargo test` also works.
+- `groundhog test --integration` — RPC tests against an ephemeral local node.
+- A bare `cargo build --target riscv32im-unknown-none-elf` can never work:
+  the required `build-std` flag lives in `.cargo/contract.toml`, which only
+  `groundhog build` passes to cargo. Errors about duplicate lang items or
+  panic strategies mean "use `groundhog build`", not that the project is
+  broken.
+
+## Names the toolchain keys on — do not rename
+
+- Feature `entrypoints`: the `#[contract]` macro emits RV32 entrypoints
+  only under `cfg(all(target_arch = "riscv32", feature = "entrypoints"))`,
+  and `groundhog build` compiles the bin with exactly this feature.
+- Feature `dev`: `groundhog test` runs host tests with `--features dev`.
+- Feature `groundhog-integration-test`: enabled by
+  `groundhog test --integration` through `build.rs`.
+- The `[[bin]]` name must stay the snake_case package name
+  (`{{PROJECT_NAME_SNAKE}}`): `groundhog build` derives `--bin` from the
+  package name and reads the ELF it produced under that name.
+
+## Manifest rules
+
+- Never make `dev` a default feature. A crate that depends on this one
+  would drag `sdk/dev` (std) into RV32 guest builds through cargo feature
+  unification, and the build fails far from the mistake.
+- The self-referential dev-dependency
+  (`{{PROJECT_NAME}} = { path = ".", features = ["dev"] }`) is deliberate:
+  it enables `dev` for `cargo test` builds only, keeping the library
+  `no_std` for guest builds. Do not simplify it away.
+- If another contract crate depends on this one, forward `dev` through the
+  dependent's own feature: `dev = ["sdk/dev", "{{PROJECT_NAME}}/dev"]`.
+- Keep `sdk` pinned to a version published in the Groundhog registry; the
+  scaffold's pin is managed by the groundhog CLI.
+
+## Files that must stay at the directory `groundhog build` runs from
+
+Cargo reads config only from its invocation directory upward, so these
+must sit at the cargo workspace root:
+
+- `.cargo/config.toml` — RV32 target rustflags, including the linker script.
+- `.cargo/contract.toml` — the `build-std` overlay `groundhog build` passes.
+- `rust-toolchain.toml` — pinned nightly plus the RV32 target.
+
+If this project is moved into a parent cargo workspace, move all three to
+the workspace root. Never copy the `[target.*]` rustflags into a second
+config file on the same discovery chain: cargo joins target rustflags
+across layers, and a duplicated `-Tgroundhog-rv32.ld` fails the link with
+"region 'CODE' already defined".
+
+## Layout
+
+- `src/implementation.rs` — all contract logic: state struct, errors, the
+  `#[contract]` impl.
+- `src/lib.rs` — `no_std` gate, `sdk::declare_mock_contract!();`, and
+  re-exports. Keep it minimal.
+- `src/main.rs` — the RV32 bin wrapper. Do not add code here.
+- `tests/test.rs` — native tests against the in-process mock executor.
+- `tests/test_rv32.rs` — RV32-executor tests, run via `groundhog test`.
+- `tests/integration.rs` — RPC tests for `groundhog test --integration`.

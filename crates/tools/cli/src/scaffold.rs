@@ -6,6 +6,7 @@ const BUILD_RS: &str = include_str!("../templates/build.rs.tmpl");
 const CARGO_TOML: &str = include_str!("../templates/Cargo.toml.tmpl");
 const CARGO_CONFIG: &str = include_str!("../templates/config.toml.tmpl");
 const CONTRACT_TOML: &str = include_str!("../templates/contract.toml.tmpl");
+const AGENTS_MD: &str = include_str!("../templates/agents.md.tmpl");
 const GITIGNORE: &str = include_str!("../templates/gitignore.tmpl");
 const GROUNDHOG_TOML: &str = include_str!("../templates/groundhog.toml.tmpl");
 const INTEGRATION_TEST: &str = include_str!("../templates/integration.rs.tmpl");
@@ -111,6 +112,7 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::write(dir.join("Cargo.toml"), apply(CARGO_TOML, name))?;
     fs::write(dir.join("build.rs"), BUILD_RS)?;
     fs::write(dir.join(".gitignore"), GITIGNORE)?;
+    fs::write(dir.join("AGENTS.md"), apply(AGENTS_MD, name))?;
     fs::write(dir.join("groundhog.toml"), apply(GROUNDHOG_TOML, name))?;
     fs::write(dir.join("rust-toolchain.toml"), apply(RUST_TOOLCHAIN, name))?;
     fs::write(dir.join(".cargo/config.toml"), apply(CARGO_CONFIG, name))?;
