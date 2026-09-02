@@ -234,7 +234,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(test.contains("register_mock_contract"));
     assert!(test.contains("CounterClient"));
     assert!(test.contains("fn setup()"));
-    assert!(test.contains("test_contract.as_hash().clone()"));
+    assert!(test.contains("*test_contract.as_hash()"));
     assert!(test.contains("env.transact(|tx|"));
     assert!(test.contains("tx.call(&caller).run(move ||"));
     assert!(test.contains("MY_COUNTER_NONCE"));
