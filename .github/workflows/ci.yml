@@ -117,7 +117,7 @@ jobs:
           done
 
   cli-smoke:
-    name: CLI smoke (new + cargo test + groundhog test)
+    name: CLI smoke (new + cargo build + cargo test + groundhog test)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
@@ -151,6 +151,11 @@ jobs:
           printf '\n[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]\ngroundhog-json-rpc-client = { path = "%s" }\n' \
             "$GITHUB_WORKSPACE/crates/json-rpc/json-rpc-client" \
             >> .cargo/config.toml
+
+      # Plain `cargo build` is what IDEs run; it must succeed without `dev`.
+      - name: Host build (cargo build)
+        working-directory: ${{ runner.temp }}/my-counter
+        run: cargo build
 
       - name: Host tests (cargo test)
         working-directory: ${{ runner.temp }}/my-counter
