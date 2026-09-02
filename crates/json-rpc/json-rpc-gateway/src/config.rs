@@ -179,8 +179,23 @@ pub struct GatewayConfig {
     /// End-to-end HTTP/WebSocket JSON-RPC timeout in milliseconds.
     pub request_timeout_ms: u64,
 
-    /// Maximum simultaneous TCP/WebSocket connections.
+    /// Maximum simultaneous TCP connections.
     pub max_connections: u32,
+
+    /// Maximum accepted JSON-RPC request body size in bytes. The largest
+    /// legitimate payload is a `groundhog_view` call carrying
+    /// `max_view_calldata_bytes` of calldata, so this stays well below the
+    /// jsonrpsee default of 10 MiB.
+    pub max_request_body_bytes: u32,
+
+    /// Maximum JSON-RPC response body size in bytes. Sized for a full
+    /// `getEvents` or `getTransactionsByAddress` page.
+    pub max_response_body_bytes: u32,
+
+    /// Maximum number of calls accepted in one JSON-RPC batch request.
+    /// Every call in a batch runs against the same per-request deadline,
+    /// so this bounds how much backend work one HTTP request can fan out.
+    pub max_batch_requests: u32,
 
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
@@ -288,6 +303,9 @@ impl Default for GatewayConfig {
             listen_address: "127.0.0.1:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
+            max_request_body_bytes: 1024 * 1024,
+            max_response_body_bytes: 4 * 1024 * 1024,
+            max_batch_requests: 100,
             observability_listen: "127.0.0.1:9646".into(),
             health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
             health_chain_tip_max_age_ms: 30_000,
@@ -541,6 +559,27 @@ mod tests {
         assert_eq!(config.listen_address, "127.0.0.1:9999");
         assert_eq!(config.batch.max_size, 10);
         assert_eq!(config.tip.max_inflight_tips, 2);
+    }
+
+    #[test]
+    fn default_body_and_batch_limits_are_bounded() {
+        let config = GatewayConfig::default();
+        assert_eq!(config.max_request_body_bytes, 1024 * 1024);
+        assert_eq!(config.max_response_body_bytes, 4 * 1024 * 1024);
+        assert_eq!(config.max_batch_requests, 100);
+        assert!(config.max_request_body_bytes as usize > config.max_view_calldata_bytes);
+
+        let config: GatewayConfig = toml::from_str(
+            "
+            max_request_body_bytes = 4096
+            max_response_body_bytes = 8192
+            max_batch_requests = 1
+            ",
+        )
+        .expect("bug: body and batch limits should parse");
+        assert_eq!(config.max_request_body_bytes, 4096);
+        assert_eq!(config.max_response_body_bytes, 8192);
+        assert_eq!(config.max_batch_requests, 1);
     }
 
     #[test]
