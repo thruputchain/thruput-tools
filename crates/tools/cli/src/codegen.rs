@@ -1297,6 +1297,11 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
+    let type_def_index: BTreeMap<&str, &ContractTypeDef> = spec
+        .type_defs
+        .iter()
+        .filter_map(|def| type_def_name(def).ok().map(|name| (name, def)))
+        .collect();
     let mut event_signatures = BTreeMap::new();
     for event in spec.events.iter() {
         let event_name = spec_string_text(&event.name)?;
@@ -1336,11 +1341,10 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         )?;
         // A token's handle never travels in event data, and the event
         // tooling rejects one; refuse here rather than emit an event spec it
-        // cannot decode.
+        // cannot decode. Named definitions are resolved so a token nested in
+        // a struct or union the event refers to is caught too.
         for field in event.topics.iter().chain(event.fields.iter()) {
-            if contract_type_matches(&field.ty, |ty| {
-                matches!(ty, ContractType::SignedToken { .. })
-            }) {
+            if type_carries_signed_token(&field.ty, &type_def_index, &mut BTreeSet::new()) {
                 return Err(CliError::SpecFailed(format!(
                     "event \"{event_name}\" field \"{}\" carries a signed token, which events cannot log",
                     spec_string_text(&field.name)?
@@ -1792,6 +1796,72 @@ fn spec_uses_type(spec: &ContractSpec, predicate: impl Fn(&ContractType) -> bool
     })
 }
 
+fn type_def_name(def: &ContractTypeDef) -> Result<&str, CliError> {
+    match def {
+        ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name),
+        ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name),
+        ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name),
+        _ => Err(CliError::SpecFailed(
+            "type definition contains an unsupported kind".into(),
+        )),
+    }
+}
+
+/// Whether `ty` contains a signed token anywhere, resolving named definitions
+/// through `type_defs`. `visiting` holds the names on the current path, so a
+/// recursive definition terminates: a token inside it is found on the first
+/// visit or not at all.
+fn type_carries_signed_token(
+    ty: &ContractType,
+    type_defs: &BTreeMap<&str, &ContractTypeDef>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    match ty {
+        ContractType::SignedToken { .. } => true,
+        ContractType::Option { option_inner } => {
+            type_carries_signed_token(option_inner, type_defs, visiting)
+        }
+        ContractType::Vector { vector } => {
+            type_carries_signed_token(&vector.element, type_defs, visiting)
+        }
+        ContractType::Array { array } => {
+            type_carries_signed_token(&array.element, type_defs, visiting)
+        }
+        ContractType::Tuple { tuple } => tuple
+            .iter()
+            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
+        ContractType::Named { named } => {
+            let Ok(name) = spec_string_text(named) else {
+                return false;
+            };
+            if !visiting.insert(name.to_owned()) {
+                return false;
+            }
+            let found = match type_defs.get(name) {
+                Some(ContractTypeDef::TypeDefStruct { struct_def }) => struct_def
+                    .fields
+                    .iter()
+                    .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
+                Some(ContractTypeDef::TypeDefUnion { union_def }) => {
+                    union_def.cases.iter().any(|case| match &case.case_type {
+                        ContractUnionCaseType::UnionCaseTuple { tuple } => tuple
+                            .iter()
+                            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
+                        ContractUnionCaseType::UnionCaseStruct { struct_fields } => struct_fields
+                            .iter()
+                            .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
+                        _ => false,
+                    })
+                }
+                _ => false,
+            };
+            visiting.remove(name);
+            found
+        }
+        _ => false,
+    }
+}
+
 fn contract_type_matches(
     ty: &ContractType,
     predicate: impl Fn(&ContractType) -> bool + Copy,
@@ -2068,6 +2138,19 @@ mod tests {
                 preimage_type: None,
             },
         };
+        // `Auth { token }` is reached only by resolving the named definition,
+        // which is what a container-only walk misses.
+        let auth_def = ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("Auth"),
+                fields: vec![ContractField {
+                    name: spec_string("token"),
+                    ty: token.clone(),
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        };
         for (label, ty) in [
             ("direct", token.clone()),
             (
@@ -2079,8 +2162,23 @@ mod tests {
                     },
                 },
             ),
+            (
+                "named",
+                ContractType::Named {
+                    named: spec_string("Auth"),
+                },
+            ),
+            (
+                "named inside a container",
+                ContractType::Option {
+                    option_inner: Box::new(ContractType::Named {
+                        named: spec_string("Auth"),
+                    }),
+                },
+            ),
         ] {
             let mut spec = spec_with_events();
+            spec.type_defs = vec![auth_def.clone()].try_into().unwrap();
             let mut event = ping_event_def();
             event.fields = vec![ContractField {
                 name: spec_string("auth"),
@@ -2095,6 +2193,35 @@ mod tests {
                 "{label}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn event_token_check_terminates_on_recursive_named_types() {
+        // `Node { next: Node | null }` refers to itself; the walk must stop
+        // rather than recurse forever, and a token-free cycle must pass.
+        let node_def = ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("Node"),
+                fields: vec![ContractField {
+                    name: spec_string("next"),
+                    ty: ContractType::Option {
+                        option_inner: Box::new(ContractType::Named {
+                            named: spec_string("Node"),
+                        }),
+                    },
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        let index: BTreeMap<&str, &ContractTypeDef> = [("Node", &node_def)].into_iter().collect();
+        assert!(!type_carries_signed_token(
+            &ContractType::Named {
+                named: spec_string("Node"),
+            },
+            &index,
+            &mut BTreeSet::new(),
+        ));
     }
 
     #[test]
