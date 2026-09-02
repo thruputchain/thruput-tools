@@ -1329,6 +1329,19 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             &defined_types,
             &format!("event \"{event_name}\" fields"),
         )?;
+        // A token's handle never travels in event data, and the event
+        // tooling rejects one; refuse here rather than emit an event spec it
+        // cannot decode.
+        for field in event.topics.iter().chain(event.fields.iter()) {
+            if contract_type_matches(&field.ty, |ty| {
+                matches!(ty, ContractType::SignedToken { .. })
+            }) {
+                return Err(CliError::SpecFailed(format!(
+                    "event \"{event_name}\" field \"{}\" carries a signed token, which events cannot log",
+                    spec_string_text(&field.name)?
+                )));
+            }
+        }
     }
 
     if !spec.events.is_empty() {
@@ -2040,6 +2053,43 @@ mod tests {
             ),
             "spec literal must carry the signed-token type:\n{output}"
         );
+    }
+
+    #[test]
+    fn rejects_signed_tokens_in_event_payloads() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let token = ContractType::SignedToken {
+            signed_token_preimage: ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        for (label, ty) in [
+            ("direct", token.clone()),
+            (
+                "nested",
+                ContractType::Vector {
+                    vector: ContractVectorType {
+                        element: Box::new(token),
+                        max_len: u32::MAX,
+                    },
+                },
+            ),
+        ] {
+            let mut spec = spec_with_events();
+            let mut event = ping_event_def();
+            event.fields = vec![ContractField {
+                name: spec_string("auth"),
+                ty,
+            }]
+            .try_into()
+            .unwrap();
+            spec.events = vec![event].try_into().unwrap();
+            let err = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap_err();
+            assert!(
+                err.to_string().contains("carries a signed token"),
+                "{label}: {err}"
+            );
+        }
     }
 
     #[test]
