@@ -158,7 +158,7 @@ async fn main() -> ExitCode {
     match Box::pin(run_cli(cli)).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(SimError::ConfirmationRequired) if json_command.is_some() => {
-            print_confirmation_required(json_command.expect("checked above"));
+            print_confirmation_required(json_command.expect("bug: checked above"));
             ExitCode::FAILURE
         }
         Err(error) => {

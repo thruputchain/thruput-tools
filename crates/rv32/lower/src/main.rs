@@ -73,7 +73,7 @@ struct OutputPath {
 #[derive(Clone, Copy)]
 enum OutputState {
     Absent,
-    Existing(FileIdentity),
+    Existing(Option<FileIdentity>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,12 @@ struct FileIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume_serial_number: u32,
+    #[cfg(windows)]
+    file_index: u64,
+    #[cfg(windows)]
+    creation_time: u64,
 }
 
 fn run(cli: &Cli) -> Result<(), CliError> {
@@ -260,17 +266,31 @@ fn inspect_output_path(path: &Path) -> Result<OutputPath, CliError> {
 }
 
 #[cfg(unix)]
-fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "other platforms can lack a reliable file identity"
+)]
+fn file_identity(metadata: &fs::Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt;
-    FileIdentity {
+    Some(FileIdentity {
         device: metadata.dev(),
         inode: metadata.ino(),
-    }
+    })
 }
 
-#[cfg(not(unix))]
-fn file_identity(_metadata: &fs::Metadata) -> FileIdentity {
-    FileIdentity {}
+#[cfg(windows)]
+fn file_identity(metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::windows::fs::MetadataExt;
+    Some(FileIdentity {
+        volume_serial_number: metadata.volume_serial_number()?,
+        file_index: metadata.file_index()?,
+        creation_time: metadata.creation_time(),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_metadata: &fs::Metadata) -> Option<FileIdentity> {
+    None
 }
 
 fn reject_output_aliases(out: &OutputPath, metadata: Option<&OutputPath>) -> Result<(), CliError> {
@@ -287,15 +307,15 @@ fn reject_output_aliases(out: &OutputPath, metadata: Option<&OutputPath>) -> Res
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn same_file_identity(left: &OutputState, right: &OutputState) -> bool {
     matches!(
         (left, right),
-        (OutputState::Existing(left), OutputState::Existing(right)) if left == right
+        (OutputState::Existing(Some(left)), OutputState::Existing(Some(right))) if left == right
     )
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn same_file_identity(_left: &OutputState, _right: &OutputState) -> bool {
     false
 }
@@ -321,7 +341,9 @@ fn stage_output(output: &OutputPath, bytes: &[u8]) -> Result<NamedTempFile, CliE
 fn revalidate_output(output: &OutputPath) -> Result<(), CliError> {
     match (output.state, fs::symlink_metadata(&output.path)) {
         (OutputState::Absent, Err(error)) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        (OutputState::Existing(expected), Ok(metadata)) if file_identity(&metadata) == expected => {
+        (OutputState::Existing(Some(expected)), Ok(metadata))
+            if file_identity(&metadata).as_ref() == Some(&expected) =>
+        {
             Ok(())
         }
         (_, Err(error)) if error.kind() != io::ErrorKind::NotFound => Err(error.into()),
