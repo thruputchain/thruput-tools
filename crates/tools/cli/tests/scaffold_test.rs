@@ -83,6 +83,65 @@ fn assert_scaffold_cargo_config(dir: &std::path::Path) {
     );
 }
 
+/// Assert the scaffolded agent guide states the load-bearing toolchain
+/// contracts a coding agent must not refactor away.
+fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
+    let agents = fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+    assert_contains_all(
+        &agents,
+        &[
+            "groundhog build",
+            "never bare cargo for RV32",
+            r#"feature = "entrypoints""#,
+            "BOTH test commands",
+            "tests/test_rv32.rs",
+            "`dev` feature",
+            "groundhog-integration-test",
+            "snake_case package name",
+            "unification",
+            "self-referential dev-dependency",
+            ".cargo/contract.toml",
+            "rust-toolchain.toml",
+            "no active profile",
+            "region 'CODE' already defined",
+        ],
+    );
+    assert!(agents.contains(snake_name));
+    assert!(!agents.contains("{{"), "unsubstituted template placeholder");
+}
+
+fn assert_counter_manifest(cargo: &str) {
+    assert!(cargo.contains(r#"name = "my-counter""#));
+    assert!(cargo.contains("registry = \"groundhog\""));
+    assert!(!cargo.contains("sdk/spec"));
+    // The version pins live once, in the `scaffold` constants; here we assert
+    // they were substituted (no placeholder survives below) and land on the
+    // right dependencies.
+    // `sdk` is declared once per target: plain on the guest, with `std` on
+    // the host so `cargo build` / `cargo check` work without `dev`.
+    assert!(cargo.contains(&format!(
+        r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
+        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
+    )));
+    assert!(cargo.contains(&format!(
+        r#"sdk = {{ version = "{}", registry = "groundhog", features = ["std"] }}"#,
+        groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
+    )));
+    assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));
+    assert!(cargo.contains("groundhog-integration-test = ["));
+    assert!(cargo.contains(
+        r#"[target.'cfg(not(target_arch = "riscv32"))'.dependencies.groundhog-json-rpc-client]"#
+    ));
+    assert!(cargo.contains(&format!(
+        "version = \"{}\"",
+        groundhog_cli::scaffold::SCAFFOLD_JSON_RPC_CLIENT_VERSION
+    )));
+    assert!(!cargo.contains("{{"), "unsubstituted template placeholder");
+    assert!(cargo.contains("optional = true"));
+    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
+    assert!(!cargo.contains(r#"features = ["storage"]"#));
+}
+
 #[test]
 fn scaffold_counter_creates_expected_files() {
     let tmp = TempDir::new().unwrap();
@@ -94,6 +153,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(dir.join("Cargo.toml").exists());
     assert!(dir.join("build.rs").exists());
     assert!(dir.join(".gitignore").exists());
+    assert_agents_guide(&dir, "my_counter");
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
     assert!(dir.join(".cargo/config.toml").exists());
@@ -104,19 +164,7 @@ fn scaffold_counter_creates_expected_files() {
     assert_rv32_only_test_scaffold(&dir);
 
     let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-    assert!(cargo.contains(r#"name = "my-counter""#));
-    assert!(cargo.contains("registry = \"groundhog\""));
-    assert!(!cargo.contains("sdk/spec"));
-    // Must be an SDK whose raw spec format this CLI reads, or `groundhog new`
-    // scaffolds a project that `groundhog build` refuses at the preflight.
-    assert!(cargo.contains(r#"sdk = { version = "0.27.0", registry = "groundhog" }"#));
-    assert!(cargo.contains("groundhog-integration-test = ["));
-    // Generated projects resolve outside this workspace, so this must name a
-    // client version that is already available in the Groundhog registry.
-    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.12.0""#));
-    assert!(cargo.contains("optional = true"));
-    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
-    assert!(!cargo.contains(r#"features = ["storage"]"#));
+    assert_counter_manifest(&cargo);
 
     assert_integration_scaffold(&dir);
     // RV32 bin wrapper target: the bin name must be the snake-case package
@@ -124,8 +172,14 @@ fn scaffold_counter_creates_expected_files() {
     // `release/<snake_name>`.
     assert!(cargo.contains("[[bin]]"));
     assert!(cargo.contains(r#"name = "my_counter""#));
-    assert!(cargo.contains(r#"rv32-entrypoints = ["entrypoints"]"#));
-    assert!(cargo.contains(r#"required-features = ["rv32-entrypoints"]"#));
+    // `entrypoints` is the name the #[contract] macro's cfg matches; the
+    // WASM-era `rv32-entrypoints` wrapper is gone from new scaffolds, and
+    // `dev` must not be a default feature — a dependent crate would drag
+    // `sdk/dev` (std) into guest builds through feature unification.
+    assert!(cargo.contains(r#"required-features = ["entrypoints"]"#));
+    assert!(!cargo.contains("rv32-entrypoints"));
+    assert!(!cargo.contains("default = "));
+    assert!(!cargo.contains("cdylib"));
     // The host test harness must not try to link the no_std bin when the
     // entrypoints feature is enabled.
     assert!(cargo.contains("test = false"));
@@ -161,8 +215,16 @@ fn scaffold_counter_creates_expected_files() {
     assert_scaffold_cargo_config(&dir);
 
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
+    assert!(toolchain.contains(&format!(
+        "channel = \"{}\"",
+        groundhog_cli::scaffold::SCAFFOLD_TOOLCHAIN_CHANNEL
+    )));
     assert!(toolchain.contains(r#"targets = ["riscv32im-unknown-none-elf"]"#));
     assert!(!toolchain.contains("wasm"));
+    assert!(
+        !toolchain.contains("{{"),
+        "unsubstituted template placeholder"
+    );
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));
@@ -179,7 +241,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(test.contains("register_mock_contract"));
     assert!(test.contains("CounterClient"));
     assert!(test.contains("fn setup()"));
-    assert!(test.contains("test_contract.as_hash().clone()"));
+    assert!(test.contains("*test_contract.as_hash()"));
     assert!(test.contains("env.transact(|tx|"));
     assert!(test.contains("tx.call(&caller).run(move ||"));
     assert!(test.contains("MY_COUNTER_NONCE"));
@@ -210,6 +272,11 @@ fn scaffold_stub_has_empty_contract() {
     assert!(imp.contains("#[contract_exception]"));
 
     assert_rv32_only_test_scaffold(&dir);
+    // The stub renders its own tests/test.rs; keep it on the same
+    // clippy-clean shape as the counter's.
+    let test = fs::read_to_string(dir.join("tests/test.rs")).unwrap();
+    assert!(test.contains("*test_contract.as_hash()"));
+    assert!(!test.contains(".clone()"));
     let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
     assert!(test_rv32.contains("load_rv32_contract"));
     assert!(test_rv32.contains("CARGO_TARGET_DIR"));

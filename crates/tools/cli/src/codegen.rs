@@ -66,6 +66,12 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             Ok(format!("readonly [{}]", items.join(", ")))
         }
         ContractType::Named { named } => Ok(spec_string_text(named)?.to_owned()),
+        ContractType::SignedToken {
+            signed_token_preimage,
+        } => match signed_token_preimage.preimage_type.as_deref() {
+            Some(inner) => Ok(format!("SignedToken<{}>", ts_type_ref(inner)?)),
+            None => Ok("SignedToken".into()),
+        },
         _ => Err(CliError::SpecFailed(
             "contract spec contains an unsupported contract type".into(),
         )),
@@ -310,6 +316,8 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         spec,
         |ty| matches!(ty, ContractType::Array { array } if array.len > 3 && !matches!(array.element.as_ref(), ContractType::U8)),
     );
+    let uses_signed_token =
+        spec_uses_type(spec, |ty| matches!(ty, ContractType::SignedToken { .. }));
     let has_direct_event_topics = spec.events.iter().any(|event| {
         event
             .topics
@@ -378,6 +386,9 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
     }
     if uses_fixed_bytes {
         client_imports.push("type FixedBytes");
+    }
+    if uses_signed_token {
+        client_imports.push("type SignedToken");
     }
     if has_events {
         client_imports.extend(["defineContractEvent", "type DecodedContractEvent"]);
@@ -755,6 +766,18 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
                 ts_string_literal(name)
             ))
         }
+        ContractType::SignedToken {
+            signed_token_preimage,
+        } => {
+            let preimage = match signed_token_preimage.preimage_type.as_deref() {
+                Some(inner) => spec_type_to_ts_literal(inner)?,
+                None => "null".into(),
+            };
+            Ok(format!(
+                "{{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
+                 {{ preimage_type: {preimage} }} }}"
+            ))
+        }
         _ => Err(CliError::SpecFailed(
             "contract spec contains an unsupported contract type".into(),
         )),
@@ -1060,6 +1083,8 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         spec,
         |ty| matches!(ty, ContractType::Array { array } if array.len > 3 && !matches!(array.element.as_ref(), ContractType::U8)),
     );
+    let uses_signed_token =
+        spec_uses_type(spec, |ty| matches!(ty, ContractType::SignedToken { .. }));
     let uses_uint8_array = has_events
         || spec_uses_type(spec, |ty| {
             matches!(ty, ContractType::Bytes)
@@ -1117,6 +1142,9 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
     }
     if uses_fixed_bytes {
         conditional_imports.push("FixedBytes");
+    }
+    if uses_signed_token {
+        conditional_imports.push("SignedToken");
     }
     for name in conditional_imports {
         reserve_ts_value_name(
@@ -1269,6 +1297,11 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
+    let type_def_index: BTreeMap<&str, &ContractTypeDef> = spec
+        .type_defs
+        .iter()
+        .filter_map(|def| type_def_name(def).ok().map(|name| (name, def)))
+        .collect();
     let mut event_signatures = BTreeMap::new();
     for event in spec.events.iter() {
         let event_name = spec_string_text(&event.name)?;
@@ -1306,6 +1339,18 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             &defined_types,
             &format!("event \"{event_name}\" fields"),
         )?;
+        // A token's handle never travels in event data, and the event
+        // tooling rejects one; refuse here rather than emit an event spec it
+        // cannot decode. Named definitions are resolved so a token nested in
+        // a struct or union the event refers to is caught too.
+        for field in event.topics.iter().chain(event.fields.iter()) {
+            if type_carries_signed_token(&field.ty, &type_def_index, &mut BTreeSet::new()) {
+                return Err(CliError::SpecFailed(format!(
+                    "event \"{event_name}\" field \"{}\" carries a signed token, which events cannot log",
+                    spec_string_text(&field.name)?
+                )));
+            }
+        }
     }
 
     if !spec.events.is_empty() {
@@ -1646,6 +1691,17 @@ fn validate_contract_type(
                 )))
             }
         }
+        ContractType::SignedToken {
+            signed_token_preimage,
+        } => match signed_token_preimage.preimage_type.as_deref() {
+            Some(inner) => validate_contract_type(
+                inner,
+                false,
+                defined_types,
+                &format!("{location} signed-token preimage"),
+            ),
+            None => Ok(()),
+        },
         _ => Err(CliError::SpecFailed(format!(
             "{location} uses an unsupported contract type"
         ))),
@@ -1740,6 +1796,72 @@ fn spec_uses_type(spec: &ContractSpec, predicate: impl Fn(&ContractType) -> bool
     })
 }
 
+fn type_def_name(def: &ContractTypeDef) -> Result<&str, CliError> {
+    match def {
+        ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name),
+        ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name),
+        ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name),
+        _ => Err(CliError::SpecFailed(
+            "type definition contains an unsupported kind".into(),
+        )),
+    }
+}
+
+/// Whether `ty` contains a signed token anywhere, resolving named definitions
+/// through `type_defs`. `visiting` holds the names on the current path, so a
+/// recursive definition terminates: a token inside it is found on the first
+/// visit or not at all.
+fn type_carries_signed_token(
+    ty: &ContractType,
+    type_defs: &BTreeMap<&str, &ContractTypeDef>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    match ty {
+        ContractType::SignedToken { .. } => true,
+        ContractType::Option { option_inner } => {
+            type_carries_signed_token(option_inner, type_defs, visiting)
+        }
+        ContractType::Vector { vector } => {
+            type_carries_signed_token(&vector.element, type_defs, visiting)
+        }
+        ContractType::Array { array } => {
+            type_carries_signed_token(&array.element, type_defs, visiting)
+        }
+        ContractType::Tuple { tuple } => tuple
+            .iter()
+            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
+        ContractType::Named { named } => {
+            let Ok(name) = spec_string_text(named) else {
+                return false;
+            };
+            if !visiting.insert(name.to_owned()) {
+                return false;
+            }
+            let found = match type_defs.get(name) {
+                Some(ContractTypeDef::TypeDefStruct { struct_def }) => struct_def
+                    .fields
+                    .iter()
+                    .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
+                Some(ContractTypeDef::TypeDefUnion { union_def }) => {
+                    union_def.cases.iter().any(|case| match &case.case_type {
+                        ContractUnionCaseType::UnionCaseTuple { tuple } => tuple
+                            .iter()
+                            .any(|item| type_carries_signed_token(item, type_defs, visiting)),
+                        ContractUnionCaseType::UnionCaseStruct { struct_fields } => struct_fields
+                            .iter()
+                            .any(|field| type_carries_signed_token(&field.ty, type_defs, visiting)),
+                        _ => false,
+                    })
+                }
+                _ => false,
+            };
+            visiting.remove(name);
+            found
+        }
+        _ => false,
+    }
+}
+
 fn contract_type_matches(
     ty: &ContractType,
     predicate: impl Fn(&ContractType) -> bool + Copy,
@@ -1752,6 +1874,12 @@ fn contract_type_matches(
             ContractType::Tuple { tuple } => tuple
                 .iter()
                 .any(|item| contract_type_matches(item, predicate)),
+            ContractType::SignedToken {
+                signed_token_preimage,
+            } => signed_token_preimage
+                .preimage_type
+                .as_deref()
+                .is_some_and(|inner| contract_type_matches(inner, predicate)),
             _ => false,
         }
 }
@@ -1921,6 +2049,214 @@ mod tests {
             option_inner: Box::new(ContractType::U64),
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "bigint | null");
+    }
+
+    #[test]
+    fn maps_signed_token_types() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let opaque = ContractType::SignedToken {
+            signed_token_preimage: ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        assert_eq!(ts_type_ref(&opaque).unwrap(), "SignedToken");
+        assert_eq!(
+            spec_type_to_ts_literal(&opaque).unwrap(),
+            "{ v: ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } }"
+        );
+
+        let typed = ContractType::SignedToken {
+            signed_token_preimage: ContractSignedTokenPreimage {
+                preimage_type: Some(Box::new(ContractType::Named {
+                    named: spec_string("Auth"),
+                })),
+            },
+        };
+        assert_eq!(ts_type_ref(&typed).unwrap(), "SignedToken<Auth>");
+        assert_eq!(
+            spec_type_to_ts_literal(&typed).unwrap(),
+            "{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
+             { preimage_type: { v: ContractTypeKind.Named, named: s(\"Auth\") } } }"
+        );
+
+        let list = ContractType::Vector {
+            vector: ContractVectorType {
+                element: Box::new(opaque),
+                max_len: u32::MAX,
+            },
+        };
+        assert_eq!(ts_type_ref(&list).unwrap(), "SignedToken[]");
+    }
+
+    #[test]
+    fn generates_signed_token_returns_and_imports_the_type() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("authorize"),
+                args: vec![ContractField {
+                    name: spec_string("message"),
+                    ty: ContractType::Bytes,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Vector {
+                    vector: ContractVectorType {
+                        element: Box::new(ContractType::SignedToken {
+                            signed_token_preimage: ContractSignedTokenPreimage {
+                                preimage_type: None,
+                            },
+                        }),
+                        max_len: u32::MAX,
+                    },
+                },
+            }],
+            false,
+        );
+        let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
+        assert!(
+            output.contains("type SignedToken } from \"@groundhogchain/client/contract\""),
+            "SignedToken must be imported from the client runtime:\n{output}"
+        );
+        assert!(
+            output.contains("export type CounterAuthorizeResult = SignedToken[];"),
+            "return type must be a token placeholder list:\n{output}"
+        );
+        assert!(
+            output.contains(
+                "{ v: ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } }"
+            ),
+            "spec literal must carry the signed-token type:\n{output}"
+        );
+    }
+
+    #[test]
+    fn rejects_signed_tokens_in_event_payloads() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let token = ContractType::SignedToken {
+            signed_token_preimage: ContractSignedTokenPreimage {
+                preimage_type: None,
+            },
+        };
+        // `Auth { token }` is reached only by resolving the named definition,
+        // which is what a container-only walk misses.
+        let auth_def = ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("Auth"),
+                fields: vec![ContractField {
+                    name: spec_string("token"),
+                    ty: token.clone(),
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        for (label, ty) in [
+            ("direct", token.clone()),
+            (
+                "nested",
+                ContractType::Vector {
+                    vector: ContractVectorType {
+                        element: Box::new(token),
+                        max_len: u32::MAX,
+                    },
+                },
+            ),
+            (
+                "named",
+                ContractType::Named {
+                    named: spec_string("Auth"),
+                },
+            ),
+            (
+                "named inside a container",
+                ContractType::Option {
+                    option_inner: Box::new(ContractType::Named {
+                        named: spec_string("Auth"),
+                    }),
+                },
+            ),
+        ] {
+            let mut spec = spec_with_events();
+            spec.type_defs = vec![auth_def.clone()].try_into().unwrap();
+            let mut event = ping_event_def();
+            event.fields = vec![ContractField {
+                name: spec_string("auth"),
+                ty,
+            }]
+            .try_into()
+            .unwrap();
+            spec.events = vec![event].try_into().unwrap();
+            let err = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap_err();
+            assert!(
+                err.to_string().contains("carries a signed token"),
+                "{label}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn event_token_check_terminates_on_recursive_named_types() {
+        // `Node { next: Node | null }` refers to itself; the walk must stop
+        // rather than recurse forever, and a token-free cycle must pass.
+        let node_def = ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("Node"),
+                fields: vec![ContractField {
+                    name: spec_string("next"),
+                    ty: ContractType::Option {
+                        option_inner: Box::new(ContractType::Named {
+                            named: spec_string("Node"),
+                        }),
+                    },
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        let index: BTreeMap<&str, &ContractTypeDef> = [("Node", &node_def)].into_iter().collect();
+        assert!(!type_carries_signed_token(
+            &ContractType::Named {
+                named: spec_string("Node"),
+            },
+            &index,
+            &mut BTreeSet::new(),
+        ));
+    }
+
+    #[test]
+    fn rejects_a_type_named_signed_token_when_the_import_is_needed() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let mut spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("authorize"),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::SignedToken {
+                    signed_token_preimage: ContractSignedTokenPreimage {
+                        preimage_type: None,
+                    },
+                },
+            }],
+            false,
+        );
+        spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("SignedToken"),
+                fields: vec![ContractField {
+                    name: spec_string("id"),
+                    ty: ContractType::U64,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        }]
+        .try_into()
+        .unwrap();
+        let err = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap_err();
+        assert!(
+            err.to_string().contains("SignedToken"),
+            "collision with the runtime import must be reported: {err}"
+        );
     }
 
     #[test]
