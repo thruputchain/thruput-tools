@@ -401,17 +401,10 @@ scalars, structs, enums, unions, options, tuples, vectors, arrays, and
 byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
 fits the underlying type.
 
-`groundhog call --dry-run` now resolves selectors, encodes calldata,
-fetches the current chain tip to set expiry, signs the transaction, and
-prints or emits the prepared invocation without submitting it. This
-first pass is intentionally signed and RPC-backed; a later follow-up can
-split payload assembly from signing if we want a no-key-required dry
-run.
-
-Remaining follow-up after this first pass: cache repeated
-embedded-spec loads, tighten the union/structured CLI UX, and remove
-the remaining local-source fallback once the spec-driven path has
-soaked.
+`groundhog call --dry-run` resolves selectors, encodes calldata, fetches the
+current chain tip to set expiry, signs the transaction, and prints or emits
+the prepared invocation without submitting it. A dry run therefore still
+needs a signing key and a reachable RPC endpoint.
 
 ### `groundhog storage`
 
@@ -453,11 +446,36 @@ line is resolved from the invocation directory and wins over
 `GROUNDHOG_RUNTIME_MANIFEST`; the environment override still wins over
 `groundhog.toml` profile settings.
 
+### `groundhog balance`
+
+Read the native HOG balance of a wallet, contract alias, `dev-N` account, or
+raw address. With no target it reads the effective wallet of the selected
+profile.
+
+```bash
+groundhog balance                       # effective wallet
+groundhog balance alice --profile devnet
+groundhog balance 0x<address> --rpc-url http://<your-rpc-host>:8545
+```
+
+### `groundhog view`
+
+Run a sandboxed contract simulation via `groundhog_view` against committed
+state. Nothing is signed or submitted. Named methods use local or built
+contract-spec metadata; without metadata, pass an explicit `0x`-prefixed
+8-byte entrypoint ID and raw calldata.
+
+```bash
+groundhog view my-counter get
+groundhog view my-counter get --from dev-1        # simulated caller
+groundhog view 0x<contract> 0x<entrypoint-id> --calldata 0x<hex>
+groundhog view my-counter get -p my-counter       # workspace member
+```
+
 ### `groundhog node`
 
 Start the local development node backed by a supervised
-`hog-devnode` process. The legacy SDK `native_exec` / hogd `test_ffi`
-prototype backend is no longer wired into this command.
+`hog-devnode` process.
 
 ```bash
 groundhog node
@@ -507,9 +525,8 @@ When recovering `--data-dir`, pass the original explicit user allocation.
 Changing it requires a fresh data directory; recovered state does not bypass
 authoritative validation.
 
-Migration note: older releases used a 20 HOG wallet-create prefund. The current
-prefund is 1 HOG; the split local bootstrap uses a fixed 1,000,000 HOG faucet
-and 100 HOG per user.
+The wallet-create prefund is 1 HOG; the local bootstrap uses a fixed
+1,000,000 HOG faucet and 100 HOG per user.
 
 `--hogd-protocol` overrides the protocol token used for hog-devnode x23 intro
 handshakes. It is useful when a local `hog-devnode` build is slightly ahead of
@@ -529,9 +546,6 @@ Use `RUST_LOG`
 only when you need exact filters or debug/trace-level output; if set,
 `RUST_LOG` overrides the `--verbose` preset.
 
-See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
-durable backend direction.
-
 ### `groundhog chain dump|restore`
 
 Back up or restore all persistent state for a stopped local node as one
@@ -548,6 +562,40 @@ Both commands fail while `groundhog node` is using the data directory. Dump
 refuses an existing output unless `--overwrite` is passed. Restore requires
 `--force` before replacing populated state and validates every archived file's
 size and SHA-256 before installing it.
+
+### `groundhog codegen ts`
+
+Generate TypeScript bindings for a contract from its `.spec.xdr` sidecar.
+The generated module imports `@groundhogchain/protocol`,
+`@groundhogchain/contract-spec`, and `@groundhogchain/client/contract`.
+
+```bash
+groundhog codegen ts target/groundhog/my_counter.spec.xdr -o src/my-counter.ts
+```
+
+### `groundhog events list`
+
+List one newest-first page of raw events emitted by a contract. Repeat a
+topic option for OR within that position; constraints across positions
+combine with AND. Pass `--spec` and `--event` to decode matching events with
+a trusted local `.xdr` sidecar.
+
+```bash
+groundhog events list my-counter --limit 20
+groundhog events list my-counter --topic0 0x<hash> --cursor 0x<cursor>
+groundhog events list my-token --spec target/groundhog/my_token.spec.xdr --event Transfer
+```
+
+### `groundhog token transfers`
+
+List one newest-first page of canonical ERC20 `TransferEvent` records for a
+token. `--from`/`--to` filter one side; `--account` matches either side.
+Amounts are unformatted base-unit decimal strings.
+
+```bash
+groundhog token transfers my-token --account alice
+groundhog token transfers my-token --from dev-1 --to dev-2 --limit 10
+```
 
 ### `groundhog completion <shell>`
 
@@ -617,7 +665,8 @@ groundhog config unset faucet-url --profile staging --global
 groundhog config use staging --global
 ```
 
-Editable fields are `network`, `rpc-url`, `faucet-url`, and `default-key`.
+Editable fields are `network`, `rpc-url`, `network-hash`, `faucet-url`, and
+`default-key`.
 `config new` creates a profile; `config set` updates a profile that already
 exists in the selected layer. `config unset` removes only the selected layer's
 field, so removing a project override may reveal an inherited global value.

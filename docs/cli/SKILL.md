@@ -121,13 +121,22 @@ entrypoints = []
 rv32-entrypoints = ["entrypoints"]
 default = ["dev"]
 dev = ["sdk/dev"]
+groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 [dependencies]
-sdk = { version = "0.15.6", registry = "groundhog" }
+sdk = { version = "0.27.0", registry = "groundhog" }
+
+[target.'cfg(not(target_arch = "riscv32"))'.dependencies]
+groundhog-json-rpc-client = { version = "0.12.0", registry = "groundhog", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }
 ```
+
+The `sdk` and `groundhog-json-rpc-client` versions above track the current
+scaffold template (`crates/tools/cli/templates/Cargo.toml.tmpl`); prefer the
+versions a freshly generated project pins.
 
 Guidance:
 - Start with `sdk` only.
