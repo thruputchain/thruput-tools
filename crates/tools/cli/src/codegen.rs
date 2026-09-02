@@ -1083,6 +1083,8 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         spec,
         |ty| matches!(ty, ContractType::Array { array } if array.len > 3 && !matches!(array.element.as_ref(), ContractType::U8)),
     );
+    let uses_signed_token =
+        spec_uses_type(spec, |ty| matches!(ty, ContractType::SignedToken { .. }));
     let uses_uint8_array = has_events
         || spec_uses_type(spec, |ty| {
             matches!(ty, ContractType::Bytes)
@@ -1140,6 +1142,9 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
     }
     if uses_fixed_bytes {
         conditional_imports.push("FixedBytes");
+    }
+    if uses_signed_token {
+        conditional_imports.push("SignedToken");
     }
     for name in conditional_imports {
         reserve_ts_value_name(
@@ -2090,6 +2095,41 @@ mod tests {
                 "{label}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_a_type_named_signed_token_when_the_import_is_needed() {
+        use groundhog_contract_spec::ContractSignedTokenPreimage;
+        let mut spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("authorize"),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::SignedToken {
+                    signed_token_preimage: ContractSignedTokenPreimage {
+                        preimage_type: None,
+                    },
+                },
+            }],
+            false,
+        );
+        spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("SignedToken"),
+                fields: vec![ContractField {
+                    name: spec_string("id"),
+                    ty: ContractType::U64,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        }]
+        .try_into()
+        .unwrap();
+        let err = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap_err();
+        assert!(
+            err.to_string().contains("SignedToken"),
+            "collision with the runtime import must be reported: {err}"
+        );
     }
 
     #[test]
