@@ -54,6 +54,7 @@ tests/
   test.rs             # native integration tests
   integration.rs      # RPC tests run by groundhog test --integration
   test_rv32.rs        # default executor-backed RV32 tests
+AGENTS.md             # the layout contracts, stated for coding agents
 Cargo.toml
 build.rs              # activates the RPC starter only for groundhog integration runs
 rust-toolchain.toml
