@@ -578,18 +578,20 @@ pub fn client_identity(
     })
 }
 
+/// The client address recorded by the trusted reverse proxy.
+///
+/// Proxies append the address they observed to the end of
+/// `X-Forwarded-For`, so the rightmost entry is the only one the proxy
+/// vouches for; everything before it is caller-supplied. `X-Real-IP` is
+/// not consulted because a client can set it and the edge proxy does not.
 fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr> {
     headers
-        .get("x-forwarded-for")
+        .get_all("x-forwarded-for")
+        .iter()
+        .next_back()
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
+        .and_then(|value| value.rsplit(',').next())
         .and_then(|value| value.trim().parse().ok())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.trim().parse().ok())
-        })
 }
 
 #[cfg(test)]
@@ -1110,6 +1112,50 @@ mod tests {
         assert_eq!(
             client_identity(&headers, Some(peer), true),
             ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)))
+        );
+    }
+
+    #[test]
+    fn client_identity_uses_the_proxy_appended_forwarded_hop() {
+        let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, 8081));
+
+        // A caller-supplied prefix must not override the address the proxy
+        // appended after it.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.10, 198.51.100.7 , 10.64.27.140".parse().unwrap(),
+        );
+        assert_eq!(
+            client_identity(&headers, Some(peer), true),
+            ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::new(10, 64, 27, 140)))
+        );
+
+        // A repeated header behaves like the comma-joined form: the last
+        // value of the last header wins.
+        let mut headers = HeaderMap::new();
+        headers.append("x-forwarded-for", "203.0.113.10".parse().unwrap());
+        headers.append("x-forwarded-for", "10.64.27.141".parse().unwrap());
+        assert_eq!(
+            client_identity(&headers, Some(peer), true),
+            ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::new(10, 64, 27, 141)))
+        );
+
+        // A malformed trailing hop falls back to the peer rather than to an
+        // earlier, caller-controlled entry.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.10, unknown".parse().unwrap());
+        assert_eq!(
+            client_identity(&headers, Some(peer), true),
+            ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
+
+        // X-Real-IP is client-settable and is never trusted.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "203.0.113.10".parse().unwrap());
+        assert_eq!(
+            client_identity(&headers, Some(peer), true),
+            ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
         );
     }
 

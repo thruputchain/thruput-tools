@@ -154,6 +154,12 @@ impl FaucetConfigFile {
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
     /// Trust reverse proxy client IP headers for per-client quota identity.
+    ///
+    /// When enabled, the client is the rightmost `X-Forwarded-For` entry,
+    /// which is the address the proxy appended. Enable this only when every
+    /// request reaches the faucet through a proxy that appends the peer
+    /// address (for example nginx `$proxy_add_x_forwarded_for`) and nothing
+    /// can connect to the faucet directly.
     pub trust_proxy_client_ip_headers: bool,
     /// Airdrop policy controls.
     pub airdrop: AirdropPolicyConfig,
