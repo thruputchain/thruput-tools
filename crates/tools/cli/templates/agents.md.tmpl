@@ -9,8 +9,8 @@ they survive refactors. Do not "clean them up".
 
 - `groundhog build` — compiles the deployable artifact to
   `target/groundhog/{{PROJECT_NAME_SNAKE}}.rv32a`.
-- `groundhog test` — host tests (equivalent to `cargo test --features dev`
-  per test target). Plain `cargo test` also works.
+- `groundhog test` — runs the RV32-executor tests in `tests/test_rv32.rs`
+  with the `dev` feature. Plain `cargo test` runs the host test targets.
 - `groundhog test --integration` — RPC tests against an ephemeral local node.
 - A bare `cargo build --target riscv32im-unknown-none-elf` can never work:
   the required `build-std` flag lives in `.cargo/contract.toml`, which only
@@ -23,9 +23,11 @@ they survive refactors. Do not "clean them up".
 - Feature `entrypoints`: the `#[contract]` macro emits RV32 entrypoints
   only under `cfg(all(target_arch = "riscv32", feature = "entrypoints"))`,
   and `groundhog build` compiles the bin with exactly this feature.
-- Feature `dev`: `groundhog test` runs host tests with `--features dev`.
-- Feature `groundhog-integration-test`: enabled by
-  `groundhog test --integration` through `build.rs`.
+- Feature `dev`: `groundhog test` (and its test targets) run with the
+  `dev` feature enabled.
+- Feature `groundhog-integration-test`: enabled by the CLI for
+  `groundhog test --integration`; `build.rs` activates the separate
+  runner cfg.
 - The `[[bin]]` name must stay the snake_case package name
   (`{{PROJECT_NAME_SNAKE}}`): `groundhog build` derives `--bin` from the
   package name and reads the ELF it produced under that name.
