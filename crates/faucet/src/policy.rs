@@ -89,6 +89,7 @@ pub enum AdmitAirdropAttemptResult {
 pub enum InsertWalletCreateAttemptResult {
     Inserted,
     Existing(Box<WalletCreateAttempt>),
+    CapacityReached,
     PendingLimitReached,
 }
 
@@ -155,6 +156,7 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
     fn insert_wallet_create_attempt_if_absent(
         &self,
         attempt: WalletCreateAttempt,
+        attempt_capacity: usize,
         max_pending_per_owner: u32,
     ) -> Result<InsertWalletCreateAttemptResult, PolicyStoreError>;
 
@@ -268,6 +270,7 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
     fn insert_wallet_create_attempt_if_absent(
         &self,
         attempt: WalletCreateAttempt,
+        attempt_capacity: usize,
         max_pending_per_owner: u32,
     ) -> Result<InsertWalletCreateAttemptResult, PolicyStoreError> {
         use std::collections::hash_map::Entry;
@@ -277,6 +280,9 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             return Ok(InsertWalletCreateAttemptResult::Existing(Box::new(
                 existing.clone(),
             )));
+        }
+        if state.wallet_create_attempts.len() >= attempt_capacity {
+            return Ok(InsertWalletCreateAttemptResult::CapacityReached);
         }
         let pending = state
             .wallet_create_attempts
@@ -961,6 +967,56 @@ mod tests {
                 .expect("bug: quota rejection should succeed"),
             AdmitAirdropAttemptResult::QuotaExceeded(_)
         ));
+    }
+
+    #[test]
+    fn wallet_create_attempt_capacity_rejects_new_keys_but_returns_existing() {
+        let store = InMemoryFaucetPolicyStore::default();
+        let now = SystemTime::UNIX_EPOCH;
+        let first = WalletCreateAttempt {
+            key: wallet_create_key(),
+            deploy_nonce: "0xdeploy".into(),
+            wallet_address: "0xwallet".into(),
+            wallet_contract_hash: "0xcontract".into(),
+            prefund_raw_amount: "1".into(),
+            status: WalletCreateAttemptStatus::Prepared,
+            prefund_tx_hash: None,
+            prefund_height: None,
+            create_tx_hash: None,
+            create_height: None,
+            error_code: None,
+            created_at: now,
+            updated_at: now,
+            expires_at: None,
+        };
+        assert_eq!(
+            store
+                .insert_wallet_create_attempt_if_absent(first.clone(), 1, 8)
+                .expect("bug: first insert should succeed"),
+            InsertWalletCreateAttemptResult::Inserted
+        );
+
+        let second = WalletCreateAttempt {
+            key: WalletCreateAttemptKey {
+                client_nonce: "0xother".into(),
+                ..wallet_create_key()
+            },
+            ..first.clone()
+        };
+        assert_eq!(
+            store
+                .insert_wallet_create_attempt_if_absent(second, 1, 8)
+                .expect("bug: capacity rejection should succeed"),
+            InsertWalletCreateAttemptResult::CapacityReached
+        );
+
+        // A retry of an already-retained key is still answered from the store.
+        assert_eq!(
+            store
+                .insert_wallet_create_attempt_if_absent(first.clone(), 1, 8)
+                .expect("bug: existing lookup should succeed"),
+            InsertWalletCreateAttemptResult::Existing(Box::new(first))
+        );
     }
 
     #[test]

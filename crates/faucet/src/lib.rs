@@ -1618,6 +1618,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wallet_create_rejects_oversized_client_nonce() {
+        let mut body = wallet_create_body();
+        body["clientNonce"] = serde_json::json!(format!("0x{}", "ab".repeat(33)));
+
+        let response = app(test_config())
+            .oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/create-wallet")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("bug: wallet-create request should build"),
+            ))
+            .await
+            .expect("bug: wallet-create request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: wallet-create body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
+        assert_eq!(json["error"]["code"], "wallet_create_invalid_client_nonce");
+    }
+
+    #[tokio::test]
     async fn wallet_create_pending_owner_limit_rejects_second_nonce_before_prefund() {
         let airdrop = Arc::new(MockAirdropSubmitter::success());
         let config = test_config_with_submitters(
@@ -2067,10 +2093,14 @@ mod tests {
         fn insert_wallet_create_attempt_if_absent(
             &self,
             attempt: policy::WalletCreateAttempt,
+            attempt_capacity: usize,
             max_pending_per_owner: u32,
         ) -> Result<policy::InsertWalletCreateAttemptResult, policy::PolicyStoreError> {
-            self.inner
-                .insert_wallet_create_attempt_if_absent(attempt, max_pending_per_owner)
+            self.inner.insert_wallet_create_attempt_if_absent(
+                attempt,
+                attempt_capacity,
+                max_pending_per_owner,
+            )
         }
 
         fn claim_wallet_create_transition(

@@ -13,6 +13,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use groundhog_json_rpc_client::{
     GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt, submit_transaction,
 };
+use groundhog_json_rpc_types::airdrop::MAX_CLIENT_NONCE_BYTES;
 use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
@@ -45,6 +46,10 @@ use crate::{
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+/// Upper bound on retained wallet-create attempts across all owners. Attempts
+/// are keyed by caller-supplied nonces, so without a cap an anonymous client
+/// could grow the in-memory policy store without limit.
+const MAX_RETAINED_WALLET_CREATE_ATTEMPTS: usize = 10_000;
 const WALLET_CREATE_QUOTA_EXCEEDED: &str = "wallet_create_quota_exceeded";
 
 struct ResolveWalletCreateAttempt<'a> {
@@ -149,6 +154,13 @@ impl WalletCreateService {
                 "clientNonce must not be empty",
             );
         }
+        if request.client_nonce.0.len() > MAX_CLIENT_NONCE_BYTES {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "wallet_create_invalid_client_nonce",
+                "clientNonce must be at most 32 bytes",
+            );
+        }
 
         let prepared = match self.wallet_create_submitter.verify_wallet_create_request(
             request.owner_public_key.0,
@@ -229,6 +241,7 @@ impl WalletCreateService {
         );
         match self.policy_store.insert_wallet_create_attempt_if_absent(
             attempt.clone(),
+            MAX_RETAINED_WALLET_CREATE_ATTEMPTS,
             self.policy_config.wallet_create.max_pending_per_owner,
         ) {
             Ok(InsertWalletCreateAttemptResult::Existing(attempt)) => {
@@ -236,6 +249,14 @@ impl WalletCreateService {
             }
             Ok(InsertWalletCreateAttemptResult::Inserted) => {
                 WalletCreateFlow::Continue(Box::new(attempt))
+            }
+            Ok(InsertWalletCreateAttemptResult::CapacityReached) => {
+                WalletCreateFlow::Respond(error_response_with_retry_after(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "wallet_create_capacity_exceeded",
+                    "wallet-create attempt capacity reached",
+                    Some(1),
+                ))
             }
             Ok(InsertWalletCreateAttemptResult::PendingLimitReached) => {
                 WalletCreateFlow::Respond(error_response_with_retry_after(
