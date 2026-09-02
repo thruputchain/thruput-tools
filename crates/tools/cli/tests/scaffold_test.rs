@@ -101,6 +101,7 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
             "self-referential dev-dependency",
             ".cargo/contract.toml",
             "rust-toolchain.toml",
+            "no active profile",
             "region 'CODE' already defined",
         ],
     );

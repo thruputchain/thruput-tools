@@ -48,14 +48,17 @@ they survive refactors. Do not "clean them up".
 
 ## Files that must stay at the directory `groundhog build` runs from
 
-Cargo reads config only from its invocation directory upward, so these
-must sit at the cargo workspace root:
+Cargo reads its config only from the invocation directory upward, and the
+groundhog CLI discovers `groundhog.toml` the same way starting at the
+cargo workspace root, so these must sit at the workspace root:
 
 - `.cargo/config.toml` — RV32 target rustflags, including the linker script.
 - `.cargo/contract.toml` — the `build-std` overlay `groundhog build` passes.
 - `rust-toolchain.toml` — pinned nightly plus the RV32 target.
+- `groundhog.toml` — profiles; a copy left behind in a member directory is
+  never found, and `groundhog build` fails with "no active profile".
 
-If this project is moved into a parent cargo workspace, move all three to
+If this project is moved into a parent cargo workspace, move all four to
 the workspace root. Never copy the `[target.*]` rustflags into a second
 config file on the same discovery chain: cargo joins target rustflags
 across layers, and a duplicated `-Tgroundhog-rv32.ld` fails the link with
