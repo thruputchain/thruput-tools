@@ -287,8 +287,10 @@ impl HostedAirdrop {
             network_hash: self.inner.network.network_hash,
             genesis_hash: self.inner.genesis_hash,
         };
-        let url = endpoint(&self.inner.base_url, "v1/airdrop")
-            .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+        let url = endpoint(&self.inner.base_url, "v1/airdrop").map_err(|error| {
+            tracing::warn!(error = %error, "faucet airdrop endpoint could not be resolved");
+            RpcServerError::BackendUnavailable("faucet endpoint is misconfigured".into())
+        })?;
         let started = Instant::now();
         let result = tokio::time::timeout_at(deadline, self.post_airdrop(url, &hosted))
             .await
@@ -412,11 +414,16 @@ fn map_faucet_error(status: StatusCode, error: FaucetError) -> RpcServerError {
     mapped
 }
 
+/// Map a transport failure talking to the faucet into a client-facing error.
+///
+/// reqwest's `Display` includes the request URL, which for the hosted faucet
+/// is a private backend address; keep that in the gateway log only.
 fn map_http_error(error: &reqwest::Error) -> RpcServerError {
     if error.is_timeout() {
         RpcServerError::BackendTimeout
     } else {
-        RpcServerError::BackendUnavailable(error.to_string())
+        tracing::warn!(error = %error, "faucet airdrop request failed");
+        RpcServerError::BackendUnavailable("faucet is unavailable".into())
     }
 }
 
@@ -475,11 +482,14 @@ enum ProbeError {
 }
 
 impl ProbeError {
+    /// See `map_http_error`: the transport detail (including the private
+    /// faucet URL) is logged here and never forwarded to RPC clients.
     fn http(error: &reqwest::Error) -> Self {
         if error.is_timeout() {
             Self::Timeout
         } else {
-            Self::Unavailable(error.to_string())
+            tracing::warn!(error = %error, "faucet network descriptor request failed");
+            Self::Unavailable("faucet did not answer".into())
         }
     }
 }
