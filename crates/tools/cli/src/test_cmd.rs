@@ -378,6 +378,7 @@ fn run_integration_against_node(
         runtime_manifest.as_deref(),
         default_key,
     );
+    crate::auth::warn_if_executor_credentials_missing(print);
     let credential_environment = crate::auth::executor_credential_environment()?;
     env.extend(credential_environment.set.iter().cloned());
     let filter = SelectedFilter {
@@ -661,6 +662,7 @@ fn run_once_with_options(
     print_test_status(options, rerun_filters.len(), print);
 
     let mut env = local_test_environment(&build.target_directory);
+    crate::auth::warn_if_executor_credentials_missing(print);
     let credential_environment = crate::auth::executor_credential_environment()?;
     env.extend(credential_environment.set.iter().cloned());
 

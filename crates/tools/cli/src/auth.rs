@@ -99,6 +99,23 @@ fn nonempty_env(name: &str) -> bool {
     env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
+/// Warn before a cargo run that will need the mock-executor FFI library.
+///
+/// Without credentials the SDK's build script falls back to an
+/// unauthenticated download and, when that fails, cargo reports it as a
+/// build-script failure many lines into its output, mentioning neither
+/// `groundhog` nor what to do. Say it up front instead.
+pub(crate) fn warn_if_executor_credentials_missing(print: &Print) {
+    if matches!(executor_credential_source(), Ok(None)) {
+        print.warn(
+            "mock-executor FFI download credentials not configured; the \
+             contract test runtime is downloaded during the build and this \
+             will likely fail. Run `groundhog init`, or set \
+             HOGD_FFI_PASSWORD (with HOGD_FFI_USER unset or nonempty).",
+        );
+    }
+}
+
 fn environment_credentials_available() -> bool {
     if !nonempty_env(FFI_PASSWORD_ENV) {
         return false;
