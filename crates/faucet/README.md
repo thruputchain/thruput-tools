@@ -35,7 +35,7 @@ Start from `faucet.example.toml`. The config includes:
 - `[network.faucet]` public faucet wallet metadata.
 - `[airdrop]` transfer settings and `[airdrop.secret_key_source]`.
 - `[wallet_create]` sponsored wallet-create settings.
-- `[policy]` optional private-preview quota overrides. Defaults are used when omitted.
+- `[policy]` optional quota and client-identity overrides. Defaults are used when omitted.
 
 Do not commit real faucet private keys.
 
@@ -98,9 +98,9 @@ the client validated.
 
 ## Policy State
 
-Private-preview policy state is in memory. Restarting the faucet clears quota
-counters and idempotency records. The current deployment model assumes one
-faucet instance.
+Policy state is in memory. Restarting the faucet clears quota counters and
+idempotency records. The current deployment model assumes one faucet
+instance.
 
 Accepted transactions remain pending until the backend reports a receipt or a
 definitive invalid status. Submission calls that return without a definitive

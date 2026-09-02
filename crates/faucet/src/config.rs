@@ -36,7 +36,7 @@ pub struct FaucetConfigFile {
     pub airdrop: AirdropConfig,
     /// Private wallet-create execution config.
     pub wallet_create: WalletCreateExecutionConfig,
-    /// Private-preview policy controls.
+    /// Quota and client-identity policy controls.
     #[serde(default)]
     pub policy: PolicyConfig,
 }

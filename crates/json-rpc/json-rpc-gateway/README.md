@@ -5,8 +5,11 @@ Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.dev) block
 JSON-RPC gateway crate within the Groundhog developer tools workspace.
 Shapes the gateway architecture, backend boundaries, and public RPC types.
 
-`groundhog_sendRawTransaction` submits directly to hogd scheduler; the
-gateway is the primary public admission-control boundary.
+`groundhog_sendRawTransaction` submits directly to the hogd scheduler. The
+gateway bounds request size, batch size, connections, and per-request
+deadlines; rate limiting, transaction de-duplication, and overload shedding
+are tracked in issue #254 and are not implemented yet, so deploy it behind
+an edge that provides them.
 
 ## Crates
 
