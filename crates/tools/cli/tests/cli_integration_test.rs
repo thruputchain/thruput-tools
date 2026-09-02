@@ -171,6 +171,27 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     assert_eq!(dump_json["data"]["fileCount"], 4);
     assert!(archive.is_file());
 
+    let original_archive = std::fs::read(&archive).unwrap();
+    let refused_overwrite = groundhog()
+        .args(["--json", "chain", "dump", "--data-dir"])
+        .arg(&source)
+        .arg("--output")
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert!(!refused_overwrite.status.success());
+    let refused_overwrite_json: serde_json::Value =
+        serde_json::from_slice(&refused_overwrite.stderr).unwrap();
+    assert_eq!(
+        refused_overwrite_json["error"]["code"],
+        "confirmation_required"
+    );
+    assert_eq!(
+        refused_overwrite_json["error"]["details"]["requiredFlag"],
+        "--force"
+    );
+    assert_eq!(std::fs::read(&archive).unwrap(), original_archive);
+
     // A populated destination must remain protected unless the caller opts in
     // to replacement with `--force`.
     write_chain_data_fixture(&destination);
@@ -183,10 +204,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
         .unwrap();
     assert!(!refused.status.success());
     let refused_json: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
-    assert_eq!(
-        refused_json["error"]["code"],
-        "chain_restore_requires_force"
-    );
+    assert_eq!(refused_json["error"]["code"], "confirmation_required");
+    assert_eq!(refused_json["error"]["details"]["requiredFlag"], "--force");
 
     // Make the destination observably different so the final assertion proves
     // that forced restore replaced its contents with the archived source state.
@@ -3798,7 +3817,7 @@ fn deploy_workspace_package_persists_selected_package_alias() {
     write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
 
     let output = groundhog()
-        .args(["--json", "deploy", "-p", "counter"])
+        .args(["--json", "deploy", "--force", "-p", "counter"])
         .current_dir(&workspace)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -4341,8 +4360,27 @@ fn wallet_rm_reports_inherited_default_after_clearing_project_default() {
     )
     .unwrap();
 
-    let output = groundhog()
+    let refused = groundhog()
         .args(["--json", "wallet", "rm", "project", "--profile", "devnet"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    let refused: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
+    assert_eq!(refused["error"]["code"], "confirmation_required");
+    assert_eq!(refused["error"]["details"]["requiredFlag"], "--force");
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "wallet",
+            "rm",
+            "project",
+            "--profile",
+            "devnet",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -4509,7 +4547,7 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     add_faucet_to_default_profile(&project, &faucet_url);
 
     let output = groundhog()
-        .args(["--json", "airdrop", "alice"])
+        .args(["--json", "airdrop", "alice", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_CACHE_HOME", &cache_home)
@@ -4529,6 +4567,83 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
     assert_eq!(stdout["data"]["txHash"], format!("0x{}", "22".repeat(32)));
+}
+
+#[test]
+fn transaction_commands_require_force_before_submission_or_attempt_state() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    let cache_home = tmp.path().join("cache-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let rpc_url = "http://127.0.0.1:9";
+    write_project_config_with_alice_wallet(&project, rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, "http://127.0.0.1:8");
+    let artifact = write_opaque_rv32_artifact(tmp.path());
+    let contract = format!("0x{}", "11".repeat(32));
+    let recipient = format!("0x{}", "22".repeat(32));
+
+    let invocations = [
+        (
+            vec![
+                "deploy".to_owned(),
+                "--artifact".to_owned(),
+                artifact.display().to_string(),
+            ],
+            "deploy a contract",
+        ),
+        (
+            vec![
+                "call".to_owned(),
+                contract,
+                "0x0123456789abcdef".to_owned(),
+                "0x".to_owned(),
+            ],
+            "call a contract",
+        ),
+        (
+            vec!["transfer".to_owned(), recipient, "1".to_owned()],
+            "transfer HOG",
+        ),
+        (
+            vec!["airdrop".to_owned(), "alice".to_owned()],
+            "request an airdrop",
+        ),
+        (
+            vec![
+                "wallet".to_owned(),
+                "create".to_owned(),
+                "--key".to_owned(),
+                "alice".to_owned(),
+                "--name".to_owned(),
+                "new-wallet".to_owned(),
+            ],
+            "create a wallet",
+        ),
+    ];
+
+    for (args, action) in invocations {
+        let output = groundhog()
+            .arg("--json")
+            .args(args)
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{action} unexpectedly succeeded");
+        assert!(output.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(
+            error["error"]["code"], "confirmation_required",
+            "{action}: {error}"
+        );
+        assert_eq!(error["error"]["details"]["action"], action);
+        assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    }
+
+    assert!(!cache_home.join("groundhog/airdrop-attempts").exists());
+    assert!(!cache_home.join("groundhog/wallet-create-attempts").exists());
 }
 
 #[test]
@@ -6183,6 +6298,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -6240,6 +6356,7 @@ fn deploy_live_json_fails_with_receipt_context() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -6282,6 +6399,7 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -6333,7 +6451,12 @@ fn deploy_live_human_reports_selected_wallet_funding_commands() {
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
-        .args(["deploy", "--artifact", rv32_path.to_str().unwrap()])
+        .args([
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -6365,7 +6488,12 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
-        .args(["deploy", "--artifact", rv32_path.to_str().unwrap()])
+        .args([
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -6400,6 +6528,7 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -7500,7 +7629,7 @@ fn call_live_human_appends_transaction_detail_sections() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7541,7 +7670,7 @@ fn call_live_human_warns_when_transaction_detail_fails() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7585,7 +7714,14 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .output()
         .unwrap();
@@ -7641,7 +7777,14 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7680,7 +7823,7 @@ fn call_live_human_fails_after_printing_receipt_context() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7715,7 +7858,14 @@ fn call_live_json_decodes_library_abort() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7759,7 +7909,7 @@ fn call_live_human_prints_decoded_abort() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7803,7 +7953,14 @@ fn call_live_json_omits_abort_fields_on_success() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7842,7 +7999,14 @@ fn call_live_json_reports_abort_decode_error() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7880,7 +8044,7 @@ fn call_live_human_reports_abort_decode_error() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -8030,7 +8194,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     let generated: serde_json::Value = serde_json::from_slice(&generated.stdout).unwrap();
 
     let exported = groundhog()
-        .args(["keys", "export", "alice"])
+        .args(["keys", "export", "alice", "--force"])
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
@@ -8062,7 +8226,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     );
 
     let quiet = groundhog()
-        .args(["--quiet", "keys", "export", "alice"])
+        .args(["--quiet", "keys", "export", "alice", "--force"])
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
@@ -8071,7 +8235,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     assert!(quiet.stderr.is_empty());
 
     let json = groundhog()
-        .args(["--json", "keys", "export", "alice"])
+        .args(["--json", "keys", "export", "alice", "--force"])
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
@@ -8096,7 +8260,7 @@ fn keys_export_rejects_missing_and_invalid_names() {
 
     for name in ["ghost", "dev-0"] {
         let output = groundhog()
-            .args(["--json", "keys", "export", name])
+            .args(["--json", "keys", "export", name, "--force"])
             .env("XDG_CONFIG_HOME", &config_home)
             .output()
             .unwrap();
@@ -8162,7 +8326,7 @@ fn keys_export_rejects_invalid_stored_keys() {
         )
         .unwrap();
         let output = groundhog()
-            .args(["--json", "keys", "export", name])
+            .args(["--json", "keys", "export", name, "--force"])
             .env("XDG_CONFIG_HOME", &config_home)
             .output()
             .unwrap();
@@ -8174,6 +8338,30 @@ fn keys_export_rejects_invalid_stored_keys() {
             "expected {message:?} for {name}, stderr: {stderr}"
         );
     }
+}
+
+#[test]
+fn keys_export_requires_confirmation_before_loading_secret_material() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let keys_dir = config_home.join("groundhog/keys");
+    std::fs::create_dir_all(&keys_dir).unwrap();
+    std::fs::write(
+        keys_dir.join("broken.json"),
+        br#"{"version":1,"scheme":"ed25519","keypair_hex":"zz"}"#,
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "keys", "export", "broken"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "confirmation_required");
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
 }
 
 #[test]
@@ -11790,7 +11978,7 @@ fn run_transfer_live_mock_with_rpc_override(
     if json {
         command.arg("--json");
     }
-    command.args(["transfer", &recipient, "1.5"]);
+    command.args(["transfer", &recipient, "1.5", "--force"]);
     if !rpc_url_suffix.is_empty() {
         command.args(["--rpc-url", &effective_rpc_url]);
     }
@@ -11835,7 +12023,7 @@ fn run_saved_wallet_transfer_live_mock(
     .unwrap();
     let recipient = format!("0x{}", "ab".repeat(32));
     let mut command = groundhog();
-    command.args(["--json", "transfer", &recipient, "1.5"]);
+    command.args(["--json", "transfer", &recipient, "1.5", "--force"]);
     if let Some(wallet) = explicit_wallet {
         command.args(["--from", wallet]);
     }

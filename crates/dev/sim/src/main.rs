@@ -1,3 +1,4 @@
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -10,8 +11,9 @@ use groundhog_sim::compare::{ResultDiff, load_result};
 use groundhog_sim::error::SimError;
 use groundhog_sim::manifest::SimulationManifest;
 use groundhog_sim::result::{SimResult, SimRunOutcome};
-use groundhog_sim::run::{RunOptions, RunSummary, run_target};
-use groundhog_sim::sweep::{SweepEntryState, sweep_runs};
+use groundhog_sim::run::{RunOptions, RunSummary, run_loaded_target};
+use groundhog_sim::sweep::{SweepEntryState, execute_sweep_plan, plan_sweep};
+use groundhog_sim::target::TargetProviderKind;
 use groundhog_sim::util::load_simulation_manifest;
 use groundhog_sim::validation::validate_manifest;
 use serde::Serialize;
@@ -96,6 +98,9 @@ struct RunArgs {
     /// Emit structured JSON output.
     #[arg(long)]
     json: bool,
+    /// Skip confirmation before using an externally managed target.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -109,6 +114,9 @@ struct SweepArgs {
     /// Emit a single JSON report.
     #[arg(long)]
     json: bool,
+    /// Skip confirmation before terminating live processes.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -145,8 +153,14 @@ impl From<RunArgs> for RunOptions {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match Box::pin(run_cli()).await {
+    let cli = Cli::parse();
+    let json_command = cli.json_command();
+    match Box::pin(run_cli(cli)).await {
         Ok(()) => ExitCode::SUCCESS,
+        Err(SimError::ConfirmationRequired) if json_command.is_some() => {
+            print_confirmation_required(json_command.expect("checked above"));
+            ExitCode::FAILURE
+        }
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::FAILURE
@@ -154,8 +168,17 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run_cli() -> Result<(), SimError> {
-    let cli = Cli::parse();
+impl Cli {
+    fn json_command(&self) -> Option<&'static str> {
+        match &self.command {
+            Command::Run(args) if args.json => Some("run"),
+            Command::Sweep(args) if args.json => Some("sweep"),
+            _ => None,
+        }
+    }
+}
+
+async fn run_cli(cli: Cli) -> Result<(), SimError> {
     match cli.command {
         Command::Validate { scenario, json } => {
             let loaded = load_simulation_manifest(&scenario).await?;
@@ -170,8 +193,25 @@ async fn run_cli() -> Result<(), SimError> {
         }
         Command::Run(args) => {
             let json = args.json;
+            let loaded = load_simulation_manifest(&args.scenario).await?;
+            validate_manifest(&loaded.manifest)?;
+            let mutations = existing_target_mutations(&loaded.manifest);
+            if loaded.manifest.target.provider == TargetProviderKind::Existing
+                && !mutations.is_empty()
+            {
+                let rpc_url = args
+                    .rpc_url
+                    .as_deref()
+                    .or(loaded.manifest.target.rpc_url.as_deref())
+                    .unwrap_or("<runtime default>");
+                confirm(
+                    args.force,
+                    json,
+                    &existing_target_prompt(&loaded.manifest.name, rpc_url, &mutations),
+                )?;
+            }
             if json {
-                match Box::pin(run_target(args.into())).await {
+                match Box::pin(run_loaded_target(args.into(), loaded)).await {
                     Ok(summary) => print_json_command("run", true, &RunReport::from(summary))?,
                     Err(SimError::RunFailed(out_dir)) => {
                         let report = RunReport::from_failed_result(PathBuf::from(&out_dir)).await?;
@@ -181,7 +221,7 @@ async fn run_cli() -> Result<(), SimError> {
                     Err(error) => return Err(error),
                 }
             } else {
-                let summary = Box::pin(run_target(args.into())).await?;
+                let summary = Box::pin(run_loaded_target(args.into(), loaded)).await?;
                 println!("completed run");
                 println!("run directory: {}", summary.out_dir.display());
             }
@@ -193,6 +233,73 @@ async fn run_cli() -> Result<(), SimError> {
     }
 }
 
+fn existing_target_mutations(manifest: &SimulationManifest) -> Vec<&'static str> {
+    let mut actions = Vec::new();
+    if manifest.bootstrap.as_ref().is_some_and(|bootstrap| {
+        bootstrap
+            .actor_provisioning
+            .as_ref()
+            .is_some_and(|provisioning| provisioning.enabled)
+    }) {
+        actions.push("provision actor accounts");
+    }
+    if !manifest.contract_artifacts.is_empty() {
+        actions.push("deploy contracts");
+    }
+    if manifest.workloads.iter().any(|workload| {
+        matches!(
+            workload.name,
+            groundhog_sim::WorkloadKind::WalletSubmitSmoke
+                | groundhog_sim::WorkloadKind::ContractCall
+                | groundhog_sim::WorkloadKind::ReadAfterWrite
+        )
+    }) {
+        actions.push("submit state-changing transactions");
+    }
+    actions
+}
+
+fn existing_target_prompt(name: &str, rpc_url: &str, mutations: &[&str]) -> String {
+    format!(
+        "Scenario `{}` will mutate existing target {}.\nActions: {}\nRun it?",
+        terminal_safe(name),
+        terminal_safe(rpc_url),
+        mutations
+            .iter()
+            .map(|mutation| terminal_safe(mutation))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn print_confirmation_required(command: &'static str) {
+    let result = confirmation_required_result(command);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&result).expect("bug: confirmation result serializes")
+    );
+}
+
+fn confirmation_required_result(
+    command: &'static str,
+) -> HogsimCommandResult<'static, ConfirmationRequiredReport> {
+    HogsimCommandResult {
+        ok: false,
+        command,
+        warnings: Vec::new(),
+        data: ConfirmationRequiredReport {
+            schema_version: HOGSIM_COMMAND_JSON_SCHEMA_VERSION,
+            status: "confirmation_required",
+            action: match command {
+                "run" => "mutate an existing simulation target",
+                "sweep" => "terminate the confirmed simulator-owned process set",
+                _ => unreachable!("only mutating commands require confirmation"),
+            },
+            required_flag: "--force",
+        },
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HogsimCommandResult<'a, T: Serialize> {
@@ -200,6 +307,15 @@ struct HogsimCommandResult<'a, T: Serialize> {
     command: &'a str,
     warnings: Vec<String>,
     data: T,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmationRequiredReport {
+    schema_version: u32,
+    status: &'static str,
+    action: &'static str,
+    required_flag: &'static str,
 }
 
 fn print_json_command<T: Serialize>(
@@ -379,7 +495,33 @@ async fn compare_runs(run_a: PathBuf, run_b: PathBuf, json: bool) -> Result<(), 
 }
 
 fn sweep_targets(args: &SweepArgs) -> Result<(), SimError> {
-    let report = sweep_runs(&args.root, args.dry_run)?;
+    let plan = plan_sweep(&args.root)?;
+    let candidates = plan
+        .candidates()
+        .map(|(run_dir, process)| {
+            format!(
+                "  {}: pid={} pgid={} port={}",
+                terminal_safe(&run_dir.display().to_string()),
+                process.pid,
+                process.pgid,
+                process.port
+            )
+        })
+        .collect::<Vec<_>>();
+    let report = if args.dry_run || candidates.is_empty() {
+        plan.dry_run_report()
+    } else {
+        confirm(
+            args.force,
+            args.json,
+            &format!(
+                "Terminate these {} simulator-owned local target(s)?\n{}",
+                candidates.len(),
+                candidates.join("\n")
+            ),
+        )?;
+        execute_sweep_plan(plan)?
+    };
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -430,6 +572,68 @@ fn sweep_targets(args: &SweepArgs) -> Result<(), SimError> {
         ));
     }
     Ok(())
+}
+
+fn confirm(force: bool, json: bool, prompt: &str) -> Result<(), SimError> {
+    let stdin = std::io::stdin();
+    let stderr = std::io::stderr();
+    let mut input = stdin.lock();
+    let mut output = stderr.lock();
+    confirm_with_io(
+        force,
+        json,
+        (stdin.is_terminal(), stderr.is_terminal()),
+        prompt,
+        &mut input,
+        &mut output,
+    )
+}
+
+fn terminal_safe(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
+fn confirm_with_io(
+    force: bool,
+    json: bool,
+    terminals: (bool, bool),
+    prompt: &str,
+    input: &mut dyn BufRead,
+    output: &mut dyn Write,
+) -> Result<(), SimError> {
+    if force {
+        return Ok(());
+    }
+    if json || !terminals.0 || !terminals.1 {
+        return Err(SimError::ConfirmationRequired);
+    }
+
+    write!(output, "{prompt} [y/N] ")?;
+    output.flush()?;
+    let mut response = String::new();
+    input.read_line(&mut response)?;
+    if response.trim().eq_ignore_ascii_case("y") || response.trim().eq_ignore_ascii_case("yes") {
+        Ok(())
+    } else {
+        Err(SimError::ConfirmationDeclined)
+    }
 }
 
 async fn sweep_targets_blocking(args: SweepArgs) -> Result<(), SimError> {
@@ -538,6 +742,7 @@ mod tests {
             "--contract-artifact-root",
             "/tmp/contracts",
             "--json",
+            "--force",
         ]);
 
         match cli.command {
@@ -555,6 +760,7 @@ mod tests {
                     Some(PathBuf::from("/tmp/contracts"))
                 );
                 assert!(args.json);
+                assert!(args.force);
             }
             _ => panic!("expected run command"),
         }
@@ -647,17 +853,183 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_reports_use_exact_command_envelope_shape() {
+        for (command, action) in [
+            ("run", "mutate an existing simulation target"),
+            (
+                "sweep",
+                "terminate the confirmed simulator-owned process set",
+            ),
+        ] {
+            let result = confirmation_required_result(command);
+
+            assert_eq!(
+                serde_json::to_value(result).expect("bug: confirmation result should serialize"),
+                serde_json::json!({
+                    "ok": false,
+                    "command": command,
+                    "warnings": [],
+                    "data": {
+                        "schemaVersion": 1,
+                        "status": "confirmation_required",
+                        "action": action,
+                        "requiredFlag": "--force"
+                    }
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn existing_target_confirmation_exempts_read_only_workloads() {
+        let mut manifest: SimulationManifest = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2,
+            "kind": "groundhog-simulation",
+            "name": "read-only",
+            "seed": "seed",
+            "target": { "provider": "existing" },
+            "loadShape": [{ "duration": "1s", "users": 1, "ratePerUserHz": 1.0 }],
+            "workloads": [
+                { "name": "chain-tip", "weight": 1 },
+                { "name": "receipt-poll", "weight": 1 },
+                { "name": "status-poll", "weight": 1 }
+            ]
+        }))
+        .expect("bug: manifest fixture should parse");
+
+        assert!(existing_target_mutations(&manifest).is_empty());
+
+        manifest
+            .workloads
+            .push(groundhog_sim::manifest::WorkloadSpec {
+                name: groundhog_sim::WorkloadKind::WalletSubmitSmoke,
+                weight: 1,
+            });
+        assert_eq!(
+            existing_target_mutations(&manifest),
+            ["submit state-changing transactions"]
+        );
+    }
+
+    #[test]
     fn sweep_flags_parse() {
-        let cli = Cli::parse_from(["hogsim", "sweep", "/tmp/runs", "--dry-run", "--json"]);
+        let cli = Cli::parse_from([
+            "hogsim",
+            "sweep",
+            "/tmp/runs",
+            "--dry-run",
+            "--json",
+            "--force",
+        ]);
 
         match cli.command {
             Command::Sweep(args) => {
                 assert_eq!(args.root, PathBuf::from("/tmp/runs"));
                 assert!(args.dry_run);
                 assert!(args.json);
+                assert!(args.force);
             }
             _ => panic!("expected sweep command"),
         }
+    }
+
+    #[test]
+    fn confirmation_accepts_y_and_yes_case_insensitively() {
+        for response in ["y\n", "YES\n"] {
+            let mut input = std::io::Cursor::new(response);
+            let mut output = Vec::new();
+
+            assert!(
+                confirm_with_io(
+                    false,
+                    false,
+                    (true, true),
+                    "Proceed?",
+                    &mut input,
+                    &mut output
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn confirmation_defaults_to_no() {
+        let mut input = std::io::Cursor::new("\n");
+        let mut output = Vec::new();
+
+        let error = confirm_with_io(
+            false,
+            false,
+            (true, true),
+            "Proceed?",
+            &mut input,
+            &mut output,
+        )
+        .expect_err("empty response should decline");
+
+        assert!(matches!(error, SimError::ConfirmationDeclined));
+        assert_eq!(String::from_utf8(output).unwrap(), "Proceed? [y/N] ");
+    }
+
+    #[test]
+    fn existing_target_prompt_escapes_manifest_control_characters() {
+        let rendered = existing_target_prompt(
+            "scenario\n\u{1b}",
+            "https://rpc.example/\r\u{202e}",
+            &["submit\ttransactions"],
+        );
+
+        assert!(rendered.contains(r"scenario\n\u{1b}"));
+        assert!(rendered.contains(r"https://rpc.example/\r\u{202e}"));
+        assert!(rendered.contains(r"submit\ttransactions"));
+        assert_eq!(rendered.matches('\n').count(), 2);
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn confirmation_fails_closed_for_json_and_non_tty() {
+        for (json, stdin_is_terminal, stderr_is_terminal) in [
+            (true, true, true),
+            (false, false, true),
+            (false, true, false),
+        ] {
+            let mut input = std::io::Cursor::new("yes\n");
+            let mut output = Vec::new();
+
+            let error = confirm_with_io(
+                false,
+                json,
+                (stdin_is_terminal, stderr_is_terminal),
+                "Proceed?",
+                &mut input,
+                &mut output,
+            )
+            .expect_err("non-interactive confirmation should fail");
+
+            assert!(matches!(error, SimError::ConfirmationRequired));
+            assert!(output.is_empty());
+        }
+    }
+
+    #[test]
+    fn force_does_not_read_stdin() {
+        let mut input = std::io::Cursor::new("no\n");
+        let mut output = Vec::new();
+
+        confirm_with_io(
+            true,
+            true,
+            (false, false),
+            "Proceed?",
+            &mut input,
+            &mut output,
+        )
+        .expect("force should bypass confirmation");
+
+        assert_eq!(input.position(), 0);
+        assert!(output.is_empty());
     }
 
     #[test]

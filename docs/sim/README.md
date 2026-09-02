@@ -131,13 +131,21 @@ cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-wallet-so
 cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
-  --json
+  --json \
+  --force
 ```
+
+Runs that can mutate an externally managed `existing` provider require
+confirmation; read-only existing-provider and disposable `local` runs do not.
+Use the command-local `--force` flag for JSON output, redirected stdin, or other
+automation.
 
 `hogsim validate --json` and `hogsim run --json` emit the same top-level command
 envelope as the main CLI: `ok`, `command`, `warnings`, and a versioned `data`
 payload. The run payload includes the run id, outcome, aggregate workload counts,
 run directory, and paths to `result.json`, `result.jsonl`, and `simulation.json`.
+Confirmation refusals use that envelope with `ok: false`; their versioned `data`
+retains the action and `requiredFlag: "--force"`.
 
 `--hogd-protocol` is optional. Use it when a local `hog-devnode` build advertises a
 newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.
@@ -314,7 +322,7 @@ orphaned simulator-owned local targets:
 
 ```bash
 cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --dry-run
-cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --json
+cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --json --force
 ```
 
 The sweeper only considers run directories whose `target-ownership.json` says
@@ -323,6 +331,9 @@ Before signaling, it validates the live PID's `ps` start-time token, process
 group, and command marker against the recorded values, then sends SIGTERM to
 the recorded process group and escalates to SIGKILL after the bounded grace
 period if needed.
+Live reclamation prompts only when validated candidates exist. `--dry-run` never
+prompts; use the command-local `--force` flag for JSON or non-interactive live
+sweeps.
 
 Run `hogsim sweep` only when no simulations are active. It has no heartbeat or
 lock-file protection and intentionally ignores the case where the node has

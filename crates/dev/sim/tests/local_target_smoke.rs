@@ -420,6 +420,7 @@ fn local_target_sweep_orphan_smoke() {
         .arg("sweep")
         .arg(root.path())
         .arg("--json")
+        .arg("--force")
         .output()
         .expect("hogsim sweep should launch");
     assert!(

@@ -78,6 +78,10 @@ pub enum SimError {
     },
     #[error("run completed with failed workloads; result directory: {0}")]
     RunFailed(String),
+    #[error("confirmation required; rerun with --force")]
+    ConfirmationRequired,
+    #[error("operation cancelled")]
+    ConfirmationDeclined,
     #[error("system clock is before Unix epoch")]
     ClockBeforeEpoch,
     #[error("unsupported result schemaVersion {actual} in {path}")]

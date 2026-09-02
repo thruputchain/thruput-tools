@@ -1,4 +1,3 @@
-use std::io::BufRead as _;
 use std::path::Path;
 
 use groundhog_json_rpc_client::GroundhogApiClient;
@@ -121,27 +120,6 @@ pub(crate) fn local_funding_projection(
     })
 }
 
-pub(crate) fn confirm_low_faucet_balance(print: &Print, yes: bool) -> Result<(), CliError> {
-    if yes {
-        return Ok(());
-    }
-    if !print.can_prompt() {
-        return Err(CliError::ConfirmationRequired {
-            action: "continue with low local faucet balance",
-        });
-    }
-
-    print.prompt("Continue? [y/N] ")?;
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer)?;
-    if answer.trim().eq_ignore_ascii_case("y") || answer.trim().eq_ignore_ascii_case("yes") {
-        return Ok(());
-    }
-    Err(CliError::Other(
-        "local funding cancelled; rerun with `--yes` to confirm non-interactively".into(),
-    ))
-}
-
 pub(crate) fn insufficient_local_faucet_error(requested: u128, estimated_max: u128) -> CliError {
     CliError::Other(format!(
         "local faucet has insufficient actionable balance: requested {} HOG, estimated maximum is {} HOG; reduce the amount or start a fresh local chain",
@@ -163,8 +141,7 @@ mod tests {
     use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
     use serde_json::json;
 
-    use super::{confirm_low_faucet_balance, local_funding_projection};
-    use crate::{CliError, Print};
+    use super::local_funding_projection;
 
     #[test]
     fn projection_reserves_active_transaction_storage_cost() {
@@ -201,15 +178,6 @@ mod tests {
             .expect_err("bug: transaction cost multiplication should be checked");
 
         assert!(error.to_string().contains("overflows u128"));
-    }
-
-    #[test]
-    fn low_balance_confirmation_never_prompts_in_json_or_quiet_mode() {
-        for print in [Print::new(false, true), Print::quiet()] {
-            let error = confirm_low_faucet_balance(&print, false)
-                .expect_err("bug: non-interactive confirmation should require --yes");
-            assert!(matches!(error, CliError::ConfirmationRequired { .. }));
-        }
     }
 
     fn costs() -> RuntimeManifestStorageCostModel {

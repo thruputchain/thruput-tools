@@ -14,6 +14,7 @@
 //!   groundhog-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
 
 use std::future::Future;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{path::Path, process, sync::Arc};
 
@@ -40,6 +41,7 @@ const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const BENCH_RESULT_SCHEMA_VERSION: u32 = 1;
+const SUBMIT_CONFIRMATION_ACTION: &str = "submit signed state-changing benchmark transactions";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RequestOutcome {
@@ -219,6 +221,17 @@ enum BenchError {
     MissingRuntimeManifest,
     #[error("unknown method `{method}`")]
     UnknownMethod { method: String },
+    #[error(
+        "confirmation required to benchmark sendRawTransaction; pass --force to continue non-interactively"
+    )]
+    ConfirmationRequired,
+    #[error("sendRawTransaction benchmark cancelled")]
+    ConfirmationDeclined,
+    #[error("failed to read or write confirmation: {source}")]
+    ConfirmationIo {
+        #[source]
+        source: std::io::Error,
+    },
     #[error("failed to read runtime manifest {path}: {source}")]
     ManifestRead {
         path: String,
@@ -345,6 +358,10 @@ struct Cli {
     /// Emit a versioned machine-readable result on stdout.
     #[arg(long)]
     json: bool,
+
+    /// Skip confirmation for sendRawTransaction.
+    #[arg(long)]
+    force: bool,
 }
 
 fn dev_signer_from_seed(seed: &str, index: usize) -> LocalSigner {
@@ -534,6 +551,67 @@ fn validate_method(method: &str) -> Result<(), BenchError> {
             method: method.to_string(),
         }),
     }
+}
+
+fn confirm_submission(
+    cli: &Cli,
+    stdin_is_terminal: bool,
+    stderr_is_terminal: bool,
+    input: &mut impl BufRead,
+    error: &mut impl Write,
+) -> Result<(), BenchError> {
+    if cli.method != "sendRawTransaction" || cli.force {
+        return Ok(());
+    }
+    if cli.json || !stdin_is_terminal || !stderr_is_terminal {
+        return Err(BenchError::ConfirmationRequired);
+    }
+
+    let rate = if cli.unthrottled {
+        "unthrottled".to_string()
+    } else {
+        format!("{} requests/second", cli.rate)
+    };
+    let url = terminal_safe(&cli.url);
+    write!(
+        error,
+        "This benchmark will submit signed, state-changing dev-wallet transactions via sendRawTransaction.\nURL: {}\nAccounts: {}\nRate: {rate}\nDuration: {}s plus {}s warmup\nContinue? [y/N] ",
+        url, cli.accounts, cli.duration, cli.warmup
+    )
+    .and_then(|()| error.flush())
+    .map_err(|source| BenchError::ConfirmationIo { source })?;
+
+    let mut answer = String::new();
+    input
+        .read_line(&mut answer)
+        .map_err(|source| BenchError::ConfirmationIo { source })?;
+    let answer = answer.trim();
+    if answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+        Ok(())
+    } else {
+        Err(BenchError::ConfirmationDeclined)
+    }
+}
+
+fn terminal_safe(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 fn classify_json_rpc_value(value: &serde_json::Value, expected_id: u64) -> RequestOutcome {
@@ -1076,15 +1154,29 @@ fn print_human_result(result: &BenchResult) {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
+    let cli = Cli::parse();
+    let json = cli.json;
+    if let Err(error) = run(cli).await {
+        if json && matches!(error, BenchError::ConfirmationRequired) {
+            println!("{}", confirmation_required_json());
+            process::exit(1);
+        }
         eprintln!("error: {error}");
         process::exit(1);
     }
 }
 
-async fn run() -> Result<(), BenchError> {
-    let cli = Cli::parse();
+fn confirmation_required_json() -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": BENCH_RESULT_SCHEMA_VERSION,
+        "kind": "groundhog-bench-confirmation",
+        "status": "confirmation_required",
+        "action": SUBMIT_CONFIRMATION_ACTION,
+        "requiredFlag": "--force"
+    })
+}
 
+async fn run(cli: Cli) -> Result<(), BenchError> {
     if cli.workers == 0 {
         return Err(BenchError::InvalidWorkers);
     }
@@ -1110,6 +1202,16 @@ async fn run() -> Result<(), BenchError> {
     let needs_transactions = cli.method == "sendRawTransaction";
     let (accounts, entrypoint) =
         transaction_inputs_for_method(&cli.method, manifest, cli.accounts)?;
+
+    let stdin = io::stdin();
+    let stderr = io::stderr();
+    confirm_submission(
+        &cli,
+        stdin.is_terminal(),
+        stderr.is_terminal(),
+        &mut stdin.lock(),
+        &mut stderr.lock(),
+    )?;
 
     let total_duration = Duration::from_secs(cli.duration);
     let warmup_duration = Duration::from_secs(cli.warmup);
@@ -1641,6 +1743,119 @@ mod tests {
     }
 
     #[test]
+    fn read_only_method_does_not_require_confirmation() {
+        let cli = confirmation_cli("chainTip");
+        let mut input = std::io::Cursor::new(Vec::<u8>::new());
+        let mut error = Vec::new();
+
+        confirm_submission(&cli, false, false, &mut input, &mut error)
+            .expect("bug: read-only benchmarks should not require confirmation");
+
+        assert!(error.is_empty());
+    }
+
+    #[test]
+    fn force_is_a_benchmark_command_option() {
+        let cli = Cli::try_parse_from(["groundhog-bench", "--force"])
+            .expect("bug: groundhog-bench should accept --force");
+
+        assert!(cli.force);
+    }
+
+    #[test]
+    fn confirmation_required_json_is_actionable() {
+        let value = confirmation_required_json();
+
+        assert_eq!(value["status"], "confirmation_required");
+        assert_eq!(value["action"], SUBMIT_CONFIRMATION_ACTION);
+        assert_eq!(value["requiredFlag"], "--force");
+    }
+
+    #[test]
+    fn force_skips_submit_confirmation_without_reading_input() {
+        struct Unreadable;
+
+        impl std::io::Read for Unreadable {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                panic!("bug: --force must not read stdin")
+            }
+        }
+
+        impl BufRead for Unreadable {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                panic!("bug: --force must not read stdin")
+            }
+
+            fn consume(&mut self, _amount: usize) {}
+        }
+
+        let mut cli = confirmation_cli("sendRawTransaction");
+        cli.force = true;
+        let mut input = Unreadable;
+        let mut error = Vec::new();
+
+        confirm_submission(&cli, false, false, &mut input, &mut error)
+            .expect("bug: --force should bypass confirmation");
+
+        assert!(error.is_empty());
+    }
+
+    #[test]
+    fn submit_confirmation_fails_closed_for_json_or_non_tty() {
+        for (json, stdin_is_terminal, stderr_is_terminal) in [
+            (true, true, true),
+            (false, false, true),
+            (false, true, false),
+        ] {
+            let mut cli = confirmation_cli("sendRawTransaction");
+            cli.json = json;
+            let mut input = std::io::Cursor::new(b"yes\n");
+            let mut error = Vec::new();
+
+            let result = confirm_submission(
+                &cli,
+                stdin_is_terminal,
+                stderr_is_terminal,
+                &mut input,
+                &mut error,
+            );
+
+            assert!(matches!(result, Err(BenchError::ConfirmationRequired)));
+            assert_eq!(input.position(), 0);
+            assert!(error.is_empty());
+        }
+    }
+
+    #[test]
+    fn submit_confirmation_accepts_y_and_yes() {
+        let cli = confirmation_cli("sendRawTransaction");
+        for answer in ["y\n", "YES\n"] {
+            let mut input = std::io::Cursor::new(answer.as_bytes());
+            let mut error = Vec::new();
+
+            confirm_submission(&cli, true, true, &mut input, &mut error)
+                .expect("bug: y and yes should confirm submission");
+
+            let prompt = String::from_utf8(error).expect("bug: prompt should be UTF-8");
+            assert!(prompt.contains("plus 2s warmup"));
+            assert!(prompt.ends_with("Continue? [y/N] "));
+        }
+    }
+
+    #[test]
+    fn submit_confirmation_defaults_to_no() {
+        let cli = confirmation_cli("sendRawTransaction");
+        for answer in ["\n", "no\n", "anything else\n"] {
+            let mut input = std::io::Cursor::new(answer.as_bytes());
+            let mut error = Vec::new();
+
+            let result = confirm_submission(&cli, true, true, &mut input, &mut error);
+
+            assert!(matches!(result, Err(BenchError::ConfirmationDeclined)));
+        }
+    }
+
+    #[test]
     fn send_raw_transaction_rejects_unsupported_manifest_derivation_scheme() {
         let mut manifest = manifest();
         manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
@@ -1826,5 +2041,11 @@ mod tests {
 
     fn hash(byte: u8) -> Hex0x<SHA256Hash> {
         Hex0x(SHA256Hash::from([byte; 32]))
+    }
+
+    fn confirmation_cli(method: &str) -> Cli {
+        let mut cli = Cli::parse_from(["groundhog-bench"]);
+        cli.method = method.to_string();
+        cli
     }
 }

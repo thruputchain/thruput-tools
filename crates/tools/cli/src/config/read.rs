@@ -534,13 +534,6 @@ pub fn validate_profile_name(name: &str) -> Result<String, CliError> {
     Ok(name.to_owned())
 }
 
-pub(crate) fn load_global_profile_state(
-    name: &str,
-) -> Result<Option<PersistedProfileState>, CliError> {
-    let path = config_file_path()?;
-    Ok(read_layer(&path)?.profiles.remove(name))
-}
-
 pub(crate) fn load_local_runtime_state() -> Result<Option<LocalRuntimeState>, CliError> {
     let path = config_file_path()?;
     let state = load_global_field("local_runtime_state")?;
