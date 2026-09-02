@@ -8,7 +8,7 @@ static NONCE: SHA256Hash =
 fn test_deploy() {
     let env = TestEnvironment::no_cost();
     let test_contract = register_mock_contract(&env);
-    let contract_hash = test_contract.as_hash().clone();
+    let contract_hash = *test_contract.as_hash();
 
     env.transact(|tx| {
         let caller = <ContractAddress as Named>::named("test_deploy");
