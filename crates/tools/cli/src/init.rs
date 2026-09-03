@@ -159,9 +159,10 @@ fn handle_credentials_step(
         ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
     } else {
         ui.note("Mock-executor download credentials are not configured");
-        if ui
-            .print
-            .ask("Configure mock-executor download credentials now?", true)?
+        if !ui.print.is_quiet()
+            && ui
+                .print
+                .ask("Configure mock-executor download credentials now?", true)?
         {
             crate::auth::configure_executor_credentials_from_init(ui.print)?;
             ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);

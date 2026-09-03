@@ -93,12 +93,15 @@ impl Print {
         Ok(confirmation_answer(&answer))
     }
 
-    /// Ask an optional wizard question, declining when input is not interactive.
+    /// Ask an optional wizard question, using its default in quiet mode.
     pub fn ask(
         &self,
         message: impl std::fmt::Display,
         default_yes: bool,
     ) -> Result<bool, CliError> {
+        if self.quiet {
+            return Ok(default_yes);
+        }
         if !self.can_prompt() {
             return Ok(false);
         }
@@ -512,5 +515,13 @@ mod tests {
         assert!(!wizard_answer("", true, false));
         assert!(!wizard_answer("n\n", true, true));
         assert!(wizard_answer("yes\n", false, true));
+    }
+
+    #[test]
+    fn quiet_wizard_questions_use_their_default() {
+        let print = Print::quiet();
+
+        assert!(print.ask("Create key?", true).unwrap());
+        assert!(!print.ask("Create project?", false).unwrap());
     }
 }

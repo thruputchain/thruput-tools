@@ -219,7 +219,7 @@ fn init_accepts_credentials_from_global_config() {
 
 #[test]
 #[serial]
-fn quiet_init_without_credentials_does_not_prompt_for_setup() {
+fn quiet_init_without_credentials_generates_default_key_only() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
@@ -235,11 +235,9 @@ fn quiet_init_without_credentials_does_not_prompt_for_setup() {
             .unwrap()
             .is_none()
     );
-    assert!(
-        groundhog_cli::keys::load_key_summaries()
-            .unwrap()
-            .is_empty()
-    );
+    let keys = groundhog_cli::keys::load_key_summaries().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].name, "default");
     assert!(!tmp.path().join("my-contract").exists());
 
     unsafe {

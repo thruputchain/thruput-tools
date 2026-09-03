@@ -131,11 +131,10 @@ the target rustflags.
 
 ### `groundhog init`
 
-Interactive first-run setup offers to generate a signing key, configure
-mock-executor download credentials, and scaffold a starter project after
-checking your toolchain. Noninteractive and `--quiet` invocations skip these
-optional prompts. Re-running when already configured is a no-op; `--json`
-remains status-only.
+Interactive first-run setup wizard. Checks your toolchain,
+generates a signing key, stores mock-executor download credentials,
+and optionally scaffolds a starter project. Re-running when already
+configured is a no-op.
 
 ```bash
 groundhog init          # guided setup
