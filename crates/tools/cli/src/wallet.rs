@@ -28,7 +28,7 @@ use crate::account_resolution::{
 };
 use crate::balance::{
     LocalFundingProjection, fetch_balance_blocking, insufficient_local_faucet_error,
-    local_funding_projection,
+    local_funding_projection, low_local_faucet_balance_warning,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
@@ -53,7 +53,6 @@ use crate::{CliError, Print, dev_keys};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 4;
 const WALLET_CREATE_PREFUND_HOG: &str = "1";
-const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 #[derive(Debug)]
 pub(crate) enum PreparedWalletCreate {
@@ -308,8 +307,12 @@ fn create_local_wallet(
     print.status(format_args!("Txn: {create_tx_hash}"));
     print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
 
-    print.json(&CommandResult::new(
+    let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
+        .into_iter()
+        .collect();
+    print.json(&CommandResult::with_warnings(
         cmd,
+        warnings,
         json!({
             "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
             "name": prepared.wallet_name,
@@ -461,7 +464,7 @@ fn print_low_wallet_faucet_warning(plan: &LocalWalletCreatePlan, print: &Print) 
     let Some(projected_balance) = plan.funding_projection.projected_balance else {
         return;
     };
-    if projected_balance >= LOW_FAUCET_BALANCE_RAW {
+    if low_local_faucet_balance_warning(Some(projected_balance)).is_none() {
         return;
     }
     print.status(format_args!(
@@ -579,18 +582,8 @@ fn validate_remote_create_wallet_address(prepared: &str, created: &str) -> Resul
     Ok(())
 }
 
-/// Remove a saved wallet after interactive confirmation.
+/// Remove a saved wallet after interactive confirmation or `force` authorization.
 pub fn remove(
-    name: &str,
-    profile: Option<&str>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    remove_with_force(name, profile, false, cmd, print)
-}
-
-/// Remove a saved wallet, optionally bypassing interactive confirmation.
-pub fn remove_with_force(
     name: &str,
     profile: Option<&str>,
     force: bool,

@@ -85,20 +85,8 @@ pub fn new_profile(
     print.json(&CommandResult::with_warnings(cmd, warnings, report))
 }
 
-/// Remove an entire profile after interactive confirmation.
+/// Remove an entire profile after interactive confirmation or `force` authorization.
 pub fn remove(
-    start: &Path,
-    profile: &str,
-    global: bool,
-    project: bool,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    remove_with_force(start, profile, false, global, project, cmd, print)
-}
-
-/// Remove an entire profile, optionally bypassing interactive confirmation.
-pub fn remove_with_force(
     start: &Path,
     profile: &str,
     force: bool,

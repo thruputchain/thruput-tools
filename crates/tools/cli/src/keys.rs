@@ -119,18 +119,8 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Export a stored private key for use with a client signer.
-pub fn export(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    export_with_force(name, false, cmd, print)
-}
-
-/// Export a stored private key, optionally bypassing interactive confirmation.
-pub fn export_with_force(
-    name: &str,
-    force: bool,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
+/// Export a stored private key after interactive confirmation or `force` authorization.
+pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {
@@ -190,18 +180,8 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
     Ok(())
 }
 
-/// Remove a stored signing key after interactive confirmation.
-pub fn remove(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    remove_with_force(name, false, cmd, print)
-}
-
-/// Remove a stored signing key, optionally bypassing interactive confirmation.
-pub fn remove_with_force(
-    name: &str,
-    force: bool,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
+/// Remove a stored signing key after interactive confirmation or `force` authorization.
+pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {

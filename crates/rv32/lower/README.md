@@ -42,22 +42,11 @@ rv32-lower --print-format-fingerprint
 
 For scripting / programmatic callers, `--json` emits a single-line result
 envelope on stdout (output path, byte sizes, code/artifact digests) on success,
-or structured error output on failure:
+or `{"status":"error","message":…}` on failure:
 
 ```sh
 rv32-lower --elf <elf> --out <contract>.rv32a --json
 ```
-
-If `--out` or `--metadata` already exists, interactive use asks once before
-replacing the affected paths. Pass `--force` to confirm replacement in scripts;
-`--json` and other non-interactive invocations fail instead of prompting. JSON
-refusals use `status: "confirmation_required"`, identify the action and affected
-paths, and report `requiredFlag: "--force"`. Both outputs are staged before
-publication, and each destination is revalidated immediately before its atomic
-rename. New destinations use no-clobber publication. Replacement preserves the
-existing regular file's permissions where supported. These checks detect paths
-that change before revalidation, but they are not an atomic compare-and-swap
-against arbitrary external writers racing the final rename.
 
 The lowerer:
 

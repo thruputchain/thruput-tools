@@ -99,7 +99,7 @@ impl Print {
         message: impl std::fmt::Display,
         default_yes: bool,
     ) -> Result<bool, CliError> {
-        if !self.output_allows_prompt() {
+        if !self.can_prompt() {
             return Ok(false);
         }
 

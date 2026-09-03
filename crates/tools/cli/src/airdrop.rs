@@ -25,7 +25,7 @@ use crate::account_resolution::{
 };
 use crate::balance::{
     LocalFundingProjection, fetch_balance_blocking, insufficient_local_faucet_error,
-    local_funding_projection,
+    local_funding_projection, low_local_faucet_balance_warning,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
@@ -46,7 +46,6 @@ use crate::{CliError, Print};
 /// Schema version of the `airdrop --json` data payload.
 pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 3;
 const DEFAULT_AIRDROP_HOG: &str = "10";
-const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 #[derive(Debug)]
 pub(crate) enum PreparedAirdrop {
@@ -246,8 +245,12 @@ fn run_local_airdrop(
     print.status(format_args!("Airdrop sent: {tx_hash}"));
     let observations = post_airdrop_observations(prepared, print);
 
-    print.json(&CommandResult::new(
+    let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
+        .into_iter()
+        .collect();
+    print.json(&CommandResult::with_warnings(
         cmd,
+        warnings,
         json!({
             "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
             "mode": "local",
@@ -288,7 +291,7 @@ fn print_low_faucet_warning(prepared: &LocalAirdropPlan, print: &Print) {
     let Some(projected_balance) = prepared.funding_projection.projected_balance else {
         return;
     };
-    if projected_balance >= LOW_FAUCET_BALANCE_RAW {
+    if low_local_faucet_balance_warning(Some(projected_balance)).is_none() {
         return;
     }
 

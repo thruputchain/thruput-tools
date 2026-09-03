@@ -235,6 +235,12 @@ fn quiet_init_without_credentials_does_not_prompt_for_setup() {
             .unwrap()
             .is_none()
     );
+    assert!(
+        groundhog_cli::keys::load_key_summaries()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!tmp.path().join("my-contract").exists());
 
     unsafe {
         env::remove_var("CARGO_HOME");

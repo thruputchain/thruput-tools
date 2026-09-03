@@ -697,8 +697,6 @@ enum CodegenCommand {
         /// Output file path (default: stdout)
         #[arg(long, short)]
         output: Option<std::path::PathBuf>,
-        #[command(flatten)]
-        confirmation: ConfirmationArgs,
     },
 }
 
@@ -1039,7 +1037,7 @@ fn main() {
                     confirmation,
                     global,
                     project,
-                } => groundhog_cli::config_cmd::remove_with_force(
+                } => groundhog_cli::config_cmd::remove(
                     &cwd,
                     &profile,
                     confirmation.force,
@@ -1381,11 +1379,11 @@ fn main() {
             }
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
             KeysCommand::Export { name, confirmation } => {
-                groundhog_cli::keys::export_with_force(&name, confirmation.force, cmd_name, &print)
+                groundhog_cli::keys::export(&name, confirmation.force, cmd_name, &print)
             }
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
             KeysCommand::Rm { name, confirmation } => {
-                groundhog_cli::keys::remove_with_force(&name, confirmation.force, cmd_name, &print)
+                groundhog_cli::keys::remove(&name, confirmation.force, cmd_name, &print)
             }
         },
         Command::Wallet { command } => match command {
@@ -1418,7 +1416,7 @@ fn main() {
                 name,
                 profile,
                 confirmation,
-            } => groundhog_cli::wallet::remove_with_force(
+            } => groundhog_cli::wallet::remove(
                 &name,
                 profile.as_deref(),
                 confirmation.force,
@@ -1427,17 +1425,9 @@ fn main() {
             ),
         },
         Command::Codegen { command } => match command {
-            CodegenCommand::Ts {
-                source,
-                output,
-                confirmation,
-            } => groundhog_cli::codegen_cmd::run_with_force(
-                &source,
-                output.as_deref(),
-                confirmation.force,
-                cmd_name,
-                &print,
-            ),
+            CodegenCommand::Ts { source, output } => {
+                groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
+            }
         },
         Command::Tx { command } => match command {
             TxCommand::Show {
