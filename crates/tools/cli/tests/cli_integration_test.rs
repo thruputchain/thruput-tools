@@ -12407,7 +12407,6 @@ fn signed_tx_deploy_contract_kind(tx_hex: &str) -> &'static str {
         .first()
         .expect("bug: deploy tx should include contract bytes");
     match contract {
-        groundhog_xdr::contract::Contract::kWasmi { .. } => "wasm",
         groundhog_xdr::contract::Contract::kRv32 { .. } => "rv32",
         _ => "other",
     }
