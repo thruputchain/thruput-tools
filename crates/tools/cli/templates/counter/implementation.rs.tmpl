@@ -37,7 +37,11 @@ impl Counter {
     }
 
     pub fn get(&self) -> u64 {
-        self.value.try_get().unwrap_or(0) as u64
+        // `none_if_missing` maps only the never-incremented case to `None`.
+        // A bare `try_get().unwrap_or(0)` would also report zero when the
+        // slot holds the wrong storage type or the accumulated increments
+        // overflow, hiding a failed read behind a plausible answer.
+        self.value.try_get().none_if_missing().unwrap_or(0) as u64
     }
 
     pub fn ping(&self, tag: u64) {
