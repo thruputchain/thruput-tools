@@ -279,7 +279,8 @@ bench_send_raw() {
     run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
         --url "$url" --runtime-manifest "$manifest" --method sendRawTransaction \
-        --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
+        --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" \
+        --force
 }
 
 run_bench_pair() {

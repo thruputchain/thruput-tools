@@ -5,10 +5,12 @@ use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::transaction::Transaction;
+use groundhog_xdr::types::NetworkHash;
 use serde_json::json;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
@@ -55,6 +57,22 @@ pub(crate) struct PreparedCall {
     pub(crate) tx_hex: String,
 }
 
+#[derive(Debug)]
+struct CallPlan {
+    rpc_url: String,
+    profile_name: String,
+    contract_address_hex: String,
+    wallet_address_hex: String,
+    wallet_entrypoint_id: String,
+    wallet_entrypoint_source: &'static str,
+    method: String,
+    resolved: ResolvedCall,
+    calldata: Vec<u8>,
+    transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
 /// Call a method on a deployed contract.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
@@ -64,6 +82,7 @@ pub fn run(
     args: &[String],
     package: Option<&str>,
     dry_run: bool,
+    force: bool,
     wallet: Option<&str>,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
@@ -71,9 +90,25 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_call(
+    if !dry_run {
+        let cwd = std::env::current_dir()?;
+        resolve_profile_with_overrides(&cwd, profile, overrides)?;
+        print.require_confirmation_available(force, "call a contract")?;
+    }
+    let plan = prepare_call_plan(
         contract, method, args, package, artifacts, wallet, profile, overrides,
     )?;
+    if !dry_run {
+        print.detail("contract", &plan.contract_address_hex);
+        print.detail("method", &plan.method);
+        print.detail("wallet", &plan.wallet_address_hex);
+        print.detail("profile", &plan.profile_name);
+        if !print.confirm(force, "call a contract", "Submit this contract call?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+    let prepared = sign_call_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -309,9 +344,8 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     }
 }
 
-/// Resolve, encode, and sign a call transaction without submitting it.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_call(
+fn prepare_call_plan(
     contract: &str,
     method: &str,
     args: &[String],
@@ -320,15 +354,15 @@ pub(crate) fn prepare_call(
     wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
-) -> Result<PreparedCall, CliError> {
+) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    prepare_call_with_runtime(
+    prepare_call_plan_with_runtime(
         contract, method, args, package, artifacts, wallet, profile, overrides, &rt,
     )
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn prepare_call_with_runtime(
+fn prepare_call_plan_with_runtime(
     contract: &str,
     method: &str,
     args: &[String],
@@ -338,7 +372,7 @@ fn prepare_call_with_runtime(
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
-) -> Result<PreparedCall, CliError> {
+) -> Result<CallPlan, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
@@ -382,16 +416,9 @@ fn prepare_call_with_runtime(
     })
     .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &sender.signer,
-        SignTransactionParams::default(),
-        &wallet_context.network_hash,
-    )
-    .map_err(|e| CliError::Other(e.to_string()))?;
-
-    Ok(PreparedCall {
+    Ok(CallPlan {
         rpc_url: rpc_url.to_owned(),
+        profile_name: resolved_profile.name,
         contract_address_hex,
         wallet_address_hex,
         wallet_entrypoint_id,
@@ -399,6 +426,29 @@ fn prepare_call_with_runtime(
         method: method.to_owned(),
         resolved,
         calldata,
+        transaction: tx,
+        signer: sender.signer,
+        network_hash: wallet_context.network_hash,
+    })
+}
+
+fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
+    let tx_hex = sign_and_encode_transaction_hex(
+        plan.transaction,
+        &plan.signer,
+        SignTransactionParams::default(),
+        &plan.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    Ok(PreparedCall {
+        rpc_url: plan.rpc_url,
+        contract_address_hex: plan.contract_address_hex,
+        wallet_address_hex: plan.wallet_address_hex,
+        wallet_entrypoint_id: plan.wallet_entrypoint_id,
+        wallet_entrypoint_source: plan.wallet_entrypoint_source,
+        method: plan.method,
+        resolved: plan.resolved,
+        calldata: plan.calldata,
         tx_hex,
     })
 }

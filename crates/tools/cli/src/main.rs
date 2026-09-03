@@ -1,4 +1,4 @@
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::Print;
 use groundhog_cli::result::CommandResult;
@@ -46,6 +46,13 @@ struct RpcTargetArgs {
     /// Override local-dev runtime manifest path for dev-N/bootstrap accounts
     #[arg(long)]
     runtime_manifest: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct ConfirmationArgs {
+    /// Confirm without prompting; the protected action cannot be undone
+    #[arg(short = 'f', long)]
+    force: bool,
 }
 
 impl From<RpcTargetArgs> for groundhog_cli::config::ProfileOverrides {
@@ -234,6 +241,8 @@ enum Command {
         target_args: RpcTargetArgs,
         #[command(flatten)]
         artifacts: ArtifactArgs,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Submit a transaction that calls a deployed contract method
     #[command(long_about = "Submit a signed transaction that calls a deployed \
@@ -264,6 +273,8 @@ enum Command {
         target_args: RpcTargetArgs,
         #[command(flatten)]
         artifacts: ArtifactArgs,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Transfer native HOG from the effective profile wallet
     Transfer {
@@ -282,6 +293,8 @@ enum Command {
         profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Request HOG funding for a wallet
     Airdrop {
@@ -293,9 +306,8 @@ enum Command {
         /// Build and sign the airdrop transaction without submitting it
         #[arg(long)]
         dry_run: bool,
-        /// Confirm a low local faucet balance without prompting
-        #[arg(long)]
-        yes: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -480,6 +492,8 @@ enum KeysCommand {
     Export {
         /// Key name to export
         name: String,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Set the default signing key
     Use {
@@ -490,9 +504,8 @@ enum KeysCommand {
     Rm {
         /// Key name to remove
         name: String,
-        /// Remove the key without prompting; this cannot be undone
-        #[arg(short = 'f', long)]
-        force: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
 }
 
@@ -556,9 +569,8 @@ enum ConfigCommand {
     Rm {
         /// Profile to remove
         profile: String,
-        /// Remove the profile without prompting; this cannot be undone
-        #[arg(short = 'f', long)]
-        force: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
         /// Remove the profile from global config
         #[arg(long)]
         global: bool,
@@ -656,9 +668,8 @@ enum WalletCommand {
         /// Exact local wallet prefund in HOG; remote faucets control this amount
         #[arg(long)]
         prefund: Option<String>,
-        /// Confirm a low local faucet balance without prompting
-        #[arg(long)]
-        yes: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -672,6 +683,8 @@ enum WalletCommand {
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
 }
 
@@ -697,9 +710,8 @@ enum ChainCommand {
         /// JSON archive to create
         #[arg(long)]
         output: PathBuf,
-        /// Replace an existing archive
-        #[arg(long)]
-        overwrite: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Restore one compressed JSON archive into a stopped persistent node
     Restore {
@@ -709,9 +721,8 @@ enum ChainCommand {
         /// JSON archive to restore
         #[arg(long)]
         input: PathBuf,
-        /// Replace populated persistent state
-        #[arg(short = 'f', long)]
-        force: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
 }
 
@@ -1023,11 +1034,17 @@ fn main() {
                 ),
                 ConfigCommand::Rm {
                     profile,
-                    force,
+                    confirmation,
                     global,
                     project,
-                } => groundhog_cli::config_cmd::remove_with_force(
-                    &cwd, &profile, force, global, project, cmd_name, &print,
+                } => groundhog_cli::config_cmd::remove(
+                    &cwd,
+                    &profile,
+                    confirmation.force,
+                    global,
+                    project,
+                    cmd_name,
+                    &print,
                 ),
                 ConfigCommand::Set {
                     field,
@@ -1147,6 +1164,7 @@ fn main() {
             profile,
             target_args,
             artifacts,
+            confirmation,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
@@ -1158,6 +1176,7 @@ fn main() {
                     artifact.as_deref(),
                     package.as_deref(),
                     dry_run,
+                    confirmation.force,
                     wallet.as_deref(),
                     &artifacts,
                     profile.as_deref(),
@@ -1176,6 +1195,7 @@ fn main() {
             profile,
             target_args,
             artifacts,
+            confirmation,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
@@ -1189,6 +1209,7 @@ fn main() {
                     &args,
                     package.as_deref(),
                     dry_run,
+                    confirmation.force,
                     wallet.as_deref(),
                     &artifacts,
                     profile.as_deref(),
@@ -1204,11 +1225,13 @@ fn main() {
             from,
             profile,
             target_args,
+            confirmation,
         } => groundhog_cli::transfer::run(
             &recipient,
             &amount,
             from.as_deref(),
             dry_run,
+            confirmation.force,
             profile.as_deref(),
             &target_args.into(),
             cmd_name,
@@ -1218,14 +1241,14 @@ fn main() {
             recipient,
             amount,
             dry_run,
-            yes,
+            confirmation,
             profile,
             target_args,
         } => groundhog_cli::airdrop::run(
             recipient.as_deref(),
             amount.as_deref(),
             dry_run,
-            yes,
+            confirmation.force,
             profile.as_deref(),
             &target_args.into(),
             cmd_name,
@@ -1334,23 +1357,33 @@ fn main() {
             ChainCommand::Dump {
                 data_dir,
                 output,
-                overwrite,
-            } => groundhog_cli::chain::dump(&data_dir, &output, overwrite, cmd_name, &print),
+                confirmation,
+            } => {
+                groundhog_cli::chain::dump(&data_dir, &output, confirmation.force, cmd_name, &print)
+            }
             ChainCommand::Restore {
                 data_dir,
                 input,
-                force,
-            } => groundhog_cli::chain::restore(&data_dir, &input, force, cmd_name, &print),
+                confirmation,
+            } => groundhog_cli::chain::restore(
+                &data_dir,
+                &input,
+                confirmation.force,
+                cmd_name,
+                &print,
+            ),
         },
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
             }
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
-            KeysCommand::Export { name } => groundhog_cli::keys::export(&name, cmd_name, &print),
+            KeysCommand::Export { name, confirmation } => {
+                groundhog_cli::keys::export(&name, confirmation.force, cmd_name, &print)
+            }
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
-            KeysCommand::Rm { name, force } => {
-                groundhog_cli::keys::remove_with_force(&name, force, cmd_name, &print)
+            KeysCommand::Rm { name, confirmation } => {
+                groundhog_cli::keys::remove(&name, confirmation.force, cmd_name, &print)
             }
         },
         Command::Wallet { command } => match command {
@@ -1365,7 +1398,7 @@ fn main() {
                 name,
                 dry_run,
                 prefund,
-                yes,
+                confirmation,
                 profile,
                 target_args,
             } => groundhog_cli::wallet::create(
@@ -1373,15 +1406,23 @@ fn main() {
                 name.as_deref(),
                 dry_run,
                 prefund.as_deref(),
-                yes,
+                confirmation.force,
                 profile.as_deref(),
                 &target_args.into(),
                 cmd_name,
                 &print,
             ),
-            WalletCommand::Rm { name, profile } => {
-                groundhog_cli::wallet::remove(&name, profile.as_deref(), cmd_name, &print)
-            }
+            WalletCommand::Rm {
+                name,
+                profile,
+                confirmation,
+            } => groundhog_cli::wallet::remove(
+                &name,
+                profile.as_deref(),
+                confirmation.force,
+                cmd_name,
+                &print,
+            ),
         },
         Command::Codegen { command } => match command {
             CodegenCommand::Ts { source, output } => {
@@ -1605,7 +1646,7 @@ mod tests {
             Command::Config {
                 command: ConfigCommand::Rm {
                     profile,
-                    force: true,
+                    confirmation: ConfirmationArgs { force: true },
                     global: false,
                     project: true,
                 }
@@ -1931,14 +1972,20 @@ mod tests {
 
     #[test]
     fn wallet_rm_flags_parse() {
-        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice"]);
+        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice", "--force"]);
 
         match cli.command {
             Command::Wallet {
-                command: WalletCommand::Rm { name, profile },
+                command:
+                    WalletCommand::Rm {
+                        name,
+                        profile,
+                        confirmation,
+                    },
             } => {
                 assert_eq!(name, "alice");
                 assert_eq!(profile, None);
+                assert!(confirmation.force);
             }
             _ => panic!("expected wallet rm command"),
         }
@@ -1999,6 +2046,7 @@ mod tests {
                 from,
                 profile,
                 target_args,
+                confirmation,
             } => {
                 assert_eq!(recipient, "alice");
                 assert_eq!(amount, "1.5");
@@ -2010,8 +2058,46 @@ mod tests {
                     target_args.runtime_manifest.as_deref(),
                     Some(std::path::Path::new("/tmp/runtime.json"))
                 );
+                assert!(!confirmation.force);
             }
             _ => panic!("expected transfer command"),
+        }
+    }
+
+    #[test]
+    fn transaction_commands_parse_command_local_force() {
+        for args in [
+            vec!["groundhog", "deploy", "--force"],
+            vec!["groundhog", "call", "contract", "method", "--force"],
+            vec!["groundhog", "transfer", "recipient", "1", "--force"],
+            vec!["groundhog", "airdrop", "recipient", "--force"],
+            vec!["groundhog", "wallet", "create", "--force"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("transaction command should accept --force");
+            let force = match cli.command {
+                Command::Deploy { confirmation, .. }
+                | Command::Call { confirmation, .. }
+                | Command::Transfer { confirmation, .. }
+                | Command::Airdrop { confirmation, .. }
+                | Command::Wallet {
+                    command: WalletCommand::Create { confirmation, .. },
+                } => confirmation.force,
+                _ => panic!("expected transaction command"),
+            };
+            assert!(force);
+        }
+    }
+
+    #[test]
+    fn airdrop_and_wallet_create_reject_yes() {
+        for args in [
+            vec!["groundhog", "airdrop", "recipient", "--yes"],
+            vec!["groundhog", "wallet", "create", "--yes"],
+        ] {
+            let Err(error) = Cli::try_parse_from(args) else {
+                panic!("--yes should be removed");
+            };
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
         }
     }
 

@@ -65,11 +65,19 @@ struct ArchiveStats {
     paths: HashSet<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ArchiveOutputSnapshot {
+    Missing,
+    File(String),
+    Symlink(PathBuf),
+    Other,
+}
+
 /// Create a compressed JSON archive of a stopped persistent local node.
 pub fn dump(
     data_dir: &Path,
     output: &Path,
-    overwrite: bool,
+    force: bool,
     command: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -81,13 +89,22 @@ pub fn dump(
             output.display().to_string(),
         ));
     }
-    // Holding the node's locks gives every archived file a single stopped-node
-    // snapshot rather than a mixture of database states.
-    let _lock = DataDirLock::acquire(&data_dir)?;
-
-    if output.exists() && !overwrite {
-        return Err(CliError::ChainDumpExists(output.display().to_string()));
+    let output_snapshot = archive_output_snapshot(&output)?;
+    let overwrite = output_snapshot != ArchiveOutputSnapshot::Missing;
+    if overwrite
+        && !print.confirm(
+            force,
+            "overwrite an existing chain dump",
+            format_args!("Overwrite existing chain dump `{}`?", output.display()),
+        )?
+    {
+        print.note("Cancelled");
+        return Ok(());
     }
+    // Prompt without excluding the node, then lock and revalidate every value
+    // used to authorize an overwrite before producing the snapshot.
+    let _lock = DataDirLock::acquire(&data_dir)?;
+    revalidate_archive_output(&output, &output_snapshot)?;
     let files = collect_archive_files(&data_dir)?;
     let output_parent = output
         .parent()
@@ -110,6 +127,7 @@ pub fn dump(
     )?;
     temp.as_file().sync_all()?;
 
+    revalidate_archive_output(&output, &output_snapshot)?;
     if overwrite {
         temp.persist(&output).map_err(|error| {
             archive_io(format!(
@@ -218,14 +236,15 @@ pub fn restore(
         .map_err(|error| archive_io(format!("open archive '{}': {error}", input.display())))?;
     let data_dir = prepare_restore_data_dir(data_dir)?;
     ensure_outside_data_dir(&data_dir, &input)?;
-    // Keep the destination locked through validation and the directory swap so
-    // a node cannot start against state that is about to be replaced.
-    let _old_lock = DataDirLock::acquire(&data_dir)?;
-    if data_dir_is_populated(&data_dir)? && !force {
-        return Err(CliError::ChainRestoreRequiresForce(
-            data_dir.display().to_string(),
-        ));
+    let populated = data_dir_is_populated(&data_dir)?;
+    if populated && !confirm_restore_replacement(&data_dir, force, print)? {
+        print.note("Cancelled");
+        return Ok(());
     }
+    // Do not exclude the node while waiting for consent. Once confirmed, lock
+    // and ensure the replacement decision was based on the current directory.
+    let _old_lock = DataDirLock::acquire(&data_dir)?;
+    revalidate_restore_population(&data_dir, populated)?;
 
     let parent = data_dir.parent().ok_or_else(|| {
         archive_io(format!(
@@ -320,6 +339,21 @@ pub fn restore(
         print.detail("Restored bytes", &report.uncompressed_bytes);
     }
     Ok(())
+}
+
+fn confirm_restore_replacement(
+    data_dir: &Path,
+    force: bool,
+    print: &Print,
+) -> Result<bool, CliError> {
+    print.confirm(
+        force,
+        "replace populated chain state",
+        format_args!(
+            "Replace populated chain state in `{}`? This cannot be undone.",
+            data_dir.display()
+        ),
+    )
 }
 
 // Rejects platforms that cannot provide the locking and permission guarantees used here.
@@ -512,6 +546,37 @@ fn hash_file(path: &Path) -> Result<String, CliError> {
         hasher.update(&buffer[..count]);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+fn archive_output_snapshot(path: &Path) -> Result<ArchiveOutputSnapshot, CliError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ArchiveOutputSnapshot::Missing);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Ok(ArchiveOutputSnapshot::Symlink(fs::read_link(path)?));
+    }
+    if file_type.is_file() {
+        return Ok(ArchiveOutputSnapshot::File(hash_file(path)?));
+    }
+    Ok(ArchiveOutputSnapshot::Other)
+}
+
+fn revalidate_archive_output(
+    path: &Path,
+    expected: &ArchiveOutputSnapshot,
+) -> Result<(), CliError> {
+    if &archive_output_snapshot(path)? == expected {
+        return Ok(());
+    }
+    Err(archive_io(format!(
+        "output '{}' changed while awaiting confirmation",
+        path.display()
+    )))
 }
 
 // Compresses and base64-encodes one file as a bounded JSON chunk sequence.
@@ -922,6 +987,16 @@ fn data_dir_is_populated(data_dir: &Path) -> Result<bool, CliError> {
     Ok(false)
 }
 
+fn revalidate_restore_population(data_dir: &Path, expected: bool) -> Result<(), CliError> {
+    if data_dir_is_populated(data_dir)? == expected {
+        return Ok(());
+    }
+    Err(archive_io(format!(
+        "data directory '{}' changed while awaiting confirmation",
+        data_dir.display()
+    )))
+}
+
 // Finds a collision-free sibling name for the data directory being replaced.
 fn unused_backup_path(
     parent: &Path,
@@ -1265,6 +1340,37 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CliError::ChainDataDirLocked(_)));
+    }
+
+    #[test]
+    fn dump_revalidation_rejects_output_changed_after_preview() {
+        let output = tempfile::NamedTempFile::new().unwrap();
+        fs::write(output.path(), b"before").unwrap();
+        let snapshot = archive_output_snapshot(output.path()).unwrap();
+        fs::write(output.path(), b"after").unwrap();
+
+        let error = revalidate_archive_output(output.path(), &snapshot).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while awaiting confirmation")
+        );
+    }
+
+    #[test]
+    fn restore_revalidation_rejects_population_changed_after_preview() {
+        let destination = TempDir::new().unwrap();
+        let populated = data_dir_is_populated(destination.path()).unwrap();
+        fs::write(destination.path().join(DATA_DIR_METADATA), b"{}").unwrap();
+
+        let error = revalidate_restore_population(destination.path(), populated).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("changed while awaiting confirmation")
+        );
     }
 
     #[cfg(unix)]

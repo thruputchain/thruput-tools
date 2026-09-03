@@ -727,7 +727,7 @@ RECIPIENT_ADDRESS="$(json_field data.address "$RECIPIENT_BEFORE_JSON")"
 SENDER_BALANCE_BEFORE="$(json_field data.rawBalance "$SENDER_BEFORE_JSON")"
 RECIPIENT_BALANCE_BEFORE="$(json_field data.rawBalance "$RECIPIENT_BEFORE_JSON")"
 
-TRANSFER_JSON="$(run_json transfer "$CLI" --json transfer "$TRANSFER_RECIPIENT" "$TRANSFER_AMOUNT")"
+TRANSFER_JSON="$(run_json transfer "$CLI" --json transfer --force "$TRANSFER_RECIPIENT" "$TRANSFER_AMOUNT")"
 TRANSFER_TX_HASH="$(json_field data.txHash "$TRANSFER_JSON")"
 [[ "$(json_field data.status.result "$TRANSFER_JSON")" == "ok" ]] \
     || die "transfer did not commit successfully: $(json_field data.status "$TRANSFER_JSON")"
@@ -785,7 +785,7 @@ log "transaction show result: tx=$TRANSFER_TX_HASH height=$TX_SHOW_STATUS_HEIGHT
 DIRECT_RECIPIENT="$RECIPIENT_ADDRESS"
 DIRECT_BEFORE_JSON="$(run_json "direct recipient balance before" "$CLI" --json balance "$DIRECT_RECIPIENT")"
 DIRECT_BALANCE_BEFORE="$(json_field data.rawBalance "$DIRECT_BEFORE_JSON")"
-DIRECT_TRANSFER_JSON="$(run_json "direct recipient transfer" "$CLI" --json transfer "$DIRECT_RECIPIENT" "$TRANSFER_AMOUNT")"
+DIRECT_TRANSFER_JSON="$(run_json "direct recipient transfer" "$CLI" --json transfer --force "$DIRECT_RECIPIENT" "$TRANSFER_AMOUNT")"
 [[ "$(json_field data.status.result "$DIRECT_TRANSFER_JSON")" == "ok" ]] \
     || die "direct recipient transfer did not commit successfully: $(json_field data.status "$DIRECT_TRANSFER_JSON")"
 [[ "$(json_field data.recipient "$DIRECT_TRANSFER_JSON")" == "$DIRECT_RECIPIENT" ]] \
@@ -868,7 +868,7 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     fi
 fi
 
-DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy)"
+DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \
     || die "deploy did not return a contract address"
@@ -887,16 +887,16 @@ INITIALIZE_DRY_RUN_JSON="$(run_json "dry-run initialize" "$CLI" --json call "$PR
 INITIALIZE_SELECTOR_SOURCE="$(json_field data.selector.source "$INITIALIZE_DRY_RUN_JSON")"
 [[ "$INITIALIZE_SELECTOR_SOURCE" == "embedded_spec" ]] \
     || die "initialize selector source was $INITIALIZE_SELECTOR_SOURCE, expected embedded_spec from the RV32 sidecar"
-INITIALIZE_JSON="$(run_json "call initialize" "$CLI" --json call "$PROJECT_NAME" initialize "$INITIAL_VALUE")"
+INITIALIZE_JSON="$(run_json "call initialize" "$CLI" --json call --force "$PROJECT_NAME" initialize "$INITIAL_VALUE")"
 assert_call_succeeded "initialize" "$INITIALIZE_JSON"
 log "initialize result: status=$(json_field data.statusSummary "$INITIALIZE_JSON") height=$(json_field data.height "$INITIALIZE_JSON") tx=$(json_field data.txHash "$INITIALIZE_JSON")"
 
-INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call "$PROJECT_NAME" increment "$INCREMENT_AMOUNT")"
+INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call --force "$PROJECT_NAME" increment "$INCREMENT_AMOUNT")"
 assert_call_succeeded "increment" "$INCREMENT_JSON"
 log "increment result: status=$(json_field data.statusSummary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.txHash "$INCREMENT_JSON")"
 
 PING_TAG=99
-PING_CALL_JSON="$(run_json "call ping" "$CLI" --json call "$PROJECT_NAME" ping "$PING_TAG")"
+PING_CALL_JSON="$(run_json "call ping" "$CLI" --json call --force "$PROJECT_NAME" ping "$PING_TAG")"
 assert_call_succeeded "ping" "$PING_CALL_JSON"
 PING_TX_HASH="$(json_field data.txHash "$PING_CALL_JSON")"
 PING_HEIGHT="$(json_field data.height "$PING_CALL_JSON")"
@@ -987,7 +987,7 @@ contract=$PING_EVENT_CONTRACT topic0=$PING_EVENT_TOPIC0 data=$PING_EVENT_DATA"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Skipping call get through standalone gateway because local block driving is owned by groundhog node"
 else
-    GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
+    GET_JSON="$(run_json "call get" "$CLI" --json call --force "$PROJECT_NAME" get)"
     assert_call_succeeded "get" "$GET_JSON"
     GET_RETURN="$(json_field data.returnValue "$GET_JSON")"
     [[ "$GET_RETURN" == "$EXPECTED_VALUE" ]] \
@@ -1016,7 +1016,7 @@ USER_KEY="smoke-user"
 log "Generating non-dev signing key: $USER_KEY"
 "$CLI" keys generate "$USER_KEY"
 
-WALLET_JSON="$(run_json "wallet create" "$CLI" --json wallet create --key "$USER_KEY")"
+WALLET_JSON="$(run_json "wallet create" "$CLI" --json wallet create --force --key "$USER_KEY")"
 WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
 [[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
     || die "wallet create did not return a wallet address"
@@ -1033,10 +1033,10 @@ log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
 # Wallet creation leaves the default 1 HOG prefund just below the transaction
 # gas limit. Add 1 HOG so this deploy reaches execution and exercises the
 # receipt-level insufficient-funding guidance instead of scheduler rejection.
-SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop "$USER_KEY" --amount 1)"
+SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop --force "$USER_KEY" --amount 1)"
 [[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
     || die "scheduler-floor airdrop did not commit successfully"
-UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy)"
+UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy --force)"
 UNDERFUNDED_CODE="$(json_field error.code "$UNDERFUNDED_DEPLOY_JSON")"
 case "$UNDERFUNDED_CODE" in
     transaction_insufficient_funds)
@@ -1056,7 +1056,7 @@ log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDE
 
 WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
 WALLET_BALANCE_BEFORE="$(json_field data.rawBalance "$WALLET_BALANCE_BEFORE_JSON")"
-AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop "$USER_KEY" --amount 10)"
+AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop --force "$USER_KEY" --amount 10)"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
 [[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" ]] \
@@ -1069,7 +1069,7 @@ AIRDROP_RAW_AMOUNT="$(json_field data.rawAmount "$AIRDROP_JSON")"
 assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
 log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.txHash "$AIRDROP_JSON")"
 
-USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy)"
+USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy --force)"
 USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"
@@ -1078,9 +1078,9 @@ SAVED_ALIAS="$(toml_field groundhog.toml "profile.$SMOKE_PROFILE.contracts.$PROJ
 [[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
 
-USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call "$PROJECT_NAME" initialize 11)"
+USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call --force "$PROJECT_NAME" initialize 11)"
 assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
-USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call "$PROJECT_NAME" increment 2)"
+USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call --force "$PROJECT_NAME" increment 2)"
 assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
 log "saved-wallet call result: status=$(json_field data.statusSummary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.txHash "$USER_INCREMENT_JSON")"
 
@@ -1109,7 +1109,7 @@ NODE_DESCENDANTS=""
 # above while its backend is offline.
 CHAIN_ARCHIVE="$WORK/chain-dump.json"
 CHAIN_DUMP_JSON="$(run_json "chain dump" "$CLI" --json chain dump \
-    --data-dir "$NODE_DATA_DIR" --output "$CHAIN_ARCHIVE")"
+    --force --data-dir "$NODE_DATA_DIR" --output "$CHAIN_ARCHIVE")"
 [[ "$(json_field command "$CHAIN_DUMP_JSON")" == "chain.dump" ]] \
     || die "chain dump returned the wrong command envelope"
 [[ -s "$CHAIN_ARCHIVE" ]] || die "chain dump did not create an archive"
@@ -1159,7 +1159,7 @@ log "persistent restart recovered counter value: $PERSISTED_VALUE_AFTER"
 # Reading the old value proves the snapshot survived; committing another call
 # also proves the restored databases remain writable and can advance the chain.
 POST_RESTORE_INCREMENT_JSON="$(run_json "increment after chain restore" \
-    "$CLI" --json call "$PROJECT_NAME" increment 1)"
+    "$CLI" --json call --force "$PROJECT_NAME" increment 1)"
 assert_call_succeeded "increment after chain restore" "$POST_RESTORE_INCREMENT_JSON"
 POST_RESTORE_VIEW="$(run_view_json "view after chain restore progress" "$PROJECT_NAME" get)"
 POST_RESTORE_VALUE="$(json_field data.returnValue "$POST_RESTORE_VIEW")"

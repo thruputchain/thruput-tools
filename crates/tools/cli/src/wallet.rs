@@ -1,5 +1,7 @@
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt as _;
 use getrandom::getrandom;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
@@ -13,6 +15,7 @@ use groundhog_signing::{
     wallet_contract_hash, wallet_create_proof_message_v2,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
+use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -24,15 +27,15 @@ use crate::account_resolution::{
     resolve_sender_account,
 };
 use crate::balance::{
-    LocalFundingProjection, confirm_low_faucet_balance, fetch_balance_blocking,
-    insufficient_local_faucet_error, local_funding_projection,
+    LocalFundingProjection, fetch_balance_blocking, insufficient_local_faucet_error,
+    local_funding_projection, low_local_faucet_balance_warning,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     Network, ProfileOverrides, ResolvedProfile, cache_dir, find_project_config,
-    load_global_profile, remove_profile_wallet_address, resolve_default_key_for_profile,
-    resolve_profile, resolve_profile_with_overrides, save_profile_default_wallet,
-    save_profile_wallet_address_with_default,
+    prepare_profile_wallet_removal, remove_prepared_profile_wallet,
+    resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
+    save_profile_default_wallet, save_profile_wallet_address_with_default,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
@@ -50,12 +53,51 @@ use crate::{CliError, Print, dev_keys};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 4;
 const WALLET_CREATE_PREFUND_HOG: &str = "1";
-const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum PreparedWalletCreate {
     Local(PreparedLocalWalletCreate),
     Remote(PreparedRemoteWalletCreate),
+}
+
+#[derive(Debug)]
+enum WalletCreatePlan {
+    Local(Box<LocalWalletCreatePlan>),
+    Remote(Box<RemoteWalletCreatePlan>),
+}
+
+#[derive(Debug)]
+struct LocalWalletCreatePlan {
+    rpc_url: String,
+    profile_name: String,
+    key_name: String,
+    wallet_name: String,
+    faucet_key_name: String,
+    faucet_role: String,
+    owner_public_key: String,
+    artifact_path: PathBuf,
+    wallet_address: String,
+    prefund_raw_amount: u128,
+    faucet_wallet: String,
+    faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    funding_projection: LocalFundingProjection,
+    prefund_transaction: Transaction,
+    create_transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
+#[derive(Debug)]
+struct RemoteWalletCreatePlan {
+    faucet_url: String,
+    rpc_url: String,
+    profile_name: String,
+    key_name: String,
+    wallet_name: String,
+    owner_public_key: String,
+    owner_public_key_xdr: Ed25519PublicKey,
+    owner: LocalSigner,
+    descriptor: NetworkDescriptor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -85,7 +127,7 @@ pub(crate) struct PreparedLocalWalletCreate {
     pub(crate) create_tx_hex: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct PreparedRemoteWalletCreate {
     faucet_url: String,
     rpc_url: String,
@@ -98,10 +140,10 @@ pub(crate) struct PreparedRemoteWalletCreate {
     owner_signature: String,
     network_id: String,
     genesis_hash: String,
-    wallet_contract_hash: String,
     wallet_address: String,
     prefund_raw_amount: String,
     attempt_path: PathBuf,
+    _attempt_lock: File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,10 +192,11 @@ struct RemoteWalletCreateAttempt {
     wallet_address: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 struct LoadedRemoteWalletCreateAttempt {
     attempt: RemoteWalletCreateAttempt,
     path: PathBuf,
+    lock: File,
 }
 
 #[expect(clippy::too_many_arguments, reason = "CLI command boundary")]
@@ -162,7 +205,7 @@ pub fn create(
     wallet_name: Option<&str>,
     dry_run: bool,
     prefund: Option<&str>,
-    yes: bool,
+    force: bool,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
@@ -181,8 +224,21 @@ pub fn create(
     {
         return print_remote_dry_run_plan(&prepared, cmd, print);
     }
+    if !dry_run {
+        print.require_confirmation_available(force, "create a wallet")?;
+    }
 
-    let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, prefund, profile, overrides)?;
+    let plan =
+        prepare_wallet_create_plan(&cwd, key_name, wallet_name, prefund, profile, overrides)?;
+    if !dry_run {
+        print_wallet_create_plan(&plan, print);
+        if !print.confirm(force, "create a wallet", "Create this wallet?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+
+    let prepared = finalize_wallet_create_plan(plan)?;
 
     if dry_run {
         return match &prepared {
@@ -194,10 +250,7 @@ pub fn create(
     }
 
     match prepared {
-        PreparedWalletCreate::Local(prepared) => {
-            preflight_local_wallet_create(&prepared, yes, print)?;
-            create_local_wallet(&cwd, &prepared, cmd, print)
-        }
+        PreparedWalletCreate::Local(prepared) => create_local_wallet(&cwd, &prepared, cmd, print),
         PreparedWalletCreate::Remote(prepared) => create_remote_wallet(&cwd, &prepared, cmd, print),
     }
 }
@@ -254,8 +307,12 @@ fn create_local_wallet(
     print.status(format_args!("Txn: {create_tx_hash}"));
     print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
 
-    print.json(&CommandResult::new(
+    let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
+        .into_iter()
+        .collect();
+    print.json(&CommandResult::with_warnings(
         cmd,
+        warnings,
         json!({
             "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
             "name": prepared.wallet_name,
@@ -277,42 +334,6 @@ fn create_local_wallet(
     ))?;
 
     Ok(())
-}
-
-fn preflight_local_wallet_create(
-    prepared: &PreparedLocalWalletCreate,
-    yes: bool,
-    print: &Print,
-) -> Result<(), CliError> {
-    let Some(projected_balance) = prepared.funding_projection.projected_balance else {
-        return Err(insufficient_local_faucet_error(
-            prepared.prefund_raw_amount,
-            prepared.funding_projection.estimated_max,
-        ));
-    };
-    if projected_balance >= LOW_FAUCET_BALANCE_RAW {
-        return Ok(());
-    }
-
-    print.status(format_args!(
-        "Local faucet: {} ({})",
-        prepared.faucet_key_name, prepared.faucet_wallet
-    ));
-    print.status(format_args!(
-        "Committed balance: {} HOG at block {}",
-        hog::format_amount(prepared.funding_projection.committed_balance),
-        *prepared.faucet_balance_height
-    ));
-    print.status(format_args!(
-        "Requested prefund: {} HOG",
-        hog::format_amount(prepared.prefund_raw_amount)
-    ));
-    print.status(format_args!(
-        "Projected faucet balance: {} HOG",
-        hog::format_amount(projected_balance)
-    ));
-    print.warn("this would leave the local faucet below 10 HOG");
-    confirm_low_faucet_balance(print, yes)
 }
 
 fn create_remote_wallet(
@@ -400,6 +421,66 @@ fn create_remote_wallet(
     ))?;
 
     Ok(())
+}
+
+fn print_wallet_create_plan(plan: &WalletCreatePlan, print: &Print) {
+    match plan {
+        WalletCreatePlan::Local(plan) => {
+            print.detail("key", &plan.key_name);
+            print.detail("wallet", &plan.wallet_name);
+            print.detail("address", &plan.wallet_address);
+            print.detail("profile", &plan.profile_name);
+            print.detail(
+                "prefund",
+                format_args!("{} HOG", hog::format_amount(plan.prefund_raw_amount)),
+            );
+            print.detail("artifact", plan.artifact_path.display());
+            print_low_wallet_faucet_warning(plan, print);
+        }
+        WalletCreatePlan::Remote(plan) => {
+            print.detail("key", &plan.key_name);
+            print.detail("wallet", &plan.wallet_name);
+            print.detail("address", "resolved after confirmation");
+            print.detail("profile", &plan.profile_name);
+            print.detail(
+                "prefund",
+                format_args!(
+                    "{} HOG",
+                    plan.descriptor
+                        .wallet_create
+                        .prefund_raw_amount
+                        .parse::<u128>()
+                        .map_or_else(
+                            |_| plan.descriptor.wallet_create.prefund_raw_amount.clone(),
+                            hog::format_amount,
+                        )
+                ),
+            );
+        }
+    }
+}
+
+fn print_low_wallet_faucet_warning(plan: &LocalWalletCreatePlan, print: &Print) {
+    let Some(projected_balance) = plan.funding_projection.projected_balance else {
+        return;
+    };
+    if low_local_faucet_balance_warning(Some(projected_balance)).is_none() {
+        return;
+    }
+    print.status(format_args!(
+        "Local faucet: {} ({})",
+        plan.faucet_key_name, plan.faucet_wallet
+    ));
+    print.status(format_args!(
+        "Committed balance: {} HOG at block {}",
+        hog::format_amount(plan.funding_projection.committed_balance),
+        *plan.faucet_balance_height
+    ));
+    print.status(format_args!(
+        "Projected faucet balance: {} HOG",
+        hog::format_amount(projected_balance)
+    ));
+    print.warn("this would leave the local faucet below 10 HOG");
 }
 
 fn validate_remote_wallet_create_response(
@@ -501,63 +582,68 @@ fn validate_remote_create_wallet_address(prepared: &str, created: &str) -> Resul
     Ok(())
 }
 
+/// Remove a saved wallet after interactive confirmation or `force` authorization.
 pub fn remove(
     name: &str,
     profile: Option<&str>,
+    force: bool,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    if name.trim().is_empty() {
+        return Err(CliError::EmptyWalletName);
+    }
     let cwd = std::env::current_dir()?;
     let project_root = find_project_config(&cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
-    let resolved_profile = resolve_profile(&project_root, profile)?;
-    let writes_project_profile = find_project_config(&project_root).is_some();
-    let configured_default = if writes_project_profile {
-        crate::config::load_project_profiles(&project_root)?
-            .and_then(|profiles| profiles.get(&resolved_profile.name).cloned())
-            .and_then(|profile| profile.default_wallet)
-    } else {
-        resolved_profile.default_wallet.clone()
-    };
+    let prepared_removal = prepare_profile_wallet_removal(&project_root, profile, name)?;
+    let profile_name = prepared_removal.profile_name().to_owned();
+    let target_profile = prepared_removal.profile();
+    let inherited_profile = prepared_removal.inherited_profile();
+    let writes_project_profile = prepared_removal.writes_project_profile();
+    let configured_default = target_profile.default_wallet.clone();
     let cleared_default = configured_default.as_deref() == Some(name.trim());
-    let inherited_profile = if writes_project_profile {
-        load_global_profile(&resolved_profile.name)?
-    } else {
-        None
-    };
     let removes_inherited_default = writes_project_profile
         && configured_default.is_none()
-        && resolved_profile.default_wallet.as_deref() == Some(name.trim());
+        && inherited_profile.and_then(|profile| profile.default_wallet.as_deref())
+            == Some(name.trim());
     if removes_inherited_default {
         return Err(CliError::InheritedDefaultWalletRemoval {
             wallet_name: name.trim().to_owned(),
-            profile: resolved_profile.name,
+            profile: profile_name,
         });
     }
     if cleared_default
-        && let Some(inherited_wallet) = inherited_profile
-            .as_ref()
-            .and_then(|profile| profile.default_wallet.as_deref())
+        && let Some(inherited_wallet) =
+            inherited_profile.and_then(|profile| profile.default_wallet.as_deref())
     {
         let remains_saved = if inherited_wallet == name.trim() {
-            inherited_profile
-                .as_ref()
-                .is_some_and(|profile| profile.wallets.contains_key(inherited_wallet))
+            inherited_profile.is_some_and(|profile| profile.wallets.contains_key(inherited_wallet))
         } else {
-            resolved_profile.wallets.contains_key(inherited_wallet)
+            target_profile.wallets.contains_key(inherited_wallet)
+                || inherited_profile
+                    .is_some_and(|profile| profile.wallets.contains_key(inherited_wallet))
         };
         if !remains_saved {
             return Err(CliError::WalletRemovalExposesMissingDefault {
                 wallet_name: name.trim().to_owned(),
                 inherited_wallet: inherited_wallet.to_owned(),
-                profile: resolved_profile.name,
+                profile: profile_name,
             });
         }
     }
-    remove_profile_wallet_address(&project_root, Some(&resolved_profile.name), name)?;
-    let effective_default_wallet =
-        resolve_profile(&project_root, Some(&resolved_profile.name))?.default_wallet;
+    let effective_default_wallet = if cleared_default {
+        inherited_profile.and_then(|profile| profile.default_wallet.clone())
+    } else {
+        configured_default
+            .or_else(|| inherited_profile.and_then(|profile| profile.default_wallet.clone()))
+    };
+    if !confirm_wallet_removal(name, &profile_name, force, print)? {
+        print.note("Cancelled");
+        return Ok(());
+    }
+    remove_prepared_profile_wallet(prepared_removal)?;
 
     print.status(format_args!("Removed wallet `{}`.", name.trim()));
     if cleared_default
@@ -565,21 +651,33 @@ pub fn remove(
         && let Some(wallet_name) = effective_default_wallet.as_deref()
     {
         print.warn(format_args!(
-            "profile `{}` now inherits default wallet `{wallet_name}` from global config",
-            resolved_profile.name
+            "profile `{profile_name}` now inherits default wallet `{wallet_name}` from global config"
         ));
     }
     print.json(&CommandResult::new(
         cmd,
         json!({
             "name": name.trim(),
-            "profile": resolved_profile.name,
+            "profile": profile_name,
             "clearedConfiguredDefault": cleared_default,
             "effectiveDefaultWallet": effective_default_wallet,
         }),
     ))?;
 
     Ok(())
+}
+
+fn confirm_wallet_removal(
+    name: &str,
+    profile: &str,
+    force: bool,
+    print: &Print,
+) -> Result<bool, CliError> {
+    print.confirm(
+        force,
+        "remove a saved wallet",
+        format_args!("Remove wallet `{}` from profile `{profile}`?", name.trim()),
+    )
 }
 
 pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(), CliError> {
@@ -756,14 +854,14 @@ fn wallet_funding_command(wallet_name: &str, profile_name: &str) -> String {
     format!("groundhog airdrop {profile} -- {wallet}")
 }
 
-pub(crate) fn prepare_wallet_create(
+fn prepare_wallet_create_plan(
     cwd: &Path,
     key_name: Option<&str>,
     wallet_name: Option<&str>,
     prefund: Option<&str>,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
-) -> Result<PreparedWalletCreate, CliError> {
+) -> Result<WalletCreatePlan, CliError> {
     let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
     let profile = inputs.profile;
     let key_name = inputs.key_name;
@@ -777,7 +875,7 @@ pub(crate) fn prepare_wallet_create(
                         .into(),
                 ));
             }
-            prepare_remote_wallet_create(&profile, key_name, wallet_name)
+            prepare_remote_wallet_create_plan(&profile, key_name, wallet_name)
         }
         ProfileBackend::LocalManifest => {
             let prefund_raw_amount = parse_local_wallet_prefund(prefund)?;
@@ -991,7 +1089,7 @@ fn prepare_local_wallet_create(
     key_name: String,
     wallet_name: String,
     prefund_raw_amount: u128,
-) -> Result<PreparedWalletCreate, CliError> {
+) -> Result<WalletCreatePlan, CliError> {
     let rpc_url = profile
         .rpc_url
         .as_deref()
@@ -1051,28 +1149,24 @@ fn prepare_local_wallet_create(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(&rpc_url).await })?;
-    let prefund_tx_hex = sign_wallet_prefund_transaction(&SignWalletPrefundTransaction {
+    let prefund_transaction = build_wallet_prefund_transaction(&WalletPrefundTransaction {
         faucet_wallet_address: faucet.wallet_address,
         wallet_entrypoint: wallet_do_action_entrypoint,
         recipient: wallet_address,
         raw_amount: prefund_raw_amount,
         block_expiry_height,
         nonce: deploy_nonce_val,
-        signer: &faucet.signer,
-        network_hash: &faucet.network_hash,
     })?;
-    let create_tx_hex = sign_create_wallet_transaction(SignCreateWalletTransaction {
+    let create_transaction = build_create_wallet_transaction(CreateWalletTransaction {
         faucet_wallet_address: faucet.wallet_address,
         create_wallet_entrypoint,
         create_calldata,
         block_expiry_height,
         nonce: deploy_nonce_val.saturating_add(1),
         contract,
-        signer: &faucet.signer,
-        network_hash: &faucet.network_hash,
-    })?;
+    });
 
-    Ok(PreparedWalletCreate::Local(PreparedLocalWalletCreate {
+    Ok(WalletCreatePlan::Local(Box::new(LocalWalletCreatePlan {
         rpc_url,
         profile_name: profile.name,
         key_name,
@@ -1086,89 +1180,56 @@ fn prepare_local_wallet_create(
         faucet_wallet,
         faucet_balance_height,
         funding_projection,
-        prefund_tx_hex,
-        create_tx_hex,
-    }))
+        prefund_transaction,
+        create_transaction,
+        signer: faucet.signer,
+        network_hash: faucet.network_hash,
+    })))
 }
 
-fn prepare_remote_wallet_create(
+fn prepare_remote_wallet_create_plan(
     profile: &crate::config::ResolvedProfile,
     key_name: String,
     wallet_name: String,
-) -> Result<PreparedWalletCreate, CliError> {
-    let faucet_url = profile
-        .faucet_url
-        .as_deref()
-        .ok_or_else(|| CliError::Other("remote wallet creation requires faucet_url".into()))?
-        .trim_end_matches('/')
-        .to_owned();
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+) -> Result<WalletCreatePlan, CliError> {
     let owner = load_local_signer(&key_name)?;
+    let descriptor = fetch_network_descriptor(profile, &key_name)?;
+    build_remote_wallet_create_plan(profile, key_name, wallet_name, owner, descriptor)
+}
+
+fn build_remote_wallet_create_plan(
+    profile: &ResolvedProfile,
+    key_name: String,
+    wallet_name: String,
+    owner: LocalSigner,
+    descriptor: NetworkDescriptor,
+) -> Result<WalletCreatePlan, CliError> {
     let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
     let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
-
-    let descriptor = fetch_network_descriptor(profile, &key_name)?;
-    let loaded_attempt = load_or_create_remote_wallet_create_attempt(
-        profile,
-        &key_name,
-        &wallet_name,
-        &owner_public_key,
-        &descriptor,
-    )?;
-    let attempt = loaded_attempt.attempt;
-    let deploy_nonce = parse_sha256_hash(&attempt.deploy_nonce)?;
-    let client_nonce = parse_hex_bytes(&attempt.client_nonce)?;
-    let wallet_address = parse_contract_address(&attempt.wallet_address)?;
-    let proof_message = wallet_create_proof_message_v2(&WalletCreateProofV2 {
-        network_id: &attempt.network_id,
-        genesis_hash: descriptor.genesis_hash.0,
-        faucet_wallet_address: descriptor.faucet.wallet_address.0,
-        wallet_contract_hash: descriptor.wallet_create.wallet_contract_hash.0,
-        owner_public_key: owner_public_key_xdr,
-        deploy_nonce,
-        wallet_address,
-        client_nonce: &client_nonce,
-    })
-    .map_err(|error| CliError::Other(error.to_string()))?;
-    let owner_signature = match owner
-        .sign(&proof_message)
-        .map_err(|error| CliError::Other(error.to_string()))?
-    {
-        groundhog_xdr::types::Signature::Ed25519 { ed25519 } => {
-            format!("0x{}", hex::encode(ed25519.as_ref()))
-        }
-        _ => {
-            return Err(CliError::Other(
-                "local signer produced unsupported signature".into(),
-            ));
-        }
-    };
-
-    Ok(PreparedWalletCreate::Remote(PreparedRemoteWalletCreate {
-        faucet_url,
-        rpc_url,
+    Ok(WalletCreatePlan::Remote(Box::new(RemoteWalletCreatePlan {
+        faucet_url: profile
+            .faucet_url
+            .as_deref()
+            .ok_or_else(|| CliError::Other("remote wallet creation requires faucet_url".into()))?
+            .trim_end_matches('/')
+            .to_owned(),
+        rpc_url: profile
+            .rpc_url
+            .as_deref()
+            .ok_or(CliError::MissingRpcUrl)?
+            .to_owned(),
         profile_name: profile.name.clone(),
         key_name,
         wallet_name,
         owner_public_key,
-        deploy_nonce: attempt.deploy_nonce,
-        client_nonce: attempt.client_nonce,
-        owner_signature,
-        network_id: attempt.network_id,
-        genesis_hash: attempt.genesis_hash,
-        wallet_contract_hash: attempt.wallet_contract_hash,
-        wallet_address: attempt.wallet_address,
-        prefund_raw_amount: descriptor.wallet_create.prefund_raw_amount,
-        attempt_path: loaded_attempt.path,
-    }))
+        owner_public_key_xdr,
+        owner,
+        descriptor,
+    })))
 }
 
 fn load_or_create_remote_wallet_create_attempt(
-    profile: &crate::config::ResolvedProfile,
+    profile_name: &str,
     key_name: &str,
     wallet_name: &str,
     owner_public_key: &str,
@@ -1178,22 +1239,30 @@ fn load_or_create_remote_wallet_create_attempt(
     let genesis_hash = format_sha256_hash(&descriptor.genesis_hash.0);
     let wallet_contract_hash = format_sha256_hash(&descriptor.wallet_create.wallet_contract_hash.0);
     let path = remote_wallet_create_attempt_path(
-        &profile.name,
+        profile_name,
         key_name,
         wallet_name,
         &network_id,
         &genesis_hash,
     )?;
+    let lock = lock_remote_wallet_create_attempt(&path)?;
     if let Some(attempt) = read_remote_wallet_create_attempt(&path)?
-        && attempt.profile == profile.name
-        && attempt.key_name == key_name
-        && attempt.wallet_name == wallet_name
-        && attempt.network_id == network_id
-        && attempt.genesis_hash == genesis_hash
-        && attempt.owner_public_key == owner_public_key
-        && attempt.wallet_contract_hash == wallet_contract_hash
+        && remote_wallet_create_attempt_matches(
+            &attempt,
+            profile_name,
+            key_name,
+            wallet_name,
+            owner_public_key,
+            &network_id,
+            &genesis_hash,
+            &wallet_contract_hash,
+        )
     {
-        return Ok(LoadedRemoteWalletCreateAttempt { attempt, path });
+        return Ok(LoadedRemoteWalletCreateAttempt {
+            attempt,
+            path,
+            lock,
+        });
     }
 
     let mut deploy_nonce_bytes = [0u8; 32];
@@ -1208,7 +1277,7 @@ fn load_or_create_remote_wallet_create_attempt(
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
     let attempt = RemoteWalletCreateAttempt {
-        profile: profile.name.clone(),
+        profile: profile_name.to_owned(),
         key_name: key_name.to_owned(),
         wallet_name: wallet_name.to_owned(),
         network_id,
@@ -1220,7 +1289,104 @@ fn load_or_create_remote_wallet_create_attempt(
         wallet_address: format_contract_address(&wallet_address),
     };
     write_remote_wallet_create_attempt(&path, &attempt)?;
-    Ok(LoadedRemoteWalletCreateAttempt { attempt, path })
+    Ok(LoadedRemoteWalletCreateAttempt {
+        attempt,
+        path,
+        lock,
+    })
+}
+
+fn finalize_wallet_create_plan(plan: WalletCreatePlan) -> Result<PreparedWalletCreate, CliError> {
+    match plan {
+        WalletCreatePlan::Local(plan) => {
+            let prefund_tx_hex = sign_and_encode_transaction_hex(
+                plan.prefund_transaction,
+                &plan.signer,
+                SignTransactionParams::default(),
+                &plan.network_hash,
+            )
+            .map_err(|error| CliError::Other(error.to_string()))?;
+            let create_tx_hex = sign_and_encode_transaction_hex(
+                plan.create_transaction,
+                &plan.signer,
+                SignTransactionParams::default(),
+                &plan.network_hash,
+            )
+            .map_err(|error| CliError::Other(error.to_string()))?;
+            Ok(PreparedWalletCreate::Local(PreparedLocalWalletCreate {
+                rpc_url: plan.rpc_url,
+                profile_name: plan.profile_name,
+                key_name: plan.key_name,
+                wallet_name: plan.wallet_name,
+                faucet_key_name: plan.faucet_key_name,
+                faucet_role: plan.faucet_role,
+                owner_public_key: plan.owner_public_key,
+                artifact_path: plan.artifact_path,
+                wallet_address: plan.wallet_address,
+                prefund_raw_amount: plan.prefund_raw_amount,
+                faucet_wallet: plan.faucet_wallet,
+                faucet_balance_height: plan.faucet_balance_height,
+                funding_projection: plan.funding_projection,
+                prefund_tx_hex,
+                create_tx_hex,
+            }))
+        }
+        WalletCreatePlan::Remote(plan) => {
+            let loaded_attempt = load_or_create_remote_wallet_create_attempt(
+                &plan.profile_name,
+                &plan.key_name,
+                &plan.wallet_name,
+                &plan.owner_public_key,
+                &plan.descriptor,
+            )?;
+            let attempt = loaded_attempt.attempt;
+            let deploy_nonce = parse_sha256_hash(&attempt.deploy_nonce)?;
+            let client_nonce = parse_hex_bytes(&attempt.client_nonce)?;
+            let wallet_address = parse_contract_address(&attempt.wallet_address)?;
+            let proof_message = wallet_create_proof_message_v2(&WalletCreateProofV2 {
+                network_id: &attempt.network_id,
+                genesis_hash: plan.descriptor.genesis_hash.0,
+                faucet_wallet_address: plan.descriptor.faucet.wallet_address.0,
+                wallet_contract_hash: plan.descriptor.wallet_create.wallet_contract_hash.0,
+                owner_public_key: plan.owner_public_key_xdr,
+                deploy_nonce,
+                wallet_address,
+                client_nonce: &client_nonce,
+            })
+            .map_err(|error| CliError::Other(error.to_string()))?;
+            let owner_signature = match plan
+                .owner
+                .sign(&proof_message)
+                .map_err(|error| CliError::Other(error.to_string()))?
+            {
+                groundhog_xdr::types::Signature::Ed25519 { ed25519 } => {
+                    format!("0x{}", hex::encode(ed25519.as_ref()))
+                }
+                _ => {
+                    return Err(CliError::Other(
+                        "local signer produced unsupported signature".into(),
+                    ));
+                }
+            };
+            Ok(PreparedWalletCreate::Remote(PreparedRemoteWalletCreate {
+                faucet_url: plan.faucet_url,
+                rpc_url: plan.rpc_url,
+                profile_name: plan.profile_name,
+                key_name: plan.key_name,
+                wallet_name: plan.wallet_name,
+                owner_public_key: plan.owner_public_key,
+                deploy_nonce: attempt.deploy_nonce,
+                client_nonce: attempt.client_nonce,
+                owner_signature,
+                network_id: attempt.network_id,
+                genesis_hash: attempt.genesis_hash,
+                wallet_address: attempt.wallet_address,
+                prefund_raw_amount: plan.descriptor.wallet_create.prefund_raw_amount,
+                attempt_path: loaded_attempt.path,
+                _attempt_lock: loaded_attempt.lock,
+            }))
+        }
+    }
 }
 
 fn read_remote_wallet_create_attempt(
@@ -1247,6 +1413,59 @@ fn write_remote_wallet_create_attempt(
         serde_json::to_vec_pretty(attempt).map_err(|error| CliError::Other(error.to_string()))?;
     std::fs::write(path, contents)?;
     Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "attempt identity is intentionally explicit"
+)]
+fn remote_wallet_create_attempt_matches(
+    attempt: &RemoteWalletCreateAttempt,
+    profile_name: &str,
+    key_name: &str,
+    wallet_name: &str,
+    owner_public_key: &str,
+    network_id: &str,
+    genesis_hash: &str,
+    wallet_contract_hash: &str,
+) -> bool {
+    attempt.profile == profile_name
+        && attempt.key_name == key_name
+        && attempt.wallet_name == wallet_name
+        && attempt.network_id == network_id
+        && attempt.genesis_hash == genesis_hash
+        && attempt.owner_public_key == owner_public_key
+        && attempt.wallet_contract_hash == wallet_contract_hash
+}
+
+fn lock_remote_wallet_create_attempt(attempt_path: &Path) -> Result<File, CliError> {
+    let parent = attempt_path
+        .parent()
+        .ok_or_else(|| CliError::Other("wallet-create attempt path has no parent".into()))?;
+    std::fs::create_dir_all(parent)?;
+    let lock_path = attempt_path.with_extension("lock");
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path)?;
+    file.try_lock_exclusive().map_err(|error| {
+        let contended = fs2::lock_contended_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock
+            || error.raw_os_error() == contended.raw_os_error()
+        {
+            CliError::Other(format!(
+                "another wallet-create command is already running for this profile, key, wallet, and network ({})",
+                lock_path.display()
+            ))
+        } else {
+            error.into()
+        }
+    })?;
+    Ok(file)
 }
 
 fn remove_remote_wallet_create_attempt(
@@ -1293,28 +1512,22 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, CliError> {
     hex::decode(value).map_err(|error| CliError::Other(error.to_string()))
 }
 
-struct SignWalletPrefundTransaction<'a> {
+struct WalletPrefundTransaction {
     faucet_wallet_address: ContractAddress,
     wallet_entrypoint: ContractEntrypointID,
     recipient: ContractAddress,
     raw_amount: u128,
     block_expiry_height: i64,
     nonce: u64,
-    signer: &'a LocalSigner,
-    /// Network the signature is bound to.
-    network_hash: &'a NetworkHash,
 }
 
-struct SignCreateWalletTransaction<'a> {
+struct CreateWalletTransaction {
     faucet_wallet_address: ContractAddress,
     create_wallet_entrypoint: ContractEntrypointID,
     create_calldata: Vec<u8>,
     block_expiry_height: i64,
     nonce: u64,
     contract: Contract,
-    signer: &'a LocalSigner,
-    /// Network the signature is bound to.
-    network_hash: &'a NetworkHash,
 }
 
 fn load_dev_wallet_contract(
@@ -1344,10 +1557,8 @@ fn deploy_nonce_from_u64(nonce: u64) -> SHA256Hash {
     SHA256Hash::from(bytes)
 }
 
-fn sign_create_wallet_transaction(
-    args: SignCreateWalletTransaction<'_>,
-) -> Result<String, CliError> {
-    let create_tx = build_deploy_transaction(BuildDeployTransaction {
+fn build_create_wallet_transaction(args: CreateWalletTransaction) -> Transaction {
+    build_deploy_transaction(BuildDeployTransaction {
         invoked_address: args.faucet_wallet_address,
         entrypoint: args.create_wallet_entrypoint,
         calldata: args.create_calldata,
@@ -1356,23 +1567,16 @@ fn sign_create_wallet_transaction(
         nonce: args.nonce,
         contracts_to_deploy: VecM(vec![args.contract]),
         auth_claim: source_address_auth_claim(),
-    });
-    sign_and_encode_transaction_hex(
-        create_tx,
-        args.signer,
-        SignTransactionParams::default(),
-        args.network_hash,
-    )
-    .map_err(|error| CliError::Other(error.to_string()))
+    })
 }
 
-fn sign_wallet_prefund_transaction(
-    args: &SignWalletPrefundTransaction<'_>,
-) -> Result<String, CliError> {
+fn build_wallet_prefund_transaction(
+    args: &WalletPrefundTransaction,
+) -> Result<Transaction, CliError> {
     let hog_address = hog::token_address();
     let transfer_entrypoint = hog::transfer_entrypoint();
     let transfer_calldata = hog::encode_transfer_calldata(&args.recipient, args.raw_amount)?;
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+    build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
         wallet_address: args.faucet_wallet_address,
         wallet_entrypoint: args.wallet_entrypoint,
         target_address: hog_address,
@@ -1383,13 +1587,6 @@ fn sign_wallet_prefund_transaction(
         block_expiry_height: args.block_expiry_height,
         nonce: args.nonce,
     })
-    .map_err(|error| CliError::Other(error.to_string()))?;
-    sign_and_encode_transaction_hex(
-        tx,
-        args.signer,
-        SignTransactionParams::default(),
-        args.network_hash,
-    )
     .map_err(|error| CliError::Other(error.to_string()))
 }
 
@@ -1444,13 +1641,14 @@ mod tests {
     use serial_test::serial;
 
     use super::{
-        PreparedRemoteWalletCreate, RemoteWalletCreateAttempt,
-        load_or_create_remote_wallet_create_attempt, parse_local_wallet_prefund,
-        read_remote_wallet_create_attempt, remote_wallet_create_attempt_path,
-        remove_remote_wallet_create_attempt, resolve_dev_wallet_artifact_path,
-        resolve_wallet_create_backend, resolve_wallet_create_inputs,
-        validate_remote_create_wallet_address, validate_remote_wallet_prefund_amount,
-        wallet_funding_command, wallet_should_become_default, write_remote_wallet_create_attempt,
+        PreparedRemoteWalletCreate, RemoteWalletCreateAttempt, build_remote_wallet_create_plan,
+        load_or_create_remote_wallet_create_attempt, lock_remote_wallet_create_attempt,
+        parse_local_wallet_prefund, read_remote_wallet_create_attempt,
+        remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
+        resolve_dev_wallet_artifact_path, resolve_wallet_create_backend,
+        resolve_wallet_create_inputs, validate_remote_create_wallet_address,
+        validate_remote_wallet_prefund_amount, wallet_funding_command,
+        wallet_should_become_default, write_remote_wallet_create_attempt,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
 
@@ -1843,7 +2041,7 @@ mod tests {
         let owner_public_key = format!("0x{}", "11".repeat(32));
 
         let loaded = load_or_create_remote_wallet_create_attempt(
-            &profile,
+            &profile.name,
             "alice",
             "main",
             &owner_public_key,
@@ -1884,15 +2082,18 @@ mod tests {
         let owner_public_key = format!("0x{}", "11".repeat(32));
 
         let first = load_or_create_remote_wallet_create_attempt(
-            &profile,
+            &profile.name,
             "alice",
             "main",
             &owner_public_key,
             &descriptor,
         )
         .expect("bug: attempt should be created");
+        let first_path = first.path.clone();
+        let first_attempt = first.attempt.clone();
+        drop(first);
         let second = load_or_create_remote_wallet_create_attempt(
-            &profile,
+            &profile.name,
             "alice",
             "main",
             &owner_public_key,
@@ -1900,8 +2101,61 @@ mod tests {
         )
         .expect("bug: attempt should be reused");
 
-        assert_eq!(second.path, first.path);
-        assert_eq!(second.attempt, first.attempt);
+        assert_eq!(second.path, first_path);
+        assert_eq!(second.attempt, first_attempt);
+    }
+
+    #[test]
+    #[serial]
+    fn cancelled_remote_wallet_create_preview_leaves_no_cache_state() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let profile = test_profile();
+        let descriptor = test_network_descriptor();
+        let owner = groundhog_signing::LocalSigner::from_secret_key([0x11; 32]);
+
+        let preview = build_remote_wallet_create_plan(
+            &profile,
+            "alice".into(),
+            "main".into(),
+            owner,
+            descriptor,
+        )
+        .expect("bug: preview should be built");
+        drop(preview);
+
+        assert!(!tmp.path().join("groundhog").exists());
+    }
+
+    #[test]
+    #[serial]
+    fn concurrent_confirmed_remote_wallet_creates_fail_safely() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let profile = test_profile();
+        let descriptor = test_network_descriptor();
+        let owner_public_key = format!("0x{}", "11".repeat(32));
+
+        let first = load_or_create_remote_wallet_create_attempt(
+            &profile.name,
+            "alice",
+            "main",
+            &owner_public_key,
+            &descriptor,
+        )
+        .expect("bug: canonical attempt should be created");
+
+        let error = load_or_create_remote_wallet_create_attempt(
+            &profile.name,
+            "alice",
+            "main",
+            &owner_public_key,
+            &descriptor,
+        )
+        .expect_err("bug: concurrent attempt should not proceed");
+
+        assert!(error.to_string().contains("already running"));
+        assert!(first.path.is_file());
     }
 
     #[test]
@@ -1936,7 +2190,7 @@ mod tests {
             .expect("bug: stale attempt should be written");
 
         let loaded = load_or_create_remote_wallet_create_attempt(
-            &profile,
+            &profile.name,
             "alice",
             "main",
             &owner_public_key,
@@ -2058,6 +2312,8 @@ mod tests {
     }
 
     fn test_prepared_remote_wallet_create(attempt_path: PathBuf) -> PreparedRemoteWalletCreate {
+        let attempt_lock = lock_remote_wallet_create_attempt(&attempt_path)
+            .expect("bug: test attempt lock should be acquired");
         PreparedRemoteWalletCreate {
             faucet_url: "https://faucet.devnet.example".into(),
             rpc_url: "https://rpc.devnet.example".into(),
@@ -2070,10 +2326,10 @@ mod tests {
             owner_signature: format!("0x{}", "44".repeat(64)),
             network_id: "devnet-preview".into(),
             genesis_hash: format!("0x{}", "01".repeat(32)),
-            wallet_contract_hash: format!("0x{}", "03".repeat(32)),
             wallet_address: format!("0x{}", "55".repeat(32)),
             prefund_raw_amount: "100000000".into(),
             attempt_path,
+            _attempt_lock: attempt_lock,
         }
     }
 }
