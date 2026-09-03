@@ -216,7 +216,7 @@ impl MyContract {
     }
 
     pub fn get_balance(&self) -> u64 {
-        self.balance.try_get().unwrap_or(0) as u64
+        self.balance.try_get().none_if_missing().unwrap_or(0) as u64
     }
 }
 ```
