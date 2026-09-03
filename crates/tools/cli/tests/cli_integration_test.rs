@@ -499,6 +499,58 @@ fn help_shows_subcommands() {
         );
     }
     assert!(stdout.contains("completion"));
+    assert!(stdout.contains("--skill"));
+}
+
+#[test]
+fn skill_flag_prints_release_matched_markdown_outside_a_project() {
+    let directory = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--skill")
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("---\nname: groundhog\n"));
+    assert!(stdout.contains(&format!(
+        "<!-- groundhog-cli-version: {} -->",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!stdout.contains("{{GROUNDHOG_CLI_VERSION}}"));
+    assert!(stdout.ends_with('\n'));
+    assert!(!stdout.ends_with("\n\n"));
+}
+
+#[test]
+fn skill_flag_rejects_commands_and_output_modifiers() {
+    for arguments in [
+        &["--skill", "status"][..],
+        &["--skill", "--json"][..],
+        &["--skill", "--quiet"][..],
+    ] {
+        let output = groundhog().args(arguments).output().unwrap();
+
+        assert!(!output.status.success(), "arguments {arguments:?}");
+        assert!(output.stdout.is_empty(), "arguments {arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            "arguments {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn bare_cli_still_requires_an_action() {
+    let output = groundhog().output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
 }
 
 #[test]
@@ -8191,6 +8243,7 @@ fn completion_json_outputs_structured_payload() {
     assert_eq!(stdout["data"]["shell"], "bash");
     let script = stdout["data"]["script"].as_str().unwrap();
     assert!(script.contains("groundhog"));
+    assert!(script.contains("--skill"));
     assert!(script.contains("--version"));
 }
 
