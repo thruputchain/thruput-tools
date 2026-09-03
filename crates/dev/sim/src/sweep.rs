@@ -33,48 +33,6 @@ impl SweepReport {
     }
 }
 
-/// A frozen set of sweep candidates and scan results.
-pub struct SweepPlan {
-    root: String,
-    entries: Vec<PlannedSweepEntry>,
-}
-
-enum PlannedSweepEntry {
-    Report(SweepEntry),
-    Candidate {
-        run_dir: std::path::PathBuf,
-        process: OwnedProcess,
-    },
-}
-
-impl SweepPlan {
-    /// Return the candidates that require explicit authorization.
-    pub fn candidates(&self) -> impl Iterator<Item = (&Path, &OwnedProcess)> {
-        self.entries.iter().filter_map(|entry| match entry {
-            PlannedSweepEntry::Candidate { run_dir, process } => Some((run_dir.as_path(), process)),
-            PlannedSweepEntry::Report(_) => None,
-        })
-    }
-
-    /// Render the plan without signaling any process.
-    pub fn dry_run_report(&self) -> SweepReport {
-        SweepReport {
-            schema_version: SWEEP_REPORT_SCHEMA_VERSION,
-            root: self.root.clone(),
-            entries: self
-                .entries
-                .iter()
-                .map(|entry| match entry {
-                    PlannedSweepEntry::Report(entry) => entry.clone(),
-                    PlannedSweepEntry::Candidate { run_dir, process } => {
-                        SweepEntry::dry_run(run_dir, process)
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Per-run sweeper classification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,26 +129,21 @@ struct RealSweepOps;
 
 /// Scan `root` for simulator-owned local targets and optionally reclaim them.
 pub fn sweep_runs(root: &Path, dry_run: bool) -> Result<SweepReport, SimError> {
-    let plan = plan_sweep(root)?;
-    if dry_run {
-        Ok(plan.dry_run_report())
-    } else {
-        execute_sweep_plan(plan)
-    }
+    sweep_runs_with_ops(root, dry_run, &RealSweepOps)
 }
 
-/// Scan and validate reclaimable processes without signaling them.
-pub fn plan_sweep(root: &Path) -> Result<SweepPlan, SimError> {
-    plan_sweep_with_ops(root, &RealSweepOps)
-}
-
-fn plan_sweep_with_ops(root: &Path, ops: &dyn SweepOps) -> Result<SweepPlan, SimError> {
-    let mut plan = SweepPlan {
+fn sweep_runs_with_ops(
+    root: &Path,
+    dry_run: bool,
+    ops: &dyn SweepOps,
+) -> Result<SweepReport, SimError> {
+    let mut report = SweepReport {
+        schema_version: SWEEP_REPORT_SCHEMA_VERSION,
         root: root.display().to_string(),
         entries: Vec::new(),
     };
     if !root.exists() {
-        return Ok(plan);
+        return Ok(report);
     }
 
     let mut run_dirs = Vec::new();
@@ -198,11 +151,10 @@ fn plan_sweep_with_ops(root: &Path, ops: &dyn SweepOps) -> Result<SweepPlan, Sim
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
-                plan.entries
-                    .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                        root,
-                        format!("directory entry unreadable: {error}"),
-                    )));
+                report.entries.push(SweepEntry::skipped(
+                    root,
+                    format!("directory entry unreadable: {error}"),
+                ));
                 continue;
             }
         };
@@ -210,12 +162,10 @@ fn plan_sweep_with_ops(root: &Path, ops: &dyn SweepOps) -> Result<SweepPlan, Sim
         match entry.file_type() {
             Ok(file_type) if file_type.is_dir() => run_dirs.push(path),
             Ok(_) => {}
-            Err(error) => plan
-                .entries
-                .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                    &path,
-                    format!("directory entry unreadable: {error}"),
-                ))),
+            Err(error) => report.entries.push(SweepEntry::skipped(
+                &path,
+                format!("directory entry unreadable: {error}"),
+            )),
         }
     }
     run_dirs.sort();
@@ -229,92 +179,51 @@ fn plan_sweep_with_ops(root: &Path, ops: &dyn SweepOps) -> Result<SweepPlan, Sim
         let ownership = match read_ownership(&ownership_path) {
             Ok(ownership) => ownership,
             Err(error) => {
-                plan.entries
-                    .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                        &run_dir,
-                        format!("ownership unreadable: {error}"),
-                    )));
+                report.entries.push(SweepEntry::skipped(
+                    &run_dir,
+                    format!("ownership unreadable: {error}"),
+                ));
                 continue;
             }
         };
         let Some(process) = reclaimable_process(&ownership) else {
-            plan.entries
-                .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                    &run_dir,
-                    "not a reclaimable simulator-owned local target",
-                )));
+            report.entries.push(SweepEntry::skipped(
+                &run_dir,
+                "not a reclaimable simulator-owned local target",
+            ));
             continue;
         };
         if !ps_available {
-            plan.entries
-                .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                    &run_dir,
-                    "`ps` not available",
-                )));
+            report
+                .entries
+                .push(SweepEntry::skipped(&run_dir, "`ps` not available"));
             continue;
         }
         match validate_process(process, ops) {
-            Ok(ProcessValidation::Valid) => plan.entries.push(PlannedSweepEntry::Candidate {
-                run_dir,
-                process: process.clone(),
-            }),
-            Ok(ProcessValidation::Skipped(reason)) => {
-                plan.entries
-                    .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                        &run_dir, reason,
-                    )));
+            Ok(ProcessValidation::Valid) if dry_run => {
+                report.entries.push(SweepEntry::dry_run(&run_dir, process));
             }
-            Err(error) => {
-                plan.entries
-                    .push(PlannedSweepEntry::Report(SweepEntry::skipped(
-                        &run_dir,
-                        format!("process validation failed: {error}"),
-                    )));
-            }
-        }
-    }
-
-    Ok(plan)
-}
-
-/// Revalidate and terminate exactly the candidates captured by `plan_sweep`.
-pub fn execute_sweep_plan(plan: SweepPlan) -> Result<SweepReport, SimError> {
-    Ok(execute_sweep_plan_with_ops(plan, &RealSweepOps))
-}
-
-fn execute_sweep_plan_with_ops(plan: SweepPlan, ops: &dyn SweepOps) -> SweepReport {
-    let mut report = SweepReport {
-        schema_version: SWEEP_REPORT_SCHEMA_VERSION,
-        root: plan.root,
-        entries: Vec::with_capacity(plan.entries.len()),
-    };
-    for entry in plan.entries {
-        let PlannedSweepEntry::Candidate { run_dir, process } = entry else {
-            let PlannedSweepEntry::Report(entry) = entry else {
-                unreachable!("bug: candidate handled above")
-            };
-            report.entries.push(entry);
-            continue;
-        };
-        match validate_process(&process, ops) {
-            Ok(ProcessValidation::Valid) => match ops.terminate_process_group(&process) {
+            Ok(ProcessValidation::Valid) => match ops.terminate_process_group(process) {
                 Ok(()) => report
                     .entries
-                    .push(SweepEntry::reclaimed(&run_dir, &process)),
+                    .push(SweepEntry::reclaimed(&run_dir, process)),
                 Err(error) => report
                     .entries
-                    .push(SweepEntry::failed(&run_dir, &process, error)),
+                    .push(SweepEntry::failed(&run_dir, process, error)),
             },
             Ok(ProcessValidation::Skipped(reason)) => {
                 report.entries.push(SweepEntry::skipped(&run_dir, reason));
             }
-            Err(error) => report.entries.push(SweepEntry::skipped(
-                &run_dir,
-                format!("process revalidation failed: {error}"),
-            )),
+            Err(error) => {
+                report.entries.push(SweepEntry::skipped(
+                    &run_dir,
+                    format!("process validation failed: {error}"),
+                ));
+            }
         }
     }
-    report
+
+    Ok(report)
 }
 
 fn read_ownership(path: &Path) -> Result<TargetOwnership, String> {
@@ -574,23 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_report_identifies_reclaimable_candidates() {
-        let plan = SweepPlan {
-            root: "hogsim-runs".into(),
-            entries: vec![PlannedSweepEntry::Candidate {
-                run_dir: Path::new("hogsim-runs/a").into(),
-                process: owned_process(),
-            }],
-        };
-
-        assert_eq!(plan.candidates().count(), 1);
-        assert_eq!(
-            plan.dry_run_report().entries[0].reason.as_deref(),
-            Some("dry run: would reclaim")
-        );
-    }
-
-    #[test]
     fn scan_classifies_mixed_run_directories() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
         let root = temp.path();
@@ -628,8 +520,7 @@ mod tests {
             terminate_error: None,
         };
 
-        let plan = plan_sweep_with_ops(root, &ops).expect("sweep should scan");
-        let report = execute_sweep_plan_with_ops(plan, &ops);
+        let report = sweep_runs_with_ops(root, false, &ops).expect("sweep should scan");
         let states: Vec<_> = report
             .entries
             .iter()
@@ -679,8 +570,7 @@ mod tests {
             terminate_error: None,
         };
 
-        let plan = plan_sweep_with_ops(temp.path(), &ops).expect("sweep should classify");
-        let report = execute_sweep_plan_with_ops(plan, &ops);
+        let report = sweep_runs_with_ops(temp.path(), false, &ops).expect("sweep should classify");
 
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].state, SweepEntryState::Skipped);
@@ -712,55 +602,11 @@ mod tests {
             terminate_error: Some("still alive".into()),
         };
 
-        let plan = plan_sweep_with_ops(temp.path(), &ops).expect("sweep should classify");
-        let report = execute_sweep_plan_with_ops(plan, &ops);
+        let report = sweep_runs_with_ops(temp.path(), false, &ops).expect("sweep should classify");
 
         assert!(report.has_failures());
         assert_eq!(report.entries[0].state, SweepEntryState::Failed);
         assert_eq!(report.entries[0].error.as_deref(), Some("still alive"));
-    }
-
-    #[test]
-    fn execution_revalidates_only_the_planned_candidates() {
-        let temp = tempfile::tempdir().expect("temp dir should be created");
-        let planned_dir = temp.path().join("planned");
-        fs::create_dir_all(&planned_dir).expect("planned dir should create");
-        write_ownership(&planned_dir, owned_process_with_pid(1234));
-        let planning_ops = FakeSweepOps {
-            ps_available: true,
-            processes: BTreeMap::from([(1234, matching_live_process(1234))]),
-            terminated: RefCell::new(Vec::new()),
-            terminate_error: None,
-        };
-        let plan = plan_sweep_with_ops(temp.path(), &planning_ops).expect("sweep should plan");
-
-        let added_dir = temp.path().join("added-after-confirmation");
-        fs::create_dir_all(&added_dir).expect("added dir should create");
-        write_ownership(&added_dir, owned_process_with_pid(5678));
-        let execution_ops = FakeSweepOps {
-            ps_available: true,
-            processes: BTreeMap::from([
-                (
-                    1234,
-                    LiveProcess {
-                        start_time: "replacement".into(),
-                        ..matching_live_process(1234)
-                    },
-                ),
-                (5678, matching_live_process(5678)),
-            ]),
-            terminated: RefCell::new(Vec::new()),
-            terminate_error: None,
-        };
-
-        let report = execute_sweep_plan_with_ops(plan, &execution_ops);
-
-        assert!(execution_ops.terminated.borrow().is_empty());
-        assert_eq!(report.entries.len(), 1);
-        assert_eq!(
-            report.entries[0].reason.as_deref(),
-            Some("pid start time mismatch")
-        );
     }
 
     fn write_ownership(run_dir: &Path, process: OwnedProcess) {
@@ -788,14 +634,6 @@ mod tests {
             port: 9545,
             start_time: "Wed May 27 12:00:00 2026".into(),
             command: "groundhog node".into(),
-        }
-    }
-
-    fn matching_live_process(pid: u32) -> LiveProcess {
-        LiveProcess {
-            start_time: "Wed May 27 12:00:00 2026".into(),
-            pgid: pid,
-            command: "/tmp/groundhog node --json".into(),
         }
     }
 

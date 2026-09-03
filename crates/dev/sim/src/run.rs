@@ -261,18 +261,6 @@ impl From<ExistingRunOptions> for RunOptions {
 
 /// Run a simulation against the provider selected by the manifest.
 pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
-    let loaded_sim = load_simulation_manifest(&args.scenario).await?;
-    run_loaded_target(args, loaded_sim).await
-}
-
-/// Run a simulation using an already-loaded manifest.
-///
-/// Standalone callers use this after confirmation so the scenario file cannot
-/// change between authorization and execution.
-pub async fn run_loaded_target(
-    args: RunOptions,
-    mut loaded_sim: LoadedSimulationManifest,
-) -> Result<RunSummary, SimError> {
     let RunOptions {
         scenario,
         rpc_url,
@@ -288,6 +276,7 @@ pub async fn run_loaded_target(
         nonce_namespace,
     } = args;
     let scenario_path = scenario.clone();
+    let mut loaded_sim = load_simulation_manifest(&scenario).await?;
     if let Some(seed) = seed {
         loaded_sim.manifest.seed = seed;
     }
