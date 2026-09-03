@@ -34,6 +34,7 @@ mod tests {
 
         assert!(skill.contains("`Balance` is the ordinary type for balances"));
         assert!(skill.contains("`NNInt` is the lower-level integer type for counters"));
+        assert!(skill.contains("self.value.try_get().none_if_missing().unwrap_or(0)"));
         assert!(skill.contains("A generated TypeScript binding describes a contract"));
         assert!(skill.contains("Inspect\n   `node_modules`, Cargo registry source"));
         assert!(skill.contains("Never print, log, store, or paste private signing material"));
