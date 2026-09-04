@@ -39,7 +39,7 @@ pub const SCAFFOLD_SDK_VERSION: &str = "0.29.0";
 ///
 /// Must already be published to the Groundhog registry. The pin is a caret
 /// requirement, so scaffolds pick up newer compatible releases on their own.
-pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.12.0";
+pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.13.0";
 
 /// Toolchain channel pinned into scaffolded projects' `rust-toolchain.toml`.
 ///
