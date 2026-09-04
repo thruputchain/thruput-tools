@@ -1,4 +1,4 @@
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{Arg, ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::Print;
 use groundhog_cli::result::CommandResult;
@@ -956,11 +956,27 @@ impl WalletCommand {
     }
 }
 
+const SKILL_ARG_ID: &str = "skill";
+
 fn cli_command(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> clap::Command {
-    Cli::command().version(bundle_identity.to_string())
+    Cli::command()
+        .version(bundle_identity.to_string())
+        .subcommand_required(false)
+        .arg(
+            Arg::new(SKILL_ARG_ID)
+                .long("skill")
+                .help("Print release-matched instructions for coding agents")
+                .action(ArgAction::SetTrue)
+                .exclusive(true),
+        )
 }
 
-fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli {
+enum ParsedCli {
+    Skill,
+    Command(Box<Cli>),
+}
+
+fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> ParsedCli {
     let matches = match cli_command(bundle_identity).try_get_matches() {
         Ok(matches) => matches,
         Err(error) => {
@@ -972,13 +988,35 @@ fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli
             error.exit()
         }
     };
-    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    if matches.get_flag(SKILL_ARG_ID)
+        && let Some(subcommand) = matches.subcommand_name()
+    {
+        cli_command(bundle_identity)
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                format!("the argument '--skill' cannot be used with the '{subcommand}' subcommand"),
+            )
+            .exit();
+    }
+    if matches.get_flag(SKILL_ARG_ID) {
+        ParsedCli::Skill
+    } else {
+        ParsedCli::Command(Box::new(
+            Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit()),
+        ))
+    }
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() {
     let bundle_identity = groundhog_cli::bundle_identity();
-    let cli = parse_cli(&bundle_identity);
+    let cli = match parse_cli(&bundle_identity) {
+        ParsedCli::Skill => {
+            print!("{}", groundhog_cli::skill::render());
+            return;
+        }
+        ParsedCli::Command(cli) => *cli,
+    };
     let print = Print::new(cli.global.quiet, cli.global.json)
         .with_command_trace(cli.global.show_cargo_commands);
     let cmd_name = cli.command.command_name();

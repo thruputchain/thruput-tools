@@ -39,6 +39,7 @@ pub(crate) mod profile_backend;
 pub mod result;
 pub(crate) mod runtime_manifest;
 pub mod scaffold;
+pub mod skill;
 pub mod status;
 pub mod storage;
 pub(crate) mod terminal;

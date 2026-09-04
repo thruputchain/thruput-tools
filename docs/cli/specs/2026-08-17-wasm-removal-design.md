@@ -159,7 +159,8 @@ files).
 wasm32 installs appear vestigial — the workspace itself is host-only — and
 the `binaryen` install exists only so the scaffold's `groundhog test` can run
 `wasm-opt`. Docs: `README.md`, `crates/tools/cli/README.md`,
-`docs/cli/SKILL.md`, `docs/cli/roadmap.md`, `docs/testkit/DESIGN.md`,
+`crates/tools/cli/assets/groundhog/SKILL.md`, `docs/cli/roadmap.md`,
+`docs/testkit/DESIGN.md`,
 `CLAUDE.md`, `typos.toml`, `crates/rv32/lower/README.md` and
 `crates/rv32/lower/Cargo.toml` (both describe the lowerer as "the wasm-opt
 analog", which stays useful as an explanation only while readers remember
@@ -380,7 +381,8 @@ Scope:
 - Remove three `rustup target add wasm32-unknown-unknown` steps and the
   `binaryen` install from `ci.yml`, and one target-add step each from
   `publish.yml`, `publish_docs.yml`, and `publish_dry_run.yml`.
-- Update `README.md`, `crates/tools/cli/README.md`, `docs/cli/SKILL.md`,
+- Update `README.md`, `crates/tools/cli/README.md`,
+  `crates/tools/cli/assets/groundhog/SKILL.md`,
   `docs/cli/roadmap.md`, `CLAUDE.md`, and `typos.toml` (whose `"*.wasm"` exclude
   becomes dead config).
 - Delete `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` and its
