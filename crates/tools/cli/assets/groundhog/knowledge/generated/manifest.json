@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "groundhog",
+  "owners": [
+    "groundhog-rpc"
+  ],
+  "compatibility": {
+    "groundhog-cli": "{{GROUNDHOG_CLI_VERSION}}"
+  },
+  "records": [
+    "groundhog.local-development",
+    "groundhog.orientation",
+    "groundhog.programming-model",
+    "groundhog.rust-contract",
+    "groundhog.sources",
+    "groundhog.typescript-application",
+    "groundhog.typescript-codegen"
+  ],
+  "artifacts": {
+    "records": {
+      "path": "generated/records.jsonl",
+      "sha256": "sha256:91dded801bb7f144f9f8b5778cbde23364dc36e5619f74fb0933a46c6187c20e"
+    },
+    "skillTemplate": {
+      "path": "../SKILL.md",
+      "sha256": "sha256:4599fe93e50a8650c534c603424f383ed921cad63897e4de263be5669cf9f3ae"
+    }
+  }
+}

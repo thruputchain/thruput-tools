@@ -1,0 +1,50 @@
+# Agent knowledge bundle
+
+This directory is the canonical source for the knowledge embedded in the
+Groundhog CLI. Do not edit `../SKILL.md` or files under `generated/` directly.
+
+Build and verify the bundle from the workspace root:
+
+```console
+cargo run -p groundhog-agent-knowledge -- build
+cargo run -p groundhog-agent-knowledge -- check
+```
+
+The build is deterministic. It emits:
+
+- `generated/records.jsonl`: normalized records sorted by stable ID;
+- `generated/manifest.json`: owners, compatibility, record IDs, and artifact
+  SHA-256 hashes;
+- `../SKILL.md`: bootstrap records ordered by `bootstrap_order`.
+
+## Source contract
+
+`bundle.toml` declares the bundle ID, allowed record owners, compatibility
+components, and skill identity. `{{GROUNDHOG_CLI_VERSION}}` is replaced with
+the immutable Cargo package version by the released CLI.
+
+Local records live in `records/*.md`. Each starts with TOML frontmatter:
+
+```toml
++++
+schema_version = 1
+id = "groundhog.example"
+owner = "groundhog-rpc"
+kind = "guide"
+audience = ["coding-agent"]
+components = ["groundhog-cli"]
+bootstrap_order = 10
++++
+```
+
+The Markdown after the frontmatter is the record content. A record without
+`bootstrap_order` remains available to the normalized bundle but is omitted
+from the compact skill.
+
+Future repository producers emit one normalized JSON object per line under
+`imports/*.jsonl`. Imported records use the fields in `generated/records.jsonl`
+and are validated against the same owners, components, stable IDs, and schema
+version. The assembly step rejects duplicate IDs and bootstrap order values.
+
+Each fact has one owning record. Other documentation and delivery adapters
+should link to or render that record instead of maintaining another copy.

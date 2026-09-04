@@ -13,17 +13,26 @@ bundled with this checkout before relying on prose elsewhere:
 cargo run -p groundhog-cli -- --skill
 ```
 
-`groundhog --skill` is the public first-contact command. Its only editable
-source is `crates/tools/cli/assets/groundhog/SKILL.md`; keep `README.md` and
-agent-instruction files as concise pointers rather than parallel copies.
+`groundhog --skill` is the public first-contact command. Its editable sources
+are `crates/tools/cli/assets/groundhog/knowledge/bundle.toml` and the records
+beside it. `crates/tools/cli/assets/groundhog/SKILL.md` and the normalized
+bundle files are generated; keep other README and agent-instruction files as
+concise pointers rather than parallel copies. Regenerate and check them with:
+
+```bash
+cargo run -p groundhog-agent-knowledge -- build
+cargo run -p groundhog-agent-knowledge -- check
+```
 
 Review the skill on every workspace or CLI version bump, and whenever the CLI,
 scaffold, SDK, generated TypeScript bindings, TypeScript client, wallets, or
 public RPC workflow changes. Check its claims against current public APIs,
 released examples, and the versions a user can install. Dated design documents
 are historical context when they conflict with those surfaces. Run
-`cargo test -p groundhog-cli skill` after updating it and confirm the asset is
-present with `cargo package -p groundhog-cli --list --allow-dirty`.
+`cargo test -p groundhog-cli skill` and
+`cargo test -p groundhog-agent-knowledge` after updating it. Confirm the skill,
+manifest, and normalized records are present with
+`cargo package -p groundhog-cli --list --allow-dirty`.
 
 ## Architecture
 
@@ -54,6 +63,8 @@ Workspace crates are grouped by boundary:
 
 `crates/tools/` and `crates/rv32/` own developer tooling:
 
+- **agent-knowledge** — non-published deterministic assembler for repo-owned
+  agent knowledge records, the embedded skill, and normalized bundle metadata.
 - **cli** — `groundhog` binary. Build/test/deploy/call/local-node workflow.
   Keep logic in the library crate; `main.rs` should be dispatch only.
 - **signing** — off-chain transaction signing and construction. Signer trait,
