@@ -18,6 +18,7 @@ mod request_deadline;
 mod rpc_backend;
 pub mod server;
 mod stub_backend;
+mod submit_batcher;
 mod view_backend;
 
 #[cfg(test)]

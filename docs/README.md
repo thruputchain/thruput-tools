@@ -24,6 +24,9 @@ This directory has two kinds of documents:
 
 ## Reference
 
+- [Dev-node transaction submission batching](specs/2026-09-04-dev-node-submit-batching.md) -
+  active design and acceptance criteria for batching embedded local-node
+  submissions.
 - [Gateway system design](gateway/system-design.md) - gateway architecture
   background and current backend topology notes.
 - [Gateway open questions](gateway/open-questions.md) - remaining cross-team

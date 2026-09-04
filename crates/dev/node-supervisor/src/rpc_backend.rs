@@ -14,16 +14,14 @@ use groundhog_json_rpc_types::{
     block::{BlockInfo, ChainTip, consensus_value_hash},
 };
 use groundhog_scheduler::{
-    DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
-    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    DbTip, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 use groundhog_x23_transport::{connect_with_config, hogd_large_message_config};
 use std::{fmt, net::SocketAddr};
-use xdr_common::{BytesM, VecM};
 
 use crate::{
     NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::require_dev_genesis,
-    request_deadline::within_request_deadline,
+    request_deadline::within_request_deadline, submit_batcher::SubmitBatcher,
 };
 
 // chainTip and submit share the SchedulerCoord endpoint. Keep a small pool so a
@@ -35,7 +33,7 @@ const SCHEDULER_POOL_SIZE: usize = 2;
 #[derive(Clone)]
 pub(crate) struct HogdDevSchedulerBackend {
     scheduler: SchedulerCoord_SchedulerCoord1_Client,
-    block_driver: Option<BlockDriverTrigger>,
+    submitter: SubmitBatcher,
 }
 
 impl fmt::Debug for HogdDevSchedulerBackend {
@@ -56,9 +54,10 @@ impl HogdDevSchedulerBackend {
         )
         .await
         .map_err(|source| NodeSupervisorError::SchedulerConnect { endpoint, source })?;
+        let submitter = SubmitBatcher::spawn(scheduler.clone());
         Ok(Self {
             scheduler,
-            block_driver: None,
+            submitter,
         })
     }
 
@@ -78,8 +77,8 @@ impl HogdDevSchedulerBackend {
     }
 
     /// Return a copy that wakes the local block driver after submit RPC success.
-    pub(crate) fn with_block_driver(mut self, block_driver: BlockDriverTrigger) -> Self {
-        self.block_driver = Some(block_driver);
+    pub(crate) fn with_block_driver(self, block_driver: BlockDriverTrigger) -> Self {
+        self.submitter.set_block_driver(block_driver);
         self
     }
 
@@ -88,9 +87,10 @@ impl HogdDevSchedulerBackend {
     /// the full `connect` path.
     #[cfg(test)]
     pub(crate) fn _new_for_test(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
+        let submitter = SubmitBatcher::spawn(scheduler.clone());
         Self {
             scheduler,
-            block_driver: None,
+            submitter,
         }
     }
 }
@@ -127,18 +127,7 @@ impl SubmitPlane for HogdDevSchedulerBackend {
         context: RpcRequestContext,
         tx: ValidatedTransaction,
     ) -> Result<(), RpcServerError> {
-        within_request_deadline(context, async {
-            let batch = single_transaction_batch(&tx.bytes)?;
-            self.scheduler
-                .schedulercoord_submit_unvetted(&batch)
-                .await
-                .map_err(|error| classify_submit_rpc_error(&error))?;
-            if let Some(block_driver) = &self.block_driver {
-                block_driver.trigger_after_submit();
-            }
-            Ok(())
-        })
-        .await
+        self.submitter.submit(context, tx.bytes).await
     }
 }
 
@@ -192,28 +181,6 @@ impl ChainPlane for HogdDevSchedulerBackend {
     }
 }
 
-fn single_transaction_batch(
-    tx_bytes: &[u8],
-) -> Result<ParallelSignedTransactionBatch, RpcServerError> {
-    let tx_len = u32::try_from(tx_bytes.len())
-        .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
-    Ok(ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(vec![1]),
-        segment_bytes: VecM(vec![tx_len]),
-        xdr: BytesM(tx_bytes.to_vec()),
-    }))
-}
-
-fn classify_submit_rpc_error(error: &rpc_driver::RpcError) -> RpcServerError {
-    // protocol-rs currently exposes `submit_unvetted` as `void`, and the
-    // generated dispatcher maps server-side `ProgramError` into a generic
-    // x23 `SystemError`. Until the XDR grows a typed submit result, we cannot
-    // distinguish semantic rejection from backend failure here.
-    // TODO(protocol-rs-submit-result): map typed scheduler rejection to
-    // `TxRejected` once submit returns an accepted/rejected result.
-    RpcServerError::BackendUnavailable(format!("hogd-dev scheduler submit failed: {error}"))
-}
-
 fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServerError> {
     let block_hash = consensus_value_hash(&value).map_err(|error| {
         RpcServerError::BackendUnavailable(format!(
@@ -224,19 +191,4 @@ fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServ
         height: value.proposal_header.block_height.clone(),
         block_hash,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn single_transaction_batch_packs_one_segment() {
-        let tx_bytes = vec![0xaa, 0xbb, 0xcc];
-        let batch = single_transaction_batch(&tx_bytes).expect("bug: test tx should pack");
-
-        assert_eq!(batch.segment_tokens.0, vec![1]);
-        assert_eq!(batch.segment_bytes.0, vec![3]);
-        assert_eq!(batch.xdr.0, tx_bytes);
-    }
 }
