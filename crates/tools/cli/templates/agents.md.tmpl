@@ -72,7 +72,9 @@ duplicating `-Tgroundhog-rv32.ld` fails with `region 'CODE' already defined`.
 - `src/implementation.rs`: contract state, errors, and `#[contract]` logic.
 - `src/lib.rs`: the `no_std` gate, `sdk::declare_mock_contract!()`, and
   re-exports.
-- `src/main.rs`: the required RV32 bin wrapper. Keep generated contents unchanged.
+- `src/main.rs`: the required RV32 bin wrapper. Do not add contract logic. If
+  the package is renamed, update its `extern crate` identifier to the new
+  snake_case crate name.
 - `tests/test.rs`: host mock-executor tests.
 - `tests/test_rv32.rs`: RV32-executor tests.
 - `tests/integration.rs`: RPC integration tests.

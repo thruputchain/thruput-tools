@@ -111,7 +111,8 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
             "no active profile",
             "region 'CODE' already defined",
             "sdk::declare_mock_contract!()",
-            "Keep generated contents unchanged",
+            "Do not add contract logic",
+            "update its `extern crate` identifier",
         ],
     );
     assert!(agents.contains(snake_name));
