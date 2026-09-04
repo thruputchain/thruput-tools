@@ -1,7 +1,7 @@
 # Dev-Node Transaction Submission Batching
 
-**Status:** Active implementation spec  
-**Baseline:** `groundhog-rpc` `origin/main` (`b3cf718` when implementation was finalized)  
+**Status:** Active implementation spec
+**Baseline:** `groundhog-rpc` `origin/main` (`b3cf718` when implementation was finalized)
 **Scope:** Embedded JSON-RPC backend used by `groundhog node`
 
 ## Summary
