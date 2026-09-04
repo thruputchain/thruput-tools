@@ -15,13 +15,18 @@ groundhog --skill
 Use that release-matched guidance for the programming model, public APIs, and
 CLI workflows. This file only records project-local scaffold invariants.
 
+This project's `Cargo.toml` and, when present, `Cargo.lock` govern which SDK
+APIs are available. If the installed CLI skill describes a newer SDK, use APIs
+supported by this project's resolved SDK version.
+
 ## Build and verify
 
 - `groundhog build` produces
   `target/groundhog/{{PROJECT_NAME_SNAKE}}.rv32a`.
 - `cargo test` runs `tests/test.rs` on the host mock executor.
 - `groundhog test` builds the RV32 artifact and runs `tests/test_rv32.rs` in
-  the RV32 executor. Run both test commands; a host-only pass does not validate
+  the RV32 executor. Run both test commands. Release builds wrap on integer
+  overflow where host builds panic, so a host-only pass does not validate
   release-mode RV32 behaviour.
 - `groundhog test --integration` runs `tests/integration.rs` against an
   ephemeral local node.
@@ -30,7 +35,7 @@ Never use bare Cargo to build RV32. `groundhog build` supplies the `build-std`
 overlay from `.cargo/contract.toml`; bypassing it causes duplicate-lang-item or
 panic-strategy failures.
 
-## Protected scaffold contracts
+## Toolchain invariants
 
 - Keep feature `entrypoints`; `#[contract]` and `groundhog build` use that
   exact name for RV32 entrypoints.
@@ -65,8 +70,9 @@ duplicating `-Tgroundhog-rv32.ld` fails with `region 'CODE' already defined`.
 ## Layout
 
 - `src/implementation.rs`: contract state, errors, and `#[contract]` logic.
-- `src/lib.rs`: the `no_std` gate, mock declaration, and re-exports.
-- `src/main.rs`: the RV32 bin wrapper; keep it code-free.
+- `src/lib.rs`: the `no_std` gate, `sdk::declare_mock_contract!()`, and
+  re-exports.
+- `src/main.rs`: the required RV32 bin wrapper. Keep generated contents unchanged.
 - `tests/test.rs`: host mock-executor tests.
 - `tests/test_rv32.rs`: RV32-executor tests.
 - `tests/integration.rs`: RPC integration tests.
