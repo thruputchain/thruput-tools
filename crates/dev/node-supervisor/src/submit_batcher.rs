@@ -132,6 +132,17 @@ impl SubmitBatcher {
         if tx_bytes.len() > MAX_BATCH_BYTES {
             return Err(RpcServerError::TxInvalid("transaction too large".into()));
         }
+        let backend_deadline = context
+            .capped_from_start(BACKEND_TIMEOUT)
+            .deadline()
+            .ok_or_else(|| {
+                RpcServerError::BackendUnavailable(
+                    "dev-node submit deadline could not be calculated".into(),
+                )
+            })?;
+        if backend_deadline <= Instant::now() {
+            return Err(RpcServerError::BackendTimeout);
+        }
         let byte_count = u32::try_from(tx_bytes.len())
             .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
         let ingress_bytes = self
@@ -141,14 +152,6 @@ impl SubmitBatcher {
             .try_acquire_many_owned(byte_count)
             .map_err(|_| RpcServerError::Overloaded("dev-node submit queue full".into()))?;
         let (reply_tx, reply_rx) = oneshot::channel();
-        let backend_deadline = context
-            .capped_from_start(BACKEND_TIMEOUT)
-            .deadline()
-            .ok_or_else(|| {
-                RpcServerError::BackendUnavailable(
-                    "dev-node submit deadline could not be calculated".into(),
-                )
-            })?;
         self.inner
             .ingress
             .try_send(Item {
@@ -660,6 +663,34 @@ mod tests {
             .expect("bug: first submit task should join")
             .expect("bug: first submit should succeed");
         assert!(matches!(error, RpcServerError::Overloaded(_)));
+    }
+
+    #[tokio::test]
+    async fn expired_request_returns_timeout_before_queue_overload() {
+        let sink = Arc::new(GatedSink::new());
+        let batcher = SubmitBatcher::spawn_with(sink.clone(), 10, 100, 10, 1);
+        let first_batch = sink.called.notified();
+        let first = tokio::spawn({
+            let batcher = batcher.clone();
+            async move {
+                batcher
+                    .submit(RpcRequestContext::unbounded(), vec![1])
+                    .await
+            }
+        });
+        first_batch.await;
+
+        let error = batcher
+            .submit(RpcRequestContext::new(Some(Duration::ZERO)), vec![2])
+            .await
+            .expect_err("expired request should time out before checking queue capacity");
+
+        sink.permits.add_permits(1);
+        first
+            .await
+            .expect("bug: first submit task should join")
+            .expect("bug: first submit should succeed");
+        assert!(matches!(error, RpcServerError::BackendTimeout));
     }
 
     #[tokio::test]
