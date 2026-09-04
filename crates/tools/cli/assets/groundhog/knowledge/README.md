@@ -1,7 +1,7 @@
 # Agent knowledge bundle
 
 This directory is the canonical source for the knowledge embedded in the
-Groundhog CLI. Do not edit `../SKILL.md` or files under `generated/` directly.
+Groundhog CLI. Do not edit files under `generated/` directly.
 
 Build and verify the bundle from the workspace root:
 
@@ -15,13 +15,14 @@ The build is deterministic. It emits:
 - `generated/records.jsonl`: normalized records sorted by stable ID;
 - `generated/manifest.json`: owners, compatibility, record IDs, and artifact
   SHA-256 hashes;
-- `../SKILL.md`: bootstrap records ordered by `bootstrap_order`.
+- `generated/SKILL.md`: bootstrap records ordered by `bootstrap_order`.
 
 ## Source contract
 
 `bundle.toml` declares the bundle ID, allowed record owners, compatibility
-components, and skill identity. `{{GROUNDHOG_CLI_VERSION}}` is replaced with
-the immutable Cargo package version by the released CLI.
+components, and skill identity. The generated manifest records the concrete
+Cargo package version. `{{GROUNDHOG_CLI_VERSION}}` remains in the generated
+skill template and is replaced by the released CLI.
 
 Local records live in `records/*.md`. Each starts with TOML frontmatter:
 

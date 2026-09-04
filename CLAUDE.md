@@ -15,9 +15,9 @@ cargo run -p groundhog-cli -- --skill
 
 `groundhog --skill` is the public first-contact command. Its editable sources
 are `crates/tools/cli/assets/groundhog/knowledge/bundle.toml` and the records
-beside it. `crates/tools/cli/assets/groundhog/SKILL.md` and the normalized
-bundle files are generated; keep other README and agent-instruction files as
-concise pointers rather than parallel copies. Regenerate and check them with:
+beside it. Files under `knowledge/generated/` are generated; keep other README
+and agent-instruction files as concise pointers rather than parallel copies.
+Regenerate and check them with:
 
 ```bash
 cargo run -p groundhog-agent-knowledge -- build
@@ -30,8 +30,8 @@ public RPC workflow changes. Check its claims against current public APIs,
 released examples, and the versions a user can install. Dated design documents
 are historical context when they conflict with those surfaces. Run
 `cargo test -p groundhog-cli skill` and
-`cargo test -p groundhog-agent-knowledge` after updating it. Confirm the skill,
-manifest, and normalized records are present with
+`cargo test -p groundhog-agent-knowledge` after updating it. Confirm the skill
+is present with
 `cargo package -p groundhog-cli --list --allow-dirty`.
 
 ## Architecture

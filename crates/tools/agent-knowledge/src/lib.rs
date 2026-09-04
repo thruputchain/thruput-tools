@@ -11,6 +11,8 @@ use thiserror::Error;
 const SCHEMA_VERSION: u32 = 1;
 const FRONTMATTER_OPEN: &str = "+++\n";
 const FRONTMATTER_CLOSE: &str = "\n+++\n";
+const CLI_VERSION_COMPONENT: &str = "groundhog-cli";
+const CLI_VERSION_PLACEHOLDER: &str = "{{GROUNDHOG_CLI_VERSION}}";
 
 /// Fully rendered artifacts for one knowledge bundle.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,11 +183,7 @@ pub fn write_bundle(bundle_root: &Path) -> Result<(), KnowledgeError> {
         &generated_root.join("manifest.json"),
         &artifacts.manifest_json,
     )?;
-    let skill_path = bundle_root
-        .parent()
-        .ok_or_else(|| KnowledgeError::Invalid("bundle root has no parent".to_owned()))?
-        .join("SKILL.md");
-    write_file(&skill_path, &artifacts.skill_markdown)
+    write_file(&generated_root.join("SKILL.md"), &artifacts.skill_markdown)
 }
 
 /// Check that all committed generated artifacts match their canonical sources.
@@ -200,11 +198,7 @@ pub fn check_bundle(bundle_root: &Path) -> Result<(), KnowledgeError> {
         &generated_root.join("manifest.json"),
         &artifacts.manifest_json,
     )?;
-    let skill_path = bundle_root
-        .parent()
-        .ok_or_else(|| KnowledgeError::Invalid("bundle root has no parent".to_owned()))?
-        .join("SKILL.md");
-    check_file(&skill_path, &artifacts.skill_markdown)
+    check_file(&generated_root.join("SKILL.md"), &artifacts.skill_markdown)
 }
 
 fn assemble(
@@ -234,16 +228,17 @@ fn assemble(
         (
             "skillTemplate",
             GeneratedArtifact {
-                path: "../SKILL.md",
+                path: "generated/SKILL.md",
                 sha256: sha256(&skill_markdown),
             },
         ),
     ]);
+    let compatibility = generated_compatibility(manifest);
     let generated_manifest = GeneratedManifest {
         schema_version: SCHEMA_VERSION,
         id: &manifest.id,
         owners: &manifest.owners,
-        compatibility: &manifest.compatibility,
+        compatibility: &compatibility,
         records: record_ids,
         artifacts,
     };
@@ -256,6 +251,22 @@ fn assemble(
         manifest_json,
         skill_markdown,
     })
+}
+
+fn generated_compatibility(manifest: &BundleSource) -> BTreeMap<String, String> {
+    manifest
+        .compatibility
+        .iter()
+        .map(|(component, version)| {
+            let version =
+                if component == CLI_VERSION_COMPONENT && version == CLI_VERSION_PLACEHOLDER {
+                    env!("CARGO_PKG_VERSION").to_owned()
+                } else {
+                    version.clone()
+                };
+            (component.clone(), version)
+        })
+        .collect()
 }
 
 fn parse_record(
@@ -531,7 +542,9 @@ fn render_skill(
         skill.push_str(line);
         skill.push('\n');
     }
-    skill.push_str("---\n\n<!-- groundhog-cli-version: ");
+    skill.push_str("---\n\n<!-- ");
+    skill.push_str(&manifest.skill.version_component);
+    skill.push_str("-version: ");
     skill.push_str(version);
     skill.push_str(" -->\n\n");
     for (index, (_, record)) in bootstrap.iter().enumerate() {
@@ -636,6 +649,19 @@ mod tests {
     }
 
     #[test]
+    fn generated_manifest_has_concrete_cli_version() {
+        let artifacts = build_bundle(&bundle_root()).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&artifacts.manifest_json).unwrap();
+
+        assert_eq!(
+            manifest["compatibility"][CLI_VERSION_COMPONENT],
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(!artifacts.manifest_json.contains(CLI_VERSION_PLACEHOLDER));
+        assert!(artifacts.skill_markdown.contains(CLI_VERSION_PLACEHOLDER));
+    }
+
+    #[test]
     fn duplicate_record_ids_are_rejected() {
         let root = tempfile::tempdir().unwrap();
         let records_root = root.path().join("records");
@@ -720,6 +746,36 @@ mod tests {
     }
 
     #[test]
+    fn unknown_record_components_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let records_root = root.path().join("records");
+        fs::create_dir(&records_root).unwrap();
+        write_test_manifest(root.path(), r#"["groundhog-rpc"]"#);
+        let record = test_record("unknown-component", "groundhog-rpc", 10).replace(
+            r#"components = ["groundhog-cli"]"#,
+            r#"components = ["sdk"]"#,
+        );
+        fs::write(records_root.join("unknown-component.md"), record).unwrap();
+
+        let error = build_bundle(root.path()).unwrap_err().to_string();
+        assert!(error.contains("record unknown-component references unknown component sdk"));
+    }
+
+    #[test]
+    fn bundle_requires_a_bootstrap_record() {
+        let root = tempfile::tempdir().unwrap();
+        let records_root = root.path().join("records");
+        fs::create_dir(&records_root).unwrap();
+        write_test_manifest(root.path(), r#"["groundhog-rpc"]"#);
+        let record =
+            test_record("not-bootstrap", "groundhog-rpc", 10).replace("bootstrap_order = 10\n", "");
+        fs::write(records_root.join("not-bootstrap.md"), record).unwrap();
+
+        let error = build_bundle(root.path()).unwrap_err().to_string();
+        assert!(error.contains("bundle must select at least one bootstrap record"));
+    }
+
+    #[test]
     fn imported_records_require_canonical_source_and_content() {
         for (source, content) in [
             (r"sdk_rs:crates\sdk\src\lib.rs", "# Imported\n"),
@@ -769,6 +825,7 @@ mod tests {
         )
         .unwrap();
         write_bundle(root.path()).unwrap();
+        assert!(root.path().join("generated/SKILL.md").is_file());
 
         fs::write(
             records_root.join("record.md"),
