@@ -925,7 +925,7 @@ fn parse_method_metadata(body: &str, method: &str) -> Option<MethodMetadata> {
         {
             continue;
         }
-        let (_, ty) = arg.rsplit_once(':')?;
+        let (_, ty) = arg.split_once(':')?;
         arg_types.push(ty.trim().to_string());
     }
 
@@ -1023,8 +1023,9 @@ mod tests {
     use super::{
         ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
         filter_candidates_by_interfaces, format_entrypoint_id, method_entrypoint_id,
-        parse_contract_attr_value, resolve_call, resolve_local_contract_metadata,
-        resolve_spec_method, select_package, selector_json, selector_summary,
+        parse_contract_attr_value, parse_method_metadata, resolve_call,
+        resolve_local_contract_metadata, resolve_spec_method, select_package, selector_json,
+        selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -1078,6 +1079,18 @@ mod tests {
         assert_eq!(metadata[0].version, "0.1.0");
         assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
         assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
+    }
+
+    #[test]
+    fn extracts_qualified_native_256_type_names() {
+        let metadata = parse_method_metadata(
+            "fn convert(value: sdk::U256) -> groundhog_sdk::I256 { todo!() }",
+            "convert",
+        )
+        .expect("bug: qualified method signature should parse");
+
+        assert_eq!(metadata.arg_types, vec!["sdk::U256"]);
+        assert_eq!(metadata.return_type.as_deref(), Some("groundhog_sdk::I256"));
     }
 
     #[test]
@@ -1340,6 +1353,38 @@ mod tests {
     }
 
     #[test]
+    fn encodes_and_decodes_local_native_256_values() {
+        for (ty, value) in [
+            ("U256", sdk::U256::MAX.to_string()),
+            ("sdk::U256", sdk::U256::MAX.to_string()),
+            ("groundhog_sdk::U256", sdk::U256::MAX.to_string()),
+            ("I256", sdk::I256::MIN.to_string()),
+            ("sdk::I256", sdk::I256::MIN.to_string()),
+            ("groundhog_sdk::I256", sdk::I256::MIN.to_string()),
+        ] {
+            let metadata = ContractMetadata {
+                interface_name: "Counter".into(),
+                version: "0.1.0".into(),
+                source: Path::new("/tmp/implementation.rs").to_path_buf(),
+                method: MethodMetadata {
+                    arg_types: vec![ty.into()],
+                    return_type: Some(ty.into()),
+                },
+            };
+
+            let encoded = encode_calldata(
+                std::slice::from_ref(&value),
+                Some(&CallMetadata::Local(metadata.clone())),
+            )
+            .expect("bug: local native 256-bit calldata should encode");
+            let decoded = decode_return_value(&encoded, Some(&CallMetadata::Local(metadata)))
+                .expect("bug: local native 256-bit return should decode");
+
+            assert_eq!(decoded, json!(value));
+        }
+    }
+
+    #[test]
     fn reports_unsupported_local_type_name_in_encode_error() {
         let metadata = ContractMetadata {
             interface_name: "Counter".into(),
@@ -1523,6 +1568,50 @@ mod tests {
                 .expect("bug: embedded spec i128 return should decode"),
             json!(i128_value)
         );
+
+        let u256_value = sdk::U256::MAX.to_string();
+        let i256_value = sdk::I256::MIN.to_string();
+        let metadata = sample_single_arg_spec_metadata(ContractType::Tuple {
+            tuple: vec![ContractType::U256, ContractType::I256]
+                .try_into()
+                .unwrap(),
+        });
+        let argument = json!([u256_value, i256_value]).to_string();
+        let bytes = encode_calldata(&[argument], Some(&CallMetadata::Spec(metadata.clone())))
+            .expect("bug: embedded spec native 256-bit integers should encode");
+
+        assert_eq!(
+            decode_spec_arguments(&metadata, &bytes),
+            vec![json!([
+                sdk::U256::MAX.to_string(),
+                sdk::I256::MIN.to_string()
+            ])]
+        );
+    }
+
+    #[test]
+    fn typed_native_256_arguments_enforce_ranges() {
+        const U256_OVERFLOW: &str =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+        const I256_OVERFLOW: &str =
+            "57896044618658097711785492504343953926634992332820282019728792003956564819968";
+        const I256_UNDERFLOW: &str =
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819969";
+
+        for (ty, value, expected) in [
+            (ContractType::U256, U256_OVERFLOW, "U256"),
+            (ContractType::I256, I256_OVERFLOW, "I256"),
+            (ContractType::I256, I256_UNDERFLOW, "I256"),
+        ] {
+            let error = encode_calldata(
+                &[value.to_owned()],
+                Some(&CallMetadata::Spec(sample_single_arg_spec_metadata(ty))),
+            )
+            .expect_err("bug: out-of-range native 256-bit argument must fail");
+
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(error.to_string().contains("does not fit"), "{error}");
+        }
     }
 
     #[test]
@@ -1945,6 +2034,15 @@ mod tests {
         assert_eq!(normalize_type_name("&'a str"), "str");
         assert_eq!(normalize_type_name("&String"), "String");
         assert_eq!(normalize_type_name("&strange"), "strange");
+    }
+
+    #[test]
+    fn normalize_type_name_recognizes_qualified_native_256_types() {
+        assert_eq!(normalize_type_name("sdk::U256"), "U256");
+        assert_eq!(normalize_type_name("&sdk::I256"), "I256");
+        assert_eq!(normalize_type_name("groundhog_sdk::U256"), "U256");
+        assert_eq!(normalize_type_name("&'a groundhog_sdk::I256"), "I256");
+        assert_eq!(normalize_type_name("other::U256"), "other::U256");
     }
 
     fn create_temp_project(package_name: &str) -> TempDir {

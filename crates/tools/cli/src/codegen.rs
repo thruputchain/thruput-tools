@@ -22,7 +22,9 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
         | ContractType::U64
         | ContractType::I64
         | ContractType::U128
-        | ContractType::I128 => Ok("bigint".into()),
+        | ContractType::I128
+        | ContractType::U256
+        | ContractType::I256 => Ok("bigint".into()),
         ContractType::String => Ok("string".into()),
         ContractType::Bytes => Ok("Uint8Array".into()),
         ContractType::Address => Ok("ContractAddress".into()),
@@ -721,6 +723,8 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
         ContractType::I64 => Ok("{ v: ContractTypeKind.I64 }".into()),
         ContractType::U128 => Ok("{ v: ContractTypeKind.U128 }".into()),
         ContractType::I128 => Ok("{ v: ContractTypeKind.I128 }".into()),
+        ContractType::U256 => Ok("{ v: ContractTypeKind.U256 }".into()),
+        ContractType::I256 => Ok("{ v: ContractTypeKind.I256 }".into()),
         ContractType::String => Ok("{ v: ContractTypeKind.String }".into()),
         ContractType::Bytes => Ok("{ v: ContractTypeKind.Bytes }".into()),
         ContractType::Address => Ok("{ v: ContractTypeKind.Address }".into()),
@@ -1658,6 +1662,8 @@ fn validate_contract_type(
         | ContractType::I64
         | ContractType::U128
         | ContractType::I128
+        | ContractType::U256
+        | ContractType::I256
         | ContractType::String
         | ContractType::Bytes
         | ContractType::Address => Ok(()),
@@ -1740,6 +1746,8 @@ fn exception_name(ty: &ContractType) -> Result<String, CliError> {
 fn event_topic_representation(ty: &ContractType) -> &'static str {
     match ty {
         ContractType::Address => "address",
+        ContractType::U256 => "u256",
+        ContractType::I256 => "i256",
         ContractType::Array { array }
             if array.len == 32 && matches!(array.element.as_ref(), ContractType::U8) =>
         {
@@ -1753,6 +1761,7 @@ fn event_topic_type(ty: &ContractType) -> String {
     match event_topic_representation(ty) {
         "address" => "ContractAddress".into(),
         "fixedBytes32" => "FixedBytes<32>".into(),
+        "u256" | "i256" => "bigint".into(),
         _ => "Uint8Array".into(),
     }
 }
@@ -2035,6 +2044,8 @@ mod tests {
         assert_eq!(ts_type_ref(&ContractType::I64).unwrap(), "bigint");
         assert_eq!(ts_type_ref(&ContractType::U128).unwrap(), "bigint");
         assert_eq!(ts_type_ref(&ContractType::I128).unwrap(), "bigint");
+        assert_eq!(ts_type_ref(&ContractType::U256).unwrap(), "bigint");
+        assert_eq!(ts_type_ref(&ContractType::I256).unwrap(), "bigint");
         assert_eq!(ts_type_ref(&ContractType::String).unwrap(), "string");
         assert_eq!(ts_type_ref(&ContractType::Bytes).unwrap(), "Uint8Array");
         assert_eq!(
@@ -3445,6 +3456,34 @@ export type Result =
         assert!(output.contains("representation: \"address\""));
         assert!(output.contains("representation: \"fixedBytes32\""));
         assert!(output.contains("defineContractEvent<"));
+    }
+
+    #[test]
+    fn generates_direct_native_256_topic_metadata() {
+        let mut spec = spec_with_events();
+        spec.events.0[0].topics = vec![
+            ContractField {
+                name: spec_string("unsigned"),
+                ty: ContractType::U256,
+            },
+            ContractField {
+                name: spec_string("signed"),
+                ty: ContractType::I256,
+            },
+        ]
+        .try_into()
+        .unwrap();
+
+        let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
+
+        assert!(output.contains("\"unsigned\": bigint"));
+        assert!(output.contains("\"signed\": bigint"));
+        assert!(output.contains("\"unsigned\"?: ContractEventFilterValue<bigint>"));
+        assert!(output.contains("\"signed\"?: ContractEventFilterValue<bigint>"));
+        assert!(output.contains("representation: \"u256\""));
+        assert!(output.contains("representation: \"i256\""));
+        assert!(output.contains("{ v: ContractTypeKind.U256 }"));
+        assert!(output.contains("{ v: ContractTypeKind.I256 }"));
     }
 
     #[test]

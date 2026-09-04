@@ -76,12 +76,12 @@ xdrs = { version = "=0.8.4", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "=0.8.4", registry = "groundhog" }
 rpc_driver = { version = "0.10.2", registry = "groundhog" }
 # from the sdk crate:
-groundhog-spec-tool = { version = "0.28.0", registry = "groundhog" }
-groundhog-contract-util = { version = "0.28.0", registry = "groundhog" }
-groundhog-domain-separator = { version = "0.28.0", registry = "groundhog" }
-groundhog-contract-spec = { version = "0.28.0", registry = "groundhog" }
-groundhog-erc20-if = { version = "=0.1.20", registry = "groundhog" }
-sdk = { version = "0.28.0", registry = "groundhog" }
+groundhog-spec-tool = { version = "0.29.0", registry = "groundhog" }
+groundhog-contract-util = { version = "0.29.0", registry = "groundhog" }
+groundhog-domain-separator = { version = "0.29.0", registry = "groundhog" }
+groundhog-contract-spec = { version = "0.29.0", registry = "groundhog" }
+groundhog-erc20-if = { version = "=0.1.21", registry = "groundhog" }
+sdk = { version = "0.29.0", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
