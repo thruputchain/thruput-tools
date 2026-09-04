@@ -95,8 +95,10 @@ genuinely needs its lower-level signed-delta or explicit-base operations.
   form a scalable shared log.
 - `Bytestring` is raw byte storage for lower-level or infrequently replaced
   data. Prefer typed `Value<T>` when a typed value is available.
-- `RetrocausalQueue` is the specialized insertion-ordered queue primitive. Use
-  it only when its ordering and removal semantics match the application.
+- `RCQ<T>` is the SDK's retro-causal queue. Within a block, submission order
+  determines whether a consume sees another transaction's insert, and
+  concurrent consumes conflict. Use it only when those semantics match the
+  application.
 
 For a token, use `Map<ContractAddress, Balance>` for per-account balances. For
 a counter, use `NNInt`. Do not implement either as read, calculate, and replace
@@ -187,8 +189,10 @@ Generated method descriptors provide typed operations such as:
 - `view(...)` and `viewOutcome(...)` for read-only execution;
 - `decodeReturn(...)` and `decodeException(...)` for raw call data;
 - `decodeReceipt(...)` and `decodeReceiptOutcome(...)` for a receipt whose root
-  method is known;
-- typed event decoding and filtering.
+  method is known.
+
+Generated event descriptors such as `PingEvent` provide `decode(...)`,
+`filter(...)`, `allFromReceipt(...)`, and `singleFromReceipt(...)`.
 
 Use those generated codecs. Do not create a low-level XDR reader when a binding
 already knows the method or event type.
