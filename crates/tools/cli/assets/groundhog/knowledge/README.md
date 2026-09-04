@@ -44,7 +44,9 @@ from the compact skill.
 Future repository producers emit one normalized JSON object per line under
 `imports/*.jsonl`. Imported records use the fields in `generated/records.jsonl`
 and are validated against the same owners, components, stable IDs, and schema
-version. The assembly step rejects duplicate IDs and bootstrap order values.
+version. Their `source` is an owner-qualified canonical relative path such as
+`sdk_rs:crates/sdk/src/lib.rs`. The assembly step rejects duplicate IDs and
+bootstrap order values.
 
 Each fact has one owning record. Other documentation and delivery adapters
 should link to or render that record instead of maintaining another copy.

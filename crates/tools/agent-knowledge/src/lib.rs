@@ -330,9 +330,40 @@ fn parse_import(path: &Path) -> Result<Vec<NormalizedRecord>, KnowledgeError> {
             })?;
         record.audience = sorted_unique(record.audience);
         record.components = sorted_unique(record.components);
+        validate_import_source(path, index + 1, &record)?;
         records.push(record);
     }
     Ok(records)
+}
+
+fn validate_import_source(
+    path: &Path,
+    line: usize,
+    record: &NormalizedRecord,
+) -> Result<(), KnowledgeError> {
+    let owner_prefix = format!("{}:", record.owner);
+    let source_path = record.source.strip_prefix(&owner_prefix).ok_or_else(|| {
+        KnowledgeError::Invalid(format!(
+            "{}:{line} record {} source must start with {owner_prefix}",
+            path.display(),
+            record.id
+        ))
+    })?;
+    let canonical = !source_path.is_empty()
+        && !source_path.starts_with('/')
+        && !source_path.ends_with('/')
+        && !source_path.contains(['\\', '\r', '\n'])
+        && source_path
+            .split('/')
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+    if !canonical {
+        return Err(KnowledgeError::Invalid(format!(
+            "{}:{line} record {} source must be an owner-qualified canonical relative path",
+            path.display(),
+            record.id
+        )));
+    }
+    Ok(())
 }
 
 fn validate_manifest(manifest: &BundleSource) -> Result<(), KnowledgeError> {
@@ -428,6 +459,7 @@ fn validate_records(
         }
         if record.source.is_empty()
             || record.content.is_empty()
+            || record.content.contains('\r')
             || !record.content.ends_with('\n')
             || record.content.ends_with("\n\n")
         {
@@ -685,6 +717,44 @@ mod tests {
 
         let error = build_bundle(root.path()).unwrap_err().to_string();
         assert!(error.contains("record unknown has unknown owner sdk_rs"));
+    }
+
+    #[test]
+    fn imported_records_require_canonical_source_and_content() {
+        for (source, content) in [
+            (r"sdk_rs:crates\sdk\src\lib.rs", "# Imported\n"),
+            ("sdk_rs:crates/sdk/src/lib.rs", "# Imported\r\n"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let records_root = root.path().join("records");
+            let imports_root = root.path().join("imports");
+            fs::create_dir(&records_root).unwrap();
+            fs::create_dir(&imports_root).unwrap();
+            write_test_manifest(root.path(), r#"["groundhog-rpc", "sdk_rs"]"#);
+            fs::write(
+                records_root.join("local.md"),
+                test_record("local", "groundhog-rpc", 20),
+            )
+            .unwrap();
+            let imported = NormalizedRecord {
+                schema_version: 1,
+                id: "imported".to_owned(),
+                owner: "sdk_rs".to_owned(),
+                kind: "api".to_owned(),
+                audience: vec!["coding-agent".to_owned()],
+                components: vec!["groundhog-cli".to_owned()],
+                bootstrap_order: Some(10),
+                source: source.to_owned(),
+                content: content.to_owned(),
+            };
+            fs::write(
+                imports_root.join("sdk.jsonl"),
+                format!("{}\n", serde_json::to_string(&imported).unwrap()),
+            )
+            .unwrap();
+
+            assert!(build_bundle(root.path()).is_err());
+        }
     }
 
     #[test]
