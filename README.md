@@ -9,6 +9,8 @@ client, simulator, benchmark harness, and canonical OpenRPC artifact.
 - **Building on Groundhog?** (writing contracts, building SDKs,
   integrating with the JSON-RPC API) → [Building on Groundhog](#building-on-groundhog).
 - **Contributing to this repo?** → [Contributing](#contributing).
+- **Using a coding agent?** Run `groundhog --skill` first. From this checkout,
+  use `cargo run -p groundhog-cli -- --skill` so its guidance matches the code.
 
 ---
 
