@@ -693,8 +693,13 @@ profiles may name a default key.
 
 ## AI-Assisted Development
 
-This repo includes a skill file at `docs/cli/SKILL.md` for use with AI coding
-assistants. It provides guidance on storage type selection, SDK macros, test
-patterns, and concurrency guardrails specific to Groundhog contracts.
+The installed CLI carries release-matched guidance for coding agents:
 
-To use it, follow your LLM's instructions on where/how to place skills files.
+```bash
+groundhog --skill
+```
+
+This is a root-only, exclusive mode rather than a global flag; invoke it exactly
+as shown. The command prints the complete Groundhog skill as Markdown without
+network access or filesystem changes. An agent can read it directly, or the
+user can save and install it using the agent's normal skill workflow.
