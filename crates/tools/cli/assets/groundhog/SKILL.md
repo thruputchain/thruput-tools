@@ -71,7 +71,14 @@ Gas meters computation and bounds cross-contract call depth. It has no token
 price and is not burned. Choose storage operations for correct conflict
 semantics, not gas-price optimisation.
 
-### Choose Storage by Behaviour
+### Start with Balance, Then Choose by Behaviour
+
+For contract authors, `Balance` is the practical starting point for ordinary
+nonnegative amounts such as token balances, allowances, supply, deposits, and
+credits. It is backed by Groundhog's mergeable integer storage, but presents a
+zero-defaulting `u128` API that prevents negative values and absolute
+replacement. Do not use raw `NNInt` for a balance unless the data model
+genuinely needs its lower-level signed-delta or explicit-base operations.
 
 - `Balance` is the ordinary type for balances, allowances, and supply. It uses
   `u128`, defaults missing state to zero, exposes increases and decreases, and
@@ -116,7 +123,11 @@ local node.
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
 
-The normal contract shape is:
+The normal starter contract is a counter, one of the narrower cases where
+`NNInt` is appropriate. Do not copy this storage choice for token balances or
+other ordinary nonnegative amounts; use `Balance` for those.
+
+The contract shape is:
 
 ```rust
 use sdk::storage::NNInt;

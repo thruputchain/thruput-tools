@@ -32,6 +32,8 @@ mod tests {
     fn rendered_skill_preserves_high_risk_guidance() {
         let skill = render();
 
+        assert!(skill.contains("`Balance` is the practical starting point"));
+        assert!(skill.contains("Do not use raw `NNInt` for a balance"));
         assert!(skill.contains("`Balance` is the ordinary type for balances"));
         assert!(skill.contains("`NNInt` is the lower-level integer type for counters"));
         assert!(skill.contains("self.value.try_get().none_if_missing().unwrap_or(0)"));
