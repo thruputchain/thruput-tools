@@ -90,10 +90,13 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
     assert_contains_all(
         &agents,
         &[
+            "groundhog --skill",
+            "release-matched guidance",
+            "project-local scaffold invariants",
             "groundhog build",
-            "never bare cargo for RV32",
-            r#"feature = "entrypoints""#,
-            "BOTH test commands",
+            "Never use bare Cargo to build RV32",
+            "feature `entrypoints`",
+            "both test commands",
             "tests/test_rv32.rs",
             "`dev` feature",
             "groundhog-integration-test",
