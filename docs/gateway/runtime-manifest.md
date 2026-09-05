@@ -15,7 +15,9 @@ Use it for local benchmark runs:
 - `hog-gateway --runtime-manifest <path>` starts the standalone gateway from
   the same backend endpoints.
 - `groundhog-bench --runtime-manifest <path>` derives the bootstrapped account
-  signers and submits auth-valid `sendRawTransaction` traffic.
+  signers and submits auth-valid `sendRawTransaction` traffic. Submit benchmarks
+  ask for confirmation after validating their local inputs. Pass `--force` for
+  JSON output, scripts, or other non-interactive runs.
 
 ## Fast Smoke
 
@@ -126,6 +128,9 @@ cargo run -p groundhog-bench -- \
   --duration 30
 ```
 
+This prompts before generating or submitting transactions and includes warmup
+traffic in the confirmation. Add `--force` when running non-interactively.
+
 ## Manual Gateway Loop
 
 Start the standalone gateway from the same manifest:
@@ -147,6 +152,8 @@ cargo run -p groundhog-bench -- \
   --rate 100 \
   --duration 30
 ```
+
+This submit benchmark follows the same confirmation behavior.
 
 CLI flags on `hog-gateway` are still explicit overrides. For example,
 `--scheduler` can intentionally replace the manifest scheduler endpoint. TOML

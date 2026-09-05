@@ -10,9 +10,11 @@ use groundhog_json_rpc_types::{
     receipt::ExecStatus,
 };
 use groundhog_signing::{
-    BuildSignedDevWalletHogTransfer, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
-    build_signed_dev_wallet_hog_transfer,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
+    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
+use groundhog_xdr::transaction::Transaction;
+use groundhog_xdr::types::NetworkHash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -22,8 +24,8 @@ use crate::account_resolution::{
     resolve_local_bootstrap_account,
 };
 use crate::balance::{
-    LocalFundingProjection, confirm_low_faucet_balance, fetch_balance_blocking,
-    insufficient_local_faucet_error, local_funding_projection,
+    LocalFundingProjection, fetch_balance_blocking, insufficient_local_faucet_error,
+    local_funding_projection, low_local_faucet_balance_warning,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
@@ -44,7 +46,6 @@ use crate::{CliError, Print};
 /// Schema version of the `airdrop --json` data payload.
 pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 3;
 const DEFAULT_AIRDROP_HOG: &str = "10";
-const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 #[derive(Debug)]
 pub(crate) enum PreparedAirdrop {
@@ -88,6 +89,41 @@ struct PreparedRemoteAirdropDryRun {
     recipient_wallet: String,
 }
 
+#[derive(Debug)]
+enum AirdropPlan {
+    Local(Box<LocalAirdropPlan>),
+    Remote(Box<RemoteAirdropPlan>),
+}
+
+#[derive(Debug)]
+struct LocalAirdropPlan {
+    rpc_url: String,
+    profile_name: String,
+    recipient_input: String,
+    recipient_wallet: String,
+    amount_hog: String,
+    raw_amount: u128,
+    faucet_key_name: String,
+    faucet_role: String,
+    faucet_wallet: String,
+    faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
+    funding_projection: LocalFundingProjection,
+    transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
+#[derive(Debug)]
+struct RemoteAirdropPlan {
+    profile: ResolvedProfile,
+    profile_name: String,
+    faucet_url: String,
+    rpc_url: String,
+    recipient_input: String,
+    recipient_wallet: String,
+    descriptor: RemoteAirdropDescriptor,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteAirdropAttempt {
@@ -109,7 +145,7 @@ pub fn run(
     recipient: Option<&str>,
     amount: Option<&str>,
     dry_run: bool,
-    yes: bool,
+    force: bool,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
@@ -128,14 +164,25 @@ pub fn run(
     {
         return print_remote_dry_run(&prepared, cmd, print);
     }
-    let prepared = prepare_airdrop(&cwd, recipient.as_ref(), amount, profile, overrides)?;
+    if !dry_run {
+        print.require_confirmation_available(force, "request an airdrop")?;
+    }
+    let plan = prepare_airdrop_plan(&cwd, recipient.as_ref(), amount, profile, overrides)?;
+    if !dry_run {
+        print_airdrop_plan(&plan, print);
+        if !print.confirm(force, "request an airdrop", "Request this airdrop?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+    let prepared = finalize_airdrop_plan(plan)?;
 
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
 
     match prepared {
-        PreparedAirdrop::Local(prepared) => run_local_airdrop(&prepared, yes, cmd, print)?,
+        PreparedAirdrop::Local(prepared) => run_local_airdrop(&prepared, cmd, print)?,
         PreparedAirdrop::Remote(prepared) => run_remote_airdrop(&prepared, cmd, print)?,
     }
 
@@ -185,11 +232,9 @@ fn prepare_remote_airdrop_dry_run(
 
 fn run_local_airdrop(
     prepared: &PreparedLocalAirdrop,
-    yes: bool,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    preflight_local_airdrop(prepared, yes, print)?;
     print.status(format_args!(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
@@ -200,8 +245,12 @@ fn run_local_airdrop(
     print.status(format_args!("Airdrop sent: {tx_hash}"));
     let observations = post_airdrop_observations(prepared, print);
 
-    print.json(&CommandResult::new(
+    let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
+        .into_iter()
+        .collect();
+    print.json(&CommandResult::with_warnings(
         cmd,
+        warnings,
         json!({
             "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
             "mode": "local",
@@ -238,19 +287,12 @@ fn ensure_local_airdrop_success(
     ensure_tx_success("airdrop", receipt, tx_hash)
 }
 
-fn preflight_local_airdrop(
-    prepared: &PreparedLocalAirdrop,
-    yes: bool,
-    print: &Print,
-) -> Result<(), CliError> {
+fn print_low_faucet_warning(prepared: &LocalAirdropPlan, print: &Print) {
     let Some(projected_balance) = prepared.funding_projection.projected_balance else {
-        return Err(insufficient_local_faucet_error(
-            prepared.raw_amount,
-            prepared.funding_projection.estimated_max,
-        ));
+        return;
     };
-    if projected_balance >= LOW_FAUCET_BALANCE_RAW {
-        return Ok(());
+    if low_local_faucet_balance_warning(Some(projected_balance)).is_none() {
+        return;
     }
 
     print.status(format_args!(
@@ -272,7 +314,102 @@ fn preflight_local_airdrop(
         hog::format_amount(projected_balance)
     ));
     print.warn("this would leave the local faucet below 10 HOG");
-    confirm_low_faucet_balance(print, yes)
+}
+
+fn print_airdrop_plan(plan: &AirdropPlan, print: &Print) {
+    match plan {
+        AirdropPlan::Local(plan) => {
+            print.detail("recipient", &plan.recipient_wallet);
+            print.detail("amount", format_args!("{} HOG", plan.amount_hog));
+            print.detail("faucet", &plan.faucet_wallet);
+            print.detail("profile", &plan.profile_name);
+            print_low_faucet_warning(plan, print);
+        }
+        AirdropPlan::Remote(plan) => {
+            print.detail("recipient", &plan.recipient_wallet);
+            print.detail("amount", format_args!("{} HOG", plan.descriptor.amount_hog));
+            print.detail("profile", &plan.profile_name);
+            print_remote_airdrop_policy(
+                &plan.descriptor.policy,
+                &plan.descriptor.amount_hog,
+                print,
+            );
+        }
+    }
+}
+
+fn prepare_local_airdrop_plan(
+    profile: &ResolvedProfile,
+    recipient: &str,
+    amount: Option<&str>,
+) -> Result<LocalAirdropPlan, CliError> {
+    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let manifest = load_configured_runtime_manifest(profile, "faucet")?
+        .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
+    manifest
+        .bootstrap
+        .dev_wallet
+        .do_action_entrypoint_id()
+        .map_err(|error| CliError::Other(error.to_string()))?;
+    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
+    parse_contract_address(&recipient_wallet)?;
+    let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
+    let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
+    let faucet_wallet = format_contract_address(&faucet.wallet_address);
+    let faucet_balance = fetch_balance_blocking(
+        rpc_url,
+        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
+    )?;
+    let funding_projection = local_funding_projection(
+        &faucet_balance.raw_balance,
+        &manifest.bootstrap.storage_cost_model,
+        raw_amount,
+        1,
+    )?;
+    if funding_projection.projected_balance.is_none() {
+        return Err(insufficient_local_faucet_error(
+            raw_amount,
+            funding_projection.estimated_max,
+        ));
+    }
+    let recipient_address = parse_contract_address(&recipient_wallet)?;
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let block_expiry_height =
+        runtime.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
+    let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
+    let transaction = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+        wallet_address: faucet.wallet_address,
+        wallet_entrypoint: manifest
+            .bootstrap
+            .dev_wallet
+            .do_action_entrypoint_id()
+            .map_err(|error| CliError::Other(error.to_string()))?,
+        target_address: hog::token_address(),
+        target_entrypoint: hog::transfer_entrypoint(),
+        target_calldata: &transfer_calldata,
+        gas_limit: DEFAULT_TX_GAS_LIMIT,
+        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+        block_expiry_height,
+        nonce: nonce_from_timestamp(),
+    })
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    Ok(LocalAirdropPlan {
+        rpc_url: rpc_url.to_owned(),
+        profile_name: profile.name.clone(),
+        recipient_input: recipient.to_owned(),
+        recipient_wallet,
+        amount_hog: hog::format_amount(raw_amount),
+        raw_amount,
+        faucet_key_name: faucet.key_name,
+        faucet_role: faucet.role,
+        faucet_wallet,
+        faucet_balance_height: faucet_balance.height,
+        funding_projection,
+        transaction,
+        signer: faucet.signer,
+        network_hash: faucet.network_hash,
+    })
 }
 
 fn post_airdrop_observations(prepared: &PreparedLocalAirdrop, print: &Print) -> Value {
@@ -330,7 +467,6 @@ fn run_remote_airdrop(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print_remote_airdrop_policy(&prepared.airdrop_policy, &prepared.amount_hog, print);
     print.status(format_args!(
         "Requesting remote airdrop to {}...",
         prepared.recipient_wallet
@@ -450,13 +586,13 @@ fn print_remote_airdrop_policy(
     ));
 }
 
-pub(crate) fn prepare_airdrop(
+fn prepare_airdrop_plan(
     cwd: &Path,
     recipient: &str,
     amount: Option<&str>,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
-) -> Result<PreparedAirdrop, CliError> {
+) -> Result<AirdropPlan, CliError> {
     let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
     match resolve_airdrop_backend(&profile)? {
         ProfileBackend::RemoteFaucet => {
@@ -465,9 +601,11 @@ pub(crate) fn prepare_airdrop(
                     "remote airdrop amount is set by the faucet service".into(),
                 ));
             }
-            prepare_remote_airdrop(&profile, recipient)
+            prepare_remote_airdrop_plan(profile, recipient)
         }
-        ProfileBackend::LocalManifest => prepare_local_airdrop(&profile, recipient, amount),
+        ProfileBackend::LocalManifest => prepare_local_airdrop_plan(&profile, recipient, amount)
+            .map(Box::new)
+            .map(AirdropPlan::Local),
         ProfileBackend::RpcOnly => Err(CliError::Other(format!(
             "profile `{}` is RPC-only; airdrop requires either `runtime_manifest` or `faucet_url`",
             profile.name
@@ -528,86 +666,10 @@ fn profile_config_error(profile: &ResolvedProfile, message: &'static str) -> Cli
     }
 }
 
-fn prepare_local_airdrop(
-    profile: &ResolvedProfile,
+fn prepare_remote_airdrop_plan(
+    profile: ResolvedProfile,
     recipient: &str,
-    amount: Option<&str>,
-) -> Result<PreparedAirdrop, CliError> {
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
-    let manifest = load_configured_runtime_manifest(profile, "faucet")?
-        .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
-    let wallet_entrypoint = manifest
-        .bootstrap
-        .dev_wallet
-        .do_action_entrypoint_id()
-        .map_err(|error| CliError::Other(error.to_string()))?;
-    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
-    let recipient_address = parse_contract_address(&recipient_wallet)?;
-    let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
-    let amount_hog = hog::format_amount(raw_amount);
-    let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
-    let faucet_wallet = format_contract_address(&faucet.wallet_address);
-    let faucet_balance = fetch_balance_blocking(
-        &rpc_url,
-        groundhog_json_rpc_types::ContractAddress::from(faucet.wallet_address),
-    )?;
-    let funding_projection = local_funding_projection(
-        &faucet_balance.raw_balance,
-        &manifest.bootstrap.storage_cost_model,
-        raw_amount,
-        1,
-    )?;
-    if funding_projection.projected_balance.is_none() {
-        return Err(insufficient_local_faucet_error(
-            raw_amount,
-            funding_projection.estimated_max,
-        ));
-    }
-
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(&rpc_url).await })?;
-
-    let signed = build_signed_dev_wallet_hog_transfer(
-        &BuildSignedDevWalletHogTransfer {
-            wallet_address: faucet.wallet_address,
-            wallet_entrypoint,
-            recipient: recipient_address,
-            raw_amount,
-            gas_limit: DEFAULT_TX_GAS_LIMIT,
-            block_expiry_height,
-            nonce: nonce_from_timestamp(),
-            sign_params: SignTransactionParams::default(),
-            network_hash: faucet.network_hash,
-        },
-        &faucet.signer,
-    )
-    .map_err(|error| CliError::Other(error.to_string()))?;
-    let tx_hex = format!("0x{}", hex::encode(signed.bytes));
-
-    Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
-        rpc_url,
-        recipient_input: recipient.to_owned(),
-        recipient_wallet,
-        amount_hog,
-        raw_amount,
-        faucet_key_name: faucet.key_name,
-        faucet_role: faucet.role,
-        faucet_wallet,
-        faucet_balance_height: faucet_balance.height,
-        funding_projection,
-        tx_hex,
-    }))
-}
-
-fn prepare_remote_airdrop(
-    profile: &ResolvedProfile,
-    recipient: &str,
-) -> Result<PreparedAirdrop, CliError> {
+) -> Result<AirdropPlan, CliError> {
     let rpc_url = profile
         .rpc_url
         .as_deref()
@@ -618,18 +680,53 @@ fn prepare_remote_airdrop(
         .as_deref()
         .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?;
     let faucet_url = faucet_url.trim_end_matches('/').to_owned();
-    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
+    let recipient_wallet = resolve_airdrop_recipient(&profile, recipient)?;
     parse_contract_address(&recipient_wallet)?;
-    let descriptor = fetch_remote_airdrop_descriptor(profile)?;
-
-    prepare_remote_airdrop_with_descriptor(
+    let descriptor = fetch_remote_airdrop_descriptor(&profile)?;
+    Ok(AirdropPlan::Remote(Box::new(RemoteAirdropPlan {
+        profile_name: profile.name.clone(),
         profile,
-        recipient,
+        recipient_input: recipient.to_owned(),
         recipient_wallet,
         faucet_url,
         rpc_url,
-        &descriptor,
-    )
+        descriptor,
+    })))
+}
+
+fn finalize_airdrop_plan(plan: AirdropPlan) -> Result<PreparedAirdrop, CliError> {
+    match plan {
+        AirdropPlan::Local(plan) => {
+            let tx_hex = sign_and_encode_transaction_hex(
+                plan.transaction,
+                &plan.signer,
+                SignTransactionParams::default(),
+                &plan.network_hash,
+            )
+            .map_err(|error| CliError::Other(error.to_string()))?;
+            Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
+                rpc_url: plan.rpc_url,
+                recipient_input: plan.recipient_input,
+                recipient_wallet: plan.recipient_wallet,
+                amount_hog: plan.amount_hog,
+                raw_amount: plan.raw_amount,
+                faucet_key_name: plan.faucet_key_name,
+                faucet_role: plan.faucet_role,
+                faucet_wallet: plan.faucet_wallet,
+                faucet_balance_height: plan.faucet_balance_height,
+                funding_projection: plan.funding_projection,
+                tx_hex,
+            }))
+        }
+        AirdropPlan::Remote(plan) => prepare_remote_airdrop_with_descriptor(
+            &plan.profile,
+            &plan.recipient_input,
+            plan.recipient_wallet,
+            plan.faucet_url,
+            plan.rpc_url,
+            &plan.descriptor,
+        ),
+    }
 }
 
 fn prepare_remote_airdrop_with_descriptor(
@@ -642,14 +739,12 @@ fn prepare_remote_airdrop_with_descriptor(
 ) -> Result<PreparedAirdrop, CliError> {
     let (loaded_attempt, attempt_locks) =
         load_or_create_remote_airdrop_attempt(profile, &recipient_wallet, descriptor)?;
-    let attempt = loaded_attempt.attempt;
-
     Ok(PreparedAirdrop::Remote(PreparedRemoteAirdrop {
         faucet_url,
         rpc_url,
         recipient_input: recipient.to_owned(),
         recipient_wallet,
-        client_nonce: attempt.client_nonce,
+        client_nonce: loaded_attempt.attempt.client_nonce,
         airdrop_policy: descriptor.policy.clone(),
         amount_hog: descriptor.amount_hog.clone(),
         attempt_path: loaded_attempt.path,

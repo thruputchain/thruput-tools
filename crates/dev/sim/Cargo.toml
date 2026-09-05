@@ -2,6 +2,7 @@
 name = "groundhog-sim"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Simulation and soak-test harness for Groundhog JSON-RPC targets"
 

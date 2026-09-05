@@ -61,6 +61,58 @@ impl Print {
             && terminals_allow_prompt(io::stdin().is_terminal(), io::stderr().is_terminal())
     }
 
+    /// Reject a protected action before preflight when no confirmation can be collected.
+    pub(crate) fn require_confirmation_available(
+        &self,
+        force: bool,
+        action: &'static str,
+    ) -> Result<(), CliError> {
+        if force || self.can_prompt() {
+            Ok(())
+        } else {
+            Err(CliError::ConfirmationRequired { action })
+        }
+    }
+
+    /// Confirm a protected action, or require `--force` when prompting is unavailable.
+    pub fn confirm(
+        &self,
+        force: bool,
+        action: &'static str,
+        message: impl std::fmt::Display,
+    ) -> Result<bool, CliError> {
+        self.require_confirmation_available(force, action)?;
+        if force {
+            return Ok(true);
+        }
+
+        let message = terminal_safe(&message.to_string());
+        self.prompt(format_args!("{message} [y/N] "))?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        Ok(confirmation_answer(&answer))
+    }
+
+    /// Ask an optional wizard question, using its default in quiet mode.
+    pub fn ask(
+        &self,
+        message: impl std::fmt::Display,
+        default_yes: bool,
+    ) -> Result<bool, CliError> {
+        if self.quiet {
+            return Ok(default_yes);
+        }
+        if !self.can_prompt() {
+            return Ok(false);
+        }
+
+        let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+        self.prompt(format_args!("{message} {suffix} "))?;
+        let mut answer = String::new();
+        let bytes_read = io::stdin().read_line(&mut answer)?;
+        Ok(wizard_answer(&answer, default_yes, bytes_read != 0))
+    }
+
     fn output_allows_prompt(&self) -> bool {
         !self.quiet && !self.json
     }
@@ -121,6 +173,8 @@ impl Print {
 
     /// Label/value detail line for human output.
     pub fn detail(&self, label: &str, value: impl std::fmt::Display) {
+        let label = terminal_safe(label);
+        let value = terminal_safe(&value.to_string());
         if self.is_human_tty() {
             eprintln!("  {DIM}{label}:{RESET} {value}");
         } else {
@@ -134,10 +188,16 @@ impl Print {
             return;
         }
 
+        let title = terminal_safe(title);
+        let items = items
+            .iter()
+            .map(|(label, value)| (terminal_safe(label), terminal_safe(value)))
+            .collect::<Vec<_>>();
+
         if self.is_human_tty() {
-            render_summary_card_tty(title, items);
+            render_summary_card_tty(&title, &items);
         } else {
-            self.status(title);
+            self.status(&title);
             self.status("");
             for (label, value) in items {
                 self.status(format_args!("{label}: {value}"));
@@ -284,6 +344,21 @@ fn terminals_allow_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
     stdin_tty && stderr_tty
 }
 
+fn confirmation_answer(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn wizard_answer(answer: &str, default_yes: bool, received_input: bool) -> bool {
+    if !received_input {
+        return false;
+    }
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return default_yes;
+    }
+    matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
 fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
     let label_width = items
         .iter()
@@ -382,7 +457,10 @@ fn render_command(command: &std::process::Command) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Print, render_command, terminal_allows_ansi, terminals_allow_prompt};
+    use super::{
+        Print, confirmation_answer, render_command, terminal_allows_ansi, terminals_allow_prompt,
+        wizard_answer,
+    };
     use std::ffi::OsStr;
     use std::process::Command;
 
@@ -421,5 +499,29 @@ mod tests {
         assert!(terminals_allow_prompt(true, true));
         assert!(!terminals_allow_prompt(false, true));
         assert!(!terminals_allow_prompt(true, false));
+    }
+
+    #[test]
+    fn confirmation_accepts_only_y_or_yes() {
+        assert!(confirmation_answer("y\n"));
+        assert!(confirmation_answer(" YES "));
+        assert!(!confirmation_answer(""));
+        assert!(!confirmation_answer("no"));
+    }
+
+    #[test]
+    fn wizard_defaults_apply_only_after_interactive_input() {
+        assert!(wizard_answer("\n", true, true));
+        assert!(!wizard_answer("", true, false));
+        assert!(!wizard_answer("n\n", true, true));
+        assert!(wizard_answer("yes\n", false, true));
+    }
+
+    #[test]
+    fn quiet_wizard_questions_use_their_default() {
+        let print = Print::quiet();
+
+        assert!(print.ask("Create key?", true).unwrap());
+        assert!(!print.ask("Create project?", false).unwrap());
     }
 }

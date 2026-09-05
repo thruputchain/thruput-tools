@@ -415,7 +415,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -475,7 +475,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     )
     .unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()
@@ -558,7 +558,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     );
     assert!(
         cargo_args.contains(
-            "build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf"
+            "build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf"
         )
     );
     assert!(cargo_args.contains("-p demo-contract-rv32"));
@@ -571,7 +571,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     // changes codegen, but the absolute path is specific to this machine.
     assert_eq!(
         metadata["build_flags"],
-        "cargo --config .cargo/contract.toml build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
+        "cargo --config .cargo/contract.toml build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
 }
 
@@ -584,7 +584,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -602,7 +602,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     let elf_fixture = project_root.join("fixture.elf");
     fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()
@@ -666,7 +666,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
         metadata["build_flags"],
-        "cargo --config .cargo/contract.toml rustc --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
+        "cargo --config .cargo/contract.toml rustc --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
     );
 }
 #[test]
@@ -1495,7 +1495,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -1508,7 +1508,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     // for the resolved graph: serve the SDK package on that call alone, and
     // the test fails if the preflight reads the wrong one.
     let workspace_metadata = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         project_root.join("target").display(),
         project_root.join("Cargo.toml").display()
@@ -1604,7 +1604,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -1614,7 +1614,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
 
     let cargo_args_log = project_root.join("cargo-args.log");
     let workspace_metadata = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         project_root.join("target").display(),
         project_root.join("Cargo.toml").display()

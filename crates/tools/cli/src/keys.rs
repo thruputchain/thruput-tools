@@ -6,7 +6,7 @@ use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -119,14 +119,23 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Export a stored private key for use with a client signer.
-pub fn export(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+/// Export a stored private key after interactive confirmation or `force` authorization.
+pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {
         return Err(CliError::KeyNotFound(name.to_string()));
     }
+    if !print.confirm(
+        force,
+        "export a private signing key",
+        format_args!("Export private key `{name}` to standard output? Treat it as a secret."),
+    )? {
+        print.note("Cancelled");
+        return Ok(());
+    }
 
+    // Do not load secret key material until export has been authorized.
     let keypair_bytes = load_stored_keypair_bytes(name)?;
     LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))?;
     let report = KeysExportReport {
@@ -171,47 +180,21 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
     Ok(())
 }
 
-/// Remove a stored signing key.
-///
-/// JSON and quiet callers retain the legacy non-interactive behavior. New CLI
-/// dispatch should use [`remove_with_force`] so deletion authority is explicit.
-pub fn remove(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    let legacy_non_interactive_bypass = print.is_json() || print.is_quiet();
-    remove_with_force(name, legacy_non_interactive_bypass, cmd, print)
-}
-
-/// Remove a stored signing key, optionally bypassing confirmation.
-pub fn remove_with_force(
-    name: &str,
-    force: bool,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
+/// Remove a stored signing key after interactive confirmation or `force` authorization.
+pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {
         return Err(CliError::KeyNotFound(name.to_string()));
     }
 
-    if !force && !print.can_prompt() {
-        return Err(CliError::ConfirmationRequired {
-            action: crate::error::REMOVE_KEY_CONFIRMATION_ACTION,
-        });
-    }
-
-    if !force {
-        print.prompt(format_args!(
-            "Remove key `{name}`? This cannot be undone. [y/N] "
-        ))?;
-        let mut answer = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut answer)
-            .map_err(CliError::Io)?;
-        if !answer.trim().eq_ignore_ascii_case("y") {
-            print.note("Cancelled");
-            return Ok(());
-        }
+    if !print.confirm(
+        force,
+        "remove a stored signing key",
+        format_args!("Remove key `{name}`? This cannot be undone."),
+    )? {
+        print.note("Cancelled");
+        return Ok(());
     }
 
     fs::remove_file(&path)?;
