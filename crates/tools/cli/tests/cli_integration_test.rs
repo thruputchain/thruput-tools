@@ -12437,7 +12437,7 @@ impl std::ops::Deref for MockListener {
     fn deref(&self) -> &TcpListener {
         self.0
             .as_ref()
-            .expect("listener retired while still in use")
+            .expect("bug: listener retired while still in use")
     }
 }
 
