@@ -280,6 +280,11 @@ expose it in logs or CI output, or commit it to a file.
 
 Create and manage wallets owned by stored signing keys:
 
+Live `deploy`, `call`, `transfer`, `airdrop`, and `wallet create` operations ask
+for confirmation on every network before signing, submitting, or retaining
+attempt state. Pass command-local `--force` for automation. `--json`, `--quiet`,
+and non-TTY invocations fail closed without `--force`; `--dry-run` never prompts.
+
 ```bash
 groundhog wallet create --key alice
 groundhog wallet create --key alice --profile devnet
@@ -299,8 +304,8 @@ For `network = "local"`, the CLI signs the prefund and create transactions with
 the fixed local bootstrap faucet role advertised by `groundhog node` (`dev-0`).
 `--prefund <HOG>` accepts an exact Local prefund with
 up to seven decimal places and rejects values below 1 HOG. If the transfer
-would leave the finite local faucet below 10 HOG, the CLI warns and requires
-confirmation or `--yes`. The built-in `dev-N` wallets are deployed and funded
+would leave the finite local faucet below 10 HOG, the confirmation summary also
+shows a warning. The built-in `dev-N` wallets are deployed and funded
 directly at genesis, so they do not use this flow and cannot be passed to
 `wallet create`. Generate or select a non-dev signing key before creating
 another wallet.
@@ -332,8 +337,8 @@ Local requests are signed by the bootstrap faucet account and transfer its
 existing HOG; they do not mint. The Local default is 10 HOG, and `--amount`
 accepts any exact positive amount the finite faucet can cover. Local mode has no
 policy cap or rate limit. A conservative balance check rejects transfers the
-faucet cannot cover, and a transfer projected to leave less than 10 HOG requires
-confirmation or `--yes`. Successful requests report best-effort committed
+faucet cannot cover, and a transfer projected to leave less than 10 HOG adds a
+warning to the normal live-operation confirmation. Successful requests report best-effort committed
 faucet and recipient balances.
 
 Devnet requests go through the configured faucet HTTP service. The service
@@ -372,7 +377,7 @@ groundhog deploy -p counter
 groundhog deploy --profile testnet
 groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog deploy --artifact target/groundhog/counter.rv32a
-groundhog deploy --json
+groundhog deploy --json --force
 ```
 
 At a Cargo workspace root, `-p <package>` (or `--package <package>`) selects the
@@ -394,7 +399,7 @@ groundhog call my-counter get
 groundhog call 0xabc123... get
 groundhog call my-counter increment 5 --dry-run
 groundhog call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
-groundhog call my-counter increment 5 --json
+groundhog call my-counter increment 5 --json --force
 ```
 
 Embedded contract specs now drive selector resolution plus first-pass
@@ -561,9 +566,9 @@ groundhog chain restore --data-dir .groundhog/node --input chain-backup.json --f
 ```
 
 Both commands fail while `groundhog node` is using the data directory. Dump
-refuses an existing output unless `--overwrite` is passed. Restore requires
-`--force` before replacing populated state and validates every archived file's
-size and SHA-256 before installing it.
+asks before replacing an existing output; pass `--force` to confirm
+non-interactively. Restore does the same before replacing populated state and
+validates every archived file's size and SHA-256 before installing it.
 
 ### `groundhog codegen ts`
 
@@ -737,8 +742,13 @@ profiles may name a default key.
 
 ## AI-Assisted Development
 
-This repo includes a skill file at `docs/cli/SKILL.md` for use with AI coding
-assistants. It provides guidance on storage type selection, SDK macros, test
-patterns, and concurrency guardrails specific to Groundhog contracts.
+The installed CLI carries release-matched guidance for coding agents:
 
-To use it, follow your LLM's instructions on where/how to place skills files.
+```bash
+groundhog --skill
+```
+
+This is a root-only, exclusive mode rather than a global flag; invoke it exactly
+as shown. The command prints the complete Groundhog skill as Markdown without
+network access or filesystem changes. An agent can read it directly, or the
+user can save and install it using the agent's normal skill workflow.

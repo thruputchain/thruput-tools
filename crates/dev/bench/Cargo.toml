@@ -2,6 +2,7 @@
 name = "groundhog-bench"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Benchmark harness for Groundhog JSON-RPC endpoints"
 

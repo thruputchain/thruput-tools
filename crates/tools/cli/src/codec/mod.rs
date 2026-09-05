@@ -417,7 +417,7 @@ fn decode_spec_value_from_reader_with_policy(
     }
 }
 
-/// Strip Rust reference and lifetime syntax from locally parsed type names.
+/// Normalize supported Rust syntax from locally parsed type names.
 pub(crate) fn normalize_type_name(ty: &str) -> String {
     let mut ty = ty.trim();
 
@@ -434,7 +434,11 @@ pub(crate) fn normalize_type_name(ty: &str) -> String {
         }
     }
 
-    ty.to_string()
+    match ty {
+        "sdk::U256" | "groundhog_sdk::U256" => "U256".into(),
+        "sdk::I256" | "groundhog_sdk::I256" => "I256".into(),
+        _ => ty.to_owned(),
+    }
 }
 
 fn encode_spec_typed_args(
@@ -648,6 +652,16 @@ fn encode_json_scalar_value(
         ContractType::I128 => Some(parse_json_numeric::<i128>(value, "i128", path).and_then(
             |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
         )),
+        ContractType::U256 => Some(
+            parse_json_numeric::<sdk::U256>(value, "U256", path).and_then(|value| {
+                encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string()))
+            }),
+        ),
+        ContractType::I256 => Some(
+            parse_json_numeric::<sdk::I256>(value, "I256", path).and_then(|value| {
+                encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string()))
+            }),
+        ),
         ContractType::String => Some(parse_json_string(value, path).and_then(|value| {
             encode_xdr_value(value.to_owned()).map_err(|e| encode_value_error(path, e.to_string()))
         })),
@@ -1105,10 +1119,12 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Cli
         "u32" => encode_local_xdr_value::<u32>(parse_numeric(value, &ty)?, path),
         "u64" => encode_local_xdr_value::<u64>(parse_numeric(value, &ty)?, path),
         "u128" => encode_local_xdr_value::<u128>(parse_numeric(value, &ty)?, path),
+        "U256" => encode_local_xdr_value::<sdk::U256>(parse_numeric(value, &ty)?, path),
         "i16" => encode_local_xdr_value::<i16>(parse_numeric(value, &ty)?, path),
         "i32" => encode_local_xdr_value::<i32>(parse_numeric(value, &ty)?, path),
         "i64" => encode_local_xdr_value::<i64>(parse_numeric(value, &ty)?, path),
         "i128" => encode_local_xdr_value::<i128>(parse_numeric(value, &ty)?, path),
+        "I256" => encode_local_xdr_value::<sdk::I256>(parse_numeric(value, &ty)?, path),
         "bool" => {
             let parsed = value
                 .parse::<bool>()
@@ -1242,6 +1258,10 @@ fn encode_scalar_cli_value(
             .map_err(|e| encode_value_error(path, e.to_string())),
         ContractType::I128 => encode_xdr_value(parse_numeric::<i128>(value, "i128")?)
             .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::U256 => encode_xdr_value(parse_numeric::<sdk::U256>(value, "U256")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
+        ContractType::I256 => encode_xdr_value(parse_numeric::<sdk::I256>(value, "I256")?)
+            .map_err(|e| encode_value_error(path, e.to_string())),
         ContractType::String => {
             encode_xdr_value(value.to_owned()).map_err(|e| encode_value_error(path, e.to_string()))
         }
@@ -1370,6 +1390,12 @@ fn decode_spec_scalar_value_from_reader(
         ContractType::I128 => {
             Some(read_xdr_value::<i128>(reader, path).map(|value| Value::from(value.to_string())))
         }
+        ContractType::U256 => Some(
+            read_xdr_value::<sdk::U256>(reader, path).map(|value| Value::from(value.to_string())),
+        ),
+        ContractType::I256 => Some(
+            read_xdr_value::<sdk::I256>(reader, path).map(|value| Value::from(value.to_string())),
+        ),
         ContractType::String => Some(read_xdr_value::<String>(reader, path).map(Value::from)),
         ContractType::Bytes => Some(
             reader
@@ -1637,10 +1663,12 @@ fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<Value> {
         "u32" => decode_xdr_value::<u32>(bytes).map(Value::from),
         "u64" => decode_xdr_value::<u64>(bytes).map(Value::from),
         "u128" => decode_xdr_value::<u128>(bytes).map(|value| Value::from(value.to_string())),
+        "U256" => decode_xdr_value::<sdk::U256>(bytes).map(|value| Value::from(value.to_string())),
         "i16" => decode_xdr_value::<i16>(bytes).map(Value::from),
         "i32" => decode_xdr_value::<i32>(bytes).map(Value::from),
         "i64" => decode_xdr_value::<i64>(bytes).map(Value::from),
         "i128" => decode_xdr_value::<i128>(bytes).map(|value| Value::from(value.to_string())),
+        "I256" => decode_xdr_value::<sdk::I256>(bytes).map(|value| Value::from(value.to_string())),
         "bool" => decode_xdr_value::<bool>(bytes).map(Value::from),
         "String" | "str" => decode_xdr_value::<String>(bytes).map(Value::from),
         "ContractAddress" => decode_xdr_value::<ContractAddress>(bytes).map(hex_json_value),

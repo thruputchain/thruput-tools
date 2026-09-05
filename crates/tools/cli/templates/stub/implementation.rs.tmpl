@@ -8,11 +8,9 @@ pub enum Error {
 
 #[derive(Debug)]
 #[sdk::storage]
-pub struct Contract {
-}
+pub struct Contract {}
 
 #[contract(throws = Error)]
 impl Contract {
-    pub fn initialize(&mut self) {
-    }
+    pub fn initialize(&mut self) {}
 }

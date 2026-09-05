@@ -4,9 +4,6 @@ use thiserror::Error;
 
 use crate::terminal::{render_shell_arg, terminal_safe};
 
-pub(crate) const REMOVE_KEY_CONFIRMATION_ACTION: &str = "remove a stored signing key";
-pub(crate) const REMOVE_PROFILE_CONFIRMATION_ACTION: &str = "remove a configuration profile";
-
 /// All errors returned by CLI commands.
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -401,8 +398,6 @@ pub enum CliError {
     ChainArchiveInvalid { path: String, message: String },
     #[error("chain dump output already exists: {0}")]
     ChainDumpExists(String),
-    #[error("chain restore destination is populated: {0}")]
-    ChainRestoreRequiresForce(String),
     #[error("chain archive path must be outside the data directory: {0}")]
     ChainArchiveInsideDataDir(String),
     #[error("chain archive operation failed: {0}")]
@@ -416,17 +411,6 @@ pub enum CliError {
     },
     #[error("{0}")]
     Other(String),
-}
-
-fn confirmation_required_flag(action: &str) -> &'static str {
-    if matches!(
-        action,
-        REMOVE_KEY_CONFIRMATION_ACTION | REMOVE_PROFILE_CONFIRMATION_ACTION
-    ) {
-        "--force"
-    } else {
-        "--yes"
-    }
 }
 
 impl CliError {
@@ -546,7 +530,6 @@ impl CliError {
             Self::ChainDataDirLocked(_) => "chain_data_dir_locked",
             Self::ChainArchiveInvalid { .. } => "chain_archive_invalid",
             Self::ChainDumpExists(_) => "chain_dump_exists",
-            Self::ChainRestoreRequiresForce(_) => "chain_restore_requires_force",
             Self::ChainArchiveInsideDataDir(_) => "chain_archive_inside_data_dir",
             Self::ChainArchiveIo(_) => "chain_archive_io",
             Self::InvalidArgument { .. } => "invalid_argument",
@@ -672,12 +655,9 @@ impl CliError {
             Self::ProfileConfigInvalid { .. } => Some(Cow::Borrowed(
                 "update the selected profile in project or global config, or choose a profile that matches the requested command",
             )),
-            Self::ConfirmationRequired { action } => {
-                let required_flag = confirmation_required_flag(action);
-                Some(Cow::Owned(format!(
-                    "review the warning and rerun with `{required_flag}` to confirm non-interactively"
-                )))
-            }
+            Self::ConfirmationRequired { .. } => Some(Cow::Borrowed(
+                "review the warning and rerun with `--force` to confirm non-interactively",
+            )),
             Self::FaucetService {
                 retry_after_seconds: Some(_),
                 ..
@@ -835,10 +815,7 @@ impl CliError {
                 "use an unmodified archive produced by `groundhog chain dump`",
             )),
             Self::ChainDumpExists(_) => Some(Cow::Borrowed(
-                "choose another output path or pass `--overwrite`",
-            )),
-            Self::ChainRestoreRequiresForce(_) => Some(Cow::Borrowed(
-                "pass `--force` to replace the existing persistent node state",
+                "review the existing archive and rerun with `--force`, or choose another output path",
             )),
             Self::ChainArchiveInsideDataDir(_) => Some(Cow::Borrowed(
                 "place the archive outside the node data directory",
@@ -1056,7 +1033,7 @@ impl CliError {
             })),
             Self::ConfirmationRequired { action } => Some(json!({
                 "action": action,
-                "requiredFlag": confirmation_required_flag(action),
+                "requiredFlag": "--force",
             })),
             Self::FaucetService {
                 url,

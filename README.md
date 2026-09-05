@@ -9,14 +9,28 @@ client, simulator, benchmark harness, and canonical OpenRPC artifact.
 - **Building on Groundhog?** (writing contracts, building SDKs,
   integrating with the JSON-RPC API) → [Building on Groundhog](#building-on-groundhog).
 - **Contributing to this repo?** → [Contributing](#contributing).
+- **Using a coding agent?** Run `groundhog --skill` first. From this checkout,
+  use `cargo run -p groundhog-cli -- --skill` so its guidance matches the code.
 
 ---
 
 ## Building on Groundhog
 
-### Install the CLI from this checkout
+### Install the CLI
 
-From the repository root:
+The CLI needs Rust 1.96 or newer (`rustup update stable`). Generated contract
+projects pin their own nightly through `rust-toolchain.toml`, which rustup
+installs on first use.
+
+From the private Groundhog registry:
+
+```bash
+export CARGO_REGISTRIES_GROUNDHOG_INDEX="sparse+https://groundhog.dev/crates/api/v1/crates/"
+cargo install groundhog-cli --registry groundhog --locked
+groundhog --version
+```
+
+Or from this checkout, from the repository root:
 
 ```bash
 cargo install --path crates/tools/cli --locked --force

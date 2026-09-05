@@ -7,9 +7,7 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
 use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
 use super::dirs::config_file_path;
 use super::project::ProjectProfile;
-use super::read::{
-    PersistedProfileState, load_global_field, load_global_profile_state, validate_http_url,
-};
+use super::read::{load_global_field, validate_http_url};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
@@ -46,20 +44,6 @@ pub(crate) struct GlobalConfigFile {
     pub(crate) profile: BTreeMap<String, ProjectProfile>,
     #[serde(default)]
     pub(crate) local_runtime_state: Option<LocalRuntimeState>,
-}
-
-pub(crate) fn load_global_profile(name: &str) -> Result<Option<ProjectProfile>, CliError> {
-    match load_global_profile_state(name)? {
-        Some(PersistedProfileState::Valid(profile)) => Ok(Some(profile)),
-        Some(PersistedProfileState::Invalid { reason }) => Err(CliError::ProfileConfigInvalid {
-            profile: name.to_owned(),
-            message: format!(
-                "is invalid in global config `{}`: {reason}",
-                config_file_path()?.display()
-            ),
-        }),
-        None => Ok(None),
-    }
 }
 
 fn transact_config_file(

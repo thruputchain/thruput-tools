@@ -35,7 +35,10 @@ mod live {
         let profile = required_env("GROUNDHOG_PROFILE");
         let default_key = required_env("GROUNDHOG_DEFAULT_KEY");
 
-        assert!(rpc_url.starts_with("http://"), "unexpected RPC URL: {rpc_url}");
+        assert!(
+            rpc_url.starts_with("http://"),
+            "unexpected RPC URL: {rpc_url}"
+        );
         assert_contract_address(&contract_address);
         assert_eq!(profile, "integration");
         assert_eq!(default_key, "dev-1");

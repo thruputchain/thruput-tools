@@ -1,8 +1,8 @@
-use {{PROJECT_NAME_SNAKE}}::register_mock_contract;
 use sdk::*;
 
-static NONCE: SHA256Hash =
-    sdk::sha256_static!("{{PROJECT_NAME_UPPER_SNAKE}}_NONCE");
+use {{PROJECT_NAME_SNAKE}}::register_mock_contract;
+
+static NONCE: SHA256Hash = sdk::sha256_static!("{{PROJECT_NAME_UPPER_SNAKE}}_NONCE");
 
 #[test]
 fn test_deploy() {
@@ -11,11 +11,9 @@ fn test_deploy() {
     let contract_hash = *test_contract.as_hash();
 
     env.transact(|tx| {
-        let caller = <ContractAddress as Named>::named("test_deploy");
+        let caller = ContractAddress::named("test_deploy");
         tx.call(&caller).run(move || {
-            deploy_contract(
-                &NONCE, &contract_hash,
-            );
+            deploy_contract(&NONCE, &contract_hash);
         })
     })
     .assert_success();

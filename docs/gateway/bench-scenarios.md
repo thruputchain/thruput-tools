@@ -12,6 +12,11 @@ for a shorter correctness loop; `gateway-baseline` and `submit-ramp` use release
 mode so their timings are comparable. Set `BENCH_BUILD_PROFILE=debug|release`
 to override the scenario default.
 
+The scenario runner passes `--force` to its `sendRawTransaction` benchmarks.
+Direct interactive submit runs prompt before transaction generation; direct
+JSON or non-TTY runs must explicitly pass `--force`. Read-only methods do not
+prompt.
+
 ```bash
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=smoke \
