@@ -10,6 +10,7 @@ use std::process::Command;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11584,7 +11585,7 @@ fn spawn_tx_list_rpc(
     expected_query: serde_json::Value,
     response: TxListRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
@@ -11616,7 +11617,7 @@ fn spawn_events_rpc(
     expected_query: serde_json::Value,
     response: EventRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
@@ -11648,7 +11649,7 @@ fn spawn_tx_show_rpc(
     status: TxShowRpcResponse,
     receipt: Option<TxShowRpcResponse>,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let tx_hash = tx_hash.to_owned();
@@ -11736,7 +11737,7 @@ fn spawn_network_descriptor_with_hash(
     rpc_url: &str,
     network_hash: &str,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let rpc_url = rpc_url.to_owned();
@@ -11815,7 +11816,7 @@ fn spawn_network_descriptor_with_hash(
 }
 
 fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let network_hash = network_hash.to_owned();
@@ -11886,7 +11887,7 @@ fn send_jsonrpc_error_response(
 }
 
 fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -11940,7 +11941,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 }
 
 fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let recipient = recipient.to_owned();
@@ -11982,7 +11983,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
 }
 
 fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let faucet = faucet.to_owned();
@@ -12002,7 +12003,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
 }
 
 fn spawn_local_wallet_create_rpc(faucet: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let faucet = faucet.to_owned();
@@ -12093,7 +12094,7 @@ fn spawn_balance_then_chain_tip_rpc(
     raw_balance: &str,
     height: i64,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = address.to_owned();
@@ -12129,7 +12130,7 @@ fn spawn_balance_then_chain_tip_rpc(
 }
 
 fn spawn_no_request_rpc() -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
@@ -12286,7 +12287,7 @@ fn spawn_transfer_rpc(
     mock: TransferRpcMock,
     expected_sender: String,
 ) -> (String, thread::JoinHandle<()>, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let (local_hash_tx, local_hash_rx) = mpsc::channel();
@@ -12409,6 +12410,93 @@ fn serve_transfer_poll(
     }
 }
 
+/// A mock-server listener whose port is never handed back to the OS.
+///
+/// The OS recycles an ephemeral port as soon as its listener is dropped, and
+/// these integration tests run concurrently against a `groundhog` child
+/// process each. When one test's mock finishes, its port can immediately be
+/// reassigned to another test's mock while the first test's child is still
+/// retrying — that stray request then arrives as the second mock's "first"
+/// request and fails a test that never made it.
+///
+/// Retiring the listener instead of closing it keeps the port out of
+/// circulation for the rest of the run. A reaper thread accepts and
+/// immediately closes anything that still arrives, so a straggler sees the
+/// connection close rather than hanging on an unanswered socket.
+struct MockListener(Option<TcpListener>);
+
+impl MockListener {
+    fn bind() -> Self {
+        Self(Some(TcpListener::bind("127.0.0.1:0").unwrap()))
+    }
+}
+
+impl std::ops::Deref for MockListener {
+    type Target = TcpListener;
+
+    fn deref(&self) -> &TcpListener {
+        self.0
+            .as_ref()
+            .expect("listener retired while still in use")
+    }
+}
+
+impl Drop for MockListener {
+    fn drop(&mut self) {
+        if let Some(listener) = self.0.take() {
+            retire_listener(listener);
+        }
+    }
+}
+
+fn retired_listeners() -> &'static Mutex<Vec<TcpListener>> {
+    static RETIRED: OnceLock<Mutex<Vec<TcpListener>>> = OnceLock::new();
+    RETIRED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn retire_listener(listener: TcpListener) {
+    static REAPER: Once = Once::new();
+    REAPER.call_once(|| {
+        thread::spawn(|| {
+            loop {
+                for retired in retired_listeners().lock().unwrap().iter() {
+                    // Retired listeners stay non-blocking, so this drains
+                    // whatever is pending and then yields.
+                    while let Ok((stream, _)) = retired.accept() {
+                        drop(stream);
+                    }
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        });
+    });
+    retired_listeners().lock().unwrap().push(listener);
+}
+
+#[test]
+fn a_retired_mock_listener_keeps_its_port_out_of_circulation() {
+    let addr = {
+        let listener = MockListener::bind();
+        listener.set_nonblocking(true).unwrap();
+        listener.local_addr().unwrap()
+    };
+
+    // The guard has been dropped. If the port had gone back to the OS another
+    // test's MockListener::bind() could be handed it while a child process is
+    // still retrying against it, which is the race this guards against.
+    assert!(
+        TcpListener::bind(addr).is_err(),
+        "retired port {addr} was returned to the OS"
+    );
+
+    // Stragglers are accepted and closed rather than left hanging.
+    let straggler = std::net::TcpStream::connect(addr);
+    assert!(
+        straggler.is_ok(),
+        "retired port {addr} refused a late connection: {straggler:?}"
+    );
+}
+
 fn assert_no_follow_up_rpc(listener: &TcpListener) {
     let deadline = Instant::now() + Duration::from_millis(200);
     loop {
@@ -12426,7 +12514,7 @@ fn assert_no_follow_up_rpc(listener: &TcpListener) {
 }
 
 fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -12457,7 +12545,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
 }
 
 fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -12572,7 +12660,7 @@ fn spawn_view_rpc_inner_with_events(
     output: serde_json::Value,
     events: serde_json::Value,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -12870,7 +12958,7 @@ fn spawn_transaction_rpc(
     receipt: serde_json::Value,
     detail_response: DevDetailRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
