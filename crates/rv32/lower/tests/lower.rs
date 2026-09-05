@@ -10,7 +10,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
-use groundhog_rv32_lower::{MetadataInput, lower, render_metadata};
+use groundhog_rv32_lower::{
+    ALLOC_ALLOWLIST, INTERFACE_ID_BYTES, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION,
+    MetadataInput, lower, render_metadata,
+};
 
 // ---------------------------------------------------------------------------
 // Minimal ELF32 little-endian RISC-V builder.
@@ -470,6 +473,108 @@ fn rejects_relocations() {
         size_override: None,
     });
     expect_err(spec, "relocations are not allowed");
+}
+
+// ---------------------------------------------------------------------------
+// Interface table: in every ELF, in the image only when its anchor is.
+// ---------------------------------------------------------------------------
+
+/// Eight distinct 8-byte records, none starting with a zero byte so the
+/// stored span begins exactly at the table.
+fn distinct_records() -> Vec<u8> {
+    (1u8..=64).collect()
+}
+
+fn interface_table_spec(with_anchor: Option<Vec<u8>>) -> ElfSpec {
+    interface_table_spec_with(distinct_records(), with_anchor)
+}
+
+fn interface_table_spec_with(table: Vec<u8>, with_anchor: Option<Vec<u8>>) -> ElfSpec {
+    let mut spec = happy_spec();
+    let anchor_addr = 0x2000 + as_u32(table.len());
+    spec.extras.push(ExtraSection::progbits(
+        INTERFACE_TABLE_SECTION,
+        SHF_ALLOC,
+        0x2000,
+        table,
+    ));
+    if let Some(anchor) = with_anchor {
+        spec.extras.push(ExtraSection::progbits(
+            INTERFACE_TABLE_ANCHOR_SECTION,
+            SHF_ALLOC,
+            anchor_addr,
+            anchor,
+        ));
+    }
+    spec
+}
+
+#[test]
+fn drops_the_interface_table_without_its_anchor() {
+    let lowered = lower(&assemble(interface_table_spec(None))).expect("lowers");
+    assert!(
+        lowered.initial_memory.is_empty(),
+        "table bytes reached the image: {:?}",
+        lowered.initial_memory
+    );
+}
+
+#[test]
+fn drops_the_interface_table_when_the_anchor_is_empty() {
+    let lowered = lower(&assemble(interface_table_spec(Some(Vec::new())))).expect("lowers");
+    assert!(lowered.initial_memory.is_empty());
+}
+
+#[test]
+fn keeps_the_interface_table_with_its_anchor() {
+    let lowered = lower(&assemble(interface_table_spec(Some(vec![1, 0, 0, 0])))).expect("lowers");
+    assert_eq!(lowered.initial_memory_start, 0x2000);
+    assert_eq!(&lowered.initial_memory[..64], &distinct_records()[..]);
+    assert_eq!(&lowered.initial_memory[64..], &[1][..]);
+    assert!(lowered.warnings.is_empty(), "{:?}", lowered.warnings);
+}
+
+#[test]
+fn warns_once_per_duplicate_interface_id() {
+    let mut table = distinct_records();
+    table.extend_from_slice(&distinct_records()[8..16]); // record 1 again
+    table.extend_from_slice(&distinct_records()[8..16]); // and again
+    let lowered = lower(&assemble(interface_table_spec_with(
+        table,
+        Some(vec![1, 0, 0, 0]),
+    )))
+    .expect("lowers");
+    // The warning is advisory: all ten records reach the image as linked.
+    assert_eq!(lowered.initial_memory.len(), 10 * INTERFACE_ID_BYTES + 1);
+    assert_eq!(lowered.warnings.len(), 1, "{:?}", lowered.warnings);
+    assert!(
+        lowered.warnings[0].contains("duplicate id 0x090a0b0c0d0e0f10"),
+        "{:?}",
+        lowered.warnings
+    );
+}
+
+#[test]
+fn checks_the_interface_table_even_when_dropping_it() {
+    let mut table = distinct_records();
+    table.extend_from_slice(&distinct_records()[..8]);
+    let lowered = lower(&assemble(interface_table_spec_with(table, None))).expect("lowers");
+    assert!(lowered.initial_memory.is_empty());
+    assert_eq!(lowered.warnings.len(), 1, "{:?}", lowered.warnings);
+}
+
+#[test]
+fn rejects_a_ragged_interface_table() {
+    expect_err(
+        interface_table_spec_with(vec![0xAB; 12], None),
+        "is not a multiple of 8",
+    );
+}
+
+#[test]
+fn interface_table_sections_are_allowlisted() {
+    assert!(ALLOC_ALLOWLIST.contains(&INTERFACE_TABLE_SECTION));
+    assert!(ALLOC_ALLOWLIST.contains(&INTERFACE_TABLE_ANCHOR_SECTION));
 }
 
 #[test]

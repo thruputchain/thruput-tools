@@ -74,6 +74,13 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
     let elf_bytes = fs::read(elf)?;
     let lowered = lower(&elf_bytes)?;
     fs::write(out, &lowered.artifact)?;
+    // The JSON summary carries `warnings`; plain mode prints them where a
+    // human building a contract will see them.
+    if !cli.json {
+        for warning in &lowered.warnings {
+            eprintln!("warning: {warning}");
+        }
+    }
 
     if let Some(metadata_path) = &cli.metadata {
         let document = render_metadata(&MetadataInput {
