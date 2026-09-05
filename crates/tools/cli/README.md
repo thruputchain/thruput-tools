@@ -458,32 +458,6 @@ line is resolved from the invocation directory and wins over
 `GROUNDHOG_RUNTIME_MANIFEST`; the environment override still wins over
 `groundhog.toml` profile settings.
 
-### `groundhog balance`
-
-Read the native HOG balance of a wallet, contract alias, `dev-N` account, or
-raw address. With no target it reads the effective wallet of the selected
-profile.
-
-```bash
-groundhog balance                       # effective wallet
-groundhog balance alice --profile devnet
-groundhog balance 0x<address> --rpc-url http://<your-rpc-host>:8545
-```
-
-### `groundhog view`
-
-Run a sandboxed contract simulation via `groundhog_view` against committed
-state. Nothing is signed or submitted. Named methods use local or built
-contract-spec metadata; without metadata, pass an explicit `0x`-prefixed
-8-byte entrypoint ID and raw calldata.
-
-```bash
-groundhog view my-counter get
-groundhog view my-counter get --from dev-1        # simulated caller
-groundhog view 0x<contract> 0x<entrypoint-id> --calldata 0x<hex>
-groundhog view my-counter get -p my-counter       # workspace member
-```
-
 ### `groundhog node`
 
 Start the local development node backed by a supervised
@@ -574,40 +548,6 @@ Both commands fail while `groundhog node` is using the data directory. Dump
 asks before replacing an existing output; pass `--force` to confirm
 non-interactively. Restore does the same before replacing populated state and
 validates every archived file's size and SHA-256 before installing it.
-
-### `groundhog codegen ts`
-
-Generate TypeScript bindings for a contract from its `.spec.xdr` sidecar.
-The generated module imports `@groundhogchain/protocol`,
-`@groundhogchain/contract-spec`, and `@groundhogchain/client/contract`.
-
-```bash
-groundhog codegen ts target/groundhog/my_counter.spec.xdr -o src/my-counter.ts
-```
-
-### `groundhog events list`
-
-List one newest-first page of raw events emitted by a contract. Repeat a
-topic option for OR within that position; constraints across positions
-combine with AND. Pass `--spec` and `--event` to decode matching events with
-a trusted local `.xdr` sidecar.
-
-```bash
-groundhog events list my-counter --limit 20
-groundhog events list my-counter --topic0 0x<hash> --cursor 0x<cursor>
-groundhog events list my-token --spec target/groundhog/my_token.spec.xdr --event Transfer
-```
-
-### `groundhog token transfers`
-
-List one newest-first page of canonical ERC20 `TransferEvent` records for a
-token. `--from`/`--to` filter one side; `--account` matches either side.
-Amounts are unformatted base-unit decimal strings.
-
-```bash
-groundhog token transfers my-token --account alice
-groundhog token transfers my-token --from dev-1 --to dev-2 --limit 10
-```
 
 ### `groundhog completion <shell>`
 
