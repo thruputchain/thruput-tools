@@ -84,6 +84,7 @@ pub(crate) struct SubmittedDeploy {
 pub fn run(
     artifact_path: Option<&Path>,
     package: Option<&str>,
+    alias: Option<&str>,
     dry_run: bool,
     force: bool,
     wallet: Option<&str>,
@@ -180,16 +181,30 @@ pub fn run(
     ) {
         let project_root = crate::config::find_project_config(&cwd)
             .and_then(|p| p.parent().map(Path::to_path_buf));
+        // `--alias` wins; otherwise the alias is the package name, which is what
+        // an author reads back with `groundhog call <name>`. There is no third
+        // source. `--artifact` names a bare binary and carries no package, so
+        // with no `--alias` nothing is recorded: this used to fall back to the
+        // project directory name, which agrees with the package name only by
+        // luck in a single-package project and disagrees in any workspace.
         if let Some(root) = project_root
-            && let Some(name) = prepared.package_name.as_deref().or_else(|| {
-                root.file_name()
-                    .and_then(|directory_name| directory_name.to_str())
-            })
             && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
         {
-            let _ =
-                crate::config::save_profile_contract_alias(&root, profile, name, contract_addr_hex);
-            print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
+            match alias.or(prepared.package_name.as_deref()) {
+                Some(name) => {
+                    let _ = crate::config::save_profile_contract_alias(
+                        &root,
+                        profile,
+                        name,
+                        contract_addr_hex,
+                    );
+                    print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
+                }
+                None => print.detail(
+                    "alias",
+                    "not recorded (no package name); pass --alias to name it",
+                ),
+            }
         }
     }
 

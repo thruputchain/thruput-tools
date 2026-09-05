@@ -3884,6 +3884,100 @@ fn deploy_workspace_package_persists_selected_package_alias() {
 }
 
 #[test]
+fn deploy_artifact_records_no_alias_without_one_and_never_the_directory() {
+    // `--artifact` carries no package name. Deploy used to fall back to the
+    // project directory name, so this deploy would have written
+    // `shared-workspace = "0x..."` -- a key that matches no package and that
+    // `groundhog call` would only find by accident.
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
+    let deployed_address = format!("0x{}", "bb".repeat(32));
+    assert!(
+        !config.contains("shared-workspace ="),
+        "the project directory name must never become an alias; config was:\n{config}"
+    );
+    assert!(
+        !config.contains(&deployed_address),
+        "no alias should be recorded without --alias; config was:\n{config}"
+    );
+}
+
+#[test]
+fn deploy_artifact_with_alias_records_that_name() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+            "--alias",
+            "token",
+        ])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
+    let deployed_address = format!("0x{}", "bb".repeat(32));
+    assert!(
+        config.contains(&format!("token = \"{deployed_address}\"")),
+        "--alias should be recorded verbatim; config was:\n{config}"
+    );
+    assert!(
+        !config.contains("shared-workspace ="),
+        "the project directory name must never become an alias; config was:\n{config}"
+    );
+}
+
+#[test]
 fn deploy_dry_run_json_outputs_prepared_transaction() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");

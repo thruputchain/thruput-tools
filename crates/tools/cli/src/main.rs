@@ -228,6 +228,11 @@ enum Command {
         /// Path to compiled .rv32a (default: auto-detect)
         #[arg(long)]
         artifact: Option<PathBuf>,
+        /// Name to record the deployed address under in groundhog.toml
+        /// (defaults to the package name; with --artifact there is no package,
+        /// so without this no alias is recorded)
+        #[arg(long)]
+        alias: Option<String>,
         /// Build and sign the deploy transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -1197,6 +1202,7 @@ fn main() {
         Command::Deploy {
             package,
             artifact,
+            alias,
             dry_run,
             wallet,
             profile,
@@ -1213,6 +1219,7 @@ fn main() {
                 groundhog_cli::deploy::run(
                     artifact.as_deref(),
                     package.as_deref(),
+                    alias.as_deref(),
                     dry_run,
                     confirmation.force,
                     wallet.as_deref(),
@@ -1621,6 +1628,78 @@ mod tests {
                 assert!(sources);
             }
             _ => panic!("expected config get command"),
+        }
+    }
+
+    #[test]
+    fn deploy_alias_flag_parses_and_defaults_to_none() {
+        let with_alias = Cli::parse_from([
+            "groundhog",
+            "deploy",
+            "--package",
+            "my-counter",
+            "--alias",
+            "counter-v2",
+        ]);
+        match with_alias.command {
+            Command::Deploy { package, alias, .. } => {
+                assert_eq!(package.as_deref(), Some("my-counter"));
+                assert_eq!(alias.as_deref(), Some("counter-v2"));
+            }
+            _ => panic!("expected deploy command"),
+        }
+
+        // Without --alias the package name is what deploy records, so the flag
+        // stays absent rather than being defaulted here.
+        let without_alias = Cli::parse_from(["groundhog", "deploy", "--package", "my-counter"]);
+        match without_alias.command {
+            Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            _ => panic!("expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn deploy_artifact_accepts_an_alias_and_does_not_demand_one() {
+        // `--artifact` names a bare binary and carries no package, so there is
+        // nothing to derive an alias from. Deploy used to fall back to the
+        // project directory name, which matches the package name only by luck
+        // in a single-package project and disagrees in any workspace. The flag
+        // is how you name it; it stays optional so that dry runs and one-off
+        // artifact deploys, which record nothing, need not invent one.
+        let Ok(alone) = Cli::try_parse_from([
+            "groundhog",
+            "deploy",
+            "--artifact",
+            "target/groundhog/token.rv32a",
+        ]) else {
+            panic!("--artifact alone should still parse");
+        };
+        match alone.command {
+            Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            _ => panic!("expected deploy command"),
+        }
+
+        let Ok(paired) = Cli::try_parse_from([
+            "groundhog",
+            "deploy",
+            "--artifact",
+            "target/groundhog/token.rv32a",
+            "--alias",
+            "token",
+        ]) else {
+            panic!("--artifact with --alias should parse");
+        };
+        match paired.command {
+            Command::Deploy {
+                artifact, alias, ..
+            } => {
+                assert_eq!(
+                    artifact,
+                    Some(PathBuf::from("target/groundhog/token.rv32a"))
+                );
+                assert_eq!(alias.as_deref(), Some("token"));
+            }
+            _ => panic!("expected deploy command"),
         }
     }
 
