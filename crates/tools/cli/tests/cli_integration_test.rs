@@ -3885,6 +3885,216 @@ fn deploy_workspace_package_persists_selected_package_alias() {
 }
 
 #[test]
+fn deploy_artifact_records_no_alias_without_one_and_never_the_directory() {
+    // `--artifact` carries no package name. Deploy used to fall back to the
+    // project directory name, so this deploy would have written
+    // `shared-workspace = "0x..."` -- a key that matches no package and that
+    // `groundhog call` would only find by accident.
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
+    let deployed_address = format!("0x{}", "bb".repeat(32));
+    assert!(
+        !config.contains("shared-workspace ="),
+        "the project directory name must never become an alias; config was:\n{config}"
+    );
+    assert!(
+        !config.contains(&deployed_address),
+        "no alias should be recorded without --alias; config was:\n{config}"
+    );
+}
+
+#[test]
+fn deploy_artifact_with_alias_records_that_name() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+            "--alias",
+            "token",
+        ])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
+    let deployed_address = format!("0x{}", "bb".repeat(32));
+    assert!(
+        config.contains(&format!("token = \"{deployed_address}\"")),
+        "--alias should be recorded verbatim; config was:\n{config}"
+    );
+    assert!(
+        !config.contains("shared-workspace ="),
+        "the project directory name must never become an alias; config was:\n{config}"
+    );
+}
+
+#[test]
+fn deploy_alias_outside_a_project_lands_in_the_global_profile() {
+    // profile_write_path resolves the nearest groundhog.toml, or the global
+    // config when there is none, so an alias deployed outside a project is
+    // recorded globally rather than dropped. Project aliases override global
+    // ones on read, which is the documented layering.
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let loose = tmp.path().join("no-project-here");
+    std::fs::create_dir_all(&loose).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    // The profile this deploy runs against lives only in the global config.
+    // write_global_config replaces the file `keys generate` just wrote, so
+    // default_key has to be set here too or the deploy has no signing key.
+    let owner_public_key = generate_key_public_key(&config_home, "alice");
+    write_global_config(
+        &config_home,
+        &format!(
+            "default_profile = \"default\"\ndefault_key = \"alice\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "aa".repeat(32)
+        ),
+    );
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+            "--alias",
+            "token",
+        ])
+        .current_dir(&loose)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    rpc_server.join().unwrap();
+
+    let global = std::fs::read_to_string(config_home.join("groundhog").join("config.toml"))
+        .expect("global config should exist");
+    let deployed_address = format!("0x{}", "bb".repeat(32));
+    assert!(
+        global.contains(&format!("token = \"{deployed_address}\"")),
+        "the alias should land in the global profile; config was:\n{global}"
+    );
+    assert!(
+        !loose.join("groundhog.toml").exists(),
+        "no project config should be invented in the working directory"
+    );
+}
+
+#[test]
+fn deploy_reports_an_alias_save_failure_in_json_warnings() {
+    // print.warn is a no-op under --json, so a failed alias write would
+    // otherwise leave a script with ok: true and warnings: [] and no way to
+    // know the alias is missing. `contracts` as an inline table makes the
+    // write fail without touching the deploy itself.
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    // Must sit inside [profile.default], not at the end of the file, or it
+    // lands under the wallets table and the save path never sees it.
+    let config = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    let config = config.replace("[profile.default]\n", "[profile.default]\ncontracts = {}\n");
+    std::fs::write(project.join("groundhog.toml"), config).unwrap();
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+            "--alias",
+            "token",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "the deploy landed, so the command stays successful; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    let warnings = stdout["warnings"].as_array().expect("warnings array");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["code"] == "deploy.alias_not_saved"),
+        "a failed alias write must be visible to --json consumers; warnings: {warnings:?}"
+    );
+}
+
+#[test]
 fn deploy_dry_run_json_outputs_prepared_transaction() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");

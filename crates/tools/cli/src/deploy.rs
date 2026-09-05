@@ -84,6 +84,7 @@ pub(crate) struct SubmittedDeploy {
 pub fn run(
     artifact_path: Option<&Path>,
     package: Option<&str>,
+    alias: Option<&str>,
     dry_run: bool,
     force: bool,
     wallet: Option<&str>,
@@ -174,22 +175,62 @@ pub fn run(
     }
 
     // Save contract alias
+    let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
     if matches!(
         &receipt.status,
         groundhog_json_rpc_types::receipt::ExecStatus::Ok
     ) {
-        let project_root = crate::config::find_project_config(&cwd)
-            .and_then(|p| p.parent().map(Path::to_path_buf));
-        if let Some(root) = project_root
-            && let Some(name) = prepared.package_name.as_deref().or_else(|| {
-                root.file_name()
-                    .and_then(|directory_name| directory_name.to_str())
-            })
-            && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
-        {
-            let _ =
-                crate::config::save_profile_contract_alias(&root, profile, name, contract_addr_hex);
-            print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
+        // `--alias` wins; otherwise the alias is the package name, which is what
+        // an author reads back with `groundhog call <name>`. There is no third
+        // source. `--artifact` names a bare binary and carries no package, so
+        // with no `--alias` nothing is recorded: this used to fall back to the
+        // project directory name, which agrees with the package name only by
+        // luck in a single-package project and disagrees in any workspace.
+        //
+        // `cwd` is a search start, not a project root: profile_write_path
+        // resolves it to the nearest groundhog.toml, or the global config when
+        // there is none, so an alias deployed outside a project lands in the
+        // global profile rather than being dropped. With no profile anywhere,
+        // the save reports NoActiveProfile and that surfaces as the warning
+        // below.
+        if let Some(contract_addr_hex) = contract_addr_hex.as_deref() {
+            match alias.or(prepared.package_name.as_deref()) {
+                Some(name) => match crate::config::save_profile_contract_alias(
+                    &cwd,
+                    profile,
+                    name,
+                    contract_addr_hex,
+                ) {
+                    Ok(_) => print.detail("alias", format_args!("{name} -> {contract_addr_hex}")),
+                    // The contract is deployed; only the local record failed.
+                    // Say that rather than confirming an alias that was never
+                    // written, and do not fail a command whose on-chain work
+                    // succeeded. `print.warn` is a no-op under --json, so the
+                    // same fact also goes into the envelope's warnings, where a
+                    // script can see it.
+                    Err(error) => {
+                        let message = format!(
+                            "deployed, but recording the alias `{name}` in groundhog.toml \
+                             failed: {error}"
+                        );
+                        print.warn(&message);
+                        alias_warnings.push(crate::checks::Finding {
+                            level: crate::checks::FindingLevel::Warn,
+                            code: "deploy.alias_not_saved",
+                            message,
+                            hint: Some(
+                                "the contract is deployed; re-record the alias by hand in \
+                                 groundhog.toml"
+                                    .into(),
+                            ),
+                        });
+                    }
+                },
+                None => print.detail(
+                    "alias",
+                    "not recorded (no package name); pass --alias to name it",
+                ),
+            }
         }
     }
 
@@ -226,7 +267,7 @@ pub fn run(
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
         return Err(CliError::CommandReportedFailure);
     }
-    print.json(&CommandResult::new(cmd, data))?;
+    print.json(&CommandResult::with_warnings(cmd, alias_warnings, data))?;
 
     Ok(())
 }
