@@ -231,7 +231,7 @@ enum Command {
         /// Name to record the deployed address under in groundhog.toml
         /// (defaults to the package name; with --artifact there is no package,
         /// so without this no alias is recorded)
-        #[arg(long)]
+        #[arg(long, value_parser = groundhog_cli::config::parse_contract_alias)]
         alias: Option<String>,
         /// Build and sign the deploy transaction without submitting it
         #[arg(long)]
@@ -1654,6 +1654,48 @@ mod tests {
         let without_alias = Cli::parse_from(["groundhog", "deploy", "--package", "my-counter"]);
         match without_alias.command {
             Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            _ => panic!("expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn deploy_rejects_an_empty_alias_before_spending_a_deploy() {
+        // An empty or whitespace-only alias is rejected by
+        // save_profile_contract_alias, but that runs only after the deploy is
+        // submitted -- the contract would be on chain with the CLI reporting an
+        // alias it never wrote. The parser rejects it first.
+        for empty in ["", "   ", "\t"] {
+            let result = Cli::try_parse_from([
+                "groundhog",
+                "deploy",
+                "--package",
+                "counter",
+                "--alias",
+                empty,
+            ]);
+            let Err(error) = result else {
+                panic!("--alias {empty:?} should be rejected");
+            };
+            assert!(
+                error.to_string().contains("contract alias cannot be empty"),
+                "error should explain the rejection, got: {error}"
+            );
+        }
+
+        // Surrounding whitespace is trimmed, so what is reported matches the
+        // key that gets written.
+        let Ok(padded) = Cli::try_parse_from([
+            "groundhog",
+            "deploy",
+            "--package",
+            "counter",
+            "--alias",
+            "  token  ",
+        ]) else {
+            panic!("a padded alias should parse");
+        };
+        match padded.command {
+            Command::Deploy { alias, .. } => assert_eq!(alias.as_deref(), Some("token")),
             _ => panic!("expected deploy command"),
         }
     }

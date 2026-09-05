@@ -168,6 +168,21 @@ pub fn load_project_profiles(
 /// Creates `groundhog.toml` if it does not already exist.
 /// Uses `toml_edit` for in-place edits that preserve user
 /// comments and formatting.
+/// Validate a `--alias` value while parsing arguments.
+///
+/// [`save_profile_contract_alias`] rejects an empty alias, but it only runs
+/// after a deploy has been submitted: by then the contract is on chain and
+/// only the local bookkeeping can fail. Rejecting it in the argument parser
+/// fails before the transaction is spent. The value is trimmed so that what
+/// the CLI reports matches the key actually written.
+pub fn parse_contract_alias(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("contract alias cannot be empty".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 pub fn save_profile_contract_alias(
     project_root: &Path,
     explicit_profile: Option<&str>,

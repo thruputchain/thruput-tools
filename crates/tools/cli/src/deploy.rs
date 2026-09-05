@@ -191,15 +191,22 @@ pub fn run(
             && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
         {
             match alias.or(prepared.package_name.as_deref()) {
-                Some(name) => {
-                    let _ = crate::config::save_profile_contract_alias(
-                        &root,
-                        profile,
-                        name,
-                        contract_addr_hex,
-                    );
-                    print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
-                }
+                Some(name) => match crate::config::save_profile_contract_alias(
+                    &root,
+                    profile,
+                    name,
+                    contract_addr_hex,
+                ) {
+                    Ok(_) => print.detail("alias", format_args!("{name} -> {contract_addr_hex}")),
+                    // The contract is deployed; only the local record failed.
+                    // Say that rather than confirming an alias that was never
+                    // written, and do not fail a command whose on-chain work
+                    // succeeded.
+                    Err(error) => print.warn(format_args!(
+                        "deployed, but recording the alias `{name}` in groundhog.toml \
+                         failed: {error}"
+                    )),
+                },
                 None => print.detail(
                     "alias",
                     "not recorded (no package name); pass --alias to name it",
