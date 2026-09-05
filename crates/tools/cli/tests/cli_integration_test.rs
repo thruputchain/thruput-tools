@@ -3978,16 +3978,29 @@ fn deploy_artifact_with_alias_records_that_name() {
 }
 
 #[test]
-fn deploy_alias_outside_a_project_fails_before_deploying() {
-    // An alias is recorded in the project's groundhog.toml. With no project
-    // there is nowhere to write it, so `--alias` cannot be honoured -- and the
-    // check has to come before submission, or the caller pays for a deploy and
-    // then learns the alias was dropped. No RPC server is spawned here on
-    // purpose: reaching one would mean the check ran too late.
+fn deploy_alias_outside_a_project_lands_in_the_global_profile() {
+    // profile_write_path resolves the nearest groundhog.toml, or the global
+    // config when there is none, so an alias deployed outside a project is
+    // recorded globally rather than dropped. Project aliases override global
+    // ones on read, which is the documented layering.
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let loose = tmp.path().join("no-project-here");
     std::fs::create_dir_all(&loose).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    // The profile this deploy runs against lives only in the global config.
+    // write_global_config replaces the file `keys generate` just wrote, so
+    // default_key has to be set here too or the deploy has no signing key.
+    let owner_public_key = generate_key_public_key(&config_home, "alice");
+    write_global_config(
+        &config_home,
+        &format!(
+            "default_profile = \"default\"\ndefault_key = \"alice\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nnetwork_hash = \"{TEST_NETWORK_HASH}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "aa".repeat(32)
+        ),
+    );
+
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
 
     let output = groundhog()
@@ -4006,18 +4019,23 @@ fn deploy_alias_outside_a_project_fails_before_deploying() {
         .unwrap();
 
     assert!(
-        !output.status.success(),
-        "deploy should refuse an alias it cannot record; stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let combined = format!(
-        "{}{}",
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    rpc_server.join().unwrap();
+
+    let global = std::fs::read_to_string(config_home.join("groundhog").join("config.toml"))
+        .expect("global config should exist");
+    let deployed_address = format!("0x{}", "bb".repeat(32));
     assert!(
-        combined.contains("--alias needs a project"),
-        "error should explain why the alias cannot be recorded; got: {combined}"
+        global.contains(&format!("token = \"{deployed_address}\"")),
+        "the alias should land in the global profile; config was:\n{global}"
+    );
+    assert!(
+        !loose.join("groundhog.toml").exists(),
+        "no project config should be invented in the working directory"
     );
 }
 

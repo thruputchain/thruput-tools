@@ -94,23 +94,6 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    // An alias is recorded in the project's groundhog.toml. Outside a project
-    // there is nowhere to put it, and the global config is not the place:
-    // contract addresses are per-project artifacts, so writing them there
-    // would leak one project's aliases into every other project's namespace.
-    // Fail here rather than after the deploy, so an unhonourable `--alias`
-    // does not cost a transaction.
-    if alias.is_some() {
-        let cwd = std::env::current_dir()?;
-        if crate::config::find_project_config(&cwd).is_none() {
-            return Err(CliError::Other(
-                "--alias needs a project: no groundhog.toml was found in this \
-                 directory or its parents, and contract aliases are not stored \
-                 in the global config"
-                    .into(),
-            ));
-        }
-    }
     if !dry_run {
         let cwd = std::env::current_dir()?;
         resolve_profile_with_overrides(&cwd, profile, overrides)?;
@@ -197,20 +180,23 @@ pub fn run(
         &receipt.status,
         groundhog_json_rpc_types::receipt::ExecStatus::Ok
     ) {
-        let project_root = crate::config::find_project_config(&cwd)
-            .and_then(|p| p.parent().map(Path::to_path_buf));
         // `--alias` wins; otherwise the alias is the package name, which is what
         // an author reads back with `groundhog call <name>`. There is no third
         // source. `--artifact` names a bare binary and carries no package, so
         // with no `--alias` nothing is recorded: this used to fall back to the
         // project directory name, which agrees with the package name only by
         // luck in a single-package project and disagrees in any workspace.
-        if let Some(root) = project_root
-            && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
-        {
+        //
+        // `cwd` is a search start, not a project root: profile_write_path
+        // resolves it to the nearest groundhog.toml, or the global config when
+        // there is none, so an alias deployed outside a project lands in the
+        // global profile rather than being dropped. With no profile anywhere,
+        // the save reports NoActiveProfile and that surfaces as the warning
+        // below.
+        if let Some(contract_addr_hex) = contract_addr_hex.as_deref() {
             match alias.or(prepared.package_name.as_deref()) {
                 Some(name) => match crate::config::save_profile_contract_alias(
-                    &root,
+                    &cwd,
                     profile,
                     name,
                     contract_addr_hex,
