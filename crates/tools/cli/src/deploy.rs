@@ -94,6 +94,23 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    // An alias is recorded in the project's groundhog.toml. Outside a project
+    // there is nowhere to put it, and the global config is not the place:
+    // contract addresses are per-project artifacts, so writing them there
+    // would leak one project's aliases into every other project's namespace.
+    // Fail here rather than after the deploy, so an unhonourable `--alias`
+    // does not cost a transaction.
+    if alias.is_some() {
+        let cwd = std::env::current_dir()?;
+        if crate::config::find_project_config(&cwd).is_none() {
+            return Err(CliError::Other(
+                "--alias needs a project: no groundhog.toml was found in this \
+                 directory or its parents, and contract aliases are not stored \
+                 in the global config"
+                    .into(),
+            ));
+        }
+    }
     if !dry_run {
         let cwd = std::env::current_dir()?;
         resolve_profile_with_overrides(&cwd, profile, overrides)?;
@@ -175,6 +192,7 @@ pub fn run(
     }
 
     // Save contract alias
+    let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
     if matches!(
         &receipt.status,
         groundhog_json_rpc_types::receipt::ExecStatus::Ok
@@ -201,11 +219,26 @@ pub fn run(
                     // The contract is deployed; only the local record failed.
                     // Say that rather than confirming an alias that was never
                     // written, and do not fail a command whose on-chain work
-                    // succeeded.
-                    Err(error) => print.warn(format_args!(
-                        "deployed, but recording the alias `{name}` in groundhog.toml \
-                         failed: {error}"
-                    )),
+                    // succeeded. `print.warn` is a no-op under --json, so the
+                    // same fact also goes into the envelope's warnings, where a
+                    // script can see it.
+                    Err(error) => {
+                        let message = format!(
+                            "deployed, but recording the alias `{name}` in groundhog.toml \
+                             failed: {error}"
+                        );
+                        print.warn(&message);
+                        alias_warnings.push(crate::checks::Finding {
+                            level: crate::checks::FindingLevel::Warn,
+                            code: "deploy.alias_not_saved",
+                            message,
+                            hint: Some(
+                                "the contract is deployed; re-record the alias by hand in \
+                                 groundhog.toml"
+                                    .into(),
+                            ),
+                        });
+                    }
                 },
                 None => print.detail(
                     "alias",
@@ -248,7 +281,7 @@ pub fn run(
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
         return Err(CliError::CommandReportedFailure);
     }
-    print.json(&CommandResult::new(cmd, data))?;
+    print.json(&CommandResult::with_warnings(cmd, alias_warnings, data))?;
 
     Ok(())
 }

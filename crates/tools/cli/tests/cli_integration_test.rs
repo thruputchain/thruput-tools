@@ -3978,6 +3978,104 @@ fn deploy_artifact_with_alias_records_that_name() {
 }
 
 #[test]
+fn deploy_alias_outside_a_project_fails_before_deploying() {
+    // An alias is recorded in the project's groundhog.toml. With no project
+    // there is nowhere to write it, so `--alias` cannot be honoured -- and the
+    // check has to come before submission, or the caller pays for a deploy and
+    // then learns the alias was dropped. No RPC server is spawned here on
+    // purpose: reaching one would mean the check ran too late.
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let loose = tmp.path().join("no-project-here");
+    std::fs::create_dir_all(&loose).unwrap();
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+            "--alias",
+            "token",
+        ])
+        .current_dir(&loose)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "deploy should refuse an alias it cannot record; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("--alias needs a project"),
+        "error should explain why the alias cannot be recorded; got: {combined}"
+    );
+}
+
+#[test]
+fn deploy_reports_an_alias_save_failure_in_json_warnings() {
+    // print.warn is a no-op under --json, so a failed alias write would
+    // otherwise leave a script with ok: true and warnings: [] and no way to
+    // know the alias is missing. `contracts` as an inline table makes the
+    // write fail without touching the deploy itself.
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    // Must sit inside [profile.default], not at the end of the file, or it
+    // lands under the wallets table and the save path never sees it.
+    let config = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    let config = config.replace("[profile.default]\n", "[profile.default]\ncontracts = {}\n");
+    std::fs::write(project.join("groundhog.toml"), config).unwrap();
+
+    let rv32_path = write_opaque_rv32_artifact(tmp.path());
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+            "--alias",
+            "token",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "the deploy landed, so the command stays successful; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    let warnings = stdout["warnings"].as_array().expect("warnings array");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["code"] == "deploy.alias_not_saved"),
+        "a failed alias write must be visible to --json consumers; warnings: {warnings:?}"
+    );
+}
+
+#[test]
 fn deploy_dry_run_json_outputs_prepared_transaction() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
