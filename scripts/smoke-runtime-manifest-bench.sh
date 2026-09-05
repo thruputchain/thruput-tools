@@ -355,7 +355,8 @@ if [[ -z "$BENCH_BUILD_PROFILE" ]]; then
 fi
 case "$BENCH_BUILD_PROFILE" in
     debug)
-        BENCH_BUILD_ARGS=()
+        # Keep a nonempty array: Bash 3.2 treats an empty array as unset under -u.
+        BENCH_BUILD_ARGS=(--profile dev)
         ;;
     release)
         BENCH_BUILD_ARGS=(--release)

@@ -1109,7 +1109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1381,21 +1381,21 @@ dependencies = [
 
 [[package]]
 name = "groundhog-access-control-if"
-version = "0.1.21"
+version = "0.1.23"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "43c6e62f8017bda466296905c6bfb166769f1a4cf352dc6c93b9e104e7870744"
+checksum = "8760c9a240390778a54956cfa1d041c88ff606d8ec607890981f875a5583e249"
 dependencies = [
  "sdk",
 ]
 
 [[package]]
 name = "groundhog-bench"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
  "groundhog-signing",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hdrhistogram",
  "hex",
  "reqwest",
@@ -1409,11 +1409,11 @@ dependencies = [
 
 [[package]]
 name = "groundhog-build-info"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 
 [[package]]
 name = "groundhog-bundle-identity"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "groundhog-build-info",
  "hex",
@@ -1425,7 +1425,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "base64",
  "clap",
@@ -1444,7 +1444,7 @@ dependencies = [
  "groundhog-rv32-lower",
  "groundhog-signing",
  "groundhog-spec-tool",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hex",
  "http-body-util",
  "jsonrpsee",
@@ -1473,12 +1473,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-spec"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "ca04d04004589aba466192a3140d6ce0e439745d9a1c63de066ec0fc0de7da80"
+checksum = "d0ac349ef3f2fcf7dee3167ae33ab71fb9f1a9f0433de60c62348d11854d593f"
 dependencies = [
  "groundhog-spec",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "heapless",
  "xdr-common",
  "xdrs",
@@ -1486,23 +1486,23 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-util"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "fbbf23facc887ada31667f00045124206c0f1f578df633414c06630519d167c0"
+checksum = "2eebb2b07628049c58784c5d3da56d94b4b4db9c2d990edad092616d9e900bae"
 dependencies = [
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "sha2 0.11.0",
  "syn 3.0.3",
 ]
 
 [[package]]
 name = "groundhog-domain-separator"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "c82767b0cacc0fbab08083e93bc0e99907cf2a3cd0c31337754f6ea538bc2e0b"
+checksum = "8ce85f26a631d361c9e5c49932e934e34cb59ee304375ba28f105be31bec71cf"
 dependencies = [
  "groundhog-contract-spec",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "sha2 0.11.0",
  "xdrs",
 ]
@@ -1514,7 +1514,7 @@ dependencies = [
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-signing",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hex",
  "jsonrpsee",
  "tokio",
@@ -1522,47 +1522,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "groundhog-erc1271-if"
-version = "0.1.21"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "96645b3df46392fac9f7083f19364b1b671ba0e071df516177dc8081a7963dd5"
-dependencies = [
- "sdk",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "groundhog-erc20-if"
-version = "0.1.21"
+version = "0.1.23"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "c74fe6c39582b15091f5694987349dc678f8cca847b585a137b05dc3d73f07c5"
+checksum = "e9d0e9d1b04bedb4acc6c49aa3e69f74c7f2446a8f8639c5d4aece2a550c2d2a"
 dependencies = [
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "sdk",
 ]
 
 [[package]]
 name = "groundhog-erc20-pausable-if"
-version = "0.1.21"
+version = "0.1.23"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "8ba44f68fb14f064920188fa75b7a257a87a3a004edc49968afdbd0745519a43"
+checksum = "7918f659629b64ab4d88aaa9b5038c1558db9025cf5fcca7fa3bf28396629f56"
 dependencies = [
  "sdk",
 ]
 
 [[package]]
-name = "groundhog-event"
-version = "0.29.0"
+name = "groundhog-erc20-permit-if"
+version = "0.1.23"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "638012cdb50277931ab71f2760a2955344d20cffcd0cd5b0a996bab4f0e7b300"
+checksum = "7414ef5a092ec83dc430a52ed63785c196071fe152301c065f5e95da46c34da5"
 dependencies = [
- "groundhog-xdr 0.30.1",
+ "groundhog-erc20-if",
+ "sdk",
+]
+
+[[package]]
+name = "groundhog-event"
+version = "0.30.1"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "b0d8f10b9ef5b2e407084fe8b3091a48cbbbaa0d9ecfccfaf9828af0b9fc58c6"
+dependencies = [
+ "groundhog-xdr",
  "xdrs",
 ]
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1576,7 +1576,7 @@ dependencies = [
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-signing",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hex",
  "http 1.5.0",
  "serde",
@@ -1597,7 +1597,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-types",
@@ -1608,13 +1608,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "jsonrpsee",
  "serde",
  "serde_json",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1637,7 +1637,7 @@ dependencies = [
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
  "groundhog-x23-transport",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_coordinator",
  "groundhog_db_gateway",
  "groundhog_indexer",
@@ -1666,14 +1666,14 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "groundhog-build-info",
  "groundhog-bundle-identity",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-types",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hex",
  "jsonrpsee",
  "sha2 0.10.9",
@@ -1686,11 +1686,11 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "bytes",
  "groundhog-trace",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_indexer",
  "groundhog_scheduler",
  "hex",
@@ -1706,13 +1706,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog-macros"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "10ea086c8835f62d71c883807cb17f99836904e8d354d245467b8541fc4206c9"
+checksum = "4917e2b60b7743e27c8107eda46e133d998907f0f5261926524e3759a64bd3db"
 dependencies = [
  "darling",
  "groundhog-contract-util",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "proc-macro2",
  "quote",
  "sha2 0.11.0",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "groundhog-bundle-identity",
@@ -1731,7 +1731,7 @@ dependencies = [
  "groundhog-signing",
  "groundhog-trace",
  "groundhog-x23-transport",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_coordinator",
  "groundhog_db_gateway",
  "groundhog_indexer",
@@ -1757,7 +1757,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "schemars",
  "serde",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-artifact"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1797,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-lower"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1809,9 +1809,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-runtime"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "96dbc2b42e083f318d8cc8ef4d34cb7dd5b99e8177df6fb0c7da98596880b931"
+checksum = "2bbb2e337cdc64299e704f8966732c2c342050e08e27e143a06ba983a29097e4"
 
 [[package]]
 name = "groundhog-serde_arrays"
@@ -1824,9 +1824,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signed-op-if"
-version = "0.1.21"
+version = "0.1.23"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "94bcbc385bc85e092a0b5a95e2b303e0ee640ddd2f32091d3d8c70f7fe5a2760"
+checksum = "80b15b541ba36333eb114ba6d63c4fac159231d110f748bccb8d565f84b7e681"
 dependencies = [
  "sdk",
  "thiserror 2.0.20",
@@ -1834,12 +1834,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
  "groundhog-json-rpc-server",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hex",
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1850,7 +1850,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1859,7 +1859,7 @@ dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-x23-transport",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_scheduler",
  "hdrhistogram",
  "hex",
@@ -1876,28 +1876,28 @@ dependencies = [
 
 [[package]]
 name = "groundhog-spec"
-version = "0.31.0"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "f4085b09a07e7377f4ffd57cea5df5dff88f354357c24c101f3c7a225364e860"
+checksum = "0c0e26949a5ce1439e28966e9d6f8b5a9b4e9387671e637776734df90dc8ea28"
 dependencies = [
  "groundhog-serde_arrays",
- "groundhog-xdr 0.31.0",
+ "groundhog-xdr",
  "serde",
  "xdrs",
 ]
 
 [[package]]
 name = "groundhog-spec-tool"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "80dd13abd282b6c455a89270cd58302bd10a40fd4b31b23f4f19994fd1a04937"
+checksum = "efccba207ea3261d7e3cac7b24eb1d0c428f8cd25b214770fe6f4ff5abc9d74f"
 dependencies = [
  "groundhog-access-control-if",
  "groundhog-contract-spec",
  "groundhog-contract-util",
- "groundhog-erc1271-if",
  "groundhog-erc20-if",
  "groundhog-erc20-pausable-if",
+ "groundhog-erc20-permit-if",
  "groundhog-signed-op-if",
  "sdk",
  "serde_json",
@@ -1907,20 +1907,20 @@ dependencies = [
 
 [[package]]
 name = "groundhog-syscall"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "c446dde72e2133da0ca06290c053963738fc1d96395c71ca154996655cf3ac95"
+checksum = "5284f8ba3a6b99366331d21002493c2b80bc7226263caa576476b3fceaf03616"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-node-supervisor",
  "groundhog-signing",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1932,12 +1932,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog-trace"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "2e93eca4a1803212ca03257d8c0877e047b0f9466652f1891b87df69ff215de0"
+checksum = "bdaa1dd24c19cde7d0671b16d3b2b46f068b35d2588627fea776d431c8af2e21"
 dependencies = [
  "groundhog-serde_arrays",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "hogexec-internal",
  "schemars",
  "serde",
@@ -1947,9 +1947,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-u256"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "6edd686246c4afb4583716d1671bbab5b711c4ff4e40c543b83dc333d083de4b"
+checksum = "9548a29d2b393b7a0f3ddbc7c40d0233ccc2b404a98b84cd61c90650bcf38c75"
 dependencies = [
  "groundhog-contract-spec",
  "xdrs",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.15.0"
+version = "0.15.1-rc.1"
 dependencies = [
  "async-trait",
  "rpc_driver",
@@ -1968,13 +1968,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog-xdr"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "2ac032f64026e1e2d12ad3de04a425867f386015d3653644d1c73f8a5b6f2bdb"
+checksum = "5d2b654613ac7319f3c8fca5073d275cd741430ded8a03abc050139eaa8736e9"
 dependencies = [
  "groundhog-serde_arrays",
  "groundhog-syscall",
- "groundhog-xdr-macros 0.30.1",
+ "groundhog-xdr-macros",
  "schemars",
  "serde",
  "thiserror 2.0.20",
@@ -1983,38 +1983,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "groundhog-xdr"
-version = "0.31.0"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "a884397a7990d1e91be9ef8d078d177c92c690310e02d012e1a29b07c6b600f7"
-dependencies = [
- "groundhog-serde_arrays",
- "groundhog-xdr-macros 0.31.0",
- "serde",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
 name = "groundhog-xdr-macros"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "3c9d19f0e4cbcb173e0797db6f3e2f16a1382977235d3d6468fc5c47b8c85648"
-dependencies = [
- "darling",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "serde_yaml",
- "syn 3.0.3",
-]
-
-[[package]]
-name = "groundhog-xdr-macros"
-version = "0.31.0"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "6456cf2ac9865ef441579a7734fdda2c5f79a29d22e1d6e75d870a980c19c17f"
+checksum = "4126ae00f026a883131fc71501fca23b5dda8933ea5c53ee70646ca3dba4f8a8"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -2027,13 +1999,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog_coordinator"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "13b0fe2abfcf098686dffbf6e6912ac51afa9d41f79aca9ca5aec34a78f26bb3"
+checksum = "1ea7202ddf798ec528e471e30e0686e43b32ecfb7fb9e89e837a62c4db15094f"
 dependencies = [
  "async-trait",
  "groundhog-serde_arrays",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_scp",
  "rpc_api",
  "schemars",
@@ -2043,12 +2015,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog_db_gateway"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "02248bec6d797b65f48d4787ab156e15f426670abf9c0585c8639e0847babfdc"
+checksum = "7fe6896df2445be2c5347bef7620abf24ddef0a71ddada2be5c3e62da915e09d"
 dependencies = [
  "async-trait",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_scheduler",
  "groundhog_scp",
  "rpc_api",
@@ -2059,14 +2031,14 @@ dependencies = [
 
 [[package]]
 name = "groundhog_indexer"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "e5904f2de9861830f1332dd48918f02a37578eee1326a9692d2827b8fcf223c9"
+checksum = "c973fd6497750ae8c70c381f8aeba4613acfe361dc4865984e16c22564d1de30"
 dependencies = [
  "async-trait",
  "groundhog-serde_arrays",
  "groundhog-trace",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_scheduler",
  "groundhog_scp",
  "rpc_api",
@@ -2078,14 +2050,14 @@ dependencies = [
 
 [[package]]
 name = "groundhog_scheduler"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "8d3edb62e535f428c3c4ad5adb933788fd521fcb8e7131fa4f2deff4fe821fc3"
+checksum = "289f8ee6831d2052a98c5d4d2943cf6baf6558e434b2195e5dcc7f222dc89c38"
 dependencies = [
  "async-trait",
  "groundhog-serde_arrays",
  "groundhog-trace",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_coordinator",
  "groundhog_scp",
  "rpc_api",
@@ -2097,13 +2069,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog_scp"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "37d6127b35f69fe8e90c88600001b9e3bfdbc5f342f69bcdb9afb8b165bd003d"
+checksum = "1d3e581b6b929d5433b17c3288c95d164ac36fba70ad30325a05f6f5eb973770"
 dependencies = [
  "async-trait",
  "groundhog-serde_arrays",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "rpc_api",
  "schemars",
  "serde",
@@ -2113,12 +2085,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog_view"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "d3133cef39a9c78c41d0048705a64caf3a61f30bda48e2bc34583a184187ac0b"
+checksum = "929adb0f1688937df7c0d861c75a2be41bff9fda428df407579d8a41f67cfe51"
 dependencies = [
  "async-trait",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "groundhog_scp",
  "rpc_api",
  "schemars",
@@ -2218,9 +2190,9 @@ dependencies = [
 
 [[package]]
 name = "hogexec-internal"
-version = "0.30.1"
+version = "0.32.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "4651fcaf1e45a672835989e5751aa0865db7ede00604d13f2dda946d58f689b3"
+checksum = "640d1075ae7a49ed0ee4e16d497e6ee1854b641b9e5575e21e5ae93b20ebaaf1"
 dependencies = [
  "xdrs",
 ]
@@ -3451,7 +3423,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3509,7 +3481,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3593,16 +3565,16 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sdk"
-version = "0.29.0"
+version = "0.30.1"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "965d95976864d97ff6d6308d6a93ba1122f30e2b5f3cca04e9ac4f1c2a623ed2"
+checksum = "a0ce07beb62a7e65503f1ab12733ff50fc1bb691bd63dbb5f63a4510286a6b28"
 dependencies = [
  "groundhog-contract-spec",
  "groundhog-event",
  "groundhog-macros",
  "groundhog-rv32-runtime",
  "groundhog-u256",
- "groundhog-xdr 0.30.1",
+ "groundhog-xdr",
  "heapless",
  "linkme",
  "thiserror 2.0.20",
@@ -3987,7 +3959,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4595,7 +4567,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

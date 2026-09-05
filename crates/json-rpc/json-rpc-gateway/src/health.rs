@@ -1815,10 +1815,17 @@ mod tests {
                 contract_size: 0,
                 contract_type: ContractType::kNative,
             },
-            network_config: NetworkConfig {
-                ext: ExtensionPoint::_0,
-                max_sha256_buffers: 0,
-                max_cross_invoke_depth: 0,
+            network_config: NetworkConfig::_0 {
+                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+                    params: vec![
+                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
+                            max_sha256_buffers: 0,
+                        },
+                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
+                            max_cross_invoke_depth: 0,
+                        },
+                    ].try_into().expect("bug: fixture parameters fit"),
+                },
             },
             value: ConsensusValue {
                 protocol: ConsensusProtocol::new(0),
