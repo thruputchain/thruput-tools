@@ -152,6 +152,41 @@ fn assert_counter_manifest(cargo: &str) {
 }
 
 #[test]
+fn scaffold_commented_alias_key_matches_the_name_deploy_saves() {
+    // `groundhog deploy` saves the contract alias under the Cargo *package*
+    // name (deploy.rs: `prepared.package_name`, which artifacts.rs fills from
+    // the manifest), and alias lookup is an exact map get with no
+    // normalisation. The commented example in groundhog.toml is an
+    // instruction to the author, so the key it shows has to be the key the
+    // CLI will actually write and resolve -- otherwise uncommenting it and
+    // pasting an address yields an alias `groundhog call` cannot find.
+    //
+    // Asserting the literal string alone would not catch that: it pins the
+    // template against itself. This pins it against the manifest instead.
+    for name in ["my-counter", "plain", "a-b-c"] {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join(name);
+        fs::create_dir(&dir).unwrap();
+        groundhog_cli::scaffold::generate(&dir, name, "counter").unwrap();
+
+        let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        let package_name = cargo
+            .lines()
+            .skip_while(|l| l.trim() != "[package]")
+            .find_map(|l| l.strip_prefix("name = "))
+            .map(|v| v.trim().trim_matches('"').to_owned())
+            .expect("bug: scaffolded manifest should declare a package name");
+
+        let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+        assert!(
+            groundhog.contains(&format!("# {package_name} =")),
+            "groundhog.toml should comment the alias under the package name \
+             `{package_name}`, which is what deploy saves, but it reads:\n{groundhog}"
+        );
+    }
+}
+
+#[test]
 fn scaffold_counter_creates_expected_files() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("my-counter");
@@ -208,7 +243,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(groundhog.contains("[profile.devnet.contracts]"));
     assert!(groundhog.contains("# [profile.devnet.wallets.alice]"));
     assert!(groundhog.contains("# owner_public_key ="));
-    assert!(groundhog.contains("# my_counter ="));
+    assert!(groundhog.contains("# my-counter ="));
     assert!(groundhog.contains("default_profile = \"local\""));
     assert!(!groundhog.contains("rpc_url"));
     assert!(!groundhog.contains("faucet_url"));
