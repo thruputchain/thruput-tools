@@ -24,5 +24,7 @@ pub mod metadata;
 
 pub use error::{LowerError, Result};
 pub use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
-pub use lower::{Lowered, lower};
+pub use lower::{
+    ALLOC_ALLOWLIST, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION, Lowered, lower,
+};
 pub use metadata::{MetadataInput, render_metadata, summary_json};

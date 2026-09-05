@@ -10,7 +10,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
-use groundhog_rv32_lower::{MetadataInput, lower, render_metadata};
+use groundhog_rv32_lower::{
+    ALLOC_ALLOWLIST, INTERFACE_TABLE_ANCHOR_SECTION, INTERFACE_TABLE_SECTION, MetadataInput, lower,
+    render_metadata,
+};
 
 // ---------------------------------------------------------------------------
 // Minimal ELF32 little-endian RISC-V builder.
@@ -470,6 +473,59 @@ fn rejects_relocations() {
         size_override: None,
     });
     expect_err(spec, "relocations are not allowed");
+}
+
+// ---------------------------------------------------------------------------
+// Interface table: in every ELF, in the image only when its anchor is.
+// ---------------------------------------------------------------------------
+
+fn interface_table_spec(with_anchor: Option<Vec<u8>>) -> ElfSpec {
+    let mut spec = happy_spec();
+    spec.extras.push(ExtraSection::progbits(
+        INTERFACE_TABLE_SECTION,
+        SHF_ALLOC,
+        0x2000,
+        vec![0xAB; 64],
+    ));
+    if let Some(anchor) = with_anchor {
+        spec.extras.push(ExtraSection::progbits(
+            INTERFACE_TABLE_ANCHOR_SECTION,
+            SHF_ALLOC,
+            0x2040,
+            anchor,
+        ));
+    }
+    spec
+}
+
+#[test]
+fn drops_the_interface_table_without_its_anchor() {
+    let lowered = lower(&assemble(interface_table_spec(None))).expect("lowers");
+    assert!(
+        lowered.initial_memory.is_empty(),
+        "table bytes reached the image: {:?}",
+        lowered.initial_memory
+    );
+}
+
+#[test]
+fn drops_the_interface_table_when_the_anchor_is_empty() {
+    let lowered = lower(&assemble(interface_table_spec(Some(Vec::new())))).expect("lowers");
+    assert!(lowered.initial_memory.is_empty());
+}
+
+#[test]
+fn keeps_the_interface_table_with_its_anchor() {
+    let lowered = lower(&assemble(interface_table_spec(Some(vec![1, 0, 0, 0])))).expect("lowers");
+    assert_eq!(lowered.initial_memory_start, 0x2000);
+    assert_eq!(&lowered.initial_memory[..64], &[0xAB; 64][..]);
+    assert_eq!(&lowered.initial_memory[64..], &[1][..]);
+}
+
+#[test]
+fn interface_table_sections_are_allowlisted() {
+    assert!(ALLOC_ALLOWLIST.contains(&INTERFACE_TABLE_SECTION));
+    assert!(ALLOC_ALLOWLIST.contains(&INTERFACE_TABLE_ANCHOR_SECTION));
 }
 
 #[test]

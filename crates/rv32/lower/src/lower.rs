@@ -12,9 +12,30 @@ use groundhog_rv32_artifact::{MAX_CODE_BYTES, MAX_MEMORY_BYTES, build_artifact, 
 
 /// Allocatable sections an rv32 contract image may contain. Anything else with
 /// the ALLOC flag is rejected.
-pub const ALLOC_ALLOWLIST: [&str; 7] = [
-    ".text", ".rodata", ".srodata", ".data", ".sdata", ".bss", ".sbss",
+pub const ALLOC_ALLOWLIST: [&str; 9] = [
+    ".text",
+    ".rodata",
+    ".srodata",
+    ".data",
+    ".sdata",
+    ".bss",
+    ".sbss",
+    INTERFACE_TABLE_SECTION,
+    INTERFACE_TABLE_ANCHOR_SECTION,
 ];
+
+/// The contract's interface table: one 32-byte interface id per `#[contract]`
+/// impl block, emitted by the SDK macros and `KEEP`'d by the SDK linker script
+/// (`sdk::interface_table`). Always present in the ELF; copied into VM memory
+/// only when [`INTERFACE_TABLE_ANCHOR_SECTION`] is, since the table has a
+/// reader exactly then. Names mirror the SDK's linker script.
+pub const INTERFACE_TABLE_SECTION: &str = "groundhog_rv32_interfaces";
+
+/// The interface table's reader anchor: an ordinary garbage-collectable word
+/// that survives the link only if the SDK's table reader was instantiated (an
+/// ERC-165 impl). Its presence with nonzero size is what admits
+/// [`INTERFACE_TABLE_SECTION`] into the image.
+pub const INTERFACE_TABLE_ANCHOR_SECTION: &str = "groundhog_rv32_interfaces_anchor";
 
 /// Low data addresses reserved as a null guard. A static landing at address 0
 /// would make a Rust `&'static` to it a readable null pointer. The SDK linker
@@ -122,6 +143,13 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
         return Err(invalid(".text extends past end of file"));
     }
 
+    let interface_table_has_reader = sections.iter().any(|section| {
+        section.name == INTERFACE_TABLE_ANCHOR_SECTION
+            && section.is_alloc()
+            && !section.is_nobits()
+            && section.size > 0
+    });
+
     let mut memory = vec![0u8; MAX_MEMORY_BYTES];
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
@@ -152,6 +180,12 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
             )));
         }
         if section.name == ".text" {
+            continue;
+        }
+        // The interface table is in every ELF the SDK links, but only a
+        // contract that reads it (its anchor survived the link) needs it in
+        // memory. Dropped like the spec bytes otherwise.
+        if section.name == INTERFACE_TABLE_SECTION && !interface_table_has_reader {
             continue;
         }
         // Code (PC space) and data are separate VM memories under the Harvard
