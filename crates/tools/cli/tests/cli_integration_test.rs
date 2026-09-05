@@ -10,6 +10,7 @@ use std::process::Command;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -171,6 +172,27 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     assert_eq!(dump_json["data"]["fileCount"], 4);
     assert!(archive.is_file());
 
+    let original_archive = std::fs::read(&archive).unwrap();
+    let refused_overwrite = groundhog()
+        .args(["--json", "chain", "dump", "--data-dir"])
+        .arg(&source)
+        .arg("--output")
+        .arg(&archive)
+        .output()
+        .unwrap();
+    assert!(!refused_overwrite.status.success());
+    let refused_overwrite_json: serde_json::Value =
+        serde_json::from_slice(&refused_overwrite.stderr).unwrap();
+    assert_eq!(
+        refused_overwrite_json["error"]["code"],
+        "confirmation_required"
+    );
+    assert_eq!(
+        refused_overwrite_json["error"]["details"]["requiredFlag"],
+        "--force"
+    );
+    assert_eq!(std::fs::read(&archive).unwrap(), original_archive);
+
     // A populated destination must remain protected unless the caller opts in
     // to replacement with `--force`.
     write_chain_data_fixture(&destination);
@@ -183,10 +205,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
         .unwrap();
     assert!(!refused.status.success());
     let refused_json: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
-    assert_eq!(
-        refused_json["error"]["code"],
-        "chain_restore_requires_force"
-    );
+    assert_eq!(refused_json["error"]["code"], "confirmation_required");
+    assert_eq!(refused_json["error"]["details"]["requiredFlag"], "--force");
 
     // Make the destination observably different so the final assertion proves
     // that forced restore replaced its contents with the archived source state.
@@ -480,6 +500,58 @@ fn help_shows_subcommands() {
         );
     }
     assert!(stdout.contains("completion"));
+    assert!(stdout.contains("--skill"));
+}
+
+#[test]
+fn skill_flag_prints_release_matched_markdown_outside_a_project() {
+    let directory = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--skill")
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("---\nname: groundhog\n"));
+    assert!(stdout.contains(&format!(
+        "<!-- groundhog-cli-version: {} -->",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!stdout.contains("{{GROUNDHOG_CLI_VERSION}}"));
+    assert!(stdout.ends_with('\n'));
+    assert!(!stdout.ends_with("\n\n"));
+}
+
+#[test]
+fn skill_flag_rejects_commands_and_output_modifiers() {
+    for arguments in [
+        &["--skill", "status"][..],
+        &["--skill", "--json"][..],
+        &["--skill", "--quiet"][..],
+    ] {
+        let output = groundhog().args(arguments).output().unwrap();
+
+        assert!(!output.status.success(), "arguments {arguments:?}");
+        assert!(output.stdout.is_empty(), "arguments {arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
+            "arguments {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn bare_cli_still_requires_an_action() {
+    let output = groundhog().output().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
 }
 
 #[test]
@@ -2284,7 +2356,7 @@ fn init_json_delegates_to_status() {
 }
 
 #[test]
-fn init_human_output_shows_setup_sections() {
+fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
     let tmp = TempDir::new().unwrap();
     let mut child = groundhog()
         .arg("init")
@@ -2302,7 +2374,7 @@ fn init_human_output_shows_setup_sections() {
         .stdin
         .as_mut()
         .unwrap()
-        .write_all(b"n\nn\nn\n")
+        .write_all(b"y\ny\ny\nshould-not-exist\n")
         .unwrap();
 
     let output = child.wait_with_output().unwrap();
@@ -2322,46 +2394,42 @@ fn init_human_output_shows_setup_sections() {
     assert!(stderr.contains("Local RPC:"));
     assert!(stderr.contains("Next:"));
     assert!(stderr.contains("groundhog new my-contract"));
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    assert!(!tmp.path().join("should-not-exist").exists());
 }
 
+#[cfg(unix)]
 #[test]
-fn init_human_output_points_to_created_project() {
+fn interactive_init_points_to_created_project() {
     let tmp = TempDir::new().unwrap();
-    let mut child = groundhog()
+    let mut command = groundhog();
+    command
         .arg("init")
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(b"y\nn\ny\ndemo-contract\n")
-        .unwrap();
-
+        .env_remove("HOGD_FFI_PASSWORD");
+    let (child, mut terminal) = spawn_with_terminal(command);
+    let output_reader = terminal_output_reader(&terminal);
+    terminal.write_all(b"y\nn\ny\ndemo-contract\n").unwrap();
     let output = child.wait_with_output().unwrap();
+    let terminal_output = output_reader
+        .join()
+        .expect("bug: terminal output reader should not panic");
     assert!(
         output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "terminal output: {terminal_output}"
     );
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Setup Complete"));
-    assert!(stderr.contains("Key: default (0x"));
-    assert!(stderr.contains("Project:"));
-    assert!(stderr.contains("demo-contract"));
-    assert!(stderr.contains("Next:"));
-    assert!(stderr.contains("cd demo-contract"));
-    assert!(stderr.contains("groundhog build"));
-    assert!(!stderr.contains("groundhog new my-contract"));
+    assert!(terminal_output.contains("Setup Complete"));
+    assert!(terminal_output.contains("Key"));
+    assert!(terminal_output.contains("default (0x"));
+    assert!(terminal_output.contains("Project"));
+    assert!(terminal_output.contains("demo-contract"));
+    assert!(terminal_output.contains("Next:"));
+    assert!(terminal_output.contains("cd demo-contract"));
+    assert!(terminal_output.contains("groundhog build"));
+    assert!(!terminal_output.contains("groundhog new my-contract"));
     assert!(tmp.path().join("demo-contract/groundhog.toml").exists());
 }
 
@@ -3798,7 +3866,7 @@ fn deploy_workspace_package_persists_selected_package_alias() {
     write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
 
     let output = groundhog()
-        .args(["--json", "deploy", "-p", "counter"])
+        .args(["--json", "deploy", "--force", "-p", "counter"])
         .current_dir(&workspace)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -4096,6 +4164,51 @@ fn wallet_create_dry_run_defaults_name_to_key() {
 }
 
 #[test]
+fn local_wallet_create_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let faucet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet, None);
+    let (rpc_url, rpc_server) = spawn_local_wallet_create_rpc(&faucet);
+    std::fs::write(project.join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profile.default]\nnetwork = \"local\"\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let generated = groundhog()
+        .args(["keys", "generate", "owner"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+
+    let output = groundhog()
+        .args(["--json", "wallet", "create", "--key", "owner", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
+    assert_eq!(payload["data"]["schemaVersion"], 4);
+}
+
+#[test]
 fn wallet_create_remote_dry_run_does_not_call_faucet() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -4341,8 +4454,27 @@ fn wallet_rm_reports_inherited_default_after_clearing_project_default() {
     )
     .unwrap();
 
-    let output = groundhog()
+    let refused = groundhog()
         .args(["--json", "wallet", "rm", "project", "--profile", "devnet"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    let refused: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
+    assert_eq!(refused["error"]["code"], "confirmation_required");
+    assert_eq!(refused["error"]["details"]["requiredFlag"], "--force");
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "wallet",
+            "rm",
+            "project",
+            "--profile",
+            "devnet",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -4496,6 +4628,44 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
 }
 
 #[test]
+fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let faucet = advertised_dev_wallet_address(0);
+    let recipient = format!("0x{}", "ab".repeat(32));
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet, None);
+    let (rpc_url, rpc_server) = spawn_local_airdrop_rpc(&faucet, &recipient);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profile.default]\nnetwork = \"local\"\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "airdrop", &recipient, "--force"])
+        .current_dir(&project)
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["warnings"][0]["level"], "warn");
+    assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
+    assert_eq!(payload["data"]["schemaVersion"], 3);
+}
+
+#[test]
 fn hosted_airdrop_uses_request_airdrop_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -4509,7 +4679,7 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     add_faucet_to_default_profile(&project, &faucet_url);
 
     let output = groundhog()
-        .args(["--json", "airdrop", "alice"])
+        .args(["--json", "airdrop", "alice", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_CACHE_HOME", &cache_home)
@@ -4529,6 +4699,83 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     assert_eq!(stdout["data"]["recipientWallet"], recipient);
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
     assert_eq!(stdout["data"]["txHash"], format!("0x{}", "22".repeat(32)));
+}
+
+#[test]
+fn transaction_commands_require_force_before_submission_or_attempt_state() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    let cache_home = tmp.path().join("cache-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let rpc_url = "http://127.0.0.1:9";
+    write_project_config_with_alice_wallet(&project, rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, "http://127.0.0.1:8");
+    let artifact = write_opaque_rv32_artifact(tmp.path());
+    let contract = format!("0x{}", "11".repeat(32));
+    let recipient = format!("0x{}", "22".repeat(32));
+
+    let invocations = [
+        (
+            vec![
+                "deploy".to_owned(),
+                "--artifact".to_owned(),
+                artifact.display().to_string(),
+            ],
+            "deploy a contract",
+        ),
+        (
+            vec![
+                "call".to_owned(),
+                contract,
+                "0x0123456789abcdef".to_owned(),
+                "0x".to_owned(),
+            ],
+            "call a contract",
+        ),
+        (
+            vec!["transfer".to_owned(), recipient, "1".to_owned()],
+            "transfer HOG",
+        ),
+        (
+            vec!["airdrop".to_owned(), "alice".to_owned()],
+            "request an airdrop",
+        ),
+        (
+            vec![
+                "wallet".to_owned(),
+                "create".to_owned(),
+                "--key".to_owned(),
+                "alice".to_owned(),
+                "--name".to_owned(),
+                "new-wallet".to_owned(),
+            ],
+            "create a wallet",
+        ),
+    ];
+
+    for (args, action) in invocations {
+        let output = groundhog()
+            .arg("--json")
+            .args(args)
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_CACHE_HOME", &cache_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{action} unexpectedly succeeded");
+        assert!(output.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(
+            error["error"]["code"], "confirmation_required",
+            "{action}: {error}"
+        );
+        assert_eq!(error["error"]["details"]["action"], action);
+        assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
+    }
+
+    assert!(!cache_home.join("groundhog/airdrop-attempts").exists());
+    assert!(!cache_home.join("groundhog/wallet-create-attempts").exists());
 }
 
 #[test]
@@ -6183,6 +6430,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -6240,6 +6488,7 @@ fn deploy_live_json_fails_with_receipt_context() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -6282,6 +6531,7 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -6333,7 +6583,12 @@ fn deploy_live_human_reports_selected_wallet_funding_commands() {
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
-        .args(["deploy", "--artifact", rv32_path.to_str().unwrap()])
+        .args([
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -6365,7 +6620,12 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
 
     let rv32_path = write_opaque_rv32_artifact(tmp.path());
     let output = groundhog()
-        .args(["deploy", "--artifact", rv32_path.to_str().unwrap()])
+        .args([
+            "deploy",
+            "--force",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -6400,6 +6660,7 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
         .args([
             "--json",
             "deploy",
+            "--force",
             "--artifact",
             rv32_path.to_str().unwrap(),
         ])
@@ -7500,7 +7761,7 @@ fn call_live_human_appends_transaction_detail_sections() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7541,7 +7802,7 @@ fn call_live_human_warns_when_transaction_detail_fails() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7585,7 +7846,14 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .output()
         .unwrap();
@@ -7641,7 +7909,14 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7680,7 +7955,7 @@ fn call_live_human_fails_after_printing_receipt_context() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7715,7 +7990,14 @@ fn call_live_json_decodes_library_abort() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7759,7 +8041,7 @@ fn call_live_human_prints_decoded_abort() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7803,7 +8085,14 @@ fn call_live_json_omits_abort_fields_on_success() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7842,7 +8131,14 @@ fn call_live_json_reports_abort_decode_error() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7880,7 +8176,7 @@ fn call_live_human_reports_abort_decode_error() {
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
-        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102", "--force"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -7948,6 +8244,7 @@ fn completion_json_outputs_structured_payload() {
     assert_eq!(stdout["data"]["shell"], "bash");
     let script = stdout["data"]["script"].as_str().unwrap();
     assert!(script.contains("groundhog"));
+    assert!(script.contains("--skill"));
     assert!(script.contains("--version"));
 }
 
@@ -8030,7 +8327,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     let generated: serde_json::Value = serde_json::from_slice(&generated.stdout).unwrap();
 
     let exported = groundhog()
-        .args(["keys", "export", "alice"])
+        .args(["keys", "export", "alice", "--force"])
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
@@ -8062,7 +8359,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     );
 
     let quiet = groundhog()
-        .args(["--quiet", "keys", "export", "alice"])
+        .args(["--quiet", "keys", "export", "alice", "--force"])
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
@@ -8071,7 +8368,7 @@ fn keys_export_outputs_client_compatible_private_key() {
     assert!(quiet.stderr.is_empty());
 
     let json = groundhog()
-        .args(["--json", "keys", "export", "alice"])
+        .args(["--json", "keys", "export", "alice", "--force"])
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
@@ -8096,7 +8393,7 @@ fn keys_export_rejects_missing_and_invalid_names() {
 
     for name in ["ghost", "dev-0"] {
         let output = groundhog()
-            .args(["--json", "keys", "export", name])
+            .args(["--json", "keys", "export", name, "--force"])
             .env("XDG_CONFIG_HOME", &config_home)
             .output()
             .unwrap();
@@ -8162,7 +8459,7 @@ fn keys_export_rejects_invalid_stored_keys() {
         )
         .unwrap();
         let output = groundhog()
-            .args(["--json", "keys", "export", name])
+            .args(["--json", "keys", "export", name, "--force"])
             .env("XDG_CONFIG_HOME", &config_home)
             .output()
             .unwrap();
@@ -8174,6 +8471,30 @@ fn keys_export_rejects_invalid_stored_keys() {
             "expected {message:?} for {name}, stderr: {stderr}"
         );
     }
+}
+
+#[test]
+fn keys_export_requires_confirmation_before_loading_secret_material() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let keys_dir = config_home.join("groundhog/keys");
+    std::fs::create_dir_all(&keys_dir).unwrap();
+    std::fs::write(
+        keys_dir.join("broken.json"),
+        br#"{"version":1,"scheme":"ed25519","keypair_hex":"zz"}"#,
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "keys", "export", "broken"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "confirmation_required");
+    assert_eq!(error["error"]["details"]["requiredFlag"], "--force");
 }
 
 #[test]
@@ -11264,7 +11585,7 @@ fn spawn_tx_list_rpc(
     expected_query: serde_json::Value,
     response: TxListRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
@@ -11296,7 +11617,7 @@ fn spawn_events_rpc(
     expected_query: serde_json::Value,
     response: EventRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
@@ -11328,7 +11649,7 @@ fn spawn_tx_show_rpc(
     status: TxShowRpcResponse,
     receipt: Option<TxShowRpcResponse>,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let tx_hash = tx_hash.to_owned();
@@ -11416,7 +11737,7 @@ fn spawn_network_descriptor_with_hash(
     rpc_url: &str,
     network_hash: &str,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let rpc_url = rpc_url.to_owned();
@@ -11495,7 +11816,7 @@ fn spawn_network_descriptor_with_hash(
 }
 
 fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let network_hash = network_hash.to_owned();
@@ -11566,7 +11887,7 @@ fn send_jsonrpc_error_response(
 }
 
 fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -11620,7 +11941,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 }
 
 fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let recipient = recipient.to_owned();
@@ -11661,12 +11982,119 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
     (format!("http://{addr}"), handle)
 }
 
+fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let faucet = faucet.to_owned();
+    let recipient = recipient.to_owned();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        serve_balance(&listener, deadline, &faucet, "200012006", 41);
+        serve_chain_tip(&listener, deadline, 42);
+        serve_successful_transaction(&listener, deadline, 43);
+
+        for (address, raw_balance) in [(&faucet, "99999999"), (&recipient, "100000000")] {
+            serve_balance(&listener, deadline, address, raw_balance, 43);
+        }
+        assert_no_follow_up_rpc(&listener);
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_local_wallet_create_rpc(faucet: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let faucet = faucet.to_owned();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        serve_balance(&listener, deadline, &faucet, "110024013", 41);
+        serve_chain_tip(&listener, deadline, 42);
+        serve_successful_transaction(&listener, deadline, 43);
+        serve_successful_transaction(&listener, deadline, 44);
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
+        assert_eq!(request["method"], "groundhog_getBalance");
+        let wallet = request["params"][0].as_str().unwrap();
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "address": wallet,
+                "rawBalance": "10000000",
+                "height": 44,
+            }),
+        );
+        assert_no_follow_up_rpc(&listener);
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn serve_balance(
+    listener: &TcpListener,
+    deadline: Instant,
+    address: &str,
+    raw_balance: &str,
+    height: i64,
+) {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "getBalance");
+    assert_eq!(request["method"], "groundhog_getBalance");
+    assert_eq!(request["params"][0], address);
+    send_jsonrpc_response(
+        stream,
+        &request["id"],
+        serde_json::json!({
+            "address": address,
+            "rawBalance": raw_balance,
+            "height": height,
+        }),
+    );
+}
+
+fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "chainTip");
+    assert_eq!(request["method"], "groundhog_chainTip");
+    send_jsonrpc_response(
+        stream,
+        &request["id"],
+        serde_json::json!({
+            "height": height,
+            "blockHash": format!("0x{}", "00".repeat(32)),
+        }),
+    );
+}
+
+fn serve_successful_transaction(listener: &TcpListener, deadline: Instant, height: i64) {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "sendRawTransaction");
+    assert_eq!(request["method"], "groundhog_sendRawTransaction");
+    let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
+    let tx_hash = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+    );
+    send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
+
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
+    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
+    send_jsonrpc_response(
+        stream,
+        &request["id"],
+        serde_json::json!({
+            "txHash": tx_hash,
+            "height": height,
+            "status": { "result": "ok" },
+            "events": [],
+        }),
+    );
+}
+
 fn spawn_balance_then_chain_tip_rpc(
     address: &str,
     raw_balance: &str,
     height: i64,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = address.to_owned();
@@ -11702,7 +12130,7 @@ fn spawn_balance_then_chain_tip_rpc(
 }
 
 fn spawn_no_request_rpc() -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
@@ -11790,7 +12218,7 @@ fn run_transfer_live_mock_with_rpc_override(
     if json {
         command.arg("--json");
     }
-    command.args(["transfer", &recipient, "1.5"]);
+    command.args(["transfer", &recipient, "1.5", "--force"]);
     if !rpc_url_suffix.is_empty() {
         command.args(["--rpc-url", &effective_rpc_url]);
     }
@@ -11835,7 +12263,7 @@ fn run_saved_wallet_transfer_live_mock(
     .unwrap();
     let recipient = format!("0x{}", "ab".repeat(32));
     let mut command = groundhog();
-    command.args(["--json", "transfer", &recipient, "1.5"]);
+    command.args(["--json", "transfer", &recipient, "1.5", "--force"]);
     if let Some(wallet) = explicit_wallet {
         command.args(["--from", wallet]);
     }
@@ -11859,7 +12287,7 @@ fn spawn_transfer_rpc(
     mock: TransferRpcMock,
     expected_sender: String,
 ) -> (String, thread::JoinHandle<()>, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let (local_hash_tx, local_hash_rx) = mpsc::channel();
@@ -11982,6 +12410,93 @@ fn serve_transfer_poll(
     }
 }
 
+/// A mock-server listener whose port is never handed back to the OS.
+///
+/// The OS recycles an ephemeral port as soon as its listener is dropped, and
+/// these integration tests run concurrently against a `groundhog` child
+/// process each. When one test's mock finishes, its port can immediately be
+/// reassigned to another test's mock while the first test's child is still
+/// retrying — that stray request then arrives as the second mock's "first"
+/// request and fails a test that never made it.
+///
+/// Retiring the listener instead of closing it keeps the port out of
+/// circulation for the rest of the run. A reaper thread accepts and
+/// immediately closes anything that still arrives, so a straggler sees the
+/// connection close rather than hanging on an unanswered socket.
+struct MockListener(Option<TcpListener>);
+
+impl MockListener {
+    fn bind() -> Self {
+        Self(Some(TcpListener::bind("127.0.0.1:0").unwrap()))
+    }
+}
+
+impl std::ops::Deref for MockListener {
+    type Target = TcpListener;
+
+    fn deref(&self) -> &TcpListener {
+        self.0
+            .as_ref()
+            .expect("bug: listener retired while still in use")
+    }
+}
+
+impl Drop for MockListener {
+    fn drop(&mut self) {
+        if let Some(listener) = self.0.take() {
+            retire_listener(listener);
+        }
+    }
+}
+
+fn retired_listeners() -> &'static Mutex<Vec<TcpListener>> {
+    static RETIRED: OnceLock<Mutex<Vec<TcpListener>>> = OnceLock::new();
+    RETIRED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn retire_listener(listener: TcpListener) {
+    static REAPER: Once = Once::new();
+    REAPER.call_once(|| {
+        thread::spawn(|| {
+            loop {
+                for retired in retired_listeners().lock().unwrap().iter() {
+                    // Retired listeners stay non-blocking, so this drains
+                    // whatever is pending and then yields.
+                    while let Ok((stream, _)) = retired.accept() {
+                        drop(stream);
+                    }
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        });
+    });
+    retired_listeners().lock().unwrap().push(listener);
+}
+
+#[test]
+fn a_retired_mock_listener_keeps_its_port_out_of_circulation() {
+    let addr = {
+        let listener = MockListener::bind();
+        listener.set_nonblocking(true).unwrap();
+        listener.local_addr().unwrap()
+    };
+
+    // The guard has been dropped. If the port had gone back to the OS another
+    // test's MockListener::bind() could be handed it while a child process is
+    // still retrying against it, which is the race this guards against.
+    assert!(
+        TcpListener::bind(addr).is_err(),
+        "retired port {addr} was returned to the OS"
+    );
+
+    // Stragglers are accepted and closed rather than left hanging.
+    let straggler = std::net::TcpStream::connect(addr);
+    assert!(
+        straggler.is_ok(),
+        "retired port {addr} refused a late connection: {straggler:?}"
+    );
+}
+
 fn assert_no_follow_up_rpc(listener: &TcpListener) {
     let deadline = Instant::now() + Duration::from_millis(200);
     loop {
@@ -11999,7 +12514,7 @@ fn assert_no_follow_up_rpc(listener: &TcpListener) {
 }
 
 fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -12030,7 +12545,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
 }
 
 fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -12145,7 +12660,7 @@ fn spawn_view_rpc_inner_with_events(
     output: serde_json::Value,
     events: serde_json::Value,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
@@ -12407,7 +12922,6 @@ fn signed_tx_deploy_contract_kind(tx_hex: &str) -> &'static str {
         .first()
         .expect("bug: deploy tx should include contract bytes");
     match contract {
-        groundhog_xdr::contract::Contract::kWasmi { .. } => "wasm",
         groundhog_xdr::contract::Contract::kRv32 { .. } => "rv32",
         _ => "other",
     }
@@ -12444,7 +12958,7 @@ fn spawn_transaction_rpc(
     receipt: serde_json::Value,
     detail_response: DevDetailRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 

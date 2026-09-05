@@ -1,4 +1,4 @@
-use std::io::BufRead as _;
+use std::borrow::Cow;
 use std::path::Path;
 
 use groundhog_json_rpc_client::GroundhogApiClient;
@@ -8,6 +8,7 @@ use groundhog_json_rpc_types::{
 use serde_json::json;
 
 use crate::account_resolution::resolve_address_target_or_default_wallet;
+use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
@@ -16,6 +17,7 @@ use crate::{CliError, Print};
 
 /// Schema version of the `balance --json` data payload.
 pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 1;
+const LOW_LOCAL_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
 pub fn run(
@@ -121,33 +123,31 @@ pub(crate) fn local_funding_projection(
     })
 }
 
-pub(crate) fn confirm_low_faucet_balance(print: &Print, yes: bool) -> Result<(), CliError> {
-    if yes {
-        return Ok(());
-    }
-    if !print.can_prompt() {
-        return Err(CliError::ConfirmationRequired {
-            action: "continue with low local faucet balance",
-        });
-    }
-
-    print.prompt("Continue? [y/N] ")?;
-    let mut answer = String::new();
-    std::io::stdin().lock().read_line(&mut answer)?;
-    if answer.trim().eq_ignore_ascii_case("y") || answer.trim().eq_ignore_ascii_case("yes") {
-        return Ok(());
-    }
-    Err(CliError::Other(
-        "local funding cancelled; rerun with `--yes` to confirm non-interactively".into(),
-    ))
-}
-
 pub(crate) fn insufficient_local_faucet_error(requested: u128, estimated_max: u128) -> CliError {
     CliError::Other(format!(
         "local faucet has insufficient actionable balance: requested {} HOG, estimated maximum is {} HOG; reduce the amount or start a fresh local chain",
         hog::format_amount(requested),
         hog::format_amount(estimated_max)
     ))
+}
+
+pub(crate) fn low_local_faucet_balance_warning(projected_balance: Option<u128>) -> Option<Finding> {
+    let projected_balance = projected_balance?;
+    if projected_balance >= LOW_LOCAL_FAUCET_BALANCE_RAW {
+        return None;
+    }
+
+    Some(Finding {
+        level: FindingLevel::Warn,
+        code: "low_local_faucet_balance",
+        message: format!(
+            "local faucet balance is projected to fall below 10 HOG ({} HOG remaining)",
+            hog::format_amount(projected_balance)
+        ),
+        hint: Some(Cow::Borrowed(
+            "reduce the amount or start a fresh local chain",
+        )),
+    })
 }
 
 fn parse_storage_cost(field: &str, raw: &str) -> Result<u128, CliError> {
@@ -163,8 +163,7 @@ mod tests {
     use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
     use serde_json::json;
 
-    use super::{confirm_low_faucet_balance, local_funding_projection};
-    use crate::{CliError, Print};
+    use super::{local_funding_projection, low_local_faucet_balance_warning};
 
     #[test]
     fn projection_reserves_active_transaction_storage_cost() {
@@ -204,12 +203,16 @@ mod tests {
     }
 
     #[test]
-    fn low_balance_confirmation_never_prompts_in_json_or_quiet_mode() {
-        for print in [Print::new(false, true), Print::quiet()] {
-            let error = confirm_low_faucet_balance(&print, false)
-                .expect_err("bug: non-interactive confirmation should require --yes");
-            assert!(matches!(error, CliError::ConfirmationRequired { .. }));
-        }
+    fn low_faucet_warning_is_emitted_below_ten_hog() {
+        let warning = low_local_faucet_balance_warning(Some(10 * crate::hog::SCALE - 1))
+            .expect("bug: balance below threshold should warn");
+
+        assert_eq!(warning.code, "low_local_faucet_balance");
+    }
+
+    #[test]
+    fn low_faucet_warning_is_not_emitted_at_ten_hog() {
+        assert!(low_local_faucet_balance_warning(Some(10 * crate::hog::SCALE)).is_none());
     }
 
     fn costs() -> RuntimeManifestStorageCostModel {

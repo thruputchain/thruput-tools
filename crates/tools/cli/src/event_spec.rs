@@ -329,6 +329,8 @@ fn validate_type(
         | ContractType::I64
         | ContractType::U128
         | ContractType::I128
+        | ContractType::U256
+        | ContractType::I256
         | ContractType::String
         | ContractType::Bytes
         | ContractType::Address => Ok(usize::from(count_values)),
@@ -801,6 +803,32 @@ mod tests {
         assert_eq!(items[2].decode_status, EventDecodeStatus::Malformed);
         assert!(items[2].decode_error.as_deref().unwrap().contains("unread"));
         assert_eq!(items[2].raw.data.0, trailing);
+    }
+
+    #[test]
+    fn validation_and_decoding_accept_native_256_event_fields() {
+        let field_type = ContractType::Tuple {
+            tuple: vec![ContractType::U256, ContractType::I256]
+                .try_into()
+                .unwrap(),
+        };
+        let mut contract_spec = event_spec(field_type);
+        contract_spec.events.0[0].topics = VecM(vec![
+            field("unsigned", ContractType::U256),
+            field("signed", ContractType::I256),
+        ]);
+        let spec = validated(contract_spec);
+        let encoded = xdrs::cxs::encode(&(sdk::U256::MAX, sdk::I256::MIN)).unwrap();
+
+        let item = spec
+            .decode_events(vec![identified_event(0x11, 3, encoded)])
+            .remove(0);
+
+        assert_eq!(item.decode_status, EventDecodeStatus::Decoded);
+        assert_eq!(
+            item.decoded.unwrap().fields["value"],
+            serde_json::json!([sdk::U256::MAX.to_string(), sdk::I256::MIN.to_string()])
+        );
     }
 
     #[test]

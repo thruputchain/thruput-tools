@@ -108,6 +108,7 @@ fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
 
     let next_steps = vec![
         format!("cd {}", render_shell_arg(&dir.to_string_lossy())),
+        "cargo test".to_string(),
         "groundhog build".to_string(),
     ];
     print.next_steps(&next_steps);

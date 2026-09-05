@@ -5,10 +5,12 @@ use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::transaction::Transaction;
+use groundhog_xdr::types::NetworkHash;
 use serde_json::json;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
@@ -55,6 +57,22 @@ pub(crate) struct PreparedCall {
     pub(crate) tx_hex: String,
 }
 
+#[derive(Debug)]
+struct CallPlan {
+    rpc_url: String,
+    profile_name: String,
+    contract_address_hex: String,
+    wallet_address_hex: String,
+    wallet_entrypoint_id: String,
+    wallet_entrypoint_source: &'static str,
+    method: String,
+    resolved: ResolvedCall,
+    calldata: Vec<u8>,
+    transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
 /// Call a method on a deployed contract.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
@@ -64,6 +82,7 @@ pub fn run(
     args: &[String],
     package: Option<&str>,
     dry_run: bool,
+    force: bool,
     wallet: Option<&str>,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
@@ -71,9 +90,25 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_call(
+    if !dry_run {
+        let cwd = std::env::current_dir()?;
+        resolve_profile_with_overrides(&cwd, profile, overrides)?;
+        print.require_confirmation_available(force, "call a contract")?;
+    }
+    let plan = prepare_call_plan(
         contract, method, args, package, artifacts, wallet, profile, overrides,
     )?;
+    if !dry_run {
+        print.detail("contract", &plan.contract_address_hex);
+        print.detail("method", &plan.method);
+        print.detail("wallet", &plan.wallet_address_hex);
+        print.detail("profile", &plan.profile_name);
+        if !print.confirm(force, "call a contract", "Submit this contract call?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+    let prepared = sign_call_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -309,9 +344,8 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     }
 }
 
-/// Resolve, encode, and sign a call transaction without submitting it.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_call(
+fn prepare_call_plan(
     contract: &str,
     method: &str,
     args: &[String],
@@ -320,15 +354,15 @@ pub(crate) fn prepare_call(
     wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
-) -> Result<PreparedCall, CliError> {
+) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    prepare_call_with_runtime(
+    prepare_call_plan_with_runtime(
         contract, method, args, package, artifacts, wallet, profile, overrides, &rt,
     )
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn prepare_call_with_runtime(
+fn prepare_call_plan_with_runtime(
     contract: &str,
     method: &str,
     args: &[String],
@@ -338,7 +372,7 @@ fn prepare_call_with_runtime(
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
-) -> Result<PreparedCall, CliError> {
+) -> Result<CallPlan, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
@@ -382,16 +416,9 @@ fn prepare_call_with_runtime(
     })
     .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &sender.signer,
-        SignTransactionParams::default(),
-        &wallet_context.network_hash,
-    )
-    .map_err(|e| CliError::Other(e.to_string()))?;
-
-    Ok(PreparedCall {
+    Ok(CallPlan {
         rpc_url: rpc_url.to_owned(),
+        profile_name: resolved_profile.name,
         contract_address_hex,
         wallet_address_hex,
         wallet_entrypoint_id,
@@ -399,6 +426,29 @@ fn prepare_call_with_runtime(
         method: method.to_owned(),
         resolved,
         calldata,
+        transaction: tx,
+        signer: sender.signer,
+        network_hash: wallet_context.network_hash,
+    })
+}
+
+fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
+    let tx_hex = sign_and_encode_transaction_hex(
+        plan.transaction,
+        &plan.signer,
+        SignTransactionParams::default(),
+        &plan.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    Ok(PreparedCall {
+        rpc_url: plan.rpc_url,
+        contract_address_hex: plan.contract_address_hex,
+        wallet_address_hex: plan.wallet_address_hex,
+        wallet_entrypoint_id: plan.wallet_entrypoint_id,
+        wallet_entrypoint_source: plan.wallet_entrypoint_source,
+        method: plan.method,
+        resolved: plan.resolved,
+        calldata: plan.calldata,
         tx_hex,
     })
 }
@@ -875,7 +925,7 @@ fn parse_method_metadata(body: &str, method: &str) -> Option<MethodMetadata> {
         {
             continue;
         }
-        let (_, ty) = arg.rsplit_once(':')?;
+        let (_, ty) = arg.split_once(':')?;
         arg_types.push(ty.trim().to_string());
     }
 
@@ -973,8 +1023,9 @@ mod tests {
     use super::{
         ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
         filter_candidates_by_interfaces, format_entrypoint_id, method_entrypoint_id,
-        parse_contract_attr_value, resolve_call, resolve_local_contract_metadata,
-        resolve_spec_method, select_package, selector_json, selector_summary,
+        parse_contract_attr_value, parse_method_metadata, resolve_call,
+        resolve_local_contract_metadata, resolve_spec_method, select_package, selector_json,
+        selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -1028,6 +1079,18 @@ mod tests {
         assert_eq!(metadata[0].version, "0.1.0");
         assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
         assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
+    }
+
+    #[test]
+    fn extracts_qualified_native_256_type_names() {
+        let metadata = parse_method_metadata(
+            "fn convert(value: sdk::U256) -> groundhog_sdk::I256 { todo!() }",
+            "convert",
+        )
+        .expect("bug: qualified method signature should parse");
+
+        assert_eq!(metadata.arg_types, vec!["sdk::U256"]);
+        assert_eq!(metadata.return_type.as_deref(), Some("groundhog_sdk::I256"));
     }
 
     #[test]
@@ -1290,6 +1353,38 @@ mod tests {
     }
 
     #[test]
+    fn encodes_and_decodes_local_native_256_values() {
+        for (ty, value) in [
+            ("U256", sdk::U256::MAX.to_string()),
+            ("sdk::U256", sdk::U256::MAX.to_string()),
+            ("groundhog_sdk::U256", sdk::U256::MAX.to_string()),
+            ("I256", sdk::I256::MIN.to_string()),
+            ("sdk::I256", sdk::I256::MIN.to_string()),
+            ("groundhog_sdk::I256", sdk::I256::MIN.to_string()),
+        ] {
+            let metadata = ContractMetadata {
+                interface_name: "Counter".into(),
+                version: "0.1.0".into(),
+                source: Path::new("/tmp/implementation.rs").to_path_buf(),
+                method: MethodMetadata {
+                    arg_types: vec![ty.into()],
+                    return_type: Some(ty.into()),
+                },
+            };
+
+            let encoded = encode_calldata(
+                std::slice::from_ref(&value),
+                Some(&CallMetadata::Local(metadata.clone())),
+            )
+            .expect("bug: local native 256-bit calldata should encode");
+            let decoded = decode_return_value(&encoded, Some(&CallMetadata::Local(metadata)))
+                .expect("bug: local native 256-bit return should decode");
+
+            assert_eq!(decoded, json!(value));
+        }
+    }
+
+    #[test]
     fn reports_unsupported_local_type_name_in_encode_error() {
         let metadata = ContractMetadata {
             interface_name: "Counter".into(),
@@ -1473,6 +1568,50 @@ mod tests {
                 .expect("bug: embedded spec i128 return should decode"),
             json!(i128_value)
         );
+
+        let u256_value = sdk::U256::MAX.to_string();
+        let i256_value = sdk::I256::MIN.to_string();
+        let metadata = sample_single_arg_spec_metadata(ContractType::Tuple {
+            tuple: vec![ContractType::U256, ContractType::I256]
+                .try_into()
+                .unwrap(),
+        });
+        let argument = json!([u256_value, i256_value]).to_string();
+        let bytes = encode_calldata(&[argument], Some(&CallMetadata::Spec(metadata.clone())))
+            .expect("bug: embedded spec native 256-bit integers should encode");
+
+        assert_eq!(
+            decode_spec_arguments(&metadata, &bytes),
+            vec![json!([
+                sdk::U256::MAX.to_string(),
+                sdk::I256::MIN.to_string()
+            ])]
+        );
+    }
+
+    #[test]
+    fn typed_native_256_arguments_enforce_ranges() {
+        const U256_OVERFLOW: &str =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+        const I256_OVERFLOW: &str =
+            "57896044618658097711785492504343953926634992332820282019728792003956564819968";
+        const I256_UNDERFLOW: &str =
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819969";
+
+        for (ty, value, expected) in [
+            (ContractType::U256, U256_OVERFLOW, "U256"),
+            (ContractType::I256, I256_OVERFLOW, "I256"),
+            (ContractType::I256, I256_UNDERFLOW, "I256"),
+        ] {
+            let error = encode_calldata(
+                &[value.to_owned()],
+                Some(&CallMetadata::Spec(sample_single_arg_spec_metadata(ty))),
+            )
+            .expect_err("bug: out-of-range native 256-bit argument must fail");
+
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(error.to_string().contains("does not fit"), "{error}");
+        }
     }
 
     #[test]
@@ -1895,6 +2034,15 @@ mod tests {
         assert_eq!(normalize_type_name("&'a str"), "str");
         assert_eq!(normalize_type_name("&String"), "String");
         assert_eq!(normalize_type_name("&strange"), "strange");
+    }
+
+    #[test]
+    fn normalize_type_name_recognizes_qualified_native_256_types() {
+        assert_eq!(normalize_type_name("sdk::U256"), "U256");
+        assert_eq!(normalize_type_name("&sdk::I256"), "I256");
+        assert_eq!(normalize_type_name("groundhog_sdk::U256"), "U256");
+        assert_eq!(normalize_type_name("&'a groundhog_sdk::I256"), "I256");
+        assert_eq!(normalize_type_name("other::U256"), "other::U256");
     }
 
     fn create_temp_project(package_name: &str) -> TempDir {

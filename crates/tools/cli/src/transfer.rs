@@ -9,10 +9,12 @@ use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, encode_signed_transaction_xdr, sign_transaction,
     transaction_hash,
 };
+use groundhog_xdr::transaction::Transaction;
+use groundhog_xdr::types::NetworkHash;
 
 use crate::account_resolution::{
     bind_sender_to_network, resolve_address_target, resolve_sender_account,
@@ -52,6 +54,26 @@ struct PreparedTransfer {
     signed_transaction: Vec<u8>,
 }
 
+#[derive(Debug)]
+struct TransferPlan {
+    profile: String,
+    rpc_url: String,
+    rpc_url_cli_override: bool,
+    sender: groundhog_xdr::types::ContractAddress,
+    sender_wallet: Option<String>,
+    signer_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    recipient_input: String,
+    recipient: groundhog_xdr::types::ContractAddress,
+    token_address: groundhog_xdr::types::ContractAddress,
+    amount: String,
+    raw_amount: u128,
+    tx_hash: TxHash,
+    expiry_height: i64,
+    transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
 /// Prepare a native HOG transfer from the effective profile wallet.
 // The command boundary mirrors its CLI flags plus shared output context.
 #[expect(clippy::too_many_arguments)]
@@ -60,12 +82,29 @@ pub fn run(
     amount: &str,
     from: Option<&str>,
     dry_run: bool,
+    force: bool,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare(recipient, amount, from, profile, overrides)?;
+    if !dry_run {
+        let cwd = std::env::current_dir()?;
+        resolve_profile_with_overrides(&cwd, profile, overrides)?;
+        print.require_confirmation_available(force, "transfer HOG")?;
+    }
+    let plan = prepare_plan(recipient, amount, from, profile, overrides)?;
+    if !dry_run {
+        print.detail("recipient", format_contract_address(&plan.recipient));
+        print.detail("amount", format_args!("{} HOG", plan.amount));
+        print.detail("from", format_contract_address(&plan.sender));
+        print.detail("profile", &plan.profile);
+        if !print.confirm(force, "transfer HOG", "Submit this transfer?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+    let prepared = sign_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -90,13 +129,13 @@ enum LiveOutcome {
     },
 }
 
-fn prepare(
+fn prepare_plan(
     recipient_input: &str,
     amount_input: &str,
     from: Option<&str>,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
-) -> Result<PreparedTransfer, CliError> {
+) -> Result<TransferPlan, CliError> {
     let cwd = std::env::current_dir()?;
     let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
@@ -143,17 +182,7 @@ fn prepare(
             .map_err(|error| CliError::Other(error.to_string()))?
             .into(),
     );
-    let authenticated_tx = sign_transaction(
-        tx,
-        &resolved_sender.signer,
-        SignTransactionParams::default(),
-        &wallet_context.network_hash,
-    )
-    .map_err(|error| CliError::Other(error.to_string()))?;
-    let signed_transaction = encode_signed_transaction_xdr(&authenticated_tx)
-        .map_err(|error| CliError::Other(error.to_string()))?;
-
-    Ok(PreparedTransfer {
+    Ok(TransferPlan {
         profile: profile.name,
         rpc_url: rpc_url.to_owned(),
         rpc_url_cli_override: profile.rpc_url_cli_override,
@@ -169,6 +198,36 @@ fn prepare(
         raw_amount,
         tx_hash,
         expiry_height,
+        transaction: tx,
+        signer: resolved_sender.signer,
+        network_hash: wallet_context.network_hash,
+    })
+}
+
+fn sign_plan(plan: TransferPlan) -> Result<PreparedTransfer, CliError> {
+    let authenticated_tx = sign_transaction(
+        plan.transaction,
+        &plan.signer,
+        SignTransactionParams::default(),
+        &plan.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    let signed_transaction = encode_signed_transaction_xdr(&authenticated_tx)
+        .map_err(|error| CliError::Other(error.to_string()))?;
+    Ok(PreparedTransfer {
+        profile: plan.profile,
+        rpc_url: plan.rpc_url,
+        rpc_url_cli_override: plan.rpc_url_cli_override,
+        sender: plan.sender,
+        sender_wallet: plan.sender_wallet,
+        signer_public_key: plan.signer_public_key,
+        recipient_input: plan.recipient_input,
+        recipient: plan.recipient,
+        token_address: plan.token_address,
+        amount: plan.amount,
+        raw_amount: plan.raw_amount,
+        tx_hash: plan.tx_hash,
+        expiry_height: plan.expiry_height,
         signed_transaction,
     })
 }
