@@ -24,12 +24,17 @@ pub const ALLOC_ALLOWLIST: [&str; 9] = [
     INTERFACE_TABLE_ANCHOR_SECTION,
 ];
 
-/// The contract's interface table: one 32-byte interface id per `#[contract]`
-/// impl block, emitted by the SDK macros and `KEEP`'d by the SDK linker script
-/// (`sdk::interface_table`). Always present in the ELF; copied into VM memory
-/// only when [`INTERFACE_TABLE_ANCHOR_SECTION`] is, since the table has a
-/// reader exactly then. Names mirror the SDK's linker script.
+/// The contract's interface table: one [`INTERFACE_ID_BYTES`]-byte interface
+/// id per `#[contract]` impl block, emitted by the SDK macros and `KEEP`'d by
+/// the SDK linker script (`sdk::interface_table`). Always present in the ELF;
+/// copied into VM memory only when [`INTERFACE_TABLE_ANCHOR_SECTION`] is,
+/// since the table has a reader exactly then. Names mirror the SDK's linker
+/// script.
 pub const INTERFACE_TABLE_SECTION: &str = "groundhog_rv32_interfaces";
+
+/// Width of one interface-table record: an interface id is the leading eight
+/// bytes of a hash, like an entrypoint id.
+pub const INTERFACE_ID_BYTES: usize = 8;
 
 /// The interface table's reader anchor: an ordinary garbage-collectable word
 /// that survives the link only if the SDK's table reader was instantiated (an
@@ -75,12 +80,16 @@ pub struct Lowered {
     pub initial_memory_start: usize,
     /// Total guest data address space, in bytes.
     pub memory_bytes: usize,
+    /// Non-fatal findings about the input, for the caller to surface. Today:
+    /// duplicate ids in the interface table.
+    pub warnings: Vec<String>,
 }
 
 /// Parse, validate, and lower an rv32im contract ELF into a v5 artifact.
 pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
     let sections = elf::parse_elf(elf_bytes)?;
     let (code, initial_memory, initial_memory_start) = validate_sections(elf_bytes, &sections)?;
+    let warnings = check_interface_table(elf_bytes, &sections)?;
     let artifact = build_artifact(&code, &initial_memory, initial_memory_start)?;
     verify_artifact(&artifact)?;
     Ok(Lowered {
@@ -89,6 +98,7 @@ pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
         initial_memory,
         initial_memory_start,
         memory_bytes: MAX_MEMORY_BYTES,
+        warnings,
     })
 }
 
@@ -98,6 +108,57 @@ fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
 
 fn is_spec_metadata_section(name: &str) -> bool {
     name.starts_with(RAW_SPEC_SECTION_PREFIX) || name == FINAL_SPEC_SECTION
+}
+
+/// Validate the interface table's shape and report duplicate ids.
+///
+/// Interface ids are 8-byte truncated hashes of `(interface name, MAJOR)`,
+/// and a contract's ERC-165 answer is "is this id in my table", so two
+/// interfaces that share an id are indistinguishable to callers. The SDK
+/// cannot see this at compile time (the colliding interfaces may come from
+/// different crates), but the linked table shows it: a duplicate record is
+/// either that collision or two contract types in one image implementing
+/// the same interface. Both are worth a warning, neither a failure.
+fn check_interface_table(data: &[u8], sections: &[Section]) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for section in sections
+        .iter()
+        .filter(|s| s.name == INTERFACE_TABLE_SECTION && s.is_alloc() && !s.is_nobits())
+    {
+        let size = section.size as usize;
+        if !size.is_multiple_of(INTERFACE_ID_BYTES) {
+            return Err(invalid(format!(
+                "{INTERFACE_TABLE_SECTION} size {size} is not a multiple of {INTERFACE_ID_BYTES}"
+            )));
+        }
+        let off = section.offset as usize;
+        if off + size > data.len() {
+            return Err(invalid(format!(
+                "section {INTERFACE_TABLE_SECTION} extends past end of file"
+            )));
+        }
+        let mut seen: Vec<&[u8]> = Vec::with_capacity(size / INTERFACE_ID_BYTES);
+        for record in data[off..off + size].chunks_exact(INTERFACE_ID_BYTES) {
+            if seen.contains(&record) {
+                let hex = record.iter().fold(String::new(), |mut acc, b| {
+                    use std::fmt::Write as _;
+                    let _ = write!(acc, "{b:02x}");
+                    acc
+                });
+                let message = format!(
+                    "interface table has duplicate id 0x{hex}: two interfaces share an id \
+                     (or two contract types in this image implement the same interface); \
+                     ERC-165 callers cannot tell them apart"
+                );
+                if !warnings.contains(&message) {
+                    warnings.push(message);
+                }
+            } else {
+                seen.push(record);
+            }
+        }
+    }
+    Ok(warnings)
 }
 
 /// Find the single `.text` section, erroring if absent or duplicated.
