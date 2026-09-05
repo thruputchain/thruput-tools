@@ -411,7 +411,12 @@ fits the underlying type.
 `groundhog call --dry-run` resolves selectors, encodes calldata, fetches the
 current chain tip to set expiry, signs the transaction, and prints or emits
 the prepared invocation without submitting it. A dry run therefore still
-needs a signing key and a reachable RPC endpoint.
+needs a signing key and a reachable RPC endpoint; a later follow-up can
+split payload assembly from signing if we want a no-key-required dry run.
+
+Remaining follow-up: cache repeated embedded-spec loads, tighten the
+union/structured CLI UX, and remove the remaining local-source fallback
+once the spec-driven path has soaked.
 
 ### `groundhog storage`
 
