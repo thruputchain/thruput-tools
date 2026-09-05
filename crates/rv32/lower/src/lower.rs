@@ -6,6 +6,8 @@
 //! contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
 //! `.text` layout rules below. Stripped release builds are valid inputs.
 
+use std::collections::HashSet;
+
 use crate::elf::{self, Section};
 use crate::error::{LowerError, Result, invalid};
 use groundhog_rv32_artifact::{MAX_CODE_BYTES, MAX_MEMORY_BYTES, build_artifact, verify_artifact};
@@ -66,7 +68,11 @@ pub const FINAL_SPEC_SECTION: &str = "groundhogspecv0";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
+///
+/// Non-exhaustive: produced only by [`lower`], and fields are added as the
+/// lowerer learns to report more (`warnings` was the first such addition).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Lowered {
     /// The complete v5 artifact bytes (`.rv32a`).
     pub artifact: Vec<u8>,
@@ -137,9 +143,15 @@ fn check_interface_table(data: &[u8], sections: &[Section]) -> Result<Vec<String
                 "section {INTERFACE_TABLE_SECTION} extends past end of file"
             )));
         }
-        let mut seen: Vec<&[u8]> = Vec::with_capacity(size / INTERFACE_ID_BYTES);
+        // A set, not a scan of what came before: the table is bounded only
+        // by the ELF, and it is checked whether or not it reaches the image.
+        let mut seen: HashSet<[u8; INTERFACE_ID_BYTES]> =
+            HashSet::with_capacity(size / INTERFACE_ID_BYTES);
         for record in data[off..off + size].chunks_exact(INTERFACE_ID_BYTES) {
-            if seen.contains(&record) {
+            let record: [u8; INTERFACE_ID_BYTES] = record
+                .try_into()
+                .expect("bug: chunks_exact yields INTERFACE_ID_BYTES-long chunks");
+            if !seen.insert(record) {
                 let hex = record.iter().fold(String::new(), |mut acc, b| {
                     use std::fmt::Write as _;
                     let _ = write!(acc, "{b:02x}");
@@ -153,8 +165,6 @@ fn check_interface_table(data: &[u8], sections: &[Section]) -> Result<Vec<String
                 if !warnings.contains(&message) {
                     warnings.push(message);
                 }
-            } else {
-                seen.push(record);
             }
         }
     }
