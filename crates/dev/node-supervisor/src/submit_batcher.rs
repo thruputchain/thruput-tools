@@ -85,6 +85,10 @@ impl fmt::Debug for SubmitBatcher {
 }
 
 impl SubmitBatcher {
+    /// Start a bounded submission worker on the current Tokio runtime.
+    ///
+    /// Clones share one queue and worker, with at most one scheduler batch in flight.
+    /// Dropping the last handle aborts the worker rather than draining queued work.
     pub(crate) fn spawn(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
         Self::spawn_with(
             Arc::new(SchedulerSink { scheduler }),
@@ -123,6 +127,13 @@ impl SubmitBatcher {
         }
     }
 
+    /// Queue validated transaction bytes and await the shared scheduler submission result.
+    ///
+    /// Exhausted queue capacity or payload-byte budget returns `Overloaded` immediately.
+    /// The backend deadline is capped at 30 seconds from request start, or the earlier
+    /// request deadline. Canceled callers are skipped before packing where possible;
+    /// canceling this future does not cancel a scheduler batch already in flight.
+    /// Success confirms scheduler RPC completion, not individual transaction commitment.
     #[tracing::instrument(skip_all, fields(tx_bytes_len = tx_bytes.len()))]
     pub(crate) async fn submit(
         &self,
@@ -177,6 +188,9 @@ impl SubmitBatcher {
         .await
     }
 
+    /// Install or replace the block-driver trigger shared by all batcher clones.
+    ///
+    /// The worker invokes the current trigger once after each successful scheduler batch.
     pub(crate) fn set_block_driver(&self, block_driver: BlockDriverTrigger) {
         *self
             .inner
