@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use groundhog_erc20_if::{CONTRACT_ADDR_ZERO, TransferEvent};
+use groundhog_erc20_if::{BurnEvent, MintEvent, TransferEvent};
 use groundhog_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
@@ -159,9 +159,30 @@ fn transfer_filters(
         return vec![
             transfer_filter(token, Some(account), None),
             transfer_filter(token, None, Some(account)),
+            supply_filter(token, *MintEvent::SIGNATURE, Some(account)),
+            supply_filter(token, *BurnEvent::SIGNATURE, Some(account)),
         ];
     }
-    vec![transfer_filter(token, from, to)]
+    let mut filters = vec![transfer_filter(token, from, to)];
+    // A mint has no sender and a burn has no recipient. Neither matches an
+    // explicit constraint on its absent participant, including the zero address.
+    if from.is_none() {
+        filters.push(supply_filter(token, *MintEvent::SIGNATURE, to));
+    }
+    if to.is_none() {
+        filters.push(supply_filter(token, *BurnEvent::SIGNATURE, from));
+    }
+    filters
+}
+
+fn supply_filter(
+    token: ContractAddress,
+    signature: [u8; 32],
+    participant: Option<ContractAddress>,
+) -> EventFilter {
+    let mut filter = transfer_filter(token, participant, None);
+    filter.topics.topic0 = TopicList(VecM(vec![Topic(signature)]));
+    filter
 }
 
 fn transfer_filter(
@@ -207,14 +228,30 @@ fn decode_transfer_record(event: IdentifiedEvent) -> TokenTransferRecordReport {
 }
 
 fn decode_transfer(raw: &RawEventReport) -> Result<DecodedTokenTransferReport, String> {
-    if raw.topics.len() != 3 {
-        return Err(format!("expected 3 topics, got {}", raw.topics.len()));
+    let (kind, expected_topics) = match raw.topics.first().map(|topic| topic.0) {
+        Some(signature) if signature == *TransferEvent::SIGNATURE => {
+            (TokenTransferKind::Transfer, 3)
+        }
+        Some(signature) if signature == *MintEvent::SIGNATURE => (TokenTransferKind::Mint, 2),
+        Some(signature) if signature == *BurnEvent::SIGNATURE => (TokenTransferKind::Burn, 2),
+        _ => return Err("topic 0 is not a canonical token event signature".into()),
+    };
+    if raw.topics.len() != expected_topics {
+        return Err(format!(
+            "expected {expected_topics} topics, got {}",
+            raw.topics.len()
+        ));
     }
-    if raw.topics[0].0 != *TransferEvent::SIGNATURE {
-        return Err("topic 0 is not the canonical TransferEvent signature".into());
-    }
-    let from = groundhog_xdr::types::ContractAddress::from(raw.topics[1].0);
-    let to = groundhog_xdr::types::ContractAddress::from(raw.topics[2].0);
+    let participant = |index: usize| {
+        ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
+            raw.topics[index].0,
+        ))
+    };
+    let (from, to) = match kind {
+        TokenTransferKind::Transfer => (Some(participant(1)), Some(participant(2))),
+        TokenTransferKind::Mint => (None, Some(participant(1))),
+        TokenTransferKind::Burn => (Some(participant(1)), None),
+    };
     let mut reader = xdrs::cxs::buf_reader::BufReader::new(&raw.data.0);
     let amount: i128 = xdrs::read_xdr(&mut reader)
         .map_err(|error| format!("failed to decode transfer amount: {error}"))?;
@@ -227,17 +264,10 @@ fn decode_transfer(raw: &RawEventReport) -> Result<DecodedTokenTransferReport, S
     if amount < 0 {
         return Err("transfer amount must be nonnegative".into());
     }
-    let kind = if &from == CONTRACT_ADDR_ZERO {
-        TokenTransferKind::Mint
-    } else if &to == CONTRACT_ADDR_ZERO {
-        TokenTransferKind::Burn
-    } else {
-        TokenTransferKind::Transfer
-    };
     Ok(DecodedTokenTransferReport {
         kind,
-        from: ContractAddress::from(from),
-        to: ContractAddress::from(to),
+        from,
+        to,
         raw_amount: amount.to_string(),
     })
 }
@@ -274,8 +304,12 @@ fn print_transfers(report: &TokenTransfersReport, continuation_requested: bool, 
                 print.detail("height", *record.raw.block_height);
                 print.detail("sequence", record.raw.sequence_number);
                 print.detail("txn", format_tx_hash(&record.raw.tx_hash));
-                print.detail("from", format_contract_address(&transfer.from.0));
-                print.detail("to", format_contract_address(&transfer.to.0));
+                if let Some(from) = transfer.from {
+                    print.detail("from", format_contract_address(&from.0));
+                }
+                if let Some(to) = transfer.to {
+                    print.detail("to", format_contract_address(&to.0));
+                }
                 print.detail("raw amount", &transfer.raw_amount);
             } else {
                 print.warn(format_args!(
@@ -357,7 +391,7 @@ fn transfer_kind_label(kind: TokenTransferKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_erc20_if::{CONTRACT_ADDR_ZERO, TransferEvent};
+    use groundhog_erc20_if::{BurnEvent, CONTRACT_ADDR_ZERO, MintEvent, TransferEvent};
     use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
     use groundhog_json_rpc_types::hex::{HexBytes, Topic};
     use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
@@ -388,17 +422,89 @@ mod tests {
     }
 
     #[test]
-    fn classifies_transfer_mint_burn_and_zero_to_zero() {
+    fn zero_address_participation_does_not_imply_supply_change() {
         let zero_address = (*CONTRACT_ADDR_ZERO).into_inner();
         for (from, to, expected) in [
             ([1; 32], [2; 32], TokenTransferKind::Transfer),
-            (zero_address, [2; 32], TokenTransferKind::Mint),
-            ([1; 32], zero_address, TokenTransferKind::Burn),
-            (zero_address, zero_address, TokenTransferKind::Mint),
+            (zero_address, [2; 32], TokenTransferKind::Transfer),
+            ([1; 32], zero_address, TokenTransferKind::Transfer),
+            (zero_address, zero_address, TokenTransferKind::Transfer),
         ] {
             let record = decode_transfer_record(event(from, to, 0));
             assert_eq!(record.decode_status, TokenTransferDecodeStatus::Decoded);
             assert_eq!(record.transfer.unwrap().kind, expected);
+        }
+    }
+
+    fn supply_event(mint: bool, participant: [u8; 32], amount: i128) -> IdentifiedEvent {
+        let address = groundhog_xdr::types::ContractAddress::from(participant);
+        let mut record = event(participant, participant, amount);
+        let (signature, data) = if mint {
+            (
+                *MintEvent::SIGNATURE,
+                xdrs::cxs::encode(&MintEvent::new(&address, amount)).unwrap(),
+            )
+        } else {
+            (
+                *BurnEvent::SIGNATURE,
+                xdrs::cxs::encode(&BurnEvent::new(&address, amount)).unwrap(),
+            )
+        };
+        record.event.topics = vec![Topic(signature), Topic(participant)];
+        record.event.data = HexBytes(data);
+        record
+    }
+
+    #[test]
+    fn canonical_supply_events_have_only_their_actual_participant() {
+        for mint in [true, false] {
+            for participant in [[2; 32], (*CONTRACT_ADDR_ZERO).into_inner()] {
+                let record = decode_transfer_record(supply_event(mint, participant, 125));
+                assert_eq!(record.decode_status, TokenTransferDecodeStatus::Decoded);
+                let transfer = record.transfer.unwrap();
+                let address =
+                    ContractAddress::from(groundhog_xdr::types::ContractAddress::from(participant));
+                assert_eq!(
+                    transfer.kind,
+                    if mint {
+                        TokenTransferKind::Mint
+                    } else {
+                        TokenTransferKind::Burn
+                    }
+                );
+                assert_eq!(transfer.from, if mint { None } else { Some(address) });
+                assert_eq!(transfer.to, if mint { Some(address) } else { None });
+                assert_eq!(transfer.raw_amount, "125");
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_supply_events_preserve_raw_evidence() {
+        for mint in [true, false] {
+            let valid = supply_event(mint, [2; 32], 125);
+            let mut missing_participant = valid.clone();
+            missing_participant.event.topics.pop();
+            let mut extra_participant = valid.clone();
+            extra_participant.event.topics.push(Topic([3; 32]));
+            let mut trailing = valid.clone();
+            trailing.event.data.0.push(0);
+            let mut truncated = valid;
+            truncated.event.data.0.clear();
+            for event in [
+                missing_participant,
+                extra_participant,
+                trailing,
+                truncated,
+                supply_event(mint, [2; 32], -1),
+            ] {
+                let raw_data = event.event.data.clone();
+                let record = decode_transfer_record(event);
+                assert_eq!(record.decode_status, TokenTransferDecodeStatus::Malformed);
+                assert!(record.transfer.is_none());
+                assert!(record.decode_error.is_some());
+                assert_eq!(record.raw.data, raw_data);
+            }
         }
     }
 
@@ -470,7 +576,7 @@ mod tests {
         assert_eq!(from_to[0].topics.topic2.0.0, vec![address_topic(to)]);
 
         let account = transfer_filters(token, None, None, Some(from));
-        assert_eq!(account.len(), 2);
+        assert_eq!(account.len(), 4);
         assert_eq!(account[0].topics.topic1.0.0, vec![address_topic(from)]);
         assert!(account[0].topics.topic2.0.0.is_empty());
         assert!(account[1].topics.topic1.0.0.is_empty());

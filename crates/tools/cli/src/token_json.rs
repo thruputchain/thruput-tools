@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events_json::RawEventReport;
 
-pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 1;
+pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Effective participant constraint for a token-transfer query.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -53,8 +53,10 @@ pub enum TokenTransferDecodeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DecodedTokenTransferReport {
     pub kind: TokenTransferKind,
-    pub from: ContractAddress,
-    pub to: ContractAddress,
+    /// Absent for mint events; the zero address is a real participant.
+    pub from: Option<ContractAddress>,
+    /// Absent for burn events; the zero address is a real participant.
+    pub to: Option<ContractAddress>,
     pub raw_amount: String,
 }
 
