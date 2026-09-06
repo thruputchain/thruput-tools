@@ -208,14 +208,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // --- Server ---
+    let max_response_body_size = jsonrpsee::core::TEN_MB_SIZE_BYTES;
     let server_cfg = jsonrpsee::server::ServerConfig::builder()
         .max_connections(ctx.config.max_connections)
+        .max_response_body_size(max_response_body_size)
         .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
         .build();
     let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
     let rpc_metrics = metrics.clone();
     let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()));
+        // Metrics must remain outermost: it observes each array once in response order.
+        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()))
+        .layer_fn(move |inner| {
+            groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                inner,
+                max_response_body_size,
+            )
+        });
     let server = jsonrpsee::server::Server::builder()
         .set_config(server_cfg)
         .set_http_middleware(http_mw)

@@ -273,4 +273,36 @@ mod tests {
         assert!(body.contains("groundhog_gateway_rpc_batch_size_bucket{le=\"2\"} 1"));
         assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0"));
     }
+
+    #[tokio::test]
+    async fn concurrent_batch_metrics_count_each_entry_once() {
+        let metrics = GatewayMetrics::for_tests();
+        let service = jsonrpsee::core::middleware::RpcServiceBuilder::new()
+            .layer_fn(|inner| RpcMetricsService::new(inner, metrics.clone()))
+            .layer_fn(|inner| {
+                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(inner, 4096)
+            })
+            .service(MockRpcService);
+        let mut batch = Batch::new();
+        for id in 0..3 {
+            batch.push(Request::borrowed(
+                "groundhog_getTransactionReceipt",
+                None,
+                Id::Number(id),
+            ));
+        }
+        service.batch(batch).await;
+
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics
+            .gather(&snapshot)
+            .expect("bug: metrics should encode");
+        assert!(body.contains(
+            "groundhog_gateway_rpc_requests_total{method=\"groundhog_getTransactionReceipt\",outcome=\"not_implemented\"} 3"
+        ));
+        assert!(body.contains("groundhog_gateway_rpc_batch_size_count 1"));
+        assert!(body.contains(
+            "groundhog_gateway_rpc_in_flight{method=\"groundhog_getTransactionReceipt\"} 0"
+        ));
+    }
 }

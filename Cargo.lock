@@ -1682,6 +1682,7 @@ name = "groundhog-json-rpc-server"
 version = "0.16.0-rc.1"
 dependencies = [
  "async-trait",
+ "futures-util",
  "groundhog-build-info",
  "groundhog-bundle-identity",
  "groundhog-json-rpc-api",

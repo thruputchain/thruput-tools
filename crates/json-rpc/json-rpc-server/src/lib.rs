@@ -6,6 +6,7 @@
 //! compositions.
 
 pub mod backend;
+pub mod batch;
 pub mod config;
 pub mod error;
 pub mod server;

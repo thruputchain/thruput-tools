@@ -25,6 +25,7 @@ groundhog-xdr = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
 async-trait = { workspace = true }
+futures-util = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
 sha2 = { workspace = true }
