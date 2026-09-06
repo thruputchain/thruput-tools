@@ -825,9 +825,12 @@ enum EventsCommand {
 enum TokenCommand {
     /// List one page of canonical ERC20 transfer history
     #[command(
-        long_about = "List exactly one newest-first page of canonical ERC20 TransferEvent records.\n\n\
+        long_about = "List exactly one newest-first page of canonical ERC20 TransferEvent, MintEvent, and BurnEvent records.\n\n\
                       Participant filters are applied by the server. --account matches transfers \
-                      where the address is either sender or recipient. Amounts remain unformatted \
+                      where the address is either sender or recipient, including mints and burns. \
+                      --from excludes mints; --to excludes burns. A zero address is a real participant, \
+                      not a supply-change marker. JSON schema version 2 uses null for the absent \
+                      sender of a mint or recipient of a burn. Amounts remain unformatted \
                       base-unit decimal strings; token metadata is not fetched."
     )]
     Transfers {

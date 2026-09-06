@@ -1,6 +1,14 @@
 # Event and Token Transfer Inspection
 **Date:** 2026-07-27 **Status:** Ready for implementation planning
 
+> September 2026 compatibility update: the token-event assumptions below are
+> historical. The current command queries canonical `TransferEvent`, `MintEvent`,
+> and `BurnEvent` signatures from ERC20 interface 0.1.24. A zero address remains
+> an ordinary participant, not a mint/burn marker. JSON schema version 2 uses
+> `from: null` for mints and `to: null` for burns. `--from` includes transfers and
+> burns; `--to` includes transfers and mints; specifying both includes only
+> transfers. `--account` includes all three event kinds in one paginated request.
+
 **Companions:**
 
 - `2026-07-23-transfer-and-transaction-inspection-design.md` - native HOG transfer and transaction status, receipt, and root-invocation history.

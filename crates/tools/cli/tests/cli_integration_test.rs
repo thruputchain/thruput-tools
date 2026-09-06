@@ -11309,6 +11309,31 @@ fn transfer_signature() -> String {
     )
 }
 
+fn mint_signature() -> String {
+    format!(
+        "0x{}",
+        hex::encode(*groundhog_erc20_if::MintEvent::SIGNATURE)
+    )
+}
+
+fn burn_signature() -> String {
+    format!(
+        "0x{}",
+        hex::encode(*groundhog_erc20_if::BurnEvent::SIGNATURE)
+    )
+}
+
+fn all_token_event_filters(token: &str) -> serde_json::Value {
+    serde_json::json!(
+        [transfer_signature(), mint_signature(), burn_signature()].map(
+            |signature| serde_json::json!({
+                "contractAddresses": [token],
+                "topics": { "topic0": [signature], "topic1": [], "topic2": [] },
+            })
+        )
+    )
+}
+
 fn token_event_json(
     identity: (&str, u64, u32),
     addresses: [&str; 4],
@@ -11328,6 +11353,18 @@ fn token_event_json(
     })
 }
 
+fn token_supply_event_json(
+    identity: (&str, u64, u32),
+    token: &str,
+    signature: &str,
+    participant: &str,
+    data: &str,
+) -> serde_json::Value {
+    let mut event = token_event_json(identity, [token, signature, participant, participant], data);
+    event["event"]["topics"] = serde_json::json!([signature, participant]);
+    event
+}
+
 #[test]
 fn token_transfers_help_describes_canonical_filtered_history() {
     let output = groundhog()
@@ -11340,6 +11377,8 @@ fn token_transfers_help_describes_canonical_filtered_history() {
     for expected in [
         "exactly one newest-first page",
         "canonical ERC20 TransferEvent",
+        "MintEvent",
+        "BurnEvent",
         "--from",
         "--to",
         "--account",
@@ -11367,10 +11406,7 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     let negative_data = format!("0x{}", hex::encode(xdrs::cxs::encode(&-1_i128).unwrap()));
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
-            "filters": [{
-                "contractAddresses": [token],
-                "topics": { "topic0": [signature], "topic1": [], "topic2": [] },
-            }],
+            "filters": all_token_event_filters(&token),
             "order": "descending",
             "anchor": { "kind": "atEnd" },
             "cursor": "0x",
@@ -11381,6 +11417,8 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
                 token_event_json(("a4", 12, 1), [&token, &signature, &from, &to], &amount_data),
                 token_event_json(("a5", 11, 0), [&token, &signature, &from, &to], &negative_data),
                 token_event_json(("a4", 12, 1), [&token, &signature, &from, &to], &amount_data),
+                token_supply_event_json(("a6", 10, 0), &token, &mint_signature(), &to, &amount_data),
+                token_supply_event_json(("a7", 9, 0), &token, &burn_signature(), &from, &amount_data),
             ],
             "cursor": "0xcafe",
             "latestBlock": 12,
@@ -11409,7 +11447,7 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["command"], "token.transfers");
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["tokenInput"], token);
     assert_eq!(stdout["data"]["tokenAddress"], token);
     assert!(stdout["data"]["participantFilter"].is_null());
@@ -11417,7 +11455,7 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     assert_eq!(stdout["data"]["latestBlock"], 12);
     assert_eq!(stdout["data"]["oldestBlock"], 2);
     let records = stdout["data"]["records"].as_array().unwrap();
-    assert_eq!(records.len(), 3);
+    assert_eq!(records.len(), 5);
     assert_eq!(records[0]["decodeStatus"], "decoded");
     assert_eq!(records[0]["transfer"]["kind"], "transfer");
     assert_eq!(records[0]["transfer"]["from"], from);
@@ -11435,10 +11473,16 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     );
     assert_eq!(records[1]["data"], negative_data);
     assert_eq!(records[2], records[0]);
+    assert_eq!(records[3]["transfer"]["kind"], "mint");
+    assert_eq!(records[3]["transfer"]["from"], serde_json::Value::Null);
+    assert_eq!(records[3]["transfer"]["to"], to);
+    assert_eq!(records[4]["transfer"]["kind"], "burn");
+    assert_eq!(records[4]["transfer"]["from"], from);
+    assert_eq!(records[4]["transfer"]["to"], serde_json::Value::Null);
 }
 
 #[test]
-fn token_transfers_account_uses_two_server_side_filters_in_one_request() {
+fn token_transfers_account_uses_four_server_side_filters_in_one_request() {
     let tmp = TempDir::new().unwrap();
     let token = format!("0x{}", "b1".repeat(32));
     let account = format!("0x{}", "b2".repeat(32));
@@ -11453,6 +11497,14 @@ fn token_transfers_account_uses_two_server_side_filters_in_one_request() {
                 {
                     "contractAddresses": [token],
                     "topics": { "topic0": [signature], "topic1": [], "topic2": [account] },
+                },
+                {
+                    "contractAddresses": [token],
+                    "topics": { "topic0": [mint_signature()], "topic1": [account], "topic2": [] },
+                },
+                {
+                    "contractAddresses": [token],
+                    "topics": { "topic0": [burn_signature()], "topic1": [account], "topic2": [] },
                 },
             ],
             "order": "descending",
@@ -11510,12 +11562,24 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
     ] {
         let tmp = TempDir::new().unwrap();
         let signature = transfer_signature();
+        let mut filters = vec![serde_json::json!({
+            "contractAddresses": [token],
+            "topics": { "topic0": [signature], "topic1": topic1, "topic2": topic2 },
+        })];
+        if filter_kind != "fromTo" {
+            let (supply_signature, participant) = if filter_kind == "from" {
+                (burn_signature(), &from)
+            } else {
+                (mint_signature(), &to)
+            };
+            filters.push(serde_json::json!({
+                "contractAddresses": [token],
+                "topics": { "topic0": [supply_signature], "topic1": [participant], "topic2": [] },
+            }));
+        }
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
-                "filters": [{
-                    "contractAddresses": [token],
-                    "topics": { "topic0": [signature], "topic1": topic1, "topic2": topic2 },
-                }],
+                "filters": filters,
                 "order": "descending",
                 "anchor": { "kind": "atEnd" },
                 "cursor": "0x1234",
@@ -11551,16 +11615,12 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
     let token = format!("0x{}", "e1".repeat(32));
     let from = format!("0x{}", "e2".repeat(32));
     let to = format!("0x{}", "e3".repeat(32));
-    let zero = format!("0x{}", "00".repeat(32));
     let signature = transfer_signature();
     let amount_data = format!("0x{}", hex::encode(xdrs::cxs::encode(&125_i128).unwrap()));
     let malformed_data = "0xff";
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
-            "filters": [{
-                "contractAddresses": [token],
-                "topics": { "topic0": [signature], "topic1": [], "topic2": [] },
-            }],
+            "filters": all_token_event_filters(&token),
             "order": "descending",
             "anchor": { "kind": "atEnd" },
             "cursor": "0x",
@@ -11584,7 +11644,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
                     "sequenceNumber": 2,
                     "event": {
                         "contractAddress": token,
-                        "topics": [signature, zero, to],
+                        "topics": [mint_signature(), to],
                         "data": amount_data,
                     },
                 },
@@ -11594,7 +11654,7 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
                     "sequenceNumber": 1,
                     "event": {
                         "contractAddress": token,
-                        "topics": [signature, from, zero],
+                        "topics": [burn_signature(), from],
                         "data": amount_data,
                     },
                 },
@@ -11633,10 +11693,14 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
     assert!(stderr.contains("\nmint\n"), "stderr: {stderr}");
     assert!(stderr.contains("\nburn\n"), "stderr: {stderr}");
     assert!(
-        stderr.contains(&format!("from: {zero}")),
+        stderr.contains(&format!("from: {from}")),
         "stderr: {stderr}"
     );
-    assert!(stderr.contains(&format!("to: {zero}")), "stderr: {stderr}");
+    assert!(stderr.contains(&format!("to: {to}")), "stderr: {stderr}");
+    assert!(
+        !stderr.contains(&format!("0x{}", "00".repeat(32))),
+        "stderr: {stderr}"
+    );
     assert!(
         stderr.contains("warning: malformed transfer event at height 9 sequence 0"),
         "stderr: {stderr}"
@@ -11647,7 +11711,6 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
 #[test]
 fn token_transfers_human_output_distinguishes_empty_page_states() {
     let token = format!("0x{}", "f1".repeat(32));
-    let signature = transfer_signature();
     for (request_cursor, response_cursor, expected) in [
         (None, "0x", "transfers: no events found; stream exhausted"),
         (
@@ -11664,10 +11727,7 @@ fn token_transfers_human_output_distinguishes_empty_page_states() {
         let tmp = TempDir::new().unwrap();
         let (rpc_url, rpc_server) = spawn_events_rpc(
             serde_json::json!({
-                "filters": [{
-                    "contractAddresses": [token],
-                    "topics": { "topic0": [signature], "topic1": [], "topic2": [] },
-                }],
+                "filters": all_token_event_filters(&token),
                 "order": "descending",
                 "anchor": { "kind": "atEnd" },
                 "cursor": request_cursor.unwrap_or("0x"),
