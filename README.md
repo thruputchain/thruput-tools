@@ -236,10 +236,10 @@ Codes worth knowing for retry policy:
 
 XDR types, contract specs, and JSON-RPC primitives for TypeScript
 consumers live in the `protocol-ts` peer repository as
-`@groundhogchain/protocol`, `/contract-spec`, `/xdr`, and `/client`.
-The canonical TS SDK that codegens against the OpenRPC artifact and
-sits on top of those primitives is the right consumer-facing entry
-point — link will land here once it ships.
+`@groundhogchain/protocol`, `/contract-spec`, and `/xdr`. The
+consumer-facing TypeScript client, `@groundhogchain/client`, lives in the
+`client-ts` repository; `groundhog codegen ts` emits bindings that import
+from it.
 
 ### Public Surface Design Notes
 

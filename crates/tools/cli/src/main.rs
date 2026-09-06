@@ -380,9 +380,7 @@ enum Command {
     /// Start a local development node
     #[command(
         long_about = "Start a local development node \
-                      backed by a supervised hog-devnode process. The \
-                      native_exec/test_ffi prototype backend is no longer \
-                      wired into this command.",
+                      backed by a supervised hog-devnode process.",
         after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {

@@ -408,17 +408,15 @@ scalars, structs, enums, unions, options, tuples, vectors, arrays, and
 byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
 fits the underlying type.
 
-`groundhog call --dry-run` now resolves selectors, encodes calldata,
-fetches the current chain tip to set expiry, signs the transaction, and
-prints or emits the prepared invocation without submitting it. This
-first pass is intentionally signed and RPC-backed; a later follow-up can
-split payload assembly from signing if we want a no-key-required dry
-run.
+`groundhog call --dry-run` resolves selectors, encodes calldata, fetches the
+current chain tip to set expiry, signs the transaction, and prints or emits
+the prepared invocation without submitting it. A dry run therefore still
+needs a signing key and a reachable RPC endpoint; a later follow-up can
+split payload assembly from signing if we want a no-key-required dry run.
 
-Remaining follow-up after this first pass: cache repeated
-embedded-spec loads, tighten the union/structured CLI UX, and remove
-the remaining local-source fallback once the spec-driven path has
-soaked.
+Remaining follow-up: cache repeated embedded-spec loads, tighten the
+union/structured CLI UX, and remove the remaining local-source fallback
+once the spec-driven path has soaked.
 
 ### `groundhog storage`
 
@@ -463,8 +461,7 @@ line is resolved from the invocation directory and wins over
 ### `groundhog node`
 
 Start the local development node backed by a supervised
-`hog-devnode` process. The legacy SDK `native_exec` / hogd `test_ffi`
-prototype backend is no longer wired into this command.
+`hog-devnode` process.
 
 ```bash
 groundhog node
@@ -514,9 +511,8 @@ When recovering `--data-dir`, pass the original explicit user allocation.
 Changing it requires a fresh data directory; recovered state does not bypass
 authoritative validation.
 
-Migration note: older releases used a 20 HOG wallet-create prefund. The current
-prefund is 1 HOG; the split local bootstrap uses a fixed 1,000,000 HOG faucet
-and 100 HOG per user.
+The wallet-create prefund is 1 HOG; the local bootstrap uses a fixed
+1,000,000 HOG faucet and 100 HOG per user.
 
 `--hogd-protocol` overrides the protocol token used for hog-devnode x23 intro
 handshakes. It is useful when a local `hog-devnode` build is slightly ahead of
@@ -535,9 +531,6 @@ the normal debugging view with forwarded hog-devnode info logs; `-v` is an alias
 Use `RUST_LOG`
 only when you need exact filters or debug/trace-level output; if set,
 `RUST_LOG` overrides the `--verbose` preset.
-
-See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
-durable backend direction.
 
 ### `groundhog chain dump|restore`
 
@@ -624,7 +617,8 @@ groundhog config unset faucet-url --profile staging --global
 groundhog config use staging --global
 ```
 
-Editable fields are `network`, `rpc-url`, `faucet-url`, and `default-key`.
+Editable fields are `network`, `rpc-url`, `network-hash`, `faucet-url`, and
+`default-key`.
 `config new` creates a profile; `config set` updates a profile that already
 exists in the selected layer. `config unset` removes only the selected layer's
 field, so removing a project override may reveal an inherited global value.
