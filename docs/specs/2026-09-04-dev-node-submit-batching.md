@@ -129,10 +129,10 @@ If scheduler batching does not materially improve admission throughput, instrume
 
 ## Validation Results
 
-Initial performance validation used `hog-devnode 0.1.26` and a release build based on `groundhog-rpc` `v0.11.1`. The final implementation and automated tests were rebased onto `origin/main`; current-main real-node results are recorded in the pull request.
+Initial performance validation used `hog-devnode 0.1.26` and a release build based on `groundhog-rpc` `v0.11.1`. The final implementation and automated tests were rebased onto `origin/main`. Current-main real-node interoperability has not been verified because the installed hogd advertises an older protocol.
 
 - 10,000 shared-counter transactions completed exactly. Successful throughput increased to 7,264 operations per second and the workload used two blocks instead of the previous five-block result near 4,000 operations per second.
-- At 100,000 transactions and concurrency 64, RPC acceptance increased from about 4,800 to 16,555 transactions per second. Blocks contained as many as 18,560 transactions, confirming that the old roughly 2,500-per-block result came from singleton admission.
-- The same 100,000 run committed 98,899 transactions while the `void` scheduler RPC reported success for all 100,000. Concurrency 128 increased acceptance to 18,079 transactions per second but increased the missing count. Final state matched committed receipts, so this is not receipt polling loss.
+- At 100,000 transactions and concurrency 64, successful RPC completion throughput increased from about 4,800 to 16,555 transactions per second. Blocks contained as many as 18,560 transactions. These are RPC completion measurements, not committed-transaction throughput.
+- The same 100,000 run committed 98,899 transactions while the `void` scheduler RPC reported success for all 100,000. Concurrency 128 increased RPC completion throughput to 18,079 transactions per second but increased the missing count. Final state matched committed receipts, so receipt polling loss alone does not explain the discrepancy.
 
-The first-slice performance goal is met, and the result identifies hogd's silent per-transaction rejection or proposal-failure handling as the next limiting stage. Before presenting scheduler RPC completion as transaction acceptance, hogd metrics must distinguish authentication failures, proposal execution failures, HOG discards, and pending transactions. A typed per-transaction scheduler result remains follow-up protocol work.
+These older-version results show improved RPC completion throughput, but do not establish current-main committed throughput or the cause of missing transactions. Diagnosing the discrepancy requires downstream evidence distinguishing authentication failures, proposal execution failures, HOG discards, and pending transactions. A typed per-transaction scheduler result remains follow-up protocol work.

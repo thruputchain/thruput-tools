@@ -234,25 +234,13 @@ async fn run(
             items.push(item);
         }
 
-        let now = Instant::now();
-        let mut live = Vec::with_capacity(items.len());
-        for item in items {
-            if item.reply.is_closed() {
-                continue;
-            }
-            if item.backend_deadline <= now {
-                let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
-                continue;
-            }
-            live.push(item);
-        }
+        let live = live_items(items, Instant::now());
         if live.is_empty() {
             continue;
         }
 
-        for mut cohort in deadline_cohorts(live) {
-            let now = Instant::now();
-            cohort.retain(|item| !item.reply.is_closed());
+        for cohort in deadline_cohorts(live) {
+            let cohort = live_items(cohort, Instant::now());
             if cohort.is_empty() {
                 continue;
             }
@@ -261,12 +249,6 @@ async fn run(
                 .map(|item| item.backend_deadline)
                 .min()
                 .expect("bug: non-empty deadline cohort should have a deadline");
-            if deadline <= now {
-                for item in cohort {
-                    let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
-                }
-                continue;
-            }
             tracing::debug!(
                 batch_size = cohort.len(),
                 "submitting dev-node transaction batch"
@@ -301,30 +283,38 @@ async fn submit_before(
         .map_err(|_| RpcServerError::BackendTimeout)?
 }
 
+fn live_items(items: Vec<Item>, now: Instant) -> Vec<Item> {
+    items
+        .into_iter()
+        .filter_map(|item| {
+            if item.reply.is_closed() {
+                return None;
+            }
+            if item.backend_deadline <= now {
+                let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
+                return None;
+            }
+            Some(item)
+        })
+        .collect()
+}
+
 fn deadline_cohorts(items: Vec<Item>) -> Vec<Vec<Item>> {
     let mut cohorts: Vec<Vec<Item>> = Vec::new();
+    let mut bounds: Option<(Instant, Instant)> = None;
     for item in items {
-        let joins_current = cohorts.last().is_some_and(|cohort| {
-            let min = cohort
-                .iter()
-                .map(|item| item.backend_deadline)
-                .min()
-                .unwrap_or(item.backend_deadline)
-                .min(item.backend_deadline);
-            let max = cohort
-                .iter()
-                .map(|item| item.backend_deadline)
-                .max()
-                .unwrap_or(item.backend_deadline)
-                .max(item.backend_deadline);
-            max.saturating_duration_since(min) <= MAX_DEADLINE_SKEW
+        let deadline = item.backend_deadline;
+        let (min, max) = bounds.map_or((deadline, deadline), |(min, max)| {
+            (min.min(deadline), max.max(deadline))
         });
-        if joins_current {
+        if bounds.is_some() && max.saturating_duration_since(min) <= MAX_DEADLINE_SKEW {
+            bounds = Some((min, max));
             cohorts
                 .last_mut()
                 .expect("bug: current deadline cohort should exist")
                 .push(item);
         } else {
+            bounds = Some((deadline, deadline));
             cohorts.push(vec![item]);
         }
     }
@@ -544,6 +534,54 @@ mod tests {
             .collect();
 
         assert_eq!(order, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn deadline_cohorts_bound_min_and_max_without_reordering() {
+        let now = Instant::now();
+        // Exercise both bound updates, inclusive skew, and reset after each split.
+        for offsets in [
+            [2_000, 1_500, 2_500, 2_501, 3_501, 3_502],
+            [2_000, 2_500, 1_500, 1_499, 499, 498],
+        ] {
+            let items = (0u8..)
+                .zip(offsets)
+                .map(|(index, millis)| {
+                    item_with_reply(vec![index], now + Duration::from_millis(millis)).0
+                })
+                .collect();
+
+            let cohorts: Vec<Vec<_>> = deadline_cohorts(items)
+                .into_iter()
+                .map(|cohort| cohort.into_iter().map(|item| item.tx_bytes[0]).collect())
+                .collect();
+
+            assert_eq!(cohorts, vec![vec![0, 1, 2], vec![3, 4], vec![5]]);
+        }
+        assert!(deadline_cohorts(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn expired_item_in_later_cohort_does_not_discard_live_item() {
+        let now = Instant::now();
+        let (first, _first_reply) = item_with_reply(vec![1], now + Duration::from_secs(30));
+        let (expired, mut expired_reply) = item_with_reply(vec![2], now + Duration::from_secs(5));
+        let (live, mut live_reply) = item_with_reply(vec![3], now + Duration::from_millis(5_500));
+        let mut cohorts = deadline_cohorts(live_items(vec![first, expired, live], now));
+        assert_eq!(cohorts.len(), 2);
+
+        // Model the first submission completing at the later cohort's earliest deadline.
+        let later = live_items(cohorts.pop().unwrap(), now + Duration::from_secs(5));
+
+        assert!(matches!(
+            expired_reply.try_recv(),
+            Ok(Err(RpcServerError::BackendTimeout))
+        ));
+        assert!(matches!(
+            live_reply.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert_eq!(pack(&later).unwrap().xdr.0, vec![3]);
     }
 
     #[tokio::test]
