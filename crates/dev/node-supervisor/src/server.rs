@@ -475,6 +475,7 @@ fn rpc_server_options(
         view_gas_limit: config.view_gas_limit,
         block_driver_config: config.block_driver,
         rpc_max_connections: config.rpc_max_connections,
+        rpc_batch_concurrency: config.rpc_batch_concurrency,
         bundle_identity: config.bundle_identity.clone(),
     }
 }
@@ -498,6 +499,7 @@ struct RpcServerOptions {
     view_gas_limit: u64,
     block_driver_config: BlockDriverConfig,
     rpc_max_connections: u32,
+    rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
     bundle_identity: Option<BundleIdentity>,
 }
 
@@ -519,6 +521,7 @@ where
         view_gas_limit,
         block_driver_config,
         rpc_max_connections,
+        rpc_batch_concurrency,
         bundle_identity,
     } = options;
     ensure_rpc_nofile_limit(rpc_max_connections)?;
@@ -527,8 +530,10 @@ where
         .max_connections(rpc_max_connections)
         .max_response_body_size(max_response_body_size)
         .build();
-    let rpc_middleware = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-        .layer_fn(move |inner| ConcurrentBatchService::new(inner, max_response_body_size));
+    let rpc_middleware =
+        jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
+            ConcurrentBatchService::new(inner, max_response_body_size, rpc_batch_concurrency)
+        });
     let server = Server::builder()
         .set_config(server_config)
         .set_rpc_middleware(rpc_middleware)
@@ -1139,57 +1144,58 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     async fn homogeneous_rpc_array_is_batched_for_scheduler() {
         use jsonrpsee::core::{client::ClientT, params::BatchRequestBuilder};
 
-        let directory = tempfile::tempdir().expect("bug: tempdir");
-        let submit_log = directory.path().join("submit-batches.log");
-        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
-        let _log_guard = EnvGuard::set(
-            "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
-            submit_log.to_str().expect("bug: tempdir path is utf-8"),
-        );
-        let hogd = HogdDevConfig::default()
-            .with_binary_path(fake_hogd_dev_binary())
-            .with_startup_timeout(Duration::from_secs(5))
-            .with_shutdown_grace(Duration::from_secs(2));
-        let config = NodeSupervisorConfig::default()
-            .with_rpc_listen_address("127.0.0.1:0")
-            .with_hogd_dev(hogd);
-        let handle = NodeSupervisorHandle::start(config)
-            .await
-            .expect("bug: supervisor should start against fake hogd-dev");
-        let client = HttpClientBuilder::default()
-            .build(format!("http://{}", handle.rpc_addr()))
-            .expect("bug: jsonrpsee http client builds");
-        let mut batch = BatchRequestBuilder::new();
-        for _ in 0..35 {
-            batch
-                .insert(
-                    "groundhog_sendRawTransaction",
-                    jsonrpsee::rpc_params![format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")],
-                )
-                .expect("bug: batch entry should serialize");
+        for concurrency in [1, 4, 128] {
+            let directory = tempfile::tempdir().expect("bug: tempdir");
+            let submit_log = directory.path().join("submit-batches.log");
+            let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
+            let _log_guard = EnvGuard::set(
+                "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
+                submit_log.to_str().expect("bug: tempdir path is utf-8"),
+            );
+            let hogd = HogdDevConfig::default()
+                .with_binary_path(fake_hogd_dev_binary())
+                .with_startup_timeout(Duration::from_secs(5))
+                .with_shutdown_grace(Duration::from_secs(2));
+            let config = NodeSupervisorConfig::default()
+                .with_rpc_listen_address("127.0.0.1:0")
+                .with_rpc_batch_concurrency(concurrency.try_into().unwrap())
+                .with_hogd_dev(hogd);
+            let handle = NodeSupervisorHandle::start(config)
+                .await
+                .expect("bug: supervisor should start against fake hogd-dev");
+            let client = HttpClientBuilder::default()
+                .build(format!("http://{}", handle.rpc_addr()))
+                .expect("bug: jsonrpsee http client builds");
+            let mut batch = BatchRequestBuilder::new();
+            for _ in 0..35 {
+                batch
+                    .insert(
+                        "groundhog_sendRawTransaction",
+                        jsonrpsee::rpc_params![format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")],
+                    )
+                    .expect("bug: batch entry should serialize");
+            }
+            let responses = client
+                .batch_request::<String>(batch)
+                .await
+                .expect("bug: submission array should succeed");
+            assert_eq!(responses.len(), 35);
+            assert!(responses.into_iter().all(|response| response.is_ok()));
+            let sizes: Vec<usize> = std::fs::read_to_string(submit_log)
+                .expect("bug: fake scheduler should write submit log")
+                .lines()
+                .map(|line| line.parse().expect("bug: submit batch size should parse"))
+                .collect();
+            assert_eq!(sizes.iter().sum::<usize>(), 35);
+            if concurrency > 1 {
+                assert!(
+                    sizes.iter().any(|size| *size > 1),
+                    "array should coalesce: {sizes:?}"
+                );
+            }
+            assert!(sizes.iter().all(|size| *size <= concurrency));
+            handle.stop().await.expect("bug: clean shutdown");
         }
-        let responses = client
-            .batch_request::<String>(batch)
-            .await
-            .expect("bug: submission array should succeed");
-        assert_eq!(responses.len(), 35);
-        assert!(responses.into_iter().all(|response| response.is_ok()));
-        let sizes: Vec<usize> = std::fs::read_to_string(submit_log)
-            .expect("bug: fake scheduler should write submit log")
-            .lines()
-            .map(|line| line.parse().expect("bug: submit batch size should parse"))
-            .collect();
-        assert_eq!(sizes.iter().sum::<usize>(), 35);
-        assert!(
-            sizes.iter().any(|size| *size > 1),
-            "array should coalesce: {sizes:?}"
-        );
-        assert!(
-            sizes
-                .iter()
-                .all(|size| *size <= groundhog_json_rpc_server::batch::BATCH_CONCURRENCY)
-        );
-        handle.stop().await.expect("bug: clean shutdown");
     }
 
     #[tokio::test]

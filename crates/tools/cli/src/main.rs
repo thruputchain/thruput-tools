@@ -423,6 +423,10 @@ enum Command {
         /// Maximum simultaneous public JSON-RPC connections
         #[arg(long)]
         rpc_max_connections: Option<u32>,
+
+        /// Concurrent entries per JSON-RPC array (1..=1024, default 128)
+        #[arg(long)]
+        rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
         /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
         /// suffix such as 2G); omit for the devnode default
         #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
@@ -1380,6 +1384,7 @@ fn main() {
             block_driver,
             block_interval_ms,
             rpc_max_connections,
+            rpc_batch_concurrency,
             ramdb_bytes,
         } => {
             let mut options = groundhog_cli::node::LocalNodeOptions::default();
@@ -1395,6 +1400,7 @@ fn main() {
             options.block_driver = block_driver.map(Into::into);
             options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
             options.rpc_max_connections = rpc_max_connections;
+            options.rpc_batch_concurrency = rpc_batch_concurrency;
             options.ramdb_bytes = ramdb_bytes;
             options.bundle_identity = Some(bundle_identity.clone());
             groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
@@ -1958,6 +1964,8 @@ mod tests {
             "250",
             "--rpc-max-connections",
             "512",
+            "--rpc-batch-concurrency",
+            "17",
         ]);
 
         match cli.command {
@@ -1965,13 +1973,25 @@ mod tests {
                 block_driver,
                 block_interval_ms,
                 rpc_max_connections,
+                rpc_batch_concurrency,
                 ..
             } => {
                 assert!(matches!(block_driver, Some(NodeBlockDriverArg::Interval)));
                 assert_eq!(block_interval_ms, Some(250));
                 assert_eq!(rpc_max_connections, Some(512));
+                assert_eq!(rpc_batch_concurrency.unwrap().get(), 17);
             }
             _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_rpc_batch_concurrency_rejects_invalid_values() {
+        for value in ["0", "1025"] {
+            assert!(
+                Cli::try_parse_from(["groundhog", "node", "--rpc-batch-concurrency", value])
+                    .is_err()
+            );
         }
     }
 

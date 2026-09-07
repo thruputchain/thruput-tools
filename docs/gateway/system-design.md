@@ -70,7 +70,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 ### JSON-RPC Arrays
 
 The gateway and embedded dev node dispatch every nonempty JSON-RPC array with
-bounded concurrency, including mixed methods. The window remains 16 entries,
+bounded concurrency, including mixed methods. The window defaults to 128 entries,
 counting both active work and completed responses awaiting earlier entries.
 Execution order is unspecified; responses retain request order. An array is
 not a transaction or a sequence: a read can run before an earlier mutation
@@ -81,6 +81,19 @@ response. Empty arrays retain jsonrpsee's invalid-request response. Completed
 responses share the response byte limit even when an earlier entry is pending;
 overflow cancels outstanding dispatch immediately. Cancellation does not roll
 back side effects already accepted by a backend.
+
+Override the window with `hog-gateway --rpc-batch-concurrency 256` or
+`groundhog node --rpc-batch-concurrency 256`. The gateway also accepts the
+top-level TOML key `rpc_batch_concurrency = 256`; the CLI overrides TOML.
+Supervisor embedders use `NodeSupervisorConfig::with_rpc_batch_concurrency`
+with a validated `RpcBatchConcurrency` value. Values outside 1..=1024 fail
+configuration parsing; 1 gives sequential array dispatch.
+
+The 1024 ceiling bounds per-array work even on the embedded server, which has
+no array-entry count cap. The gateway's existing 1000-entry array cap remains
+unchanged. This is not a global concurrency cap and does not change response
+byte limits, scheduler submit batch size, in-flight backend batch limits, or
+storage batching. Those backend controls remain independent.
 
 ### Data Sources (via x23 RPC)
 

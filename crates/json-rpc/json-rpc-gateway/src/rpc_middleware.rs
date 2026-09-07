@@ -306,7 +306,11 @@ mod tests {
         let service = jsonrpsee::core::middleware::RpcServiceBuilder::new()
             .layer_fn(|inner| RpcMetricsService::new(inner, metrics.clone()))
             .layer_fn(|inner| {
-                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(inner, 4096)
+                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                    inner,
+                    4096,
+                    groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+                )
             })
             .service(inner.clone());
         let batch = Batch::from(vec![
@@ -381,7 +385,11 @@ mod tests {
         let service = jsonrpsee::core::middleware::RpcServiceBuilder::new()
             .layer_fn(|inner| RpcMetricsService::new(inner, metrics.clone()))
             .layer_fn(|inner| {
-                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(inner, 4096)
+                groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                    inner,
+                    4096,
+                    groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+                )
             })
             .service(MockRpcService::default());
         let mut batch = Batch::new();
@@ -405,5 +413,39 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_rpc_in_flight{method=\"groundhog_getTransactionReceipt\"} 0"
         ));
+    }
+
+    #[tokio::test]
+    async fn gateway_config_controls_array_dispatch_window() {
+        for window in [1, 2, 128] {
+            let mut config = toml::from_str::<crate::config::GatewayConfig>(&format!(
+                "rpc_batch_concurrency = {window}"
+            ))
+            .unwrap();
+            let cli = <crate::Cli as clap::Parser>::parse_from(["hog-gateway"]);
+            crate::apply_cli_overrides(&mut config, cli);
+            let gate = Arc::new(tokio::sync::Semaphore::new(0));
+            let inner = MockRpcService {
+                gate: Some(gate.clone()),
+                ..Default::default()
+            };
+            let service = config.batch_service(inner.clone(), 4096);
+            let mut batch = Batch::new();
+            batch.push(Request::borrowed("groundhog_chainTip", None, Id::Number(1)));
+            batch.push(Request::borrowed("unknown", None, Id::Number(2)));
+            let mut response = Box::pin(service.batch(batch));
+            future::poll_fn(|cx| {
+                assert!(response.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert_eq!(
+                inner.completed.lock().unwrap().len(),
+                usize::from(window > 1)
+            );
+            gate.add_permits(1);
+            response.await;
+            assert_eq!(inner.completed.lock().unwrap().len(), 2);
+        }
     }
 }

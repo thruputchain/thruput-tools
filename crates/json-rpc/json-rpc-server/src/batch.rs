@@ -1,6 +1,6 @@
 //! Ordered, bounded dispatch for JSON-RPC arrays.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroUsize, str::FromStr};
 
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use jsonrpsee::{
@@ -11,8 +11,51 @@ use jsonrpsee::{
     types::{Id, Request, error::reject_too_big_batch_response},
 };
 
-/// Maximum number of entries being dispatched or awaiting ordered output per array.
-pub const BATCH_CONCURRENCY: usize = 16;
+/// Per-array limit on active and buffered entries (1..=1024, default 128).
+/// Independent of backend submit batching and array-length limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(try_from = "usize")]
+pub struct RpcBatchConcurrency(NonZeroUsize);
+
+impl RpcBatchConcurrency {
+    /// Return the validated entry limit.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for RpcBatchConcurrency {
+    fn default() -> Self {
+        Self(NonZeroUsize::new(128).expect("bug: default concurrency is positive"))
+    }
+}
+
+impl TryFrom<usize> for RpcBatchConcurrency {
+    type Error = InvalidRpcBatchConcurrency;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match NonZeroUsize::new(value) {
+            Some(value) if value.get() <= 1024 => Ok(Self(value)),
+            _ => Err(InvalidRpcBatchConcurrency),
+        }
+    }
+}
+
+impl FromStr for RpcBatchConcurrency {
+    type Err = InvalidRpcBatchConcurrency;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .parse::<usize>()
+            .map_err(|_| InvalidRpcBatchConcurrency)?
+            .try_into()
+    }
+}
+
+/// An RPC array concurrency setting outside the supported resource bound.
+#[derive(Debug, thiserror::Error)]
+#[error("RPC batch concurrency must be in 1..=1024")]
+pub struct InvalidRpcBatchConcurrency;
 
 /// Bounded concurrent dispatch for every nonempty JSON-RPC array.
 ///
@@ -26,14 +69,16 @@ pub const BATCH_CONCURRENCY: usize = 16;
 pub struct ConcurrentBatchService<S> {
     inner: S,
     max_response_body_size: u32,
+    concurrency: RpcBatchConcurrency,
 }
 
 impl<S> ConcurrentBatchService<S> {
     /// Wrap a service using the same response limit as its jsonrpsee `ServerConfig`.
-    pub fn new(inner: S, max_response_body_size: u32) -> Self {
+    pub fn new(inner: S, max_response_body_size: u32, concurrency: RpcBatchConcurrency) -> Self {
         Self {
             inner,
             max_response_body_size,
+            concurrency,
         }
     }
 }
@@ -67,6 +112,7 @@ where
     fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
         let inner = self.inner.clone();
         let max_response_body_size = self.max_response_body_size as usize;
+        let concurrency = self.concurrency.get();
         async move {
             if batch.is_empty() {
                 return inner.batch(batch).await;
@@ -85,7 +131,7 @@ where
             loop {
                 for (index, entry) in entries
                     .by_ref()
-                    .take(BATCH_CONCURRENCY - responses.len() - completed.len())
+                    .take(concurrency.saturating_sub(responses.len() + completed.len()))
                 {
                     let inner = &inner;
                     responses.push(async move {
@@ -156,6 +202,7 @@ pub(crate) mod tests {
     const SEND: &str = "groundhog_sendRawTransaction";
     const RECEIPT: &str = "groundhog_getTransactionReceipt";
     const LIMIT: u32 = 4096;
+    const BATCH_CONCURRENCY: usize = 4;
 
     #[derive(Default)]
     struct State {
@@ -289,29 +336,74 @@ pub(crate) mod tests {
         serde_json::from_str(response.as_json().get()).unwrap()
     }
 
+    #[test]
+    fn concurrency_defaults_to_128_and_validates_all_construction_paths() {
+        assert_eq!(RpcBatchConcurrency::default().get(), 128);
+        for value in [0, 1025, usize::MAX] {
+            assert!(RpcBatchConcurrency::try_from(value).is_err());
+            assert!(value.to_string().parse::<RpcBatchConcurrency>().is_err());
+            assert!(serde_json::from_value::<RpcBatchConcurrency>(json!(value)).is_err());
+        }
+        for value in [1, 128, 1024] {
+            assert_eq!(RpcBatchConcurrency::try_from(value).unwrap().get(), value);
+            assert_eq!(
+                value
+                    .to_string()
+                    .parse::<RpcBatchConcurrency>()
+                    .unwrap()
+                    .get(),
+                value
+            );
+            assert_eq!(
+                serde_json::from_value::<RpcBatchConcurrency>(json!(value))
+                    .unwrap()
+                    .get(),
+                value
+            );
+        }
+    }
+
     #[tokio::test]
     async fn homogeneous_calls_bound_active_and_buffered_work_and_preserve_order() {
-        for method in [SEND, RECEIPT, "groundhog_chainTip", "unknown"] {
-            let count = BATCH_CONCURRENCY * 2 + 3;
-            let probe = Probe::new(count, LIMIT);
-            let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
+        for (method, concurrency) in [SEND, RECEIPT, "groundhog_chainTip", "unknown"]
+            .into_iter()
+            .flat_map(|method| [1, 4, 128, 1024].map(|window| (method, window)))
+        {
+            let count = concurrency * 2 + 3;
+            let limit = u32::try_from(count * 64).unwrap();
+            let probe = Probe::new(count, limit);
+            let service =
+                ConcurrentBatchService::new(probe.clone(), limit, concurrency.try_into().unwrap());
             let mut response = Box::pin(service.batch(calls(method, count)));
-            assert!(futures_util::poll!(&mut response).is_pending());
-            assert_eq!(probe.state.active.load(Ordering::SeqCst), BATCH_CONCURRENCY);
+            // FuturesUnordered may yield before polling the full window.
+            std::future::poll_fn(|cx| {
+                assert!(response.as_mut().poll(cx).is_pending());
+                if probe.state.active.load(Ordering::SeqCst) == concurrency {
+                    std::task::Poll::Ready(())
+                } else {
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
 
             // Complete the rest of the window in reverse order, leaving its head blocked.
-            for index in (1..BATCH_CONCURRENCY).rev() {
+            for index in (1..concurrency).rev() {
                 probe.gates[index].add_permits(1);
-                assert!(futures_util::poll!(&mut response).is_pending());
+                std::future::poll_fn(|cx| {
+                    assert!(response.as_mut().poll(cx).is_pending());
+                    if probe.state.active.load(Ordering::SeqCst) == index {
+                        std::task::Poll::Ready(())
+                    } else {
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
             }
-            assert_eq!(
-                probe.state.started.load(Ordering::SeqCst),
-                BATCH_CONCURRENCY
-            );
+            assert_eq!(probe.state.started.load(Ordering::SeqCst), concurrency);
             assert_eq!(probe.state.active.load(Ordering::SeqCst), 1);
             assert_eq!(
                 *probe.state.completed.lock().unwrap(),
-                (1..u64::try_from(BATCH_CONCURRENCY).unwrap())
+                (1..u64::try_from(concurrency).unwrap())
                     .rev()
                     .collect::<Vec<_>>()
             );
@@ -325,7 +417,7 @@ pub(crate) mod tests {
                 .collect();
             assert_eq!(value(&response), json!(expected));
             assert_eq!(probe.state.started.load(Ordering::SeqCst), count);
-            assert_eq!(probe.state.peak.load(Ordering::SeqCst), BATCH_CONCURRENCY);
+            assert_eq!(probe.state.peak.load(Ordering::SeqCst), concurrency);
             assert_eq!(probe.state.batches.load(Ordering::SeqCst), 0);
         }
     }
@@ -333,7 +425,11 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn dropping_batch_cancels_inflight_calls_without_starting_queued_calls() {
         let probe = Probe::new(BATCH_CONCURRENCY + 1, LIMIT);
-        let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
+        let service = ConcurrentBatchService::new(
+            probe.clone(),
+            LIMIT,
+            BATCH_CONCURRENCY.try_into().unwrap(),
+        );
         let mut response = Box::pin(service.batch(calls(SEND, BATCH_CONCURRENCY + 1)));
         assert!(futures_util::poll!(&mut response).is_pending());
         drop(response);
@@ -366,9 +462,10 @@ pub(crate) mod tests {
                 ErrorCode::InvalidParams.into(),
             )),
         );
-        let response = ConcurrentBatchService::new(probe.clone(), LIMIT)
-            .batch(Batch::from(batch))
-            .await;
+        let response =
+            ConcurrentBatchService::new(probe.clone(), LIMIT, RpcBatchConcurrency::default())
+                .batch(Batch::from(batch))
+                .await;
         assert_eq!(
             value(&response),
             json!([
@@ -384,7 +481,8 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn overflow_matches_sequential_error_and_drops_remaining_window() {
         let probe = Probe::new(BATCH_CONCURRENCY * 2, 60);
-        let service = ConcurrentBatchService::new(probe.clone(), 60);
+        let service =
+            ConcurrentBatchService::new(probe.clone(), 60, BATCH_CONCURRENCY.try_into().unwrap());
         let mut response = Box::pin(service.batch(calls(SEND, BATCH_CONCURRENCY * 2)));
         assert!(futures_util::poll!(&mut response).is_pending());
         probe.gates[0].add_permits(1);
@@ -407,7 +505,11 @@ pub(crate) mod tests {
         let limit = jsonrpsee::core::TEN_MB_SIZE_BYTES;
         let mut probe = Probe::new(BATCH_CONCURRENCY + 1, limit);
         probe.payload_bytes = 9 * 1024 * 1024;
-        let service = ConcurrentBatchService::new(probe.clone(), limit);
+        let service = ConcurrentBatchService::new(
+            probe.clone(),
+            limit,
+            BATCH_CONCURRENCY.try_into().unwrap(),
+        );
         let mut response = Box::pin(service.batch(calls(RECEIPT, BATCH_CONCURRENCY + 1)));
         assert!(futures_util::poll!(&mut response).is_pending());
         assert_eq!(probe.state.active.load(Ordering::SeqCst), BATCH_CONCURRENCY);
@@ -432,7 +534,8 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn completed_byte_budget_includes_already_emitted_prefix() {
         let probe = Probe::new(4, 90);
-        let service = ConcurrentBatchService::new(probe.clone(), 90);
+        let service =
+            ConcurrentBatchService::new(probe.clone(), 90, BATCH_CONCURRENCY.try_into().unwrap());
         let mut response = Box::pin(service.batch(calls(RECEIPT, 4)));
         assert!(futures_util::poll!(&mut response).is_pending());
         for index in [0, 2] {
@@ -458,7 +561,11 @@ pub(crate) mod tests {
         let exact_limit = u32::try_from(expected.as_json().get().len()).unwrap();
         for limit in [exact_limit, exact_limit - 1] {
             let probe = Probe::new(3, limit);
-            let service = ConcurrentBatchService::new(probe.clone(), limit);
+            let service = ConcurrentBatchService::new(
+                probe.clone(),
+                limit,
+                BATCH_CONCURRENCY.try_into().unwrap(),
+            );
             let mut response = Box::pin(service.batch(calls(RECEIPT, 3)));
             assert!(futures_util::poll!(&mut response).is_pending());
             for index in [2, 1] {
@@ -489,7 +596,8 @@ pub(crate) mod tests {
     async fn mixed_methods_and_notifications_use_concurrent_dispatch() {
         for other in [RECEIPT, "groundhog_chainTip", "unknown", SEND] {
             let probe = Probe::new(2, LIMIT);
-            let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
+            let service =
+                ConcurrentBatchService::new(probe.clone(), LIMIT, RpcBatchConcurrency::default());
             let mut batch = calls(SEND, 1);
             if other == SEND {
                 let mut entries = batch.into_iter().collect::<Vec<_>>();
@@ -527,7 +635,8 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn only_empty_arrays_delegate_and_preserve_invalid_request() {
         let probe = Probe::new(0, LIMIT);
-        let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
+        let service =
+            ConcurrentBatchService::new(probe.clone(), LIMIT, RpcBatchConcurrency::default());
         let empty = service.batch(Batch::new()).await;
         let baseline = Probe::new(0, LIMIT).batch(Batch::new()).await;
         assert_eq!(empty.as_json().get(), baseline.as_json().get());
@@ -597,8 +706,10 @@ pub(crate) mod tests {
             .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(40))
             .build();
         if concurrent {
-            let middleware = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-                .layer_fn(move |inner| ConcurrentBatchService::new(inner, limit));
+            let middleware =
+                jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
+                    ConcurrentBatchService::new(inner, limit, RpcBatchConcurrency::default())
+                });
             let server = jsonrpsee::server::Server::builder()
                 .set_config(config)
                 .set_rpc_middleware(middleware)

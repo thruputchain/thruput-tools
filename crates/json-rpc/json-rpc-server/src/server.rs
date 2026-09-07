@@ -940,15 +940,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[tokio::test]
     async fn mixed_rpc_array_read_can_finish_before_earlier_submission() {
-        use crate::batch::{ConcurrentBatchService, tests::http_request};
+        use crate::batch::{ConcurrentBatchService, RpcBatchConcurrency, tests::http_request};
         use serde_json::{Value, json};
 
         let backend = Arc::new(MockBackend {
             submit_gate: Some(tokio::sync::Semaphore::new(0)),
             ..Default::default()
         });
-        let middleware = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-            .layer_fn(|inner| ConcurrentBatchService::new(inner, 4096));
+        let middleware = jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(|inner| {
+            ConcurrentBatchService::new(inner, 4096, RpcBatchConcurrency::default())
+        });
         let transport = jsonrpsee::server::Server::builder()
             .set_config(
                 jsonrpsee::server::ServerConfig::builder()

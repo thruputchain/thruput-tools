@@ -29,6 +29,7 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
 sha2 = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
