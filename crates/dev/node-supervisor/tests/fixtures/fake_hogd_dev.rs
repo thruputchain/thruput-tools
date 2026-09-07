@@ -59,6 +59,7 @@ use tokio::{net::TcpListener, runtime::Runtime};
 use xdr_common::{BytesM, VecM};
 
 const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
+const SUBMIT_LOG_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG";
 /// Optional path the fake writes its PID to before printing readiness.
 /// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
 const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
@@ -188,6 +189,9 @@ fn main() {
             run_ready_with_scheduler(FakeSchedulerMode::NetworkHashMismatch);
         }
         Ok("scheduler-no-genesis") => run_ready_with_scheduler(FakeSchedulerMode::NoGenesis),
+        Ok("submit-batch-probe") => {
+            run_ready_with_scheduler(FakeSchedulerMode::SubmitBatchProbe);
+        }
         Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
         Ok("automine-slow-commit") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCommit);
@@ -728,6 +732,7 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FakeSchedulerMode {
     Normal,
+    SubmitBatchProbe,
     Automine,
     AutomineSlowCommit,
     AutomineSerializeProbe,
@@ -767,6 +772,7 @@ struct FakeScheduler {
     pending_submits: Arc<AtomicU64>,
     commit_in_progress: Arc<AtomicBool>,
     get_tip_calls: Arc<AtomicU64>,
+    submit_calls: Arc<AtomicU64>,
     candidate: Arc<Mutex<Option<(BlockID, ConsensusValue)>>>,
     mode: FakeSchedulerMode,
 }
@@ -778,6 +784,7 @@ impl FakeScheduler {
             pending_submits: Arc::new(AtomicU64::new(0)),
             commit_in_progress: Arc::new(AtomicBool::new(false)),
             get_tip_calls: Arc::new(AtomicU64::new(0)),
+            submit_calls: Arc::new(AtomicU64::new(0)),
             candidate: Arc::new(Mutex::new(None)),
             mode,
         };
@@ -906,19 +913,41 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         batch: ParallelSignedTransactionBatch,
     ) -> Result<(), ProgramError> {
-        if batch.segment_tokens.0 != vec![1] {
+        let submit_call = self.submit_calls.fetch_add(1, Ordering::SeqCst);
+        if self.mode == FakeSchedulerMode::SubmitBatchProbe {
+            if submit_call == 0 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if let Ok(path) = env::var(SUBMIT_LOG_ENV) {
+                let mut file = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map_err(|error| ProgramError::msg(error.to_string()))?;
+                writeln!(file, "{}", batch.segment_tokens.0.len())
+                    .map_err(|error| ProgramError::msg(error.to_string()))?;
+            }
+        }
+        if batch.segment_tokens.0.iter().any(|tokens| *tokens != 1) {
             return Err(ProgramError::msg(
-                "fake scheduler expected one token segment for single transaction submit",
+                "fake scheduler expected one token per transaction segment",
             ));
         }
-        if batch.segment_bytes.0.len() != 1 {
+        if batch.segment_bytes.0.len() != batch.segment_tokens.0.len() {
             return Err(ProgramError::msg(
-                "fake scheduler expected one byte segment for single transaction submit",
+                "fake scheduler token and byte segment counts did not match",
             ));
         }
-        if batch.segment_bytes.0[0] as usize != batch.xdr.0.len() {
+        if batch
+            .segment_bytes
+            .0
+            .iter()
+            .map(|length| *length as usize)
+            .sum::<usize>()
+            != batch.xdr.0.len()
+        {
             return Err(ProgramError::msg(
-                "fake scheduler byte segment length did not match xdr payload",
+                "fake scheduler byte segment lengths did not match xdr payload",
             ));
         }
         if batch.xdr.0.is_empty() {
@@ -927,7 +956,8 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
             ));
         }
         if self.mode.supports_block_driver() {
-            self.pending_submits.fetch_add(1, Ordering::SeqCst);
+            self.pending_submits
+                .fetch_add(batch.segment_tokens.0.len() as u64, Ordering::SeqCst);
         }
         Ok(())
     }
