@@ -721,6 +721,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[derive(Default)]
     struct MockBackend {
         submitted: Mutex<Vec<ValidatedTransaction>>,
+        submit_gate: Option<tokio::sync::Semaphore>,
+        status_read: tokio::sync::Notify,
         event_calls: Mutex<u32>,
         tx_by_address_calls: Mutex<u32>,
     }
@@ -790,6 +792,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             _context: RpcRequestContext,
             tx: ValidatedTransaction,
         ) -> Result<(), RpcServerError> {
+            if let Some(gate) = &self.submit_gate {
+                gate.acquire().await.unwrap().forget();
+            }
             self.submitted.lock().await.push(tx);
             Ok(())
         }
@@ -872,9 +877,20 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         async fn transaction_status(
             &self,
             _context: RpcRequestContext,
-            _tx_hash: TxHash,
+            tx_hash: TxHash,
         ) -> Result<TransactionStatus, RpcServerError> {
-            Ok(TransactionStatus::Unknown)
+            let pending = self
+                .submitted
+                .lock()
+                .await
+                .iter()
+                .any(|tx| tx.hash == tx_hash);
+            self.status_read.notify_one();
+            Ok(if pending {
+                TransactionStatus::Pending
+            } else {
+                TransactionStatus::Unknown
+            })
         }
 
         async fn contract_events(
@@ -921,6 +937,70 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ViewPlane for Arc<MockBackend> {}
+
+    #[tokio::test]
+    async fn mixed_rpc_array_read_can_finish_before_earlier_submission() {
+        use crate::batch::{ConcurrentBatchService, tests::http_request};
+        use serde_json::{Value, json};
+
+        let backend = Arc::new(MockBackend {
+            submit_gate: Some(tokio::sync::Semaphore::new(0)),
+            ..Default::default()
+        });
+        let middleware = jsonrpsee::core::middleware::RpcServiceBuilder::new()
+            .layer_fn(|inner| ConcurrentBatchService::new(inner, 4096));
+        let transport = jsonrpsee::server::Server::builder()
+            .set_config(
+                jsonrpsee::server::ServerConfig::builder()
+                    .max_response_body_size(4096)
+                    .build(),
+            )
+            .set_rpc_middleware(middleware)
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = transport.local_addr().unwrap();
+        let handle = transport.start(server(backend.clone()).into_rpc());
+        let hash = format!("0x{CANONICAL_HASH_VECTOR_TX_HASH_HEX}");
+        let read = json!({"jsonrpc":"2.0", "method":"groundhog_getTransactionStatus",
+            "id":null, "params":[hash]});
+        let body = json!([
+            {"jsonrpc":"2.0", "method":"groundhog_sendRawTransaction", "id":"submit",
+                "params":[format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")]},
+            {"jsonrpc":"2.0", "method":"groundhog_sendRawTransaction",
+                "params":[format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")]},
+            read,
+            null,
+            {"jsonrpc":"2.0", "method":"unknown", "id":"missing"},
+            {"jsonrpc":"2.0", "method":"groundhog_getTransactionReceipt", "id":"receipt",
+                "params":[hash]}
+        ])
+        .to_string();
+        let request = tokio::spawn(async move { http_request(address, &body).await });
+        tokio::time::timeout(Duration::from_secs(5), backend.status_read.notified())
+            .await
+            .unwrap();
+        assert!(backend.submitted.lock().await.is_empty());
+        assert!(!request.is_finished());
+        backend.submit_gate.as_ref().unwrap().add_permits(1);
+        let response: Value = serde_json::from_str(&request.await.unwrap()).unwrap();
+        assert_eq!(
+            response,
+            json!([
+                {"jsonrpc":"2.0", "id":"submit", "result":hash},
+                {"jsonrpc":"2.0", "id":null, "result":{"status":"unknown"}},
+                {"jsonrpc":"2.0", "id":null, "error":{"code":-32600,"message":"Invalid request"}},
+                {"jsonrpc":"2.0", "id":"missing", "error":{"code":-32601,"message":"Method not found"}},
+                {"jsonrpc":"2.0", "id":"receipt", "result":null}
+            ])
+        );
+        assert_eq!(backend.submitted.lock().await.len(), 1);
+        let after: Value =
+            serde_json::from_str(&http_request(address, &read.to_string()).await).unwrap();
+        assert_eq!(after["result"]["status"], "pending");
+        handle.stop().unwrap();
+        handle.stopped().await;
+    }
 
     #[async_trait::async_trait]
     impl ReadPlane for ReadOnly {

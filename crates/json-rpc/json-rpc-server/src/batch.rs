@@ -1,4 +1,4 @@
-//! Ordered, bounded dispatch for independent transaction RPC arrays.
+//! Ordered, bounded dispatch for JSON-RPC arrays.
 
 use std::collections::BTreeMap;
 
@@ -14,13 +14,14 @@ use jsonrpsee::{
 /// Maximum number of entries being dispatched or awaiting ordered output per array.
 pub const BATCH_CONCURRENCY: usize = 16;
 
-/// Concurrent dispatch for homogeneous submission or receipt arrays only.
+/// Bounded concurrent dispatch for every nonempty JSON-RPC array.
 ///
-/// Mixed-method arrays, any arrays containing notifications, admin methods, and unknown methods
-/// retain the inner service's scheduling. Invalid entries have no method to schedule
-/// and retain their position in otherwise eligible arrays. Single calls are unchanged.
+/// Execution order is unspecified; responses and their extensions retain request order.
+/// Notifications delegate to the inner notification service and produce no array entry.
+/// Empty arrays and single calls retain the inner service's behavior.
 /// Completed responses share the array's byte budget, even while awaiting earlier entries.
 /// Overflow cancels outstanding dispatch without waiting for the head of the array.
+/// Cancellation does not roll back side effects already accepted by a backend.
 #[derive(Clone, Debug)]
 pub struct ConcurrentBatchService<S> {
     inner: S,
@@ -35,26 +36,6 @@ impl<S> ConcurrentBatchService<S> {
             max_response_body_size,
         }
     }
-}
-
-fn is_concurrent_batch(batch: &Batch<'_>) -> bool {
-    if batch
-        .iter()
-        .any(|entry| matches!(entry, Ok(BatchEntry::Notification(_))))
-    {
-        return false;
-    }
-    let mut methods = batch
-        .iter()
-        .filter_map(|entry| entry.as_ref().ok())
-        .map(BatchEntry::method_name);
-    let Some(method) = methods.next() else {
-        return false;
-    };
-    matches!(
-        method,
-        "groundhog_sendRawTransaction" | "groundhog_getTransactionReceipt"
-    ) && methods.all(|other| other == method)
 }
 
 impl<S> RpcServiceT for ConcurrentBatchService<S>
@@ -87,7 +68,7 @@ where
         let inner = self.inner.clone();
         let max_response_body_size = self.max_response_body_size as usize;
         async move {
-            if !is_concurrent_batch(&batch) {
+            if batch.is_empty() {
                 return inner.batch(batch).await;
             }
 
@@ -157,7 +138,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -310,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn homogeneous_calls_bound_active_and_buffered_work_and_preserve_order() {
-        for method in [SEND, RECEIPT] {
+        for method in [SEND, RECEIPT, "groundhog_chainTip", "unknown"] {
             let count = BATCH_CONCURRENCY * 2 + 3;
             let probe = Probe::new(count, LIMIT);
             let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
@@ -505,8 +486,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mixed_admin_unknown_and_notification_batches_delegate_sequentially() {
-        for other in [RECEIPT, "groundhog_devProduceBlock", "unknown", SEND] {
+    async fn mixed_methods_and_notifications_use_concurrent_dispatch() {
+        for other in [RECEIPT, "groundhog_chainTip", "unknown", SEND] {
             let probe = Probe::new(2, LIMIT);
             let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
             let mut batch = calls(SEND, 1);
@@ -524,13 +505,18 @@ mod tests {
             }
             let mut response = Box::pin(service.batch(batch));
             assert!(futures_util::poll!(&mut response).is_pending());
-            assert_eq!(probe.state.batches.load(Ordering::SeqCst), 1);
-            assert_eq!(probe.state.started.load(Ordering::SeqCst), 1);
+            assert_eq!(probe.state.batches.load(Ordering::SeqCst), 0);
+            let calls = if other == SEND { 1 } else { 2 };
+            assert_eq!(probe.state.started.load(Ordering::SeqCst), calls);
+            assert_eq!(
+                probe.state.notifications.load(Ordering::SeqCst),
+                usize::from(other == SEND)
+            );
             for gate in probe.gates.iter() {
                 gate.add_permits(1);
             }
             response.await;
-            assert_eq!(probe.state.peak.load(Ordering::SeqCst), 1);
+            assert_eq!(probe.state.peak.load(Ordering::SeqCst), calls);
             assert_eq!(
                 probe.state.notifications.load(Ordering::SeqCst),
                 usize::from(other == SEND)
@@ -539,10 +525,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_invalid_only_and_notifications_only_delegate() {
+    async fn only_empty_arrays_delegate_and_preserve_invalid_request() {
         let probe = Probe::new(0, LIMIT);
         let service = ConcurrentBatchService::new(probe.clone(), LIMIT);
         let empty = service.batch(Batch::new()).await;
+        let baseline = Probe::new(0, LIMIT).batch(Batch::new()).await;
+        assert_eq!(empty.as_json().get(), baseline.as_json().get());
         assert_eq!(value(&empty)["error"]["code"], -32600);
         let invalid = service
             .batch(Batch::from(vec![Err(BatchEntryErr::new(
@@ -560,11 +548,12 @@ mod tests {
             ))]))
             .await;
         assert!(notification.is_notification());
-        assert_eq!(probe.state.batches.load(Ordering::SeqCst), 3);
+        assert_eq!(probe.state.batches.load(Ordering::SeqCst), 1);
         assert_eq!(probe.state.started.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.state.notifications.load(Ordering::SeqCst), 1);
     }
 
-    async fn http_request(address: std::net::SocketAddr, body: &str) -> String {
+    pub(crate) async fn http_request(address: std::net::SocketAddr, body: &str) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -590,7 +579,7 @@ mod tests {
     ) {
         let invoked = Arc::new(AtomicUsize::new(0));
         let mut module = jsonrpsee::RpcModule::new(invoked.clone());
-        for method in [SEND, RECEIPT, "groundhog_devProduceBlock"] {
+        for method in [SEND, RECEIPT, "groundhog_chainTip"] {
             module
                 .register_async_method(method, |params, invoked, _| async move {
                     invoked.fetch_add(1, Ordering::SeqCst);
@@ -628,12 +617,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_responses_match_jsonrpsee_for_valid_invalid_fallback_and_overflow_inputs() {
+    async fn http_responses_match_jsonrpsee_for_mixed_invalid_and_overflow_inputs() {
         let call = |method, id, params| json!({"jsonrpc":"2.0", "method":method, "id":id, "params":params});
         let send = call(SEND, json!("same"), json!([7]));
         let receipt = call(RECEIPT, Value::Null, json!([null]));
         let notification = json!({"jsonrpc":"2.0", "method":SEND, "params":[7]});
-        let admin = call("groundhog_devProduceBlock", json!(2), json!([true]));
+        let tip = call("groundhog_chainTip", json!(2), json!([true]));
         let unknown = call("unknown", json!(3), json!([]));
         let cases = vec![
             "[".to_owned(),
@@ -653,8 +642,9 @@ mod tests {
             json!([notification, notification]).to_string(),
             json!([send, notification, send]).to_string(),
             json!([send, receipt]).to_string(),
-            json!([send, admin, send]).to_string(),
-            json!([admin, admin]).to_string(),
+            json!([send, tip, send]).to_string(),
+            json!([tip, tip]).to_string(),
+            json!([send, notification, null, unknown, receipt, tip]).to_string(),
             json!([unknown, unknown]).to_string(),
             json!([send, unknown]).to_string(),
             json!([notification, null]).to_string(),

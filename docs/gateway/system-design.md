@@ -67,6 +67,21 @@ embedding it in chuckd or chuckd-rs. Reasons:
       events          tx lookup      (Phase 2)        │
 ```
 
+### JSON-RPC Arrays
+
+The gateway and embedded dev node dispatch every nonempty JSON-RPC array with
+bounded concurrency, including mixed methods. The window remains 16 entries,
+counting both active work and completed responses awaiting earlier entries.
+Execution order is unspecified; responses retain request order. An array is
+not a transaction or a sequence: a read can run before an earlier mutation
+finishes. Send dependent requests separately and wait for the required state.
+
+Notifications use jsonrpsee's notification path, not its call path, and add no
+response. Empty arrays retain jsonrpsee's invalid-request response. Completed
+responses share the response byte limit even when an earlier entry is pending;
+overflow cancels outstanding dispatch immediately. Cancellation does not roll
+back side effects already accepted by a backend.
+
 ### Data Sources (via x23 RPC)
 
 | Data | Source | Existing RPC | Notes |
