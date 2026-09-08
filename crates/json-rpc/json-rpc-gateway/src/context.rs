@@ -38,6 +38,8 @@ use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
 static NEXT_SCHEDULER_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) const SCHEDULER_LOOKUP_CONCURRENCY: usize = 4;
+// Allow sixteen waves of waiting work without expanding the dedicated x23 pool.
+pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = SCHEDULER_LOOKUP_CONCURRENCY + 64;
 const HEALTH_PROBE_POOL_SIZE: usize = 1;
 
 #[derive(Clone)]
@@ -162,8 +164,11 @@ pub struct GatewayContext {
     /// Used for: transaction submission, tip, lookup, and pending count.
     pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
 
-    /// Admission bound for direct transaction-status scheduler lookups.
+    /// Running plus waiting transaction-status scheduler lookups, shared across callers.
     pub(crate) scheduler_lookup_admission: Arc<Semaphore>,
+
+    /// Execution slots matching the dedicated scheduler lookup pool.
+    pub(crate) scheduler_lookup_execution: Arc<Semaphore>,
 
     /// Scheduler pool held away from request handlers until its readiness
     /// grace period has elapsed.
@@ -362,7 +367,8 @@ impl GatewayContext {
 
         Self {
             scheduler,
-            scheduler_lookup_admission: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_CONCURRENCY)),
+            scheduler_lookup_admission: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_MAX_OUTSTANDING)),
+            scheduler_lookup_execution: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_CONCURRENCY)),
             scheduler_quarantine: Arc::new(RwLock::new(None)),
             indexer,
             batch_submitter,

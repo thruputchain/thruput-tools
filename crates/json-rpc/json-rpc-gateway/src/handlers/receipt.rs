@@ -10,8 +10,8 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::transaction::{InvocationFrameOutput, TransactionHash};
-use std::{sync::Arc, time::Instant};
-use tokio::{sync::RwLock, task::JoinHandle};
+use std::time::Instant;
+use tokio::task::JoinHandle;
 use xdr_common::VecM;
 
 use crate::config::HealthBackend;
@@ -23,21 +23,13 @@ use super::backend_deadline;
 use super::parse_event::parse_emitted_event;
 
 struct SchedulerLookupGuard<T: Send + 'static> {
-    scheduler: Arc<RwLock<Option<crate::context::SchedulerClient>>>,
-    generation: u64,
     worker: Option<JoinHandle<T>>,
     armed: bool,
 }
 
 impl<T: Send + 'static> SchedulerLookupGuard<T> {
-    fn new(
-        scheduler: Arc<RwLock<Option<crate::context::SchedulerClient>>>,
-        generation: u64,
-        worker: JoinHandle<T>,
-    ) -> Self {
+    fn new(worker: JoinHandle<T>) -> Self {
         Self {
-            scheduler,
-            generation,
             worker: Some(worker),
             armed: true,
         }
@@ -49,8 +41,7 @@ impl<T: Send + 'static> SchedulerLookupGuard<T> {
             .expect("bug: scheduler worker should exist")
     }
 
-    async fn clear_and_abort(&mut self) {
-        clear_scheduler_if_current(&self.scheduler, self.generation).await;
+    async fn abort(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.abort();
             let _ = worker.await;
@@ -195,13 +186,7 @@ async fn transaction_is_pending(
     deadline: Instant,
     tx_hash: TxHash,
 ) -> Result<bool, GatewayError> {
-    let client = ctx
-        .scheduler
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
-    let permit = ctx
+    let admission = ctx
         .scheduler_lookup_admission
         .clone()
         .try_acquire_owned()
@@ -210,27 +195,49 @@ async fn transaction_is_pending(
                 "scheduler transaction-status lookup capacity exhausted".into(),
             )
         })?;
+    let permit = tokio::time::timeout_at(
+        deadline.into(),
+        ctx.scheduler_lookup_execution.clone().acquire_owned(),
+    )
+    .await
+    .map_err(|_| GatewayError::BackendTimeout)?
+    .map_err(|_| GatewayError::BackendUnavailable("scheduler lookup execution closed".into()))?;
+    // Queued requests must use the current generation, not a pre-wait snapshot.
+    let scheduler = tokio::time::timeout_at(deadline.into(), ctx.scheduler.read())
+        .await
+        .map_err(|_| GatewayError::BackendTimeout)?;
+    if Instant::now() >= deadline {
+        return Err(GatewayError::BackendTimeout);
+    }
+    let client = scheduler
+        .as_ref()
+        .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
     let generation = client.generation();
     let lookup_client = client.lookup_client().clone();
     let hash = TransactionHash::from(tx_hash.0.0.into_inner());
     let batch: VecM<TransactionHash> = VecM(vec![hash]);
     let started_at = Instant::now();
     let worker = tokio::spawn(async move {
+        let _admission = admission;
         let _permit = permit;
-        lookup_client.schedgateway_lookup_tx(&batch).await
+        if Instant::now() >= deadline {
+            return None;
+        }
+        Some(lookup_client.schedgateway_lookup_tx(&batch).await)
     });
-    let mut guard = SchedulerLookupGuard::new(ctx.scheduler.clone(), generation, worker);
-    let rpc_result = if let Ok(result) = tokio::time::timeout(
-        deadline.saturating_duration_since(Instant::now()),
-        guard.worker_mut(),
-    )
-    .await
-    {
-        Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
-    } else {
-        guard.clear_and_abort().await;
-        Err(())
-    };
+    drop(scheduler);
+    let mut guard = SchedulerLookupGuard::new(worker);
+    let rpc_result =
+        if let Ok(result) = tokio::time::timeout_at(deadline.into(), guard.worker_mut()).await {
+            result
+                .unwrap_or(Some(Err(rpc_driver::RpcError::SystemError)))
+                .ok_or(())
+        } else {
+            // ReplaceConnection isolates cancellation to this lookup connection;
+            // a spent request budget is not evidence that the scheduler is unhealthy.
+            guard.abort().await;
+            Err(())
+        };
     if matches!(rpc_result, Ok(Err(_))) {
         clear_scheduler_if_current(&ctx.scheduler, generation).await;
     }
@@ -281,15 +288,19 @@ pub async fn get_transaction_status(
     };
 
     // 2. Check indexer (authoritative).
-    let maybe_indexer = ctx.indexer.read().await.clone();
+    let maybe_indexer = tokio::time::timeout_at(deadline.into(), ctx.indexer.read())
+        .await
+        .map_err(|_| GatewayError::BackendTimeout)?
+        .clone();
+    // timeout polls its future even when already expired; do not dispatch a late fallback.
+    if Instant::now() >= deadline {
+        return Err(GatewayError::BackendTimeout);
+    }
     if let Some(client) = maybe_indexer.as_ref() {
         let hash = TransactionHash::from(tx_hash.0.0.into_inner());
         let started_at = Instant::now();
-        let rpc_result = tokio::time::timeout(
-            deadline.saturating_duration_since(Instant::now()),
-            client.get_transaction_info(&hash),
-        )
-        .await;
+        let rpc_result =
+            tokio::time::timeout_at(deadline.into(), client.get_transaction_info(&hash)).await;
         ctx.metrics.observe_backend_request(
             HealthBackend::Indexer,
             "get_transaction_info",
@@ -387,15 +398,18 @@ mod tests {
     }
     use crate::config::GatewayConfig;
     use crate::context::{
-        BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient, connect_optional_scheduler,
+        BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SCHEDULER_LOOKUP_MAX_OUTSTANDING,
+        SchedulerClient, connect_optional_scheduler,
     };
     use crate::metrics::GatewayMetrics;
 
-    /// Indexer that answers `get_transaction_info` with not-found.
-    struct NotFoundIndexer;
+    struct FakeIndexer {
+        result: TxInfoResult,
+        calls: Arc<AtomicUsize>,
+    }
 
     #[async_trait]
-    impl IndexerBlockExplorer_IndexerBlockExplorer1 for NotFoundIndexer {
+    impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         async fn indexer_block_explorer_intro(
             &self,
             _arg0: Protocol,
@@ -407,9 +421,8 @@ mod tests {
             &self,
             _arg0: TransactionHash,
         ) -> Result<TxInfoResult, ProgramError> {
-            Ok(TxInfoResult::Default {
-                outcome: TxInfoOutcome::TxInfoNotFound.0,
-            })
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.result.clone())
         }
 
         async fn get_block_by_height(
@@ -447,6 +460,7 @@ mod tests {
 
     #[derive(Clone)]
     enum FakeSchedulerMode {
+        GatedMiss(Arc<LookupGate>),
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
         /// Mempool lookup succeeds but returns no slot for the queried hash.
@@ -471,6 +485,51 @@ mod tests {
 
     struct FakeScheduler {
         mode: FakeSchedulerMode,
+    }
+
+    struct LookupGate {
+        started: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+        calls: AtomicUsize,
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+    }
+
+    impl LookupGate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                started: tokio::sync::Semaphore::new(0),
+                release: tokio::sync::Semaphore::new(0),
+                calls: AtomicUsize::new(0),
+                active: AtomicUsize::new(0),
+                max_active: AtomicUsize::new(0),
+            })
+        }
+
+        async fn wait_started(&self, count: u32) {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.started.acquire_many(count),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        }
+    }
+
+    fn poll_pending<F: Future>(future: std::pin::Pin<&mut F>) {
+        assert!(
+            future
+                .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                .is_pending()
+        );
+    }
+
+    async fn watchdog<F: Future>(future: F) -> F::Output {
+        tokio::time::timeout(std::time::Duration::from_secs(5), future)
+            .await
+            .expect("test operation exceeded independent watchdog")
     }
 
     #[async_trait]
@@ -498,6 +557,15 @@ mod tests {
             _arg0: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             match &self.mode {
+                FakeSchedulerMode::GatedMiss(gate) => {
+                    gate.calls.fetch_add(1, Ordering::SeqCst);
+                    let active = gate.active.fetch_add(1, Ordering::SeqCst) + 1;
+                    gate.max_active.fetch_max(active, Ordering::SeqCst);
+                    gate.started.add_permits(1);
+                    gate.release.acquire().await.unwrap().forget();
+                    gate.active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(VecM(vec![None]))
+                }
                 FakeSchedulerMode::MempoolMiss => Ok(VecM(vec![None])),
                 FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
                 FakeSchedulerMode::ExtraSlot => Ok(VecM(vec![None, None])),
@@ -534,6 +602,22 @@ mod tests {
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
+        start_fake_indexer(
+            TxInfoResult::Default {
+                outcome: TxInfoOutcome::TxInfoNotFound.0,
+            },
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await
+    }
+
+    async fn start_fake_indexer(
+        result: TxInfoResult,
+        calls: Arc<AtomicUsize>,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: test indexer should bind");
@@ -542,7 +626,10 @@ mod tests {
             .expect("bug: test indexer should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(
-            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(NotFoundIndexer)),
+            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(FakeIndexer {
+                result,
+                calls,
+            })),
         ));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
@@ -606,6 +693,459 @@ mod tests {
         TxHash(groundhog_json_rpc_types::hex::Hex0x(SHA256Hash::from(
             [7u8; 32],
         )))
+    }
+
+    async fn start_status_http_server(
+        ctx: Arc<GatewayContext>,
+    ) -> (std::net::SocketAddr, jsonrpsee::server::ServerHandle) {
+        use groundhog_json_rpc_api::GroundhogApiServer;
+        use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+        use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+
+        let config = ctx.config.clone();
+        let rpc_metrics = ctx.metrics.clone();
+        let batch_config = config.clone();
+        let max_response_body_size = jsonrpsee::core::TEN_MB_SIZE_BYTES;
+        let server = jsonrpsee::server::Server::builder()
+            .set_config(
+                jsonrpsee::server::ServerConfig::builder()
+                    .max_connections(config.max_connections)
+                    .max_response_body_size(max_response_body_size)
+                    .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
+                    .build(),
+            )
+            .set_http_middleware(crate::middleware::http_middleware(
+                &config,
+                ctx.metrics.clone(),
+            ))
+            .set_rpc_middleware(
+                jsonrpsee::core::middleware::RpcServiceBuilder::new()
+                    .layer_fn(move |inner| {
+                        crate::rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone())
+                    })
+                    .layer_fn(move |inner| {
+                        batch_config.batch_service(inner, max_response_body_size)
+                    }),
+            )
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let addr = server.local_addr().unwrap();
+        let handle = server.start(
+            GroundhogRpcServer::unified(
+                crate::backend::GatewayBackend::new(ctx.clone()),
+                NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
+                RpcServerConfig::default()
+                    .with_request_timeout_ms(config.request_timeout_ms.max(3))
+                    .with_max_events_per_page(config.max_events_per_page)
+                    .with_max_transactions_per_page(config.max_transactions_per_page)
+                    .with_max_cursor_bytes(config.max_cursor_bytes)
+                    .with_max_view_calldata_bytes(config.max_view_calldata_bytes)
+                    .with_view_gas_limit(config.view_gas_limit),
+                BuildInfo::new("test", Some("test")),
+            )
+            .into_rpc(),
+        );
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn http_status_array_returns_twenty_unknown_at_serial_and_default_concurrency() {
+        for concurrency in [1, 128] {
+            let gate = LookupGate::new();
+            let (scheduler_addr, scheduler) =
+                start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
+            let indexer_calls = Arc::new(AtomicUsize::new(0));
+            let (indexer_addr, indexer) = start_fake_indexer(
+                TxInfoResult::Default {
+                    outcome: TxInfoOutcome::TxInfoNotFound.0,
+                },
+                indexer_calls.clone(),
+            )
+            .await;
+            let mut ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+            ctx.config = Arc::new(GatewayConfig {
+                rpc_batch_concurrency: concurrency.try_into().unwrap(),
+                ..GatewayConfig::default()
+            });
+            let ctx = Arc::new(ctx);
+            let (addr, handle) = watchdog(start_status_http_server(ctx.clone())).await;
+            let request: Vec<_> = (0..20)
+                .map(|id| {
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "method": "groundhog_getTransactionStatus", "params": [test_hash()],
+                    })
+                })
+                .collect();
+            let response = tokio::spawn(async move {
+                reqwest::Client::new()
+                    .post(format!("http://{addr}"))
+                    .json(&request)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<Vec<serde_json::Value>>()
+                    .await
+                    .unwrap()
+            });
+            let width = concurrency.min(SCHEDULER_LOOKUP_CONCURRENCY);
+            gate.wait_started(width.try_into().unwrap()).await;
+            // Hold the first wave until every dispatched entry is admitted.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while ctx.scheduler_lookup_admission.available_permits()
+                    != SCHEDULER_LOOKUP_MAX_OUTSTANDING - concurrency.min(20)
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(gate.calls.load(Ordering::SeqCst), width);
+            assert_eq!(indexer_calls.load(Ordering::SeqCst), 0);
+            gate.release.add_permits(20);
+            let responses = tokio::time::timeout(std::time::Duration::from_secs(5), response)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(responses.len(), 20);
+            for (id, response) in responses.iter().enumerate() {
+                assert_eq!(
+                    response,
+                    &serde_json::json!({
+                        "jsonrpc": "2.0", "id": id, "result": {"status": "unknown"},
+                    })
+                );
+            }
+            assert_eq!(gate.calls.load(Ordering::SeqCst), 20);
+            assert_eq!(indexer_calls.load(Ordering::SeqCst), 20);
+            assert_eq!(gate.max_active.load(Ordering::SeqCst), width);
+            let snapshot = crate::health::GatewayHealthSnapshot::for_test(
+                crate::health::HealthStatus::Starting,
+                None,
+                &[],
+            );
+            let metrics = ctx.metrics.gather(&snapshot).unwrap();
+            assert!(metrics.contains("groundhog_gateway_rpc_requests_total{method=\"groundhog_getTransactionStatus\",outcome=\"ok\"} 20\n"));
+            assert!(metrics.contains("groundhog_gateway_http_requests_total{endpoint=\"jsonrpc\",status_class=\"2xx\"} 1\n"));
+            assert!(metrics.contains("groundhog_gateway_rpc_batch_size_count 1\n"));
+            handle.stop().unwrap();
+            watchdog(handle.stopped()).await;
+            ctx.abort_request_workers();
+            scheduler.abort();
+            indexer.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn lookup_queue_is_bounded_across_callers_and_cancellation_recovers_permits() {
+        let gate = LookupGate::new();
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        let mut callers = Vec::new();
+        for _ in 0..SCHEDULER_LOOKUP_MAX_OUTSTANDING {
+            let mut caller = Box::pin(get_transaction_status(
+                &ctx,
+                RpcRequestContext::unbounded(),
+                test_hash(),
+            ));
+            poll_pending(caller.as_mut());
+            callers.push(caller);
+        }
+        gate.wait_started(4).await;
+        assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 0);
+        assert!(matches!(
+            watchdog(get_transaction_status(
+                &ctx,
+                RpcRequestContext::unbounded(),
+                test_hash()
+            ))
+            .await,
+            Err(GatewayError::Overloaded(_))
+        ));
+        callers.truncate(4);
+        assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 64);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
+        gate.release.add_permits(4);
+        for caller in callers {
+            assert!(matches!(
+                watchdog(caller).await.unwrap(),
+                TransactionStatus::Unknown
+            ));
+        }
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING
+        );
+        assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 4);
+        assert!(ctx.scheduler.read().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn queued_timeout_does_not_launch_work_or_invalidate_scheduler() {
+        let gate = LookupGate::new();
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
+        let indexer_calls = Arc::new(AtomicUsize::new(0));
+        let (indexer_addr, _indexer) = start_fake_indexer(
+            TxInfoResult::Default {
+                outcome: TxInfoOutcome::TxInfoNotFound.0,
+            },
+            indexer_calls.clone(),
+        )
+        .await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        let slots = ctx
+            .scheduler_lookup_execution
+            .clone()
+            .try_acquire_many_owned(4)
+            .unwrap();
+        let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(20)));
+        let deadline = context.deadline().unwrap();
+        let mut lookup = Box::pin(get_transaction_status(&ctx, context, test_hash()));
+        poll_pending(lookup.as_mut());
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING - 1
+        );
+        assert!(matches!(
+            watchdog(lookup).await,
+            Err(GatewayError::BackendTimeout)
+        ));
+        drop(slots);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(indexer_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING
+        );
+        assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 4);
+        assert!(ctx.scheduler.read().await.is_some());
+        // An expired request must not dispatch even when execution is immediately available.
+        assert!(matches!(
+            watchdog(transaction_is_pending(&ctx, deadline, test_hash())).await,
+            Err(GatewayError::BackendTimeout)
+        ));
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn queued_lookup_execution_timeout_preserves_normal_scheduler_lane() {
+        use std::time::Duration;
+
+        let gate = LookupGate::new();
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        let generation = watchdog(ctx.scheduler.read())
+            .await
+            .as_ref()
+            .unwrap()
+            .generation();
+        let slots = ctx
+            .scheduler_lookup_execution
+            .clone()
+            .try_acquire_many_owned(4)
+            .unwrap();
+
+        tokio::time::pause();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut lookup = Box::pin(transaction_is_pending(&ctx, deadline, test_hash()));
+        poll_pending(lookup.as_mut());
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING - 1
+        );
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+        tokio::time::advance(Duration::from_millis(9_900)).await;
+        drop(slots);
+        poll_pending(lookup.as_mut());
+
+        // Keep the paused clock from auto-advancing while x23 reaches the gate.
+        // This watchdog uses wall time, independent of the simulated RPC deadline.
+        let started = Instant::now();
+        while gate.started.available_permits() == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "lookup never reached x23"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 3);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::time::resume();
+        assert!(matches!(
+            watchdog(lookup).await,
+            Err(GatewayError::BackendTimeout)
+        ));
+
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING
+        );
+        assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 4);
+        let scheduler = watchdog(ctx.scheduler.read())
+            .await
+            .as_ref()
+            .expect("a lookup deadline must not evict the scheduler")
+            .clone();
+        assert_eq!(scheduler.generation(), generation);
+        assert!(matches!(
+            watchdog(scheduler.schedcoord_get_tip()).await.unwrap(),
+            SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock
+        ));
+
+        // The backend may finish the canceled call later; the replacement lane remains usable.
+        gate.release.add_permits(2);
+        assert!(
+            !watchdog(transaction_is_pending(
+                &ctx,
+                (tokio::time::Instant::now() + Duration::from_secs(4)).into_std(),
+                test_hash()
+            ))
+            .await
+            .unwrap()
+        );
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING
+        );
+        assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 4);
+    }
+
+    #[tokio::test]
+    async fn queued_lookup_uses_replacement_scheduler_generation() {
+        let (old_addr, _old) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
+        let (new_addr, _new) = start_fake_scheduler(FakeSchedulerMode::MempoolMiss).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(Some(old_addr), indexer_addr).await;
+        let slots = ctx
+            .scheduler_lookup_execution
+            .clone()
+            .try_acquire_many_owned(4)
+            .unwrap();
+        let mut lookup = Box::pin(get_transaction_status(
+            &ctx,
+            RpcRequestContext::unbounded(),
+            test_hash(),
+        ));
+        poll_pending(lookup.as_mut());
+        let replacement = watchdog(connect_optional_scheduler(&new_addr.to_string(), 1))
+            .await
+            .unwrap()
+            .unwrap();
+        let generation = replacement.generation();
+        *ctx.scheduler.write().await = Some(replacement);
+        drop(slots);
+        assert!(matches!(
+            watchdog(lookup).await.unwrap(),
+            TransactionStatus::Unknown
+        ));
+        assert_eq!(
+            ctx.scheduler.read().await.as_ref().unwrap().generation(),
+            generation
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_indexer_answers_survive_full_lookup_admission() {
+        use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
+        use groundhog_xdr::{
+            auth_claim::{AuthClaim, AuthClaim_source_address_claim},
+            event::TxEventLog,
+            transaction::*,
+        };
+        use xdr_common::BytesM;
+
+        let committed = TxInfoResult::TxInfoFound {
+            info: groundhog_indexer::TxInfo {
+                height: 42.into(),
+                tx: ProposedTransaction {
+                    signed_tx: SignedTransaction {
+                        tx: Transaction {
+                            invocation: Invocation {
+                                invoked_address: [0; 32].into(),
+                                entrypoint: [0; 8].into(),
+                                gas_limit: 0,
+                                calldata: BytesM(vec![]),
+                            },
+                            uniquifier: Uniquifier {
+                                block_expiry_height: 0.into(),
+                                nonce: 0,
+                            },
+                            contracts_to_deploy: VecM(vec![]),
+                            auth_claim: AuthClaim::kSourceAddressAuthData {
+                                source_address_claim: AuthClaim_source_address_claim {
+                                    allowed_keys: 0,
+                                    required_weight: 0,
+                                },
+                            },
+                        },
+                        signatures: VecM(vec![]),
+                    },
+                    nondeterministic_proposal_data: NondeterministicProposalData {
+                        nondeterministic_bits: BytesM(vec![]),
+                        nondeterministic_bit_count: 0,
+                        observed_queue_entry_sequence: VecM(vec![]),
+                    },
+                },
+                events: TxEventLog {
+                    tx_hash: [7; 32].into(),
+                    exec_result: ExecResult::ExecResultOK,
+                    root_output: InvocationFrameOutput::Return {
+                        return_buffer: BytesM(vec![]),
+                    },
+                    events: VecM(vec![]),
+                },
+            },
+        };
+        let diagnostic = TxFailureDiagnostic {
+            attempt_height: 43.into(),
+            conflict: DbConflictDiagnostic {
+                addrkey: groundhog_xdr::types::AddressAndKey {
+                    address: [0; 32].into(),
+                    key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                },
+                code: DbConflictCode::kDbConflictExclusiveLock,
+            },
+        };
+        let recent_status = TransactionStatus::from(&diagnostic);
+        for (result, expected) in [
+            (
+                committed,
+                TransactionStatus::Committed { height: 42.into() },
+            ),
+            (
+                TxInfoResult::TxInfoRecentFailure {
+                    recent_failure: diagnostic,
+                },
+                recent_status,
+            ),
+        ] {
+            let (scheduler_addr, _scheduler) =
+                start_fake_scheduler(FakeSchedulerMode::MempoolMiss).await;
+            let (indexer_addr, _indexer) =
+                start_fake_indexer(result, Arc::new(AtomicUsize::new(0))).await;
+            let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+            let _admission = ctx
+                .scheduler_lookup_admission
+                .clone()
+                .acquire_many_owned(SCHEDULER_LOOKUP_MAX_OUTSTANDING.try_into().unwrap())
+                .await
+                .unwrap();
+            let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+            assert!(ctx.scheduler.read().await.is_some());
+        }
     }
 
     #[tokio::test]
@@ -685,7 +1225,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
         let mut permits = Vec::new();
-        for _ in 0..SCHEDULER_LOOKUP_CONCURRENCY {
+        for _ in 0..SCHEDULER_LOOKUP_MAX_OUTSTANDING {
             permits.push(
                 ctx.scheduler_lookup_admission
                     .clone()
@@ -818,7 +1358,7 @@ mod tests {
         let permits = tokio::time::timeout(
             std::time::Duration::from_secs(1),
             ctx.scheduler_lookup_admission.clone().acquire_many_owned(
-                u32::try_from(SCHEDULER_LOOKUP_CONCURRENCY)
+                u32::try_from(SCHEDULER_LOOKUP_MAX_OUTSTANDING)
                     .expect("test lookup capacity should fit u32"),
             ),
         )

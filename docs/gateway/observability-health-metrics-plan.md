@@ -615,13 +615,24 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   registration after their TCP listener opens. The pool is promoted only after
   a successful null probe at or after the grace deadline; the next pass performs
   the first tip probe.
-- Scheduler pools use rpc_driver's fail-closed cancellation policy. A timed-out
-  scheduler request clears the handler-visible slot before canceling its worker;
+- Normal scheduler requests use rpc_driver's fail-closed cancellation policy.
+  A timed-out submit/tip request clears the handler-visible slot before canceling its worker;
   only the gateway reconnect manager may construct the replacement pool and put
   it through quarantine.
-- Direct transaction-status scheduler lookups use reserved admission permits
-  matched by scheduler pool capacity. Admission saturation returns overload
-  without entering the x23 queue or clearing a healthy scheduler.
+- Direct transaction-status scheduler lookups admit at most 68 outstanding calls
+  across all callers: four execution slots and 64 waiting calls (sixteen waves
+  of the dedicated four-connection pool). This finite burst allowance is local
+  to lookups, independent of JSON-RPC array concurrency and submit queue policy.
+  Admitted calls wait asynchronously under the same absolute backend deadline
+  used for scheduler execution and indexer fallback. Queue timeout/cancellation
+  releases admission without launching x23 work or clearing a healthy scheduler;
+  the scheduler generation is selected after waiting. Only a full outstanding
+  bound returns overload. Terminal indexer answers can still resolve scheduler
+  failures within the remaining deadline; an indexer miss cannot hide overload
+  as `Unknown`. An executing lookup's deadline aborts its worker and replaces only
+  that lookup connection (`ReplaceConnection`); it does not evict the scheduler
+  generation or interrupt normal submit/tip work. Caller cancellation has the
+  same isolation. Actual RPC errors retain generation-scoped invalidation.
 - Scheduler transport failures clear only the generation that produced the
   failure, so a stale request cannot remove a newer replacement pool.
 - Each backend keeps its health probe on a dedicated one-connection x23 pool.

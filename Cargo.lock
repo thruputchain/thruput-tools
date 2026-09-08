@@ -1649,6 +1649,7 @@ dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
+ "groundhog-trace",
  "groundhog-x23-transport",
  "groundhog-xdr",
  "groundhog_coordinator",

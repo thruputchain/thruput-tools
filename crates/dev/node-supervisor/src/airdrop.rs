@@ -25,7 +25,7 @@ use groundhog_signing::{
 };
 use groundhog_tx_validation::NetworkConfigParams;
 use jsonrpsee::core::RpcResult;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
 
 use crate::{
     LocalAirdropConfig, NodeSupervisorConfig, block_driver::BlockDriverTrigger,
@@ -87,6 +87,7 @@ pub(crate) struct LocalAirdropRpc {
     attempts: Arc<Mutex<HashMap<AttemptKey, Arc<Attempt>>>>,
     capacity: usize,
     concurrency: Arc<Semaphore>,
+    admission: Arc<Semaphore>,
     timeout: Duration,
     raw_amount: u128,
     block_driver: BlockDriverTrigger,
@@ -131,6 +132,14 @@ impl LocalAirdropRpc {
             attempts: Arc::new(Mutex::new(HashMap::new())),
             capacity: config.attempt_capacity,
             concurrency: Arc::new(Semaphore::new(config.max_concurrency)),
+            // Allow a finite burst of 16 execution waves across all callers, including
+            // same-key observers. Execution concurrency remains independently bounded.
+            admission: Arc::new(Semaphore::new(
+                config
+                    .max_concurrency
+                    .saturating_mul(16)
+                    .min(Semaphore::MAX_PERMITS),
+            )),
             timeout: config.request_timeout,
             raw_amount: config.raw_amount,
             block_driver,
@@ -141,8 +150,20 @@ impl LocalAirdropRpc {
         &self,
         request: AirdropRequest,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
+        let context = RpcRequestContext::new(Some(self.timeout));
+        let _admission = self.admission.try_acquire().map_err(|_| {
+            RpcServerError::Overloaded("local airdrop admission capacity reached".into())
+        })?;
+        within_request_deadline(context, self.request_admitted(request, context)).await
+    }
+
+    async fn request_admitted(
+        &self,
+        request: AirdropRequest,
+        context: RpcRequestContext,
+    ) -> Result<AirdropAttemptResponse, RpcServerError> {
         let key = AttemptKey::new(&request);
-        let (attempt, admission_permit) = self.find_or_admit(key)?;
+        let attempt = self.find_or_admit(key)?;
         let observed_revision = attempt.revision()?;
         let _operation = attempt.operation.lock().await;
 
@@ -161,27 +182,29 @@ impl LocalAirdropRpc {
             })?;
         }
 
-        let permit = match admission_permit {
-            Some(permit) => permit,
-            None => self.concurrency.clone().try_acquire_owned().map_err(|_| {
-                RpcServerError::Overloaded("local airdrop concurrency limit reached".into())
-            })?,
-        };
-        let result = self.advance_attempt(&attempt, request.recipient).await;
+        let permit = self.concurrency.acquire().await.map_err(|_| {
+            RpcServerError::BackendUnavailable("local airdrop execution is closed".into())
+        })?;
+        if context
+            .remaining()
+            .is_some_and(|remaining| remaining.is_zero())
+        {
+            return Err(RpcServerError::BackendTimeout);
+        }
+        let result = self
+            .advance_attempt(&attempt, request.recipient, context)
+            .await;
         drop(permit);
         attempt.record_result(result.clone());
         result
     }
 
-    fn find_or_admit(
-        &self,
-        key: AttemptKey,
-    ) -> Result<(Arc<Attempt>, Option<OwnedSemaphorePermit>), RpcServerError> {
+    fn find_or_admit(&self, key: AttemptKey) -> Result<Arc<Attempt>, RpcServerError> {
         let mut attempts = self.attempts.lock().map_err(|_| {
             RpcServerError::BackendUnavailable("local airdrop attempt store is poisoned".into())
         })?;
         if let Some(attempt) = attempts.get(&key) {
-            return Ok((attempt.clone(), None));
+            return Ok(attempt.clone());
         }
         if attempts.len() >= self.capacity
             && let Some(terminal_key) = attempts
@@ -196,20 +219,17 @@ impl LocalAirdropRpc {
                 "local airdrop attempt capacity reached".into(),
             ));
         }
-        let permit = self.concurrency.clone().try_acquire_owned().map_err(|_| {
-            RpcServerError::Overloaded("local airdrop concurrency limit reached".into())
-        })?;
         let attempt = Arc::new(Attempt::new());
         attempts.insert(key, attempt.clone());
-        Ok((attempt, Some(permit)))
+        Ok(attempt)
     }
 
     async fn advance_attempt(
         &self,
         attempt: &Attempt,
         recipient: ContractAddress,
+        context: RpcRequestContext,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
-        let context = RpcRequestContext::new(Some(self.timeout));
         if attempt.signed()?.is_none() {
             let tip = self.backend.chain_tip(context).await?;
             let signed = match self.builder.build(
@@ -641,6 +661,8 @@ mod tests {
         status_results: Mutex<VecDeque<Result<TransactionStatus, RpcServerError>>>,
         submissions: Mutex<Vec<Vec<u8>>>,
         submit_delay: Duration,
+        submit_gate: Option<Arc<Semaphore>>,
+        contexts: Mutex<Vec<RpcRequestContext>>,
     }
 
     impl TestBackend {
@@ -650,6 +672,8 @@ mod tests {
                 status_results: Mutex::new(VecDeque::new()),
                 submissions: Mutex::new(Vec::new()),
                 submit_delay: Duration::ZERO,
+                submit_gate: None,
+                contexts: Mutex::new(Vec::new()),
             }
         }
 
@@ -669,7 +693,8 @@ mod tests {
 
     #[async_trait]
     impl AirdropBackend for TestBackend {
-        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+        async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+            self.contexts.lock().unwrap().push(context);
             Ok(ChainTip {
                 height: BlockHeight::from(7),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x77; 32])),
@@ -685,6 +710,9 @@ mod tests {
                 .lock()
                 .expect("bug: submissions lock should be available")
                 .push(signed.bytes.clone());
+            if let Some(gate) = &self.submit_gate {
+                gate.acquire().await.unwrap().forget();
+            }
             if !self.submit_delay.is_zero() {
                 tokio::time::sleep(self.submit_delay).await;
             }
@@ -742,6 +770,179 @@ mod tests {
 
         assert_eq!(first.tx_hash, second.tx_hash);
         assert_ne!(first.bytes, second.bytes);
+    }
+
+    #[tokio::test]
+    async fn registered_http_small_array_waits_without_raising_execution_limit() {
+        use groundhog_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for concurrency in [1, RpcBatchConcurrency::default().get()] {
+            let gate = Arc::new(Semaphore::new(0));
+            let mut backend = TestBackend::new(vec![]);
+            backend.submit_gate = Some(gate.clone());
+            let backend = Arc::new(backend);
+            let builder = Arc::new(CountingBuilder {
+                constructions: AtomicUsize::new(0),
+                bytes: vec![1, 2, 3],
+            });
+            let rpc = test_rpc(backend.clone(), builder.clone(), 64, 16);
+            let middleware =
+                jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
+                    ConcurrentBatchService::new(inner, 100_000, concurrency.try_into().unwrap())
+                });
+            let server = jsonrpsee::server::Server::builder()
+                .set_rpc_middleware(middleware)
+                .build("127.0.0.1:0")
+                .await
+                .unwrap();
+            let address = server.local_addr().unwrap();
+            let handle = server.start(rpc.clone().into_rpc());
+            let body = serde_json::to_string(
+                &(1..=20)
+                    .map(|id| {
+                        serde_json::json!({
+                            "jsonrpc": "2.0", "id": id, "method": "groundhog_requestAirdrop",
+                            "params": [test_request(id, id)]
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            let response = tokio::spawn(async move {
+                let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+                socket.write_all(format!(
+                    "POST / HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                ).as_bytes()).await.unwrap();
+                let mut response = String::new();
+                socket.read_to_string(&mut response).await.unwrap();
+                response
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while backend.submissions.lock().unwrap().len() < concurrency.min(16)
+                    || rpc.admission.available_permits() != 256 - concurrency.min(20)
+                {
+                    tokio::task::yield_now().await;
+                }
+                assert_eq!(
+                    backend.submissions.lock().unwrap().len(),
+                    concurrency.min(16)
+                );
+                assert_eq!(rpc.admission.available_permits(), 256 - concurrency.min(20));
+                gate.add_permits(20);
+                let response = response.await.unwrap();
+                let responses: Vec<serde_json::Value> =
+                    serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+                assert_eq!(responses.len(), 20);
+                for response in responses {
+                    assert!(response.get("error").is_none(), "{response}");
+                    assert_eq!(response["result"]["attemptStatus"], "pending");
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(builder.constructions.load(Ordering::SeqCst), 20);
+            assert_eq!(backend.submissions.lock().unwrap().len(), 20);
+            assert_eq!(rpc.concurrency.available_permits(), 16);
+            assert_eq!(rpc.admission.available_permits(), 256);
+            handle.stop().unwrap();
+            handle.stopped().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_bounds_same_key_waiters_and_recovers_after_cancellation() {
+        let backend = Arc::new(TestBackend::new(vec![]));
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![1],
+        });
+        let rpc = test_rpc(backend.clone(), builder, 64, 1);
+        let execution = rpc.concurrency.acquire().await.unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let rpc = rpc.clone();
+            tasks.spawn(async move { rpc.request_airdrop(test_request(1, 1)).await });
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while rpc.admission.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let error = rpc.request_airdrop(test_request(2, 2)).await.unwrap_err();
+        assert_eq!(
+            error.code(),
+            groundhog_json_rpc_types::error::codes::OVERLOADED
+        );
+        assert_eq!(rpc.attempts.lock().unwrap().len(), 1);
+        assert!(backend.submissions.lock().unwrap().is_empty());
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+        assert_eq!(rpc.admission.available_permits(), 16);
+        drop(execution);
+        rpc.request_airdrop(test_request(1, 1)).await.unwrap();
+        assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deadline_covers_queue_and_submission_and_retains_signed_bytes() {
+        let backend =
+            Arc::new(TestBackend::new(vec![]).with_submit_delay(Duration::from_millis(50)));
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![9, 8, 7],
+        });
+        let mut rpc = test_rpc(backend.clone(), builder.clone(), 1, 1);
+        rpc.timeout = Duration::from_millis(10);
+        let execution = rpc.concurrency.acquire().await.unwrap();
+        assert!(matches!(
+            rpc.request(test_request(1, 1)).await,
+            Err(RpcServerError::BackendTimeout)
+        ));
+        assert_eq!(rpc.admission.available_permits(), 16);
+        assert_eq!(builder.constructions.load(Ordering::SeqCst), 0);
+        drop(execution);
+        // A pristine expired waiter can be evicted, but signed ambiguous work cannot.
+        assert!(matches!(
+            rpc.request(test_request(2, 2)).await,
+            Err(RpcServerError::BackendTimeout)
+        ));
+        assert_eq!(rpc.concurrency.available_permits(), 1);
+        rpc.timeout = Duration::from_secs(1);
+        rpc.request_airdrop(test_request(2, 2)).await.unwrap();
+        assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+        assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![9, 8, 7]; 2]);
+    }
+
+    #[tokio::test]
+    async fn execution_receives_the_deadline_started_before_queueing() {
+        let backend = Arc::new(TestBackend::new(vec![]));
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![1],
+        });
+        let rpc = test_rpc(backend.clone(), builder, 1, 1);
+        let execution = rpc.concurrency.acquire().await.unwrap();
+        let task = tokio::spawn({
+            let rpc = rpc.clone();
+            async move { rpc.request_airdrop(test_request(1, 1)).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while rpc.admission.available_permits() == 16 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let released_at = std::time::Instant::now();
+        drop(execution);
+        task.await.unwrap().unwrap();
+        let contexts = backend.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].deadline().unwrap() <= released_at + rpc.timeout);
+        assert!(contexts[0].started_at() <= released_at);
     }
 
     #[test]
