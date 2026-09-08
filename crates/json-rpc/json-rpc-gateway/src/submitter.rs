@@ -3,7 +3,7 @@
 //! Drives the shared adaptive-batching machinery in `adaptive_batch.rs`
 //! with a tx-submission–specific processor: pack N client tx-byte blobs
 //! into one `ParallelSignedTransactionBatch`, call
-//! `schedgateway_submit_tx_batch_with_outcomes`, and fan out each
+//! `schedgateway_submit_tx_batch`, and fan out each
 //! request-scoped result to its matching waiter.
 //!
 //! See `AdaptiveBatchConfig` for the dispatch policy (no timer,
@@ -42,7 +42,7 @@ pub trait SubmitSink: Send + Sync + 'static {
 }
 
 /// Production sink: forwards to the hogd scheduler's
-/// `schedgateway_submit_tx_batch_with_outcomes` RPC.
+/// `schedgateway_submit_tx_batch` RPC.
 ///
 /// Holds a shared `Arc<RwLock<Option<Client>>>` so that scheduler
 /// reconnections in `GatewayContext` become visible on the next call.
@@ -87,9 +87,8 @@ impl SubmitSink for SchedulerSink {
                 if timeout.is_zero() {
                     return Err(GatewayError::BackendTimeout);
                 }
-                let mut call = tokio::spawn(async move {
-                    c.schedgateway_submit_tx_batch_with_outcomes(&batch).await
-                });
+                let mut call =
+                    tokio::spawn(async move { c.schedgateway_submit_tx_batch(&batch).await });
                 let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
                 let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
                     Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
@@ -101,7 +100,7 @@ impl SubmitSink for SchedulerSink {
                 };
                 self.metrics.observe_backend_request(
                     crate::config::HealthBackend::Scheduler,
-                    "schedgateway_submit_tx_batch_with_outcomes",
+                    "schedgateway_submit_tx_batch",
                     match &result {
                         Ok(Ok(_)) => BackendRequestOutcome::Ok,
                         Ok(Err(_)) => BackendRequestOutcome::Error,

@@ -15,7 +15,6 @@ fn line_column(contents: &str, offset: usize) -> (usize, usize) {
 }
 
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
-pub(crate) use global::load_global_profile;
 pub use global::{
     ExecutorCredentials, LocalRuntimeState, clear_default_key,
     clear_local_runtime_state_if_matches, initialize_global_profiles, load_default_key,
@@ -31,11 +30,13 @@ pub use mutate::{
 pub(crate) use mutate::{prepare_profile_removal, remove_confirmed_profile};
 pub use project::{
     Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding,
-    active_profile_name, find_project_config, load_project_profiles, remove_profile_wallet_address,
-    resolve_default_key, resolve_default_key_for_profile, resolve_profile,
-    resolve_profile_with_overrides, save_profile_contract_alias, save_profile_default_wallet,
-    save_profile_wallet_address, save_profile_wallet_address_with_default,
+    active_profile_name, find_project_config, load_project_profiles, parse_contract_alias,
+    remove_profile_wallet_address, resolve_default_key, resolve_default_key_for_profile,
+    resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
+    save_profile_default_wallet, save_profile_wallet_address,
+    save_profile_wallet_address_with_default,
 };
+pub(crate) use project::{prepare_profile_wallet_removal, remove_prepared_profile_wallet};
 pub use read::{
     CONFIG_GET_JSON_SCHEMA_VERSION, CONFIG_PROFILES_JSON_SCHEMA_VERSION, ConfigField,
     ConfigFieldValue, ConfigGetReport, ConfigProfileRow, ConfigProfileStatus, ConfigProfilesReport,

@@ -91,6 +91,7 @@ pub fn summary_json(out: &str, lowered: &Lowered) -> String {
         "memory_bytes": lowered.memory_bytes,
         "initial_memory_bytes": lowered.initial_memory.len(),
         "initial_memory_start": lowered.initial_memory_start,
+        "warnings": lowered.warnings,
     });
     doc.to_string()
 }

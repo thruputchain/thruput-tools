@@ -25,7 +25,7 @@ fn generate_use_and_remove_key_updates_default_selection() {
     let default_key = groundhog_cli::config::load_default_key().unwrap();
     assert_eq!(default_key.as_deref(), Some("bob"));
 
-    groundhog_cli::keys::remove("bob", "keys.rm", &quiet()).unwrap();
+    groundhog_cli::keys::remove("bob", true, "keys.rm", &quiet()).unwrap();
     let default_key = groundhog_cli::config::load_default_key().unwrap();
     assert!(default_key.is_none());
 
@@ -50,12 +50,37 @@ fn remove_nonexistent_key_fails() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    let result = groundhog_cli::keys::remove("nonexistent", "keys.rm", &quiet());
+    let result = groundhog_cli::keys::remove("nonexistent", true, "keys.rm", &quiet());
     assert!(matches!(
         result,
         Err(groundhog_cli::CliError::KeyNotFound(name)) if name == "nonexistent"
     ));
 
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn key_entry_points_do_not_treat_quiet_or_json_as_authorization() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+
+    for print in [Print::quiet(), Print::new(false, true)] {
+        let export =
+            groundhog_cli::keys::export("alice", false, "keys.export", &print).unwrap_err();
+        assert!(matches!(
+            export,
+            groundhog_cli::CliError::ConfirmationRequired { .. }
+        ));
+        let remove = groundhog_cli::keys::remove("alice", false, "keys.rm", &print).unwrap_err();
+        assert!(matches!(
+            remove,
+            groundhog_cli::CliError::ConfirmationRequired { .. }
+        ));
+    }
+
+    assert_eq!(groundhog_cli::keys::load_key_summaries().unwrap().len(), 1);
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 

@@ -1,19 +1,21 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use groundhog_contract_util::NormalizedMethodSignature;
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::transaction::Transaction;
+use groundhog_xdr::types::NetworkHash;
 use serde_json::json;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
 use crate::artifacts::ArtifactOptions;
-use crate::build::{cargo_metadata_with_artifacts, resolve_package};
+use crate::build::{CargoMetadata, cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
     format_contract_address, spec_string_text,
@@ -55,6 +57,22 @@ pub(crate) struct PreparedCall {
     pub(crate) tx_hex: String,
 }
 
+#[derive(Debug)]
+struct CallPlan {
+    rpc_url: String,
+    profile_name: String,
+    contract_address_hex: String,
+    wallet_address_hex: String,
+    wallet_entrypoint_id: String,
+    wallet_entrypoint_source: &'static str,
+    method: String,
+    resolved: ResolvedCall,
+    calldata: Vec<u8>,
+    transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
 /// Call a method on a deployed contract.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
@@ -62,7 +80,9 @@ pub fn run(
     contract: &str,
     method: &str,
     args: &[String],
+    package: Option<&str>,
     dry_run: bool,
+    force: bool,
     wallet: Option<&str>,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
@@ -70,18 +90,25 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = match wallet {
-        Some(wallet) => prepare_call_with_wallet(
-            contract,
-            method,
-            args,
-            artifacts,
-            Some(wallet),
-            profile,
-            overrides,
-        )?,
-        None => prepare_call(contract, method, args, artifacts, profile, overrides)?,
-    };
+    if !dry_run {
+        let cwd = std::env::current_dir()?;
+        resolve_profile_with_overrides(&cwd, profile, overrides)?;
+        print.require_confirmation_available(force, "call a contract")?;
+    }
+    let plan = prepare_call_plan(
+        contract, method, args, package, artifacts, wallet, profile, overrides,
+    )?;
+    if !dry_run {
+        print.detail("contract", &plan.contract_address_hex);
+        print.detail("method", &plan.method);
+        print.detail("wallet", &plan.wallet_address_hex);
+        print.detail("profile", &plan.profile_name);
+        if !print.confirm(force, "call a contract", "Submit this contract call?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+    let prepared = sign_call_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -317,44 +344,35 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     }
 }
 
-/// Resolve, encode, and sign a call transaction without submitting it.
-pub(crate) fn prepare_call(
+#[allow(clippy::too_many_arguments)]
+fn prepare_call_plan(
     contract: &str,
     method: &str,
     args: &[String],
-    artifacts: &ArtifactOptions,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
-) -> Result<PreparedCall, CliError> {
-    prepare_call_with_wallet(contract, method, args, artifacts, None, profile, overrides)
-}
-
-fn prepare_call_with_wallet(
-    contract: &str,
-    method: &str,
-    args: &[String],
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
-) -> Result<PreparedCall, CliError> {
+) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    prepare_call_with_runtime(
-        contract, method, args, artifacts, wallet, profile, overrides, &rt,
+    prepare_call_plan_with_runtime(
+        contract, method, args, package, artifacts, wallet, profile, overrides, &rt,
     )
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn prepare_call_with_runtime(
+fn prepare_call_plan_with_runtime(
     contract: &str,
     method: &str,
     args: &[String],
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
-) -> Result<PreparedCall, CliError> {
+) -> Result<CallPlan, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
@@ -370,7 +388,7 @@ fn prepare_call_with_runtime(
 
     let sender = resolve_transaction_sender(&resolved_profile, wallet)?;
 
-    let resolved = resolve_call(&cwd, method, artifacts)?;
+    let resolved = resolve_call(&cwd, method, package, artifacts)?;
     let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
     let wallet_address = sender.wallet_address;
@@ -398,16 +416,9 @@ fn prepare_call_with_runtime(
     })
     .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &sender.signer,
-        SignTransactionParams::default(),
-        &wallet_context.network_hash,
-    )
-    .map_err(|e| CliError::Other(e.to_string()))?;
-
-    Ok(PreparedCall {
+    Ok(CallPlan {
         rpc_url: rpc_url.to_owned(),
+        profile_name: resolved_profile.name,
         contract_address_hex,
         wallet_address_hex,
         wallet_entrypoint_id,
@@ -415,6 +426,29 @@ fn prepare_call_with_runtime(
         method: method.to_owned(),
         resolved,
         calldata,
+        transaction: tx,
+        signer: sender.signer,
+        network_hash: wallet_context.network_hash,
+    })
+}
+
+fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
+    let tx_hex = sign_and_encode_transaction_hex(
+        plan.transaction,
+        &plan.signer,
+        SignTransactionParams::default(),
+        &plan.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    Ok(PreparedCall {
+        rpc_url: plan.rpc_url,
+        contract_address_hex: plan.contract_address_hex,
+        wallet_address_hex: plan.wallet_address_hex,
+        wallet_entrypoint_id: plan.wallet_entrypoint_id,
+        wallet_entrypoint_source: plan.wallet_entrypoint_source,
+        method: plan.method,
+        resolved: plan.resolved,
+        calldata: plan.calldata,
         tx_hex,
     })
 }
@@ -470,6 +504,7 @@ fn method_entrypoint_id(interface_name: &str, version: &str, method: &str) -> Co
 pub(crate) fn resolve_call(
     cwd: &Path,
     method: &str,
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
 ) -> Result<ResolvedCall, CliError> {
     if let Some(entrypoint) = explicit_entrypoint_id(method)? {
@@ -478,13 +513,13 @@ pub(crate) fn resolve_call(
             metadata: None,
         });
     }
-    if let Some(metadata) = resolve_spec_method(cwd, method, artifacts)? {
+    if let Some(metadata) = resolve_spec_method(cwd, method, package, artifacts)? {
         return Ok(ResolvedCall {
             entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
             metadata: Some(CallMetadata::Spec(metadata)),
         });
     }
-    match resolve_local_contract_metadata(cwd, method, artifacts)? {
+    match resolve_local_contract_metadata(cwd, method, package, artifacts)? {
         Some(metadata) => Ok(ResolvedCall {
             entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
             metadata: Some(CallMetadata::Local(metadata)),
@@ -501,15 +536,13 @@ pub(crate) fn resolve_call(
 fn resolve_spec_method(
     cwd: &Path,
     method: &str,
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
 ) -> Result<Option<SpecMethodMetadata>, CliError> {
-    let Ok(metadata) = cargo_metadata_with_artifacts(artifacts) else {
+    let Some(selected) = select_package(cwd, package, artifacts)? else {
         return Ok(None);
     };
-    let Ok(pkg_name) = resolve_package(&metadata, None, cwd) else {
-        return Ok(None);
-    };
-    let Some(spec) = load_built_contract_spec(&metadata.target_directory, pkg_name)? else {
+    let Some(spec) = load_built_contract_spec(&selected.target_directory, &selected.name)? else {
         return Ok(None);
     };
 
@@ -583,31 +616,38 @@ fn resolve_spec_method(
 fn resolve_local_contract_metadata(
     cwd: &Path,
     method: &str,
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
 ) -> Result<Option<ContractMetadata>, CliError> {
-    let Some(config_path) = find_project_config(cwd) else {
+    // Only a project has local sources worth scanning; outside one the caller
+    // reports that the method is unresolvable instead.
+    if find_project_config(cwd).is_none() {
         return Ok(None);
-    };
-    let Some(project_root) = config_path.parent() else {
-        return Ok(None);
-    };
-    let interface_specs = load_project_registered_interfaces(project_root, artifacts)?;
-    resolve_local_contract_metadata_in_project(project_root, method, interface_specs.as_deref())
+    }
+    // Selected from the invocation directory, matching the spec path above, so
+    // one invocation cannot resolve two different packages.  A workspace root
+    // is contained by no member, which is what leaves `-p` to settle it.
+    let metadata = cargo_metadata_with_artifacts(artifacts)?;
+    let pkg_name = resolve_package(&metadata, package, cwd)?;
+    let selected = package_context(&metadata, pkg_name);
+    let interface_specs =
+        load_built_registered_interfaces(&selected.target_directory, &selected.name)?;
+    resolve_local_contract_metadata_in_package(&selected, method, interface_specs.as_deref())
 }
 
-fn resolve_local_contract_metadata_in_project(
-    project_root: &Path,
+fn resolve_local_contract_metadata_in_package(
+    selected: &SelectedPackage,
     method: &str,
     interface_specs: Option<&[InterfaceSpec]>,
 ) -> Result<Option<ContractMetadata>, CliError> {
-    let package_version = load_package_version(project_root)?;
-    let src_root = project_root.join("src");
+    let package_version = selected.version.as_str();
+    let src_root = selected.root.join("src");
     if !src_root.exists() {
         return Ok(None);
     }
 
     let mut candidates = Vec::new();
-    collect_contract_metadata(&src_root, method, &package_version, &mut candidates)?;
+    collect_contract_metadata(&src_root, method, package_version, &mut candidates)?;
     candidates = filter_candidates_by_interfaces(candidates, interface_specs);
 
     if candidates.is_empty() {
@@ -641,13 +681,59 @@ fn resolve_local_contract_metadata_in_project(
     )))
 }
 
-fn load_project_registered_interfaces(
-    project_root: &Path,
+/// Workspace package whose sources and build output describe the contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedPackage {
+    /// Package directory, used as the root for local source scanning.
+    root: PathBuf,
+    name: String,
+    /// Fallback interface version for contracts that declare none.
+    version: String,
+    /// Cargo target directory holding the built contract spec sidecar.
+    target_directory: PathBuf,
+}
+
+/// Select the package that backs metadata-driven method resolution.
+///
+/// An explicit `-p` name is validated against workspace members and any
+/// failure is reported.  Without one the package is inferred from `cwd`, and a
+/// directory cargo cannot place in a package yields `Ok(None)` so the caller
+/// falls through to the remaining resolution paths.
+fn select_package(
+    cwd: &Path,
+    package: Option<&str>,
     artifacts: &ArtifactOptions,
-) -> Result<Option<Vec<crate::contract_spec::InterfaceSpec>>, CliError> {
-    let metadata = cargo_metadata_with_artifacts(artifacts)?;
-    let pkg_name = resolve_package(&metadata, None, project_root)?;
-    load_built_registered_interfaces(&metadata.target_directory, pkg_name)
+) -> Result<Option<SelectedPackage>, CliError> {
+    let metadata = match cargo_metadata_with_artifacts(artifacts) {
+        Ok(metadata) => metadata,
+        Err(err) if package.is_some() => return Err(err),
+        Err(_) => return Ok(None),
+    };
+    let pkg_name = match resolve_package(&metadata, package, cwd) {
+        Ok(name) => name,
+        Err(err) if package.is_some() => return Err(err),
+        Err(_) => return Ok(None),
+    };
+    Ok(Some(package_context(&metadata, pkg_name)))
+}
+
+/// Pair a resolved package name with the paths and version cargo reported for
+/// it.  Falls back to the workspace root for a package cargo listed without a
+/// manifest directory.
+fn package_context(metadata: &CargoMetadata, pkg_name: &str) -> SelectedPackage {
+    let package = metadata
+        .packages
+        .iter()
+        .find(|candidate| candidate.name == pkg_name);
+    let root = package
+        .and_then(|candidate| candidate.manifest_path.parent())
+        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
+    SelectedPackage {
+        root,
+        name: pkg_name.to_owned(),
+        version: package.map_or_else(String::new, |candidate| candidate.version.clone()),
+        target_directory: metadata.target_directory.clone(),
+    }
 }
 
 fn filter_candidates_by_interfaces(
@@ -668,19 +754,6 @@ fn filter_candidates_by_interfaces(
         })
     });
     candidates
-}
-
-fn load_package_version(project_root: &Path) -> Result<String, CliError> {
-    let cargo_toml = project_root.join("Cargo.toml");
-    let contents = std::fs::read_to_string(&cargo_toml)?;
-    let value: toml::Value = toml::from_str(&contents)
-        .map_err(|e| CliError::Other(format!("invalid Cargo.toml: {e}")))?;
-    value
-        .get("package")
-        .and_then(|package| package.get("version"))
-        .and_then(toml::Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| CliError::Other("Cargo.toml is missing package.version".into()))
 }
 
 fn collect_contract_metadata(
@@ -852,7 +925,7 @@ fn parse_method_metadata(body: &str, method: &str) -> Option<MethodMetadata> {
         {
             continue;
         }
-        let (_, ty) = arg.rsplit_once(':')?;
+        let (_, ty) = arg.split_once(':')?;
         arg_types.push(ty.trim().to_string());
     }
 
@@ -949,9 +1022,10 @@ mod tests {
 
     use super::{
         ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
-        filter_candidates_by_interfaces, format_entrypoint_id, load_project_registered_interfaces,
-        method_entrypoint_id, parse_contract_attr_value, resolve_call, resolve_spec_method,
-        selector_json, selector_summary,
+        filter_candidates_by_interfaces, format_entrypoint_id, method_entrypoint_id,
+        parse_contract_attr_value, parse_method_metadata, resolve_call,
+        resolve_local_contract_metadata, resolve_spec_method, select_package, selector_json,
+        selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -960,7 +1034,7 @@ mod tests {
         decode_return as decode_return_value, decode_spec_value, decode_spec_value_from_reader,
         encode_args as encode_calldata, normalize_type_name, parse_contract_address,
     };
-    use crate::contract_spec::InterfaceSpec;
+    use crate::contract_spec::{InterfaceSpec, load_built_registered_interfaces};
     use crate::tx_utils::summarize_exec_status;
     use groundhog_contract_spec::{
         ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec,
@@ -1005,6 +1079,18 @@ mod tests {
         assert_eq!(metadata[0].version, "0.1.0");
         assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
         assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
+    }
+
+    #[test]
+    fn extracts_qualified_native_256_type_names() {
+        let metadata = parse_method_metadata(
+            "fn convert(value: sdk::U256) -> groundhog_sdk::I256 { todo!() }",
+            "convert",
+        )
+        .expect("bug: qualified method signature should parse");
+
+        assert_eq!(metadata.arg_types, vec!["sdk::U256"]);
+        assert_eq!(metadata.return_type.as_deref(), Some("groundhog_sdk::I256"));
     }
 
     #[test]
@@ -1267,6 +1353,38 @@ mod tests {
     }
 
     #[test]
+    fn encodes_and_decodes_local_native_256_values() {
+        for (ty, value) in [
+            ("U256", sdk::U256::MAX.to_string()),
+            ("sdk::U256", sdk::U256::MAX.to_string()),
+            ("groundhog_sdk::U256", sdk::U256::MAX.to_string()),
+            ("I256", sdk::I256::MIN.to_string()),
+            ("sdk::I256", sdk::I256::MIN.to_string()),
+            ("groundhog_sdk::I256", sdk::I256::MIN.to_string()),
+        ] {
+            let metadata = ContractMetadata {
+                interface_name: "Counter".into(),
+                version: "0.1.0".into(),
+                source: Path::new("/tmp/implementation.rs").to_path_buf(),
+                method: MethodMetadata {
+                    arg_types: vec![ty.into()],
+                    return_type: Some(ty.into()),
+                },
+            };
+
+            let encoded = encode_calldata(
+                std::slice::from_ref(&value),
+                Some(&CallMetadata::Local(metadata.clone())),
+            )
+            .expect("bug: local native 256-bit calldata should encode");
+            let decoded = decode_return_value(&encoded, Some(&CallMetadata::Local(metadata)))
+                .expect("bug: local native 256-bit return should decode");
+
+            assert_eq!(decoded, json!(value));
+        }
+    }
+
+    #[test]
     fn reports_unsupported_local_type_name_in_encode_error() {
         let metadata = ContractMetadata {
             interface_name: "Counter".into(),
@@ -1450,6 +1568,50 @@ mod tests {
                 .expect("bug: embedded spec i128 return should decode"),
             json!(i128_value)
         );
+
+        let u256_value = sdk::U256::MAX.to_string();
+        let i256_value = sdk::I256::MIN.to_string();
+        let metadata = sample_single_arg_spec_metadata(ContractType::Tuple {
+            tuple: vec![ContractType::U256, ContractType::I256]
+                .try_into()
+                .unwrap(),
+        });
+        let argument = json!([u256_value, i256_value]).to_string();
+        let bytes = encode_calldata(&[argument], Some(&CallMetadata::Spec(metadata.clone())))
+            .expect("bug: embedded spec native 256-bit integers should encode");
+
+        assert_eq!(
+            decode_spec_arguments(&metadata, &bytes),
+            vec![json!([
+                sdk::U256::MAX.to_string(),
+                sdk::I256::MIN.to_string()
+            ])]
+        );
+    }
+
+    #[test]
+    fn typed_native_256_arguments_enforce_ranges() {
+        const U256_OVERFLOW: &str =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+        const I256_OVERFLOW: &str =
+            "57896044618658097711785492504343953926634992332820282019728792003956564819968";
+        const I256_UNDERFLOW: &str =
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819969";
+
+        for (ty, value, expected) in [
+            (ContractType::U256, U256_OVERFLOW, "U256"),
+            (ContractType::I256, I256_OVERFLOW, "I256"),
+            (ContractType::I256, I256_UNDERFLOW, "I256"),
+        ] {
+            let error = encode_calldata(
+                &[value.to_owned()],
+                Some(&CallMetadata::Spec(sample_single_arg_spec_metadata(ty))),
+            )
+            .expect_err("bug: out-of-range native 256-bit argument must fail");
+
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(error.to_string().contains("does not fit"), "{error}");
+        }
     }
 
     #[test]
@@ -1664,7 +1826,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn load_project_registered_interfaces_uses_explicit_target_dir() {
+    fn select_package_reads_the_explicit_target_dir() {
         let project = create_temp_project("demo-contract");
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
@@ -1681,9 +1843,13 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let interfaces = load_project_registered_interfaces(&project_root, &artifacts)
-            .expect("bug: registered interface lookup should succeed")
-            .expect("bug: registered interfaces should resolve from explicit target dir");
+        let selected = select_package(&project_root, None, &artifacts)
+            .expect("bug: package selection should succeed")
+            .expect("bug: the project package should resolve");
+        let interfaces =
+            load_built_registered_interfaces(&selected.target_directory, &selected.name)
+                .expect("bug: registered interface lookup should succeed")
+                .expect("bug: registered interfaces should resolve from explicit target dir");
 
         assert_eq!(
             interfaces,
@@ -1714,7 +1880,7 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let err = resolve_spec_method(&project_root, "get", &artifacts)
+        let err = resolve_spec_method(&project_root, "get", None, &artifacts)
             .expect_err("bug: ambiguous sidecar interface matches should fail");
         assert_eq!(
             err.to_string(),
@@ -1742,7 +1908,7 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let resolved = resolve_call(&project_root, "mint", &artifacts)
+        let resolved = resolve_call(&project_root, "mint", None, &artifacts)
             .expect("bug: mint should resolve from the rv32 spec sidecar");
         let receiver_hex = format!("0x{}", "04".repeat(32));
         let encoded = encode_calldata(
@@ -1760,12 +1926,96 @@ mod tests {
             )
         );
 
-        let total_supply = resolve_call(&project_root, "total_supply", &artifacts)
+        let total_supply = resolve_call(&project_root, "total_supply", None, &artifacts)
             .expect("bug: total_supply should resolve from the rv32 spec sidecar");
         let return_data = xdrs::cxs::encode(&0_u128).expect("bug: u128 should encode");
         assert_eq!(
             decode_return_value(&return_data, total_supply.metadata.as_ref()),
             Some(json!("0")),
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn workspace_package_selects_its_own_sources_and_inherited_version() {
+        let workspace = create_temp_workspace();
+        let workspace_root = std::fs::canonicalize(workspace.path())
+            .expect("bug: workspace path should canonicalize");
+
+        let _cwd = CurrentDirGuard::enter(&workspace_root);
+        let metadata = resolve_local_contract_metadata(
+            &workspace_root,
+            "mint",
+            Some("erc20"),
+            &ArtifactOptions::default(),
+        )
+        .expect("bug: an explicit package should resolve at the workspace root")
+        .expect("bug: mint should resolve from the erc20 member sources");
+
+        assert_eq!(metadata.interface_name, "Erc20");
+        assert_eq!(metadata.version, "9.9.9");
+        assert_eq!(metadata.source, workspace_root.join("erc20/src/lib.rs"));
+    }
+
+    #[test]
+    #[serial]
+    fn member_directory_infers_its_own_package_without_a_flag() {
+        let workspace = create_temp_workspace();
+        let workspace_root = std::fs::canonicalize(workspace.path())
+            .expect("bug: workspace path should canonicalize");
+        let member_root = workspace_root.join("erc20");
+
+        let _cwd = CurrentDirGuard::enter(&member_root);
+        let metadata = resolve_local_contract_metadata(
+            &member_root,
+            "mint",
+            None,
+            &ArtifactOptions::default(),
+        )
+        .expect("bug: a member directory should select its own package")
+        .expect("bug: mint should resolve from the surrounding member");
+
+        assert_eq!(metadata.interface_name, "Erc20");
+        assert_eq!(metadata.source, member_root.join("src/lib.rs"));
+    }
+
+    #[test]
+    #[serial]
+    fn workspace_root_without_a_package_asks_for_one() {
+        let workspace = create_temp_workspace();
+        let workspace_root = std::fs::canonicalize(workspace.path())
+            .expect("bug: workspace path should canonicalize");
+
+        let _cwd = CurrentDirGuard::enter(&workspace_root);
+        let err = resolve_local_contract_metadata(
+            &workspace_root,
+            "mint",
+            None,
+            &ArtifactOptions::default(),
+        )
+        .expect_err("bug: a workspace root should not resolve a package on its own");
+
+        assert!(matches!(err, CliError::PackageRequired), "got {err:?}");
+    }
+
+    #[test]
+    #[serial]
+    fn unknown_package_is_reported_instead_of_being_skipped() {
+        let workspace = create_temp_workspace();
+        let workspace_root = std::fs::canonicalize(workspace.path())
+            .expect("bug: workspace path should canonicalize");
+
+        let _cwd = CurrentDirGuard::enter(&workspace_root);
+        let err = select_package(
+            &workspace_root,
+            Some("not-a-member"),
+            &ArtifactOptions::default(),
+        )
+        .expect_err("bug: an unknown package name should fail");
+
+        assert!(
+            matches!(&err, CliError::PackageNotFound(name) if name == "not-a-member"),
+            "got {err:?}"
         );
     }
 
@@ -1786,6 +2036,15 @@ mod tests {
         assert_eq!(normalize_type_name("&strange"), "strange");
     }
 
+    #[test]
+    fn normalize_type_name_recognizes_qualified_native_256_types() {
+        assert_eq!(normalize_type_name("sdk::U256"), "U256");
+        assert_eq!(normalize_type_name("&sdk::I256"), "I256");
+        assert_eq!(normalize_type_name("groundhog_sdk::U256"), "U256");
+        assert_eq!(normalize_type_name("&'a groundhog_sdk::I256"), "I256");
+        assert_eq!(normalize_type_name("other::U256"), "other::U256");
+    }
+
     fn create_temp_project(package_name: &str) -> TempDir {
         let project = tempfile::tempdir().expect("bug: temp dir should be created");
         write_project_manifest(project.path(), package_name);
@@ -1794,6 +2053,43 @@ mod tests {
         std::fs::write(project.path().join("src/lib.rs"), "pub fn demo() {}\n")
             .expect("bug: lib.rs should be written");
         project
+    }
+
+    /// Two-member workspace with the project config at the root, so no member
+    /// contains it and `-p` is the only way to select one.  Members inherit
+    /// their version from the workspace.
+    fn create_temp_workspace() -> TempDir {
+        let workspace = tempfile::tempdir().expect("bug: temp dir should be created");
+        std::fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"3\"\nmembers = [\"erc20\", \"counter\"]\n\n             [workspace.package]\nversion = \"9.9.9\"\n",
+        )
+        .expect("bug: workspace manifest should be written");
+        std::fs::write(workspace.path().join("groundhog.toml"), "")
+            .expect("bug: groundhog.toml should be written");
+
+        for (member, interface, method) in [
+            ("erc20", "Erc20", "mint"),
+            ("counter", "Counter", "increment"),
+        ] {
+            let src = workspace.path().join(member).join("src");
+            std::fs::create_dir_all(&src).expect("bug: member src dir should be created");
+            std::fs::write(
+                workspace.path().join(member).join("Cargo.toml"),
+                format!(
+                    "[package]\nname = \"{member}\"\nversion.workspace = true\n                     edition = \"2024\"\n"
+                ),
+            )
+            .expect("bug: member manifest should be written");
+            std::fs::write(
+                src.join("lib.rs"),
+                format!(
+                    "#[contract(throws = Error)]\nimpl {interface} {{\n                         pub fn {method}(&self, amount: u64) -> u64 {{ amount }}\n}}\n"
+                ),
+            )
+            .expect("bug: member sources should be written");
+        }
+        workspace
     }
 
     fn write_project_manifest(project_root: &Path, package_name: &str) {

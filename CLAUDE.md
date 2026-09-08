@@ -4,6 +4,27 @@ Agent reference for the Groundhog off-chain tooling workspace. Keep this file
 actionable: architecture boundaries, commands, style rules, and planning-doc
 policy.
 
+## Agent Guidance
+
+For Groundhog programming-model or developer-workflow work, load the guidance
+bundled with this checkout before relying on prose elsewhere:
+
+```bash
+cargo run -p groundhog-cli -- --skill
+```
+
+`groundhog --skill` is the public first-contact command. Its only editable
+source is `crates/tools/cli/assets/groundhog/SKILL.md`; keep `README.md` and
+agent-instruction files as concise pointers rather than parallel copies.
+
+Review the skill on every workspace or CLI version bump, and whenever the CLI,
+scaffold, SDK, generated TypeScript bindings, TypeScript client, wallets, or
+public RPC workflow changes. Check its claims against current public APIs,
+released examples, and the versions a user can install. Dated design documents
+are historical context when they conflict with those surfaces. Run
+`cargo test -p groundhog-cli skill` after updating it and confirm the asset is
+present with `cargo package -p groundhog-cli --list --allow-dirty`.
+
 ## Architecture
 
 Workspace crates are grouped by boundary:
@@ -67,7 +88,7 @@ simulator quickstart and result-artifact contract.
 
 ### Gateway Data Flows
 
-- **Tx submission** → hogd `SchedGateway` (`schedgateway_submit_tx_batch_with_outcomes`) via x23
+- **Tx submission** → hogd `SchedGateway` (`schedgateway_submit_tx_batch`) via x23
 - **Receipts/events** → hogd indexer (`get_transaction_info`, `get_contract_events`) via x23
 - **Chain state** → hogd `SchedGateway` (`schedgateway_get_tip`, `schedgateway_lookup_tx`, `schedgateway_pending_tx_count`) via x23
 - **Block data** → coordinator storage (TBD — see docs/gateway/system-design.md)

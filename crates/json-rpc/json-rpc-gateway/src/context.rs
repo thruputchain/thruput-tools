@@ -175,7 +175,7 @@ pub struct GatewayContext {
 
     /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
     /// incoming client submissions and packs them into
-    /// `schedgateway_submit_tx_batch_with_outcomes` RPCs to amortize
+    /// `schedgateway_submit_tx_batch` RPCs to amortize
     /// per-call overhead at high load.
     pub batch_submitter: BatchSubmitter,
 
@@ -1015,13 +1015,6 @@ mod tests {
         }
 
         async fn schedgateway_submit_tx_batch(
-            &self,
-            _batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            panic!("bug: intro test should not submit")
-        }
-
-        async fn schedgateway_submit_tx_batch_with_outcomes(
             &self,
             _batch: ParallelSignedTransactionBatch,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {

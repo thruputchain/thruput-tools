@@ -971,13 +971,6 @@ mod tests {
 
         async fn schedgateway_submit_tx_batch(
             &self,
-            _batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            Ok(())
-        }
-
-        async fn schedgateway_submit_tx_batch_with_outcomes(
-            &self,
             batch: ParallelSignedTransactionBatch,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
             Ok(VecM(vec![

@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
+use super::atomic::{
+    ConfigFileKind, insert_preserving_decor, transact_document, transact_document_with_peer,
+};
 use super::dirs::config_file_path;
 use super::global::{LocalRuntimeState, load_default_key};
 use super::read::{
@@ -166,6 +168,21 @@ pub fn load_project_profiles(
 /// Creates `groundhog.toml` if it does not already exist.
 /// Uses `toml_edit` for in-place edits that preserve user
 /// comments and formatting.
+/// Validate a `--alias` value while parsing arguments.
+///
+/// [`save_profile_contract_alias`] rejects an empty alias, but it only runs
+/// after a deploy has been submitted: by then the contract is on chain and
+/// only the local bookkeeping can fail. Rejecting it in the argument parser
+/// fails before the transaction is spent. The value is trimmed so that what
+/// the CLI reports matches the key actually written.
+pub fn parse_contract_alias(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("contract alias cannot be empty".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 pub fn save_profile_contract_alias(
     project_root: &Path,
     explicit_profile: Option<&str>,
@@ -335,6 +352,176 @@ pub fn remove_profile_wallet_address(
         Ok(())
     })?;
     Ok(path)
+}
+
+/// A wallet removal bound to the config snapshot shown before confirmation.
+#[derive(Debug)]
+pub(crate) struct PreparedWalletRemoval {
+    path: PathBuf,
+    profile_name: String,
+    wallet_name: String,
+    expected_document: String,
+    peer: Option<WalletRemovalPeer>,
+    profile: ProjectProfile,
+    inherited_profile: Option<ProjectProfile>,
+}
+
+#[derive(Debug)]
+struct WalletRemovalPeer {
+    path: PathBuf,
+    expected_document: String,
+}
+
+impl PreparedWalletRemoval {
+    pub(crate) fn profile_name(&self) -> &str {
+        &self.profile_name
+    }
+
+    pub(crate) fn profile(&self) -> &ProjectProfile {
+        &self.profile
+    }
+
+    pub(crate) fn inherited_profile(&self) -> Option<&ProjectProfile> {
+        self.inherited_profile.as_ref()
+    }
+
+    pub(crate) fn writes_project_profile(&self) -> bool {
+        self.peer.is_some()
+    }
+}
+
+pub(crate) fn prepare_profile_wallet_removal(
+    project_root: &Path,
+    explicit_profile: Option<&str>,
+    name: &str,
+) -> Result<PreparedWalletRemoval, CliError> {
+    let wallet_name = name.trim();
+    if wallet_name.is_empty() {
+        return Err(CliError::EmptyWalletName);
+    }
+    let profile_name = profile_name_for_write(project_root, explicit_profile)?;
+    let path = profile_write_path(project_root)?;
+    let document = super::atomic::load_document(&path)?;
+    let profile = profile_from_document(&document, &profile_name)?.ok_or_else(|| {
+        CliError::SavedWalletNotFound {
+            wallet_name: wallet_name.to_owned(),
+            profile: profile_name.clone(),
+        }
+    })?;
+    if !profile.wallets.contains_key(wallet_name) {
+        return Err(CliError::SavedWalletNotFound {
+            wallet_name: wallet_name.to_owned(),
+            profile: profile_name,
+        });
+    }
+    let (peer, inherited_profile) = if path == config_file_path()? {
+        (None, None)
+    } else {
+        let peer_path = config_file_path()?;
+        let peer_document = super::atomic::load_document(&peer_path)?;
+        let inherited_profile = profile_from_document(&peer_document, &profile_name)?;
+        (
+            Some(WalletRemovalPeer {
+                path: peer_path,
+                expected_document: peer_document.to_string(),
+            }),
+            inherited_profile,
+        )
+    };
+    Ok(PreparedWalletRemoval {
+        path,
+        profile_name,
+        wallet_name: wallet_name.to_owned(),
+        expected_document: document.to_string(),
+        peer,
+        profile,
+        inherited_profile,
+    })
+}
+
+pub(crate) fn remove_prepared_profile_wallet(
+    prepared: PreparedWalletRemoval,
+) -> Result<PathBuf, CliError> {
+    let PreparedWalletRemoval {
+        path,
+        profile_name,
+        wallet_name,
+        expected_document,
+        peer,
+        ..
+    } = prepared;
+    let remove = |document: &mut toml_edit::DocumentMut| {
+        if document.to_string() != expected_document {
+            return Err(CliError::ConfigChangedDuringConfirmation { path: path.clone() });
+        }
+        let profile = document
+            .get_mut("profile")
+            .and_then(toml_edit::Item::as_table_mut)
+            .and_then(|profiles| profiles.get_mut(&profile_name))
+            .and_then(toml_edit::Item::as_table_mut)
+            .ok_or_else(|| CliError::SavedWalletNotFound {
+                wallet_name: wallet_name.clone(),
+                profile: profile_name.clone(),
+            })?;
+        let wallets = profile
+            .get_mut("wallets")
+            .and_then(toml_edit::Item::as_table_mut)
+            .ok_or_else(|| CliError::SavedWalletNotFound {
+                wallet_name: wallet_name.clone(),
+                profile: profile_name.clone(),
+            })?;
+        if wallets.remove(&wallet_name).is_none() {
+            return Err(CliError::SavedWalletNotFound {
+                wallet_name: wallet_name.clone(),
+                profile: profile_name.clone(),
+            });
+        }
+        if profile
+            .get("default_wallet")
+            .and_then(toml_edit::Item::as_str)
+            == Some(wallet_name.as_str())
+        {
+            profile.remove("default_wallet");
+        }
+        Ok(())
+    };
+    if let Some(peer) = peer {
+        transact_document_with_peer(
+            &path,
+            ConfigFileKind::Project,
+            &peer.path,
+            |document, peer_document| {
+                if peer_document.to_string() != peer.expected_document {
+                    return Err(CliError::ConfigChangedDuringConfirmation {
+                        path: peer.path.clone(),
+                    });
+                }
+                remove(document)
+            },
+            |_, _| Ok(()),
+        )?;
+    } else {
+        transact_profile_document(&path, remove)?;
+    }
+    Ok(path)
+}
+
+fn profile_from_document(
+    document: &toml_edit::DocumentMut,
+    profile_name: &str,
+) -> Result<Option<ProjectProfile>, CliError> {
+    let root: toml::Table = toml::from_str(&document.to_string())
+        .map_err(|error| CliError::Other(error.to_string()))?;
+    root.get("profile")
+        .and_then(toml::Value::as_table)
+        .and_then(|profiles| profiles.get(profile_name))
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()
+        .map_err(|error| CliError::ProfileConfigInvalid {
+            profile: profile_name.to_owned(),
+            message: error.to_string(),
+        })
 }
 
 /// Persist the default wallet under the selected profile.
@@ -540,4 +727,75 @@ fn is_valid_address(addr: &str) -> bool {
         return false;
     };
     hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        PreparedWalletRemoval, ProjectProfile, WalletRemovalPeer, remove_prepared_profile_wallet,
+    };
+
+    #[test]
+    fn confirmed_wallet_removal_rejects_changed_config() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("groundhog.toml");
+        let original = "[profile.local.wallets.alice]\naddress = '0x00'\n";
+        std::fs::write(&path, original).unwrap();
+        let prepared = PreparedWalletRemoval {
+            path: path.clone(),
+            profile_name: "local".into(),
+            wallet_name: "alice".into(),
+            expected_document: original
+                .parse::<toml_edit::DocumentMut>()
+                .unwrap()
+                .to_string(),
+            peer: None,
+            profile: ProjectProfile::default(),
+            inherited_profile: None,
+        };
+        let changed = "[profile.local.wallets.alice]\naddress = '0x01'\n";
+        std::fs::write(&path, changed).unwrap();
+
+        let error = remove_prepared_profile_wallet(prepared).unwrap_err();
+
+        assert_eq!(error.code(), "config_changed_during_confirmation");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), changed);
+    }
+
+    #[test]
+    fn confirmed_wallet_removal_rejects_changed_inherited_config() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("groundhog.toml");
+        let peer_path = temp.path().join("config.toml");
+        let original = "[profile.local.wallets.alice]\naddress = '0x00'\n";
+        let inherited = "[profile.local]\ndefault_wallet = 'global'\n";
+        std::fs::write(&path, original).unwrap();
+        std::fs::write(&peer_path, inherited).unwrap();
+        let prepared = PreparedWalletRemoval {
+            path: path.clone(),
+            profile_name: "local".into(),
+            wallet_name: "alice".into(),
+            expected_document: original
+                .parse::<toml_edit::DocumentMut>()
+                .unwrap()
+                .to_string(),
+            peer: Some(WalletRemovalPeer {
+                path: peer_path.clone(),
+                expected_document: inherited
+                    .parse::<toml_edit::DocumentMut>()
+                    .unwrap()
+                    .to_string(),
+            }),
+            profile: ProjectProfile::default(),
+            inherited_profile: Some(ProjectProfile::default()),
+        };
+        let changed = "[profile.local]\ndefault_wallet = 'other'\n";
+        std::fs::write(&peer_path, changed).unwrap();
+
+        let error = remove_prepared_profile_wallet(prepared).unwrap_err();
+
+        assert_eq!(error.code(), "config_changed_during_confirmation");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(peer_path).unwrap(), changed);
+    }
 }

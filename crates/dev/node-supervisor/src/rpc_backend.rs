@@ -17,18 +17,16 @@ use groundhog_json_rpc_types::{
     protocol_token::protocol_from_text,
 };
 use groundhog_scheduler::{
-    DbTip, ExpectedDBTip, ParallelBatch, RPCError, SchedGatewayIntroOutcome,
-    SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
-    parallel::ParallelSignedTransactionBatch, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    DbTip, ExpectedDBTip, RPCError, SchedGatewayIntroOutcome,
+    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
     sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use groundhog_x23_transport::{connect_with_config, hogd_large_message_config};
 use std::{fmt, net::SocketAddr};
-use xdr_common::{BytesM, VecM};
 
 use crate::{
     NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::require_dev_genesis,
-    request_deadline::within_request_deadline,
+    request_deadline::within_request_deadline, submit_batcher::SubmitBatcher,
 };
 
 const SCHEDULER_COORD_POOL_SIZE: usize = 1;
@@ -41,7 +39,7 @@ const SCHEDULER_GATEWAY_POOL_SIZE: usize = 2;
 pub(crate) struct HogdDevSchedulerBackend {
     coordinator: SchedulerCoord_SchedulerCoord1_Client,
     gateway: SchedGateway_SchedGateway1_Client,
-    block_driver: Option<BlockDriverTrigger>,
+    submitter: SubmitBatcher,
 }
 
 impl fmt::Debug for HogdDevSchedulerBackend {
@@ -101,10 +99,11 @@ impl HogdDevSchedulerBackend {
                 expected_protocol: expected_protocol.map(str::to_string),
             });
         }
+        let submitter = SubmitBatcher::spawn(gateway.clone());
         Ok(Self {
             coordinator,
             gateway,
-            block_driver: None,
+            submitter,
         })
     }
 
@@ -154,8 +153,8 @@ impl HogdDevSchedulerBackend {
     }
 
     /// Return a copy that wakes the local block driver after submit RPC success.
-    pub(crate) fn with_block_driver(mut self, block_driver: BlockDriverTrigger) -> Self {
-        self.block_driver = Some(block_driver);
+    pub(crate) fn with_block_driver(self, block_driver: BlockDriverTrigger) -> Self {
+        self.submitter.set_block_driver(block_driver);
         self
     }
 }
@@ -204,20 +203,7 @@ impl SubmitPlane for HogdDevSchedulerBackend {
         context: RpcRequestContext,
         tx: ValidatedTransaction,
     ) -> Result<(), RpcServerError> {
-        within_request_deadline(context, async {
-            let batch = single_transaction_batch(&tx.bytes)?;
-            let outcomes = self
-                .gateway
-                .schedgateway_submit_tx_batch_with_outcomes(&batch)
-                .await
-                .map_err(|error| classify_submit_rpc_error(&error))?;
-            result_for_single_submit(outcomes)?;
-            if let Some(block_driver) = &self.block_driver {
-                block_driver.trigger_after_submit();
-            }
-            Ok(())
-        })
-        .await
+        self.submitter.submit(context, tx.bytes).await
     }
 }
 
@@ -283,60 +269,6 @@ impl ChainPlane for HogdDevSchedulerBackend {
     }
 }
 
-fn single_transaction_batch(
-    tx_bytes: &[u8],
-) -> Result<ParallelSignedTransactionBatch, RpcServerError> {
-    let tx_len = u32::try_from(tx_bytes.len())
-        .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
-    Ok(ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(vec![1]),
-        segment_bytes: VecM(vec![tx_len]),
-        xdr: BytesM(tx_bytes.to_vec()),
-    }))
-}
-
-fn classify_submit_rpc_error(error: &rpc_driver::RpcError) -> RpcServerError {
-    // An x23 failure carries no request-scoped admission outcome. The caller
-    // must treat admission as indeterminate and must not assume rejection.
-    RpcServerError::BackendUnavailable(format!(
-        "hogd-dev scheduler gateway submit outcome is indeterminate: {error}"
-    ))
-}
-
-fn result_for_single_submit(
-    outcomes: SchedGatewaySubmitOutcomeBatch,
-) -> Result<(), RpcServerError> {
-    let mut outcomes = outcomes.0.into_iter();
-    let Some(outcome) = outcomes.next() else {
-        return Err(RpcServerError::BackendUnavailable(
-            "scheduler gateway returned no admission outcome for one transaction".into(),
-        ));
-    };
-    if outcomes.next().is_some() {
-        return Err(RpcServerError::BackendUnavailable(
-            "scheduler gateway returned multiple admission outcomes for one transaction".into(),
-        ));
-    }
-    match outcome {
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected => {
-            Err(RpcServerError::TxRejected(
-                "scheduler rejected authentication for the signed transaction".into(),
-            ))
-        }
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(RpcServerError::Overloaded(
-            "scheduler could not admit the transaction; retry with backoff".into(),
-        )),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => Err(
-            RpcServerError::BackendUnavailable("scheduler admission dependency failed".into()),
-        ),
-        unknown => Err(RpcServerError::BackendUnavailable(format!(
-            "scheduler returned unknown submission outcome {}",
-            unknown.0
-        ))),
-    }
-}
-
 fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServerError> {
     let block_hash = consensus_value_hash(&value).map_err(|error| {
         RpcServerError::BackendUnavailable(format!(
@@ -347,66 +279,4 @@ fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServ
         height: value.proposal_header.block_height.clone(),
         block_hash,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn single_transaction_batch_packs_one_segment() {
-        let tx_bytes = vec![0xaa, 0xbb, 0xcc];
-        let batch = single_transaction_batch(&tx_bytes).expect("bug: test tx should pack");
-
-        assert_eq!(batch.segment_tokens.0, vec![1]);
-        assert_eq!(batch.segment_bytes.0, vec![3]);
-        assert_eq!(batch.xdr.0, tx_bytes);
-    }
-
-    #[test]
-    fn single_submit_requires_exactly_one_outcome() {
-        assert!(matches!(
-            result_for_single_submit(VecM(vec![])),
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-        assert!(matches!(
-            result_for_single_submit(VecM(vec![
-                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
-                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
-            ])),
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-    }
-
-    #[test]
-    fn single_submit_maps_each_gateway_outcome() {
-        let admitted = result_for_single_submit(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted,
-        ]));
-        assert!(admitted.is_ok());
-
-        let rejected = result_for_single_submit(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected,
-        ]));
-        assert!(matches!(rejected, Err(RpcServerError::TxRejected(_))));
-
-        let retryable = result_for_single_submit(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable,
-        ]));
-        assert!(matches!(retryable, Err(RpcServerError::Overloaded(_))));
-
-        let internal = result_for_single_submit(VecM(vec![
-            SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError,
-        ]));
-        assert!(matches!(
-            internal,
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-
-        let unknown = result_for_single_submit(VecM(vec![SchedGatewaySubmitOutcome(99)]));
-        assert!(matches!(
-            unknown,
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-    }
 }

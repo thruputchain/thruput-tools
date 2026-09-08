@@ -108,8 +108,9 @@ For CLI commands that sign or simulate as `dev-N`, use a profile with
 
 ## Using cargo directly
 
-Scaffolded projects enable the `dev` feature by default, so
-plain `cargo` builds and tests work for the host target:
+Scaffolded projects build for the host with plain `cargo`: the `sdk`
+dependency is declared with `std` for non-rv32 targets, and the self
+dev-dependency turns on `dev` (the native mock executor) for test builds:
 
 | Command | What it does |
 |---------|-------------|
@@ -119,9 +120,10 @@ plain `cargo` builds and tests work for the host target:
 | `groundhog test` | Run executor-backed RV32 tests |
 | `groundhog test --integration` | Start hog-devnode, deploy RV32, and run `tests/integration.rs` |
 
-The `dev` feature enables `std` for native compilation.
-`groundhog build` passes `--no-default-features` to disable it
-for RV32. The `.cargo/contract.toml` overlay supplies `build-std`;
+`dev` is deliberately not a default feature: a crate depending on the
+contract would otherwise drag `sdk/dev` (and `std`) into its guest build
+through feature unification. The `.cargo/contract.toml` overlay supplies
+`build-std`;
 `panic=immediate-abort` lives in `.cargo/config.toml` alongside the rest of
 the target rustflags.
 
@@ -278,6 +280,11 @@ expose it in logs or CI output, or commit it to a file.
 
 Create and manage wallets owned by stored signing keys:
 
+Live `deploy`, `call`, `transfer`, `airdrop`, and `wallet create` operations ask
+for confirmation on every network before signing, submitting, or retaining
+attempt state. Pass command-local `--force` for automation. `--json`, `--quiet`,
+and non-TTY invocations fail closed without `--force`; `--dry-run` never prompts.
+
 ```bash
 groundhog wallet create --key alice
 groundhog wallet create --key alice --profile devnet
@@ -297,8 +304,8 @@ For `network = "local"`, the CLI signs the prefund and create transactions with
 the fixed local bootstrap faucet role advertised by `groundhog node` (`dev-0`).
 `--prefund <HOG>` accepts an exact Local prefund with
 up to seven decimal places and rejects values below 1 HOG. If the transfer
-would leave the finite local faucet below 10 HOG, the CLI warns and requires
-confirmation or `--yes`. The built-in `dev-N` wallets are deployed and funded
+would leave the finite local faucet below 10 HOG, the confirmation summary also
+shows a warning. The built-in `dev-N` wallets are deployed and funded
 directly at genesis, so they do not use this flow and cannot be passed to
 `wallet create`. Generate or select a non-dev signing key before creating
 another wallet.
@@ -330,8 +337,8 @@ Local requests are signed by the bootstrap faucet account and transfer its
 existing HOG; they do not mint. The Local default is 10 HOG, and `--amount`
 accepts any exact positive amount the finite faucet can cover. Local mode has no
 policy cap or rate limit. A conservative balance check rejects transfers the
-faucet cannot cover, and a transfer projected to leave less than 10 HOG requires
-confirmation or `--yes`. Successful requests report best-effort committed
+faucet cannot cover, and a transfer projected to leave less than 10 HOG adds a
+warning to the normal live-operation confirmation. Successful requests report best-effort committed
 faucet and recipient balances.
 
 Devnet requests go through the configured faucet HTTP service. The service
@@ -370,7 +377,7 @@ groundhog deploy -p counter
 groundhog deploy --profile testnet
 groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog deploy --artifact target/groundhog/counter.rv32a
-groundhog deploy --json
+groundhog deploy --json --force
 ```
 
 At a Cargo workspace root, `-p <package>` (or `--package <package>`) selects the
@@ -392,7 +399,7 @@ groundhog call my-counter get
 groundhog call 0xabc123... get
 groundhog call my-counter increment 5 --dry-run
 groundhog call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
-groundhog call my-counter increment 5 --json
+groundhog call my-counter increment 5 --json --force
 ```
 
 Embedded contract specs now drive selector resolution plus first-pass
@@ -401,17 +408,15 @@ scalars, structs, enums, unions, options, tuples, vectors, arrays, and
 byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
 fits the underlying type.
 
-`groundhog call --dry-run` now resolves selectors, encodes calldata,
-fetches the current chain tip to set expiry, signs the transaction, and
-prints or emits the prepared invocation without submitting it. This
-first pass is intentionally signed and RPC-backed; a later follow-up can
-split payload assembly from signing if we want a no-key-required dry
-run.
+`groundhog call --dry-run` resolves selectors, encodes calldata, fetches the
+current chain tip to set expiry, signs the transaction, and prints or emits
+the prepared invocation without submitting it. A dry run therefore still
+needs a signing key and a reachable RPC endpoint; a later follow-up can
+split payload assembly from signing if we want a no-key-required dry run.
 
-Remaining follow-up after this first pass: cache repeated
-embedded-spec loads, tighten the union/structured CLI UX, and remove
-the remaining local-source fallback once the spec-driven path has
-soaked.
+Remaining follow-up: cache repeated embedded-spec loads, tighten the
+union/structured CLI UX, and remove the remaining local-source fallback
+once the spec-driven path has soaked.
 
 ### `groundhog storage`
 
@@ -456,8 +461,7 @@ line is resolved from the invocation directory and wins over
 ### `groundhog node`
 
 Start the local development node backed by a supervised
-`hog-devnode` process. The legacy SDK `native_exec` / hogd `test_ffi`
-prototype backend is no longer wired into this command.
+`hog-devnode` process.
 
 ```bash
 groundhog node
@@ -507,9 +511,8 @@ When recovering `--data-dir`, pass the original explicit user allocation.
 Changing it requires a fresh data directory; recovered state does not bypass
 authoritative validation.
 
-Migration note: older releases used a 20 HOG wallet-create prefund. The current
-prefund is 1 HOG; the split local bootstrap uses a fixed 1,000,000 HOG faucet
-and 100 HOG per user.
+The wallet-create prefund is 1 HOG; the local bootstrap uses a fixed
+1,000,000 HOG faucet and 100 HOG per user.
 
 `--hogd-protocol` overrides the protocol token used for hog-devnode x23 intro
 handshakes. It is useful when a local `hog-devnode` build is slightly ahead of
@@ -529,9 +532,6 @@ Use `RUST_LOG`
 only when you need exact filters or debug/trace-level output; if set,
 `RUST_LOG` overrides the `--verbose` preset.
 
-See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
-durable backend direction.
-
 ### `groundhog chain dump|restore`
 
 Back up or restore all persistent state for a stopped local node as one
@@ -545,9 +545,9 @@ groundhog chain restore --data-dir .groundhog/node --input chain-backup.json --f
 ```
 
 Both commands fail while `groundhog node` is using the data directory. Dump
-refuses an existing output unless `--overwrite` is passed. Restore requires
-`--force` before replacing populated state and validates every archived file's
-size and SHA-256 before installing it.
+asks before replacing an existing output; pass `--force` to confirm
+non-interactively. Restore does the same before replacing populated state and
+validates every archived file's size and SHA-256 before installing it.
 
 ### `groundhog completion <shell>`
 
@@ -617,7 +617,8 @@ groundhog config unset faucet-url --profile staging --global
 groundhog config use staging --global
 ```
 
-Editable fields are `network`, `rpc-url`, `faucet-url`, and `default-key`.
+Editable fields are `network`, `rpc-url`, `network-hash`, `faucet-url`, and
+`default-key`.
 `config new` creates a profile; `config set` updates a profile that already
 exists in the selected layer. `config unset` removes only the selected layer's
 field, so removing a project override may reveal an inherited global value.
@@ -686,8 +687,13 @@ profiles may name a default key.
 
 ## AI-Assisted Development
 
-This repo includes a skill file at `docs/cli/SKILL.md` for use with AI coding
-assistants. It provides guidance on storage type selection, SDK macros, test
-patterns, and concurrency guardrails specific to Groundhog contracts.
+The installed CLI carries release-matched guidance for coding agents:
 
-To use it, follow your LLM's instructions on where/how to place skills files.
+```bash
+groundhog --skill
+```
+
+This is a root-only, exclusive mode rather than a global flag; invoke it exactly
+as shown. The command prints the complete Groundhog skill as Markdown without
+network access or filesystem changes. An agent can read it directly, or the
+user can save and install it using the agent's normal skill workflow.

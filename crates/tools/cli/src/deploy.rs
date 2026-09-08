@@ -4,11 +4,13 @@ use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
-    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
+    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
+    build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
+    source_address_auth_claim,
 };
+use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::ContractAddress;
-use groundhog_xdr::types::SHA256Hash;
+use groundhog_xdr::types::{NetworkHash, SHA256Hash};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
@@ -51,6 +53,23 @@ pub(crate) struct PreparedDeploy {
     pub(crate) package_name: Option<String>,
 }
 
+#[derive(Debug)]
+struct DeployPlan {
+    rpc_url: String,
+    profile_name: String,
+    wallet_name: Option<String>,
+    wallet_address: String,
+    artifact: ResolvedArtifact,
+    artifact_bytes_len: usize,
+    predicted_address: String,
+    wallet_entrypoint_id: String,
+    wallet_entrypoint_source: &'static str,
+    package_name: Option<String>,
+    transaction: Transaction,
+    signer: LocalSigner,
+    network_hash: NetworkHash,
+}
+
 /// Submitted deploy metadata after a live deploy transaction is accepted.
 #[derive(Debug, Clone)]
 pub(crate) struct SubmittedDeploy {
@@ -65,7 +84,9 @@ pub(crate) struct SubmittedDeploy {
 pub fn run(
     artifact_path: Option<&Path>,
     package: Option<&str>,
+    alias: Option<&str>,
     dry_run: bool,
+    force: bool,
     wallet: Option<&str>,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
@@ -73,18 +94,36 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = match wallet {
-        Some(wallet) => prepare_deploy_with_wallet(
-            artifact_path,
-            package,
-            artifacts,
-            Some(wallet),
-            profile,
-            overrides,
-            print,
-        )?,
-        None => prepare_deploy(artifact_path, package, artifacts, profile, overrides, print)?,
-    };
+    if !dry_run {
+        let cwd = std::env::current_dir()?;
+        resolve_profile_with_overrides(&cwd, profile, overrides)?;
+        print.require_confirmation_available(force, "deploy a contract")?;
+    }
+    let plan = prepare_deploy_plan(
+        artifact_path,
+        package,
+        artifacts,
+        wallet,
+        profile,
+        overrides,
+        print,
+    )?;
+    if !dry_run {
+        print.detail("artifact", plan.artifact.path.display());
+        if let Some(package) = package {
+            print.detail("package", package);
+        }
+        print.detail(
+            "wallet",
+            plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
+        );
+        print.detail("profile", &plan.profile_name);
+        if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
+            print.note("Cancelled");
+            return Ok(());
+        }
+    }
+    let prepared = sign_deploy_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -136,22 +175,62 @@ pub fn run(
     }
 
     // Save contract alias
+    let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
     if matches!(
         &receipt.status,
         groundhog_json_rpc_types::receipt::ExecStatus::Ok
     ) {
-        let project_root = crate::config::find_project_config(&cwd)
-            .and_then(|p| p.parent().map(Path::to_path_buf));
-        if let Some(root) = project_root
-            && let Some(name) = prepared.package_name.as_deref().or_else(|| {
-                root.file_name()
-                    .and_then(|directory_name| directory_name.to_str())
-            })
-            && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
-        {
-            let _ =
-                crate::config::save_profile_contract_alias(&root, profile, name, contract_addr_hex);
-            print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
+        // `--alias` wins; otherwise the alias is the package name, which is what
+        // an author reads back with `groundhog call <name>`. There is no third
+        // source. `--artifact` names a bare binary and carries no package, so
+        // with no `--alias` nothing is recorded: this used to fall back to the
+        // project directory name, which agrees with the package name only by
+        // luck in a single-package project and disagrees in any workspace.
+        //
+        // `cwd` is a search start, not a project root: profile_write_path
+        // resolves it to the nearest groundhog.toml, or the global config when
+        // there is none, so an alias deployed outside a project lands in the
+        // global profile rather than being dropped. With no profile anywhere,
+        // the save reports NoActiveProfile and that surfaces as the warning
+        // below.
+        if let Some(contract_addr_hex) = contract_addr_hex.as_deref() {
+            match alias.or(prepared.package_name.as_deref()) {
+                Some(name) => match crate::config::save_profile_contract_alias(
+                    &cwd,
+                    profile,
+                    name,
+                    contract_addr_hex,
+                ) {
+                    Ok(_) => print.detail("alias", format_args!("{name} -> {contract_addr_hex}")),
+                    // The contract is deployed; only the local record failed.
+                    // Say that rather than confirming an alias that was never
+                    // written, and do not fail a command whose on-chain work
+                    // succeeded. `print.warn` is a no-op under --json, so the
+                    // same fact also goes into the envelope's warnings, where a
+                    // script can see it.
+                    Err(error) => {
+                        let message = format!(
+                            "deployed, but recording the alias `{name}` in groundhog.toml \
+                             failed: {error}"
+                        );
+                        print.warn(&message);
+                        alias_warnings.push(crate::checks::Finding {
+                            level: crate::checks::FindingLevel::Warn,
+                            code: "deploy.alias_not_saved",
+                            message,
+                            hint: Some(
+                                "the contract is deployed; re-record the alias by hand in \
+                                 groundhog.toml"
+                                    .into(),
+                            ),
+                        });
+                    }
+                },
+                None => print.detail(
+                    "alias",
+                    "not recorded (no package name); pass --alias to name it",
+                ),
+            }
         }
     }
 
@@ -188,7 +267,7 @@ pub fn run(
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
         return Err(CliError::CommandReportedFailure);
     }
-    print.json(&CommandResult::new(cmd, data))?;
+    print.json(&CommandResult::with_warnings(cmd, alias_warnings, data))?;
 
     Ok(())
 }
@@ -347,29 +426,8 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     })
 }
 
-/// Resolve an artifact, build and sign a deploy transaction without submitting it.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn prepare_deploy(
-    artifact_path: Option<&Path>,
-    package: Option<&str>,
-    artifacts: &ArtifactOptions,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
-    print: &Print,
-) -> Result<PreparedDeploy, CliError> {
-    prepare_deploy_with_wallet(
-        artifact_path,
-        package,
-        artifacts,
-        None,
-        profile,
-        overrides,
-        print,
-    )
-}
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn prepare_deploy_with_wallet(
+fn prepare_deploy_plan(
     artifact_path: Option<&Path>,
     package: Option<&str>,
     artifacts: &ArtifactOptions,
@@ -377,7 +435,7 @@ fn prepare_deploy_with_wallet(
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     print: &Print,
-) -> Result<PreparedDeploy, CliError> {
+) -> Result<DeployPlan, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
 
@@ -410,9 +468,7 @@ fn prepare_deploy_with_wallet(
     };
     let artifact_bytes = std::fs::read(&artifact.path)?;
 
-    let mut prepared = prepare_deploy_transaction(artifact, artifact_bytes, &resolved, wallet)?;
-    prepared.package_name = package_name;
-    Ok(prepared)
+    prepare_deploy_transaction_plan(artifact, artifact_bytes, package_name, &resolved, wallet)
 }
 
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.
@@ -439,24 +495,26 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         wallets: std::collections::BTreeMap::default(),
         source: None,
     };
-    prepare_deploy_transaction(
+    sign_deploy_plan(prepare_deploy_transaction_plan(
         ResolvedArtifact {
             kind: ArtifactKind::Rv32,
             path: artifact_path.to_path_buf(),
         },
         artifact_bytes,
+        None,
         &profile,
         None,
-    )
+    )?)
 }
 
 #[allow(clippy::too_many_lines)]
-fn prepare_deploy_transaction(
+fn prepare_deploy_transaction_plan(
     artifact: ResolvedArtifact,
     artifact_bytes: Vec<u8>,
+    package_name: Option<String>,
     profile: &ResolvedProfile,
     selected_wallet: Option<&str>,
-) -> Result<PreparedDeploy, CliError> {
+) -> Result<DeployPlan, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     // Build the deploy transaction — invokes the sender's wallet contract.
@@ -513,15 +571,7 @@ fn prepare_deploy_transaction(
         auth_claim,
     });
 
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &sender.signer,
-        SignTransactionParams::default(),
-        &wallet_context.network_hash,
-    )
-    .map_err(|e| CliError::Other(e.to_string()))?;
-
-    Ok(PreparedDeploy {
+    Ok(DeployPlan {
         rpc_url: rpc_url.to_owned(),
         profile_name: profile.name.clone(),
         wallet_name: sender.wallet_name,
@@ -534,8 +584,33 @@ fn prepare_deploy_transaction(
             hex::encode(wallet_context.entrypoints.deploy.into_inner())
         ),
         wallet_entrypoint_source: wallet_context.entrypoints.source,
+        package_name,
+        transaction: tx,
+        signer: sender.signer,
+        network_hash: wallet_context.network_hash,
+    })
+}
+
+fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
+    let tx_hex = sign_and_encode_transaction_hex(
+        plan.transaction,
+        &plan.signer,
+        SignTransactionParams::default(),
+        &plan.network_hash,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    Ok(PreparedDeploy {
+        rpc_url: plan.rpc_url,
+        profile_name: plan.profile_name,
+        wallet_name: plan.wallet_name,
+        wallet_address: plan.wallet_address,
+        artifact: plan.artifact,
+        artifact_bytes_len: plan.artifact_bytes_len,
+        predicted_address: plan.predicted_address,
+        wallet_entrypoint_id: plan.wallet_entrypoint_id,
+        wallet_entrypoint_source: plan.wallet_entrypoint_source,
         tx_hex,
-        package_name: None,
+        package_name: plan.package_name,
     })
 }
 

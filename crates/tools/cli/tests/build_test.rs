@@ -45,10 +45,12 @@ fn resolve_package_with_explicit_name() {
         packages: vec![
             groundhog_cli::build::MetadataPackage {
                 name: "alpha".into(),
+                version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
+                version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
             },
         ],
@@ -65,6 +67,7 @@ fn resolve_package_explicit_name_not_found() {
         target_directory: PathBuf::from("/ws/target"),
         packages: vec![groundhog_cli::build::MetadataPackage {
             name: "alpha".into(),
+            version: "0.1.0".into(),
             manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
         }],
     };
@@ -81,10 +84,12 @@ fn resolve_package_from_member_dir() {
         packages: vec![
             groundhog_cli::build::MetadataPackage {
                 name: "alpha".into(),
+                version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
+                version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
             },
         ],
@@ -102,10 +107,12 @@ fn resolve_package_from_workspace_root_errors() {
         packages: vec![
             groundhog_cli::build::MetadataPackage {
                 name: "alpha".into(),
+                version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
+                version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
             },
         ],
@@ -122,6 +129,7 @@ fn resolve_package_standalone_project() {
         target_directory: PathBuf::from("/proj/target"),
         packages: vec![groundhog_cli::build::MetadataPackage {
             name: "my-contract".into(),
+            version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
         }],
     };
@@ -137,6 +145,7 @@ fn resolve_package_standalone_from_root() {
         target_directory: PathBuf::from("/proj/target"),
         packages: vec![groundhog_cli::build::MetadataPackage {
             name: "my-contract".into(),
+            version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
         }],
     };
@@ -197,7 +206,7 @@ fn build_rejects_conflicting_target_dir_passthrough() {
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
@@ -311,7 +320,7 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
@@ -366,7 +375,7 @@ fn build_rejects_missing_active_profile_before_compiling() {
     let fake_bin = tmp.path().join("bin");
     let compile_marker = tmp.path().join("compiled");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         tmp.path().display(),
         tmp.path().join("target").display(),
         tmp.path().join("Cargo.toml").display()
@@ -406,7 +415,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -466,7 +475,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     )
     .unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()
@@ -549,7 +558,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     );
     assert!(
         cargo_args.contains(
-            "build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf"
+            "build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf"
         )
     );
     assert!(cargo_args.contains("-p demo-contract-rv32"));
@@ -562,7 +571,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     // changes codegen, but the absolute path is specific to this machine.
     assert_eq!(
         metadata["build_flags"],
-        "cargo --config .cargo/contract.toml build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
+        "cargo --config .cargo/contract.toml build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
 }
 
@@ -575,7 +584,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -593,7 +602,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     let elf_fixture = project_root.join("fixture.elf");
     fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()
@@ -657,7 +666,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
         metadata["build_flags"],
-        "cargo --config .cargo/contract.toml rustc --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
+        "cargo --config .cargo/contract.toml rustc --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
     );
 }
 #[test]
@@ -792,7 +801,7 @@ fn write_bootstrapped_workspace(root: &Path, pkg_name: &str) -> (PathBuf, String
     write_scaffold_cargo_config(&member);
     fs::write(member.join(".cargo/contract.toml"), "").unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"{pkg_name}","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"{pkg_name}","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         root.display(),
         root.join("target").display(),
         member.join("Cargo.toml").display()
@@ -1119,7 +1128,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
     let elf_fixture = project_root.join("fixture.elf");
     fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()
@@ -1209,7 +1218,7 @@ fn build_relays_what_cargo_reports_while_it_reads_the_registry() {
     let elf_fixture = project_root.join("fixture.elf");
     fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()
@@ -1316,7 +1325,7 @@ fn build_stops_cargo_when_the_relay_loses_its_reader() {
 
     let finished = project_root.join("cargo-ran-to-completion");
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
         project_root.display(),
         project_root.join("target").display(),
         project_root.join("Cargo.toml").display()
@@ -1486,7 +1495,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -1499,7 +1508,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     // for the resolved graph: serve the SDK package on that call alone, and
     // the test fails if the preflight reads the wrong one.
     let workspace_metadata = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         project_root.join("target").display(),
         project_root.join("Cargo.toml").display()
@@ -1508,9 +1517,9 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     // `groundhog-contract-spec` through `sdk`, not directly.
     let dep_graph_metadata = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[
-            {{"id":"member","name":"demo-contract-rv32","manifest_path":"{}","metadata":null}},
-            {{"id":"sdk","name":"sdk","manifest_path":"{}","metadata":null}},
-            {{"id":"spec","name":"groundhog-contract-spec","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
+            {{"id":"member","name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","metadata":null}},
+            {{"id":"sdk","name":"sdk","version":"0.1.0","manifest_path":"{}","metadata":null}},
+            {{"id":"spec","name":"groundhog-contract-spec","version":"0.1.0","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
         ],"resolve":{{"nodes":[
             {{"id":"member","dependencies":["sdk"]}},
             {{"id":"sdk","dependencies":["spec"]}},
@@ -1595,7 +1604,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
     write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -1605,7 +1614,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
 
     let cargo_args_log = project_root.join("cargo-args.log");
     let workspace_metadata = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
         project_root.display(),
         project_root.join("target").display(),
         project_root.join("Cargo.toml").display()

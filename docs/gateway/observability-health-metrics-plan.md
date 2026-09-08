@@ -516,7 +516,7 @@ Standard backend `operation` values:
 ```text
 schedgateway_intro
 schedgateway_get_tip
-schedgateway_submit_tx_batch_with_outcomes
+schedgateway_submit_tx_batch
 schedgateway_lookup_tx
 schedgateway_pending_tx_count
 indexer_block_explorer_intro
@@ -871,7 +871,7 @@ gateway.rpc.groundhog_getStorageAt
 gateway.rpc.groundhog_getBalance
 gateway.rpc.groundhog_view
 gateway.backend.scheduler.schedgateway_get_tip
-gateway.backend.scheduler.schedgateway_submit_tx_batch_with_outcomes
+gateway.backend.scheduler.schedgateway_submit_tx_batch
 gateway.backend.scheduler.schedgateway_lookup_tx
 gateway.backend.indexer.get_transaction_info
 gateway.backend.indexer.get_events

@@ -1,4 +1,4 @@
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{Arg, ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::Print;
 use groundhog_cli::result::CommandResult;
@@ -46,6 +46,13 @@ struct RpcTargetArgs {
     /// Override local-dev runtime manifest path for dev-N/bootstrap accounts
     #[arg(long)]
     runtime_manifest: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct ConfirmationArgs {
+    /// Confirm without prompting; the protected action cannot be undone
+    #[arg(short = 'f', long)]
+    force: bool,
 }
 
 impl From<RpcTargetArgs> for groundhog_cli::config::ProfileOverrides {
@@ -221,6 +228,11 @@ enum Command {
         /// Path to compiled .rv32a (default: auto-detect)
         #[arg(long)]
         artifact: Option<PathBuf>,
+        /// Name to record the deployed address under in groundhog.toml
+        /// (defaults to the package name; with --artifact there is no package,
+        /// so without this no alias is recorded)
+        #[arg(long, value_parser = groundhog_cli::config::parse_contract_alias)]
+        alias: Option<String>,
         /// Build and sign the deploy transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -234,6 +246,8 @@ enum Command {
         target_args: RpcTargetArgs,
         #[command(flatten)]
         artifacts: ArtifactArgs,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Submit a transaction that calls a deployed contract method
     #[command(long_about = "Submit a signed transaction that calls a deployed \
@@ -248,6 +262,9 @@ enum Command {
         method: String,
         /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
         args: Vec<String>,
+        /// Package whose contract metadata resolves the method (required in workspaces)
+        #[arg(short, long)]
+        package: Option<String>,
         /// Resolve, encode, and sign the transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -261,6 +278,8 @@ enum Command {
         target_args: RpcTargetArgs,
         #[command(flatten)]
         artifacts: ArtifactArgs,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Transfer native HOG from the effective profile wallet
     Transfer {
@@ -279,6 +298,8 @@ enum Command {
         profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Request HOG funding for a wallet
     Airdrop {
@@ -290,9 +311,8 @@ enum Command {
         /// Build and sign the airdrop transaction without submitting it
         #[arg(long)]
         dry_run: bool,
-        /// Confirm a low local faucet balance without prompting
-        #[arg(long)]
-        yes: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -328,6 +348,9 @@ enum Command {
         /// Simulated caller address, or dev-N on local dev endpoints
         #[arg(long = "from")]
         from: Option<String>,
+        /// Package whose contract metadata resolves the method (required in workspaces)
+        #[arg(short, long)]
+        package: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -357,9 +380,7 @@ enum Command {
     /// Start a local development node
     #[command(
         long_about = "Start a local development node \
-                      backed by a supervised hog-devnode process. The \
-                      native_exec/test_ffi prototype backend is no longer \
-                      wired into this command.",
+                      backed by a supervised hog-devnode process.",
         after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {
@@ -474,6 +495,8 @@ enum KeysCommand {
     Export {
         /// Key name to export
         name: String,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Set the default signing key
     Use {
@@ -484,9 +507,8 @@ enum KeysCommand {
     Rm {
         /// Key name to remove
         name: String,
-        /// Remove the key without prompting; this cannot be undone
-        #[arg(short = 'f', long)]
-        force: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
 }
 
@@ -550,9 +572,8 @@ enum ConfigCommand {
     Rm {
         /// Profile to remove
         profile: String,
-        /// Remove the profile without prompting; this cannot be undone
-        #[arg(short = 'f', long)]
-        force: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
         /// Remove the profile from global config
         #[arg(long)]
         global: bool,
@@ -650,9 +671,8 @@ enum WalletCommand {
         /// Exact local wallet prefund in HOG; remote faucets control this amount
         #[arg(long)]
         prefund: Option<String>,
-        /// Confirm a low local faucet balance without prompting
-        #[arg(long)]
-        yes: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -666,6 +686,8 @@ enum WalletCommand {
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
 }
 
@@ -691,9 +713,8 @@ enum ChainCommand {
         /// JSON archive to create
         #[arg(long)]
         output: PathBuf,
-        /// Replace an existing archive
-        #[arg(long)]
-        overwrite: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
     /// Restore one compressed JSON archive into a stopped persistent node
     Restore {
@@ -703,9 +724,8 @@ enum ChainCommand {
         /// JSON archive to restore
         #[arg(long)]
         input: PathBuf,
-        /// Replace populated persistent state
-        #[arg(short = 'f', long)]
-        force: bool,
+        #[command(flatten)]
+        confirmation: ConfirmationArgs,
     },
 }
 
@@ -805,9 +825,12 @@ enum EventsCommand {
 enum TokenCommand {
     /// List one page of canonical ERC20 transfer history
     #[command(
-        long_about = "List exactly one newest-first page of canonical ERC20 TransferEvent records.\n\n\
+        long_about = "List exactly one newest-first page of canonical ERC20 TransferEvent, MintEvent, and BurnEvent records.\n\n\
                       Participant filters are applied by the server. --account matches transfers \
-                      where the address is either sender or recipient. Amounts remain unformatted \
+                      where the address is either sender or recipient, including mints and burns. \
+                      --from excludes mints; --to excludes burns. A zero address is a real participant, \
+                      not a supply-change marker. JSON schema version 2 uses null for the absent \
+                      sender of a mint or recipient of a burn. Amounts remain unformatted \
                       base-unit decimal strings; token metadata is not fetched."
     )]
     Transfers {
@@ -939,11 +962,27 @@ impl WalletCommand {
     }
 }
 
+const SKILL_ARG_ID: &str = "skill";
+
 fn cli_command(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> clap::Command {
-    Cli::command().version(bundle_identity.to_string())
+    Cli::command()
+        .version(bundle_identity.to_string())
+        .subcommand_required(false)
+        .arg(
+            Arg::new(SKILL_ARG_ID)
+                .long("skill")
+                .help("Print release-matched instructions for coding agents")
+                .action(ArgAction::SetTrue)
+                .exclusive(true),
+        )
 }
 
-fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli {
+enum ParsedCli {
+    Skill,
+    Command(Box<Cli>),
+}
+
+fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> ParsedCli {
     let matches = match cli_command(bundle_identity).try_get_matches() {
         Ok(matches) => matches,
         Err(error) => {
@@ -955,13 +994,35 @@ fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli
             error.exit()
         }
     };
-    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+    if matches.get_flag(SKILL_ARG_ID)
+        && let Some(subcommand) = matches.subcommand_name()
+    {
+        cli_command(bundle_identity)
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                format!("the argument '--skill' cannot be used with the '{subcommand}' subcommand"),
+            )
+            .exit();
+    }
+    if matches.get_flag(SKILL_ARG_ID) {
+        ParsedCli::Skill
+    } else {
+        ParsedCli::Command(Box::new(
+            Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit()),
+        ))
+    }
 }
 
 #[allow(clippy::too_many_lines)]
 fn main() {
     let bundle_identity = groundhog_cli::bundle_identity();
-    let cli = parse_cli(&bundle_identity);
+    let cli = match parse_cli(&bundle_identity) {
+        ParsedCli::Skill => {
+            print!("{}", groundhog_cli::skill::render());
+            return;
+        }
+        ParsedCli::Command(cli) => *cli,
+    };
     let print = Print::new(cli.global.quiet, cli.global.json)
         .with_command_trace(cli.global.show_cargo_commands);
     let cmd_name = cli.command.command_name();
@@ -1017,11 +1078,17 @@ fn main() {
                 ),
                 ConfigCommand::Rm {
                     profile,
-                    force,
+                    confirmation,
                     global,
                     project,
-                } => groundhog_cli::config_cmd::remove_with_force(
-                    &cwd, &profile, force, global, project, cmd_name, &print,
+                } => groundhog_cli::config_cmd::remove(
+                    &cwd,
+                    &profile,
+                    confirmation.force,
+                    global,
+                    project,
+                    cmd_name,
+                    &print,
                 ),
                 ConfigCommand::Set {
                     field,
@@ -1136,11 +1203,13 @@ fn main() {
         Command::Deploy {
             package,
             artifact,
+            alias,
             dry_run,
             wallet,
             profile,
             target_args,
             artifacts,
+            confirmation,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
@@ -1151,7 +1220,9 @@ fn main() {
                 groundhog_cli::deploy::run(
                     artifact.as_deref(),
                     package.as_deref(),
+                    alias.as_deref(),
                     dry_run,
+                    confirmation.force,
                     wallet.as_deref(),
                     &artifacts,
                     profile.as_deref(),
@@ -1164,11 +1235,13 @@ fn main() {
             contract,
             method,
             args,
+            package,
             dry_run,
             wallet,
             profile,
             target_args,
             artifacts,
+            confirmation,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
@@ -1180,7 +1253,9 @@ fn main() {
                     &contract,
                     &method,
                     &args,
+                    package.as_deref(),
                     dry_run,
+                    confirmation.force,
                     wallet.as_deref(),
                     &artifacts,
                     profile.as_deref(),
@@ -1196,11 +1271,13 @@ fn main() {
             from,
             profile,
             target_args,
+            confirmation,
         } => groundhog_cli::transfer::run(
             &recipient,
             &amount,
             from.as_deref(),
             dry_run,
+            confirmation.force,
             profile.as_deref(),
             &target_args.into(),
             cmd_name,
@@ -1210,14 +1287,14 @@ fn main() {
             recipient,
             amount,
             dry_run,
-            yes,
+            confirmation,
             profile,
             target_args,
         } => groundhog_cli::airdrop::run(
             recipient.as_deref(),
             amount.as_deref(),
             dry_run,
-            yes,
+            confirmation.force,
             profile.as_deref(),
             &target_args.into(),
             cmd_name,
@@ -1245,6 +1322,7 @@ fn main() {
             args,
             calldata,
             from,
+            package,
             profile,
             target_args,
             artifacts,
@@ -1261,6 +1339,7 @@ fn main() {
                     &args,
                     calldata.as_deref(),
                     from.as_deref(),
+                    package.as_deref(),
                     &artifacts,
                     &cwd,
                     profile.as_deref(),
@@ -1324,23 +1403,33 @@ fn main() {
             ChainCommand::Dump {
                 data_dir,
                 output,
-                overwrite,
-            } => groundhog_cli::chain::dump(&data_dir, &output, overwrite, cmd_name, &print),
+                confirmation,
+            } => {
+                groundhog_cli::chain::dump(&data_dir, &output, confirmation.force, cmd_name, &print)
+            }
             ChainCommand::Restore {
                 data_dir,
                 input,
-                force,
-            } => groundhog_cli::chain::restore(&data_dir, &input, force, cmd_name, &print),
+                confirmation,
+            } => groundhog_cli::chain::restore(
+                &data_dir,
+                &input,
+                confirmation.force,
+                cmd_name,
+                &print,
+            ),
         },
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
             }
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
-            KeysCommand::Export { name } => groundhog_cli::keys::export(&name, cmd_name, &print),
+            KeysCommand::Export { name, confirmation } => {
+                groundhog_cli::keys::export(&name, confirmation.force, cmd_name, &print)
+            }
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
-            KeysCommand::Rm { name, force } => {
-                groundhog_cli::keys::remove_with_force(&name, force, cmd_name, &print)
+            KeysCommand::Rm { name, confirmation } => {
+                groundhog_cli::keys::remove(&name, confirmation.force, cmd_name, &print)
             }
         },
         Command::Wallet { command } => match command {
@@ -1355,7 +1444,7 @@ fn main() {
                 name,
                 dry_run,
                 prefund,
-                yes,
+                confirmation,
                 profile,
                 target_args,
             } => groundhog_cli::wallet::create(
@@ -1363,15 +1452,23 @@ fn main() {
                 name.as_deref(),
                 dry_run,
                 prefund.as_deref(),
-                yes,
+                confirmation.force,
                 profile.as_deref(),
                 &target_args.into(),
                 cmd_name,
                 &print,
             ),
-            WalletCommand::Rm { name, profile } => {
-                groundhog_cli::wallet::remove(&name, profile.as_deref(), cmd_name, &print)
-            }
+            WalletCommand::Rm {
+                name,
+                profile,
+                confirmation,
+            } => groundhog_cli::wallet::remove(
+                &name,
+                profile.as_deref(),
+                confirmation.force,
+                cmd_name,
+                &print,
+            ),
         },
         Command::Codegen { command } => match command {
             CodegenCommand::Ts { source, output } => {
@@ -1536,6 +1633,120 @@ mod tests {
     }
 
     #[test]
+    fn deploy_alias_flag_parses_and_defaults_to_none() {
+        let with_alias = Cli::parse_from([
+            "groundhog",
+            "deploy",
+            "--package",
+            "my-counter",
+            "--alias",
+            "counter-v2",
+        ]);
+        match with_alias.command {
+            Command::Deploy { package, alias, .. } => {
+                assert_eq!(package.as_deref(), Some("my-counter"));
+                assert_eq!(alias.as_deref(), Some("counter-v2"));
+            }
+            _ => panic!("expected deploy command"),
+        }
+
+        // Without --alias the package name is what deploy records, so the flag
+        // stays absent rather than being defaulted here.
+        let without_alias = Cli::parse_from(["groundhog", "deploy", "--package", "my-counter"]);
+        match without_alias.command {
+            Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            _ => panic!("expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn deploy_rejects_an_empty_alias_before_spending_a_deploy() {
+        // An empty or whitespace-only alias is rejected by
+        // save_profile_contract_alias, but that runs only after the deploy is
+        // submitted -- the contract would be on chain with the CLI reporting an
+        // alias it never wrote. The parser rejects it first.
+        for empty in ["", "   ", "\t"] {
+            let result = Cli::try_parse_from([
+                "groundhog",
+                "deploy",
+                "--package",
+                "counter",
+                "--alias",
+                empty,
+            ]);
+            let Err(error) = result else {
+                panic!("--alias {empty:?} should be rejected");
+            };
+            assert!(
+                error.to_string().contains("contract alias cannot be empty"),
+                "error should explain the rejection, got: {error}"
+            );
+        }
+
+        // Surrounding whitespace is trimmed, so what is reported matches the
+        // key that gets written.
+        let Ok(padded) = Cli::try_parse_from([
+            "groundhog",
+            "deploy",
+            "--package",
+            "counter",
+            "--alias",
+            "  token  ",
+        ]) else {
+            panic!("a padded alias should parse");
+        };
+        match padded.command {
+            Command::Deploy { alias, .. } => assert_eq!(alias.as_deref(), Some("token")),
+            _ => panic!("expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn deploy_artifact_accepts_an_alias_and_does_not_demand_one() {
+        // `--artifact` names a bare binary and carries no package, so there is
+        // nothing to derive an alias from. Deploy used to fall back to the
+        // project directory name, which matches the package name only by luck
+        // in a single-package project and disagrees in any workspace. The flag
+        // is how you name it; it stays optional so that dry runs and one-off
+        // artifact deploys, which record nothing, need not invent one.
+        let Ok(alone) = Cli::try_parse_from([
+            "groundhog",
+            "deploy",
+            "--artifact",
+            "target/groundhog/token.rv32a",
+        ]) else {
+            panic!("--artifact alone should still parse");
+        };
+        match alone.command {
+            Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            _ => panic!("expected deploy command"),
+        }
+
+        let Ok(paired) = Cli::try_parse_from([
+            "groundhog",
+            "deploy",
+            "--artifact",
+            "target/groundhog/token.rv32a",
+            "--alias",
+            "token",
+        ]) else {
+            panic!("--artifact with --alias should parse");
+        };
+        match paired.command {
+            Command::Deploy {
+                artifact, alias, ..
+            } => {
+                assert_eq!(
+                    artifact,
+                    Some(PathBuf::from("target/groundhog/token.rv32a"))
+                );
+                assert_eq!(alias.as_deref(), Some("token"));
+            }
+            _ => panic!("expected deploy command"),
+        }
+    }
+
+    #[test]
     fn config_profiles_command_name_parses() {
         let cli = Cli::parse_from(["groundhog", "config", "profiles"]);
 
@@ -1595,7 +1806,7 @@ mod tests {
             Command::Config {
                 command: ConfigCommand::Rm {
                     profile,
-                    force: true,
+                    confirmation: ConfirmationArgs { force: true },
                     global: false,
                     project: true,
                 }
@@ -1921,14 +2132,20 @@ mod tests {
 
     #[test]
     fn wallet_rm_flags_parse() {
-        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice"]);
+        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice", "--force"]);
 
         match cli.command {
             Command::Wallet {
-                command: WalletCommand::Rm { name, profile },
+                command:
+                    WalletCommand::Rm {
+                        name,
+                        profile,
+                        confirmation,
+                    },
             } => {
                 assert_eq!(name, "alice");
                 assert_eq!(profile, None);
+                assert!(confirmation.force);
             }
             _ => panic!("expected wallet rm command"),
         }
@@ -1989,6 +2206,7 @@ mod tests {
                 from,
                 profile,
                 target_args,
+                confirmation,
             } => {
                 assert_eq!(recipient, "alice");
                 assert_eq!(amount, "1.5");
@@ -2000,8 +2218,46 @@ mod tests {
                     target_args.runtime_manifest.as_deref(),
                     Some(std::path::Path::new("/tmp/runtime.json"))
                 );
+                assert!(!confirmation.force);
             }
             _ => panic!("expected transfer command"),
+        }
+    }
+
+    #[test]
+    fn transaction_commands_parse_command_local_force() {
+        for args in [
+            vec!["groundhog", "deploy", "--force"],
+            vec!["groundhog", "call", "contract", "method", "--force"],
+            vec!["groundhog", "transfer", "recipient", "1", "--force"],
+            vec!["groundhog", "airdrop", "recipient", "--force"],
+            vec!["groundhog", "wallet", "create", "--force"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("transaction command should accept --force");
+            let force = match cli.command {
+                Command::Deploy { confirmation, .. }
+                | Command::Call { confirmation, .. }
+                | Command::Transfer { confirmation, .. }
+                | Command::Airdrop { confirmation, .. }
+                | Command::Wallet {
+                    command: WalletCommand::Create { confirmation, .. },
+                } => confirmation.force,
+                _ => panic!("expected transaction command"),
+            };
+            assert!(force);
+        }
+    }
+
+    #[test]
+    fn airdrop_and_wallet_create_reject_yes() {
+        for args in [
+            vec!["groundhog", "airdrop", "recipient", "--yes"],
+            vec!["groundhog", "wallet", "create", "--yes"],
+        ] {
+            let Err(error) = Cli::try_parse_from(args) else {
+                panic!("--yes should be removed");
+            };
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
         }
     }
 

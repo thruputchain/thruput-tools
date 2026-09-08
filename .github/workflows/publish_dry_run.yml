@@ -55,7 +55,7 @@ jobs:
         with:
           repository: groundhogchain/actions
           path: actions
-          ref: 6661fedc744b057368d7ecb0127aece0aa12b426
+          ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
 
       - name: publish dry run
         uses: ./actions/cargo-publish-dry-run

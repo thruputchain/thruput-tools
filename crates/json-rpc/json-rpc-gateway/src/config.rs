@@ -77,7 +77,7 @@ impl FromStr for HealthBackend {
 /// batch is in flight and drain together when it completes.
 ///
 /// Used for both `sendRawTransaction` (packing tx blobs into
-/// `schedgateway_submit_tx_batch_with_outcomes`) and `getStorageAt`
+/// `schedgateway_submit_tx_batch`) and `getStorageAt`
 /// (packing item reads into `dbgateway_get_items`); see
 /// `GatewayConfig::batch` and `GatewayConfig::storage` for the per-RPC
 /// tuning slots.

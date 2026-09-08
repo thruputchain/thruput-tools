@@ -74,7 +74,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
 | Chain tip (height, hash) | hogd `SchedGateway` | `schedgateway_get_tip()` | |
-| Transaction submission | hogd `SchedGateway` | `schedgateway_submit_tx_batch_with_outcomes(batch)` | Returns one request-scoped admission outcome per exact signed transaction |
+| Transaction submission | hogd `SchedGateway` | `schedgateway_submit_tx_batch(batch)` | Returns one request-scoped admission outcome per exact signed transaction |
 | Transaction lookup (pending) | hogd `SchedGateway` | `schedgateway_lookup_tx(hashes)` | Returns `Option<SignedTransaction>` per hash |
 | Pending tx count | hogd `SchedGateway` | `schedgateway_pending_tx_count()` | Atomic counter, includes runqueue + stranded |
 | Latest committed storage | hogd DbGateway | `get_storage_at(address, key)` | Optional endpoint; required for `groundhog_getStorageAt` |

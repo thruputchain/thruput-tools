@@ -279,7 +279,8 @@ bench_send_raw() {
     run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
         --url "$url" --runtime-manifest "$manifest" --method sendRawTransaction \
-        --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
+        --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" \
+        --force
 }
 
 run_bench_pair() {
@@ -354,7 +355,8 @@ if [[ -z "$BENCH_BUILD_PROFILE" ]]; then
 fi
 case "$BENCH_BUILD_PROFILE" in
     debug)
-        BENCH_BUILD_ARGS=()
+        # Keep a nonempty array: Bash 3.2 treats an empty array as unset under -u.
+        BENCH_BUILD_ARGS=(--profile dev)
         ;;
     release)
         BENCH_BUILD_ARGS=(--release)
@@ -492,6 +494,10 @@ fi
 case "$BENCH_SCENARIO" in
     smoke)
         run_smoke "$NODE_RPC_URL" "$GATEWAY_RPC_URL" "$RUNTIME_MANIFEST"
+        for admission_url in "$NODE_RPC_URL" "$GATEWAY_RPC_URL"; do
+            RPC_URL="$admission_url" cargo test -p groundhog-e2e-tests \
+                invalid_signature_returns_transaction_rejection -- --ignored
+        done
         ;;
     gateway-baseline)
         run_gateway_baseline "$GATEWAY_RPC_URL" "$RUNTIME_MANIFEST"

@@ -485,13 +485,6 @@ mod tests {
         async fn schedgateway_submit_tx_batch(
             &self,
             _arg0: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            panic!("bug: status tests should not submit")
-        }
-
-        async fn schedgateway_submit_tx_batch_with_outcomes(
-            &self,
-            _arg0: ParallelSignedTransactionBatch,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
             panic!("bug: status tests should not submit")
         }

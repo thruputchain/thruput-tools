@@ -1081,6 +1081,55 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[tokio::test]
     #[serial]
+    async fn concurrent_public_submissions_are_batched_for_scheduler() {
+        const SUBMIT_LOG_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG";
+        let directory = tempfile::tempdir().expect("bug: tempdir");
+        let submit_log = directory.path().join("submit-batches.log");
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
+        let _log_guard = EnvGuard::set(
+            SUBMIT_LOG_ENV,
+            submit_log.to_str().expect("bug: tempdir path is utf-8"),
+        );
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .expect("bug: jsonrpsee http client builds");
+        let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
+
+        let (a, b, c, d, e) = tokio::join!(
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex),
+        );
+
+        for result in [a, b, c, d, e] {
+            result.expect("bug: concurrent transaction should be submitted");
+        }
+        let sizes: Vec<usize> = std::fs::read_to_string(submit_log)
+            .expect("bug: fake scheduler should write submit log")
+            .lines()
+            .map(|line| line.parse().expect("bug: submit batch size should parse"))
+            .collect();
+        assert!(
+            sizes.iter().any(|size| *size > 1),
+            "concurrent public submissions should produce a multi-transaction batch: {sizes:?}"
+        );
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn block_driver_coalesces_rapid_submit_wakes() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine-slow-commit");
 

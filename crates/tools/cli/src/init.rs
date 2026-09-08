@@ -5,7 +5,7 @@
 //! everything is already configured, prints a short summary and
 //! exits. `init --json` delegates to `status --json`.
 
-use std::io::BufRead;
+use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
 use crate::{CliError, Print};
@@ -111,7 +111,7 @@ fn handle_key_step(
 ) -> Result<(), CliError> {
     if report.keys.keys.is_empty() {
         ui.note("No signing key found");
-        if confirm(ui.print, "Generate a local signing key now?", true)? {
+        if ui.print.ask("Generate a local signing key now?", true)? {
             crate::keys::generate(&None, false, "keys.generate", ui.print)?;
             ui.success("Generated local signing key");
             ui.finish_step(InitStep::SigningKey, StepState::Done);
@@ -160,11 +160,9 @@ fn handle_credentials_step(
     } else {
         ui.note("Mock-executor download credentials are not configured");
         if !ui.print.is_quiet()
-            && confirm(
-                ui.print,
-                "Configure mock-executor download credentials now?",
-                true,
-            )?
+            && ui
+                .print
+                .ask("Configure mock-executor download credentials now?", true)?
         {
             crate::auth::configure_executor_credentials_from_init(ui.print)?;
             ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
@@ -194,7 +192,7 @@ fn handle_scaffold_step(
             .and_then(existing_project_context));
     }
 
-    let created_project = if confirm(ui.print, "Create a starter project?", false)? {
+    let created_project = if ui.print.ask("Create a starter project?", false)? {
         ui.print.prompt("Project name: ")?;
         let mut name = String::new();
         std::io::stdin()
@@ -548,26 +546,4 @@ fn local_rpc_url(project_start: &Path) -> Option<String> {
     crate::config::resolve_profile(project_start, Some("local"))
         .ok()
         .and_then(|profile| profile.rpc_url)
-}
-
-fn confirm(print: &Print, message: &str, default_yes: bool) -> Result<bool, CliError> {
-    if print.is_quiet() {
-        return Ok(default_yes);
-    }
-
-    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
-    print.prompt(format_args!("{message} {suffix} "))?;
-
-    let mut answer = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut answer)
-        .map_err(CliError::Io)?;
-    let answer = answer.trim();
-
-    if answer.is_empty() {
-        return Ok(default_yes);
-    }
-
-    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }

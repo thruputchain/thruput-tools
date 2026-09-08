@@ -252,3 +252,57 @@ async fn get_events_cursor_walks_or_terminates() {
 // TODO: add submit_and_query_receipt test once this suite can read the
 // runtime manifest emitted by the running node and construct valid dev-wallet
 // transactions against the bootstrapped genesis state.
+
+#[tokio::test]
+#[ignore = "requires running hog-devnode local node or gateway"]
+async fn invalid_signature_returns_transaction_rejection() {
+    use groundhog_signing::{
+        BuildCallTransaction, LocalSigner, PubkeyAccount, SignTransactionParams, Signer,
+        build_call_transaction, encode_signed_transaction_xdr, sign_transaction,
+    };
+    use groundhog_xdr::{
+        contract::ContractEntrypointID,
+        types::{NetworkHash, Signature},
+    };
+
+    let c = client();
+    let network = c
+        .network_info()
+        .await
+        .expect("network identity should be available");
+    let signer = LocalSigner::from_secret_key([0x42; 32]);
+    let account = PubkeyAccount::new(signer.public_key(), 0);
+    let tx = build_call_transaction(BuildCallTransaction {
+        invoked_address: account.address().unwrap(),
+        entrypoint: ContractEntrypointID::from([0; 8]),
+        calldata: vec![],
+        gas_limit: 1_000_000,
+        block_expiry_height: i64::MAX,
+        nonce: 1,
+        auth_claim: account.auth_claim(),
+    });
+    let mut signed = sign_transaction(
+        tx,
+        &signer,
+        SignTransactionParams::default(),
+        &NetworkHash::new(network.network_hash.0),
+    )
+    .unwrap();
+    signed.signatures.0[0].signature = Signature::Ed25519 {
+        ed25519: [0; 64].into(),
+    };
+    let encoded = encode_signed_transaction_xdr(&signed).unwrap();
+    let error = c
+        .send_raw_transaction(format!("0x{}", hex::encode(encoded)))
+        .await
+        .expect_err("an invalid signature must not return a transaction hash");
+    match error {
+        jsonrpsee::core::ClientError::Call(error) => {
+            assert_eq!(
+                error.code(),
+                groundhog_json_rpc_types::error::codes::TX_REJECTED
+            );
+        }
+        other => panic!("expected a typed transaction rejection, got {other}"),
+    }
+}
