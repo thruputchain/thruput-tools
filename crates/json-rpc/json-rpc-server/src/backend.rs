@@ -19,7 +19,6 @@
 //!
 //! - `SubmitPlane`                            → scheduler
 //! - `ChainPlane::chain_tip`                  → scheduler
-//! - `ChainPlane::transaction_limits`         → scheduler (same tip read)
 //! - `ChainPlane::get_block_by_number`        → coordinator (TBD)
 //! - `ChainPlane::pending_transaction_count`  → scheduler
 //! - `ReadPlane::transaction_receipt`         → indexer
@@ -76,7 +75,9 @@ use groundhog_json_rpc_types::{
 };
 use std::time::{Duration, Instant};
 
-use crate::{error::RpcServerError, limits::TxLimits};
+use groundhog_xdr::network_config::NetworkConfig;
+
+use crate::error::RpcServerError;
 
 /// Absolute timing budget for one public JSON-RPC request.
 #[derive(Debug, Clone, Copy)]
@@ -169,24 +170,36 @@ pub trait SubmitPlane: Send + Sync + 'static {
     ) -> Result<(), RpcServerError>;
 }
 
+/// One reading of the committed db tip: the public chain tip together with
+/// the execution parameters in force for the block that follows it.
+///
+/// hogd returns both in a single `schedgateway_get_tip` reply, and the
+/// shared server refreshes its cached network config from every reading it
+/// receives, so a backend never has to serve the config separately.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct TipReading {
+    /// Chain state that advances with each commit; what `chainTip` returns.
+    pub tip: ChainTip,
+    /// Network config the tip carries.
+    pub network_config: NetworkConfig,
+}
+
+impl TipReading {
+    /// Pair a chain tip with the network config read alongside it.
+    pub fn new(tip: ChainTip, network_config: NetworkConfig) -> Self {
+        Self {
+            tip,
+            network_config,
+        }
+    }
+}
+
 /// Backend plane for chain metadata and block-oriented reads.
 #[async_trait]
 pub trait ChainPlane: Send + Sync + 'static {
-    /// Return the current chain tip.
-    async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError>;
-
-    /// Return the transaction bounds in force at the current chain tip.
-    ///
-    /// Feeds the advisory `sendRawTransaction` pre-checks, which cache the
-    /// reading and tolerate a stale or missing one. The default reports
-    /// `NotImplemented`, under which the shared server skips the
-    /// chain-derived checks and keeps the protocol-constant ones.
-    async fn transaction_limits(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<TxLimits, RpcServerError> {
-        Err(RpcServerError::NotImplemented("transactionLimits".into()))
-    }
+    /// Return the current chain tip and the network config it carries.
+    async fn chain_tip(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError>;
 
     /// Return block data at a specific height, if available.
     async fn get_block_by_number(

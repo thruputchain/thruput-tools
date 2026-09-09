@@ -8,16 +8,15 @@
 pub mod backend;
 pub mod config;
 pub mod error;
-pub mod limits;
 pub mod server;
 pub mod tx;
 
 pub use groundhog_build_info::{BuildVersion, build_version};
 
 pub use backend::{
-    ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, ValidatedTransaction, ViewPlane,
+    ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, TipReading, ValidatedTransaction,
+    ViewPlane,
 };
 pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig};
 pub use error::RpcServerError;
-pub use limits::TxLimits;
 pub use server::{BuildInfo, GroundhogRpcServer};

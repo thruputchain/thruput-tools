@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{
-    ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TxLimits, ValidatedTransaction,
+    ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, NetworkHashHex,
@@ -235,20 +235,9 @@ impl HogdDevSchedulerBackend {
 #[async_trait]
 impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
-    async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+    async fn chain_tip(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         within_request_deadline(context, async {
-            chain_tip_from_db_tip(self.db_tip().await?)
-        })
-        .await
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn transaction_limits(
-        &self,
-        context: RpcRequestContext,
-    ) -> Result<TxLimits, RpcServerError> {
-        within_request_deadline(context, async {
-            TxLimits::from_network_config(&self.db_tip().await?.network_config)
+            tip_reading_from_db_tip(self.db_tip().await?)
         })
         .await
     }
@@ -287,14 +276,23 @@ impl ChainPlane for HogdDevSchedulerBackend {
     }
 }
 
-fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServerError> {
+fn tip_reading_from_db_tip(
+    DbTip {
+        value,
+        network_config,
+        ..
+    }: DbTip,
+) -> Result<TipReading, RpcServerError> {
     let block_hash = consensus_value_hash(&value).map_err(|error| {
         RpcServerError::BackendUnavailable(format!(
             "hogd-dev scheduler returned an unencodable consensus value: {error}"
         ))
     })?;
-    Ok(ChainTip {
-        height: value.proposal_header.block_height.clone(),
-        block_hash,
-    })
+    Ok(TipReading::new(
+        ChainTip {
+            height: value.proposal_header.block_height.clone(),
+            block_hash,
+        },
+        network_config,
+    ))
 }

@@ -36,3 +36,4 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 groundhog-json-rpc-server = { workspace = true }
+groundhog-tx-validation = { workspace = true }

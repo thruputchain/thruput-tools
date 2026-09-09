@@ -1673,6 +1673,7 @@ dependencies = [
  "groundhog-bundle-identity",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-types",
+ "groundhog-tx-validation",
  "groundhog-xdr",
  "hex",
  "jsonrpsee",
@@ -1731,6 +1732,7 @@ dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-trace",
+ "groundhog-tx-validation",
  "groundhog-x23-transport",
  "groundhog-xdr",
  "groundhog_coordinator",
@@ -1841,6 +1843,7 @@ dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
  "groundhog-json-rpc-server",
+ "groundhog-tx-validation",
  "groundhog-xdr",
  "hex",
  "sha2 0.10.9",
@@ -1943,6 +1946,18 @@ dependencies = [
  "hogexec-internal",
  "schemars",
  "serde",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "groundhog-tx-validation"
+version = "0.16.0-rc.1"
+dependencies = [
+ "groundhog-json-rpc-types",
+ "groundhog-xdr",
+ "hex",
+ "thiserror 2.0.20",
  "xdr-common",
  "xdrs",
 ]

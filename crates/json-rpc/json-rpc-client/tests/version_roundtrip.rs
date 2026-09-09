@@ -2,11 +2,11 @@ use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use groundhog_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
-    RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
+    RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
-    block::{BlockInfo, ChainTip},
+    block::BlockInfo,
     events::{EventPage, EventQuery},
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
@@ -31,7 +31,7 @@ impl SubmitPlane for VersionOnlyBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for VersionOnlyBackend {
-    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
 

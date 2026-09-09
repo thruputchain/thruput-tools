@@ -2547,7 +2547,7 @@ mod tests {
             .chain_tip(RpcRequestContext::unbounded())
             .await
             .expect("chain tip should be available");
-        assert_eq!(*tip.height, 1);
+        assert_eq!(*tip.tip.height, 1);
 
         let status = backend
             .transaction_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())

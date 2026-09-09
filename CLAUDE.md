@@ -59,6 +59,10 @@ Workspace crates are grouped by boundary:
 - **signing** — off-chain transaction signing and construction. Signer trait,
   local Ed25519 signer, canonical address derivation, tx builders for deploy
   and call, XDR encoding.
+- **tx-validation** — off-chain mirror of the bounds hogd's executor checks
+  before running a transaction. `NetworkConfigParams` flattens a db tip's
+  network config into per-parameter fields (`None` when unstated);
+  `check_transaction` reports violations as `TxInvalidDetail`.
 - **rv32-artifact** — Rust source of truth for the Groundhog RV32 artifact
   format: constants, offsets, fingerprint, writer, and validator.
 - **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The
@@ -394,12 +398,16 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `x-data-schema`; never hand-author the shape in the spec.
 - `sendRawTransaction` pre-checks (expiry against the tip, attached-contract
   count from the tip's network config, per-contract size, duplicate
-  attachments) live in `json-rpc-server` (`tx.rs`, `limits.rs`) and mirror
-  what hogd's executor rejects before running a transaction. They are
-  advisory, not a trust boundary: readings are cached with a TTL and a
-  missing reading skips the chain-derived checks rather than blocking
-  submission. Backends supply the reading through
-  `ChainPlane::transaction_limits`.
+  attachments) mirror what hogd's executor rejects before running a
+  transaction. The bound logic lives in `groundhog-tx-validation`;
+  `json-rpc-server` applies it from one cached db-tip reading
+  (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
+  that every tip fetch refreshes: a submit that finds it stale, the public
+  `chainTip` method, and a background task `GroundhogRpcServer::new` starts
+  on `tip_refresh_interval_ms`. The checks are advisory, not a trust
+  boundary: a bound the config does not state, or a missing reading, skips
+  the chain-derived checks rather than blocking submission. Never
+  substitute protocol defaults for unstated parameters.
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 

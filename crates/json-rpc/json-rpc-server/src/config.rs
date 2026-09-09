@@ -37,24 +37,25 @@ pub struct RpcServerConfig {
     pub view_gas_limit: u64,
 
     /// How long a chain-tip reading is reused by the `sendRawTransaction`
-    /// expiry pre-check before the backend is asked again. Bounds the
+    /// pre-checks before a submit asks the backend again. Bounds the
     /// extra backend load to one tip probe per window regardless of
     /// submission rate. Stale readings are safe: the tip only grows, so
-    /// staleness can only under-detect expiry, never falsely reject.
+    /// staleness can only under-detect expiry, and the network config the
+    /// reading carries changes only at explicit upgrade blocks.
     pub tip_cache_ttl_ms: u64,
 
-    /// Upper bound on a single backend probe issued by a `sendRawTransaction`
-    /// pre-check (chain tip or transaction limits). The pre-checks are
-    /// advisory, so a slow or stalled backend must not delay submission
-    /// past this bound.
+    /// Upper bound on a single chain-tip probe issued on behalf of the
+    /// `sendRawTransaction` pre-checks, whether by a submit or by the
+    /// background refresh. The pre-checks are advisory, so a slow or
+    /// stalled backend must not delay submission past this bound.
     pub tip_probe_timeout_ms: u64,
 
-    /// How long a transaction-limits reading is reused by the
-    /// `sendRawTransaction` bound checks before the backend is asked
-    /// again. Limits change only through explicit config upgrades, so a
-    /// longer window than the tip cache costs nothing in accuracy beyond
-    /// the upgrade block itself.
-    pub tx_limits_cache_ttl_ms: u64,
+    /// Interval of the background task that keeps the cached tip reading
+    /// (and with it the network config) fresh on an idle server. Each tick
+    /// asks the backend only if no probe ran within the interval, so a
+    /// busy server pays for at most one probe per `tip_cache_ttl_ms` and
+    /// an idle one for at most one per interval.
+    pub tip_refresh_interval_ms: u64,
 }
 
 impl Default for RpcServerConfig {
@@ -68,7 +69,7 @@ impl Default for RpcServerConfig {
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
             tip_cache_ttl_ms: 3_000,
             tip_probe_timeout_ms: 2_000,
-            tx_limits_cache_ttl_ms: 30_000,
+            tip_refresh_interval_ms: 5_000,
         }
     }
 }
@@ -116,7 +117,7 @@ impl RpcServerConfig {
         self
     }
 
-    /// Override how long the expiry pre-check reuses a chain-tip reading.
+    /// Override how long the submit pre-checks reuse a chain-tip reading.
     #[must_use]
     pub fn with_tip_cache_ttl_ms(mut self, ttl_ms: u64) -> Self {
         self.tip_cache_ttl_ms = ttl_ms;
@@ -130,10 +131,10 @@ impl RpcServerConfig {
         self
     }
 
-    /// Override how long the bound checks reuse a transaction-limits reading.
+    /// Override the background tip refresh interval.
     #[must_use]
-    pub fn with_tx_limits_cache_ttl_ms(mut self, ttl_ms: u64) -> Self {
-        self.tx_limits_cache_ttl_ms = ttl_ms;
+    pub fn with_tip_refresh_interval_ms(mut self, interval_ms: u64) -> Self {
+        self.tip_refresh_interval_ms = interval_ms;
         self
     }
 }

@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
-    RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
+    RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
@@ -115,11 +115,18 @@ impl SubmitPlane for ScriptedBackend {
 
 #[async_trait]
 impl ChainPlane for ScriptedBackend {
-    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
-        Ok(ChainTip {
-            height: BlockHeight::from(0),
-            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
-        })
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
+        Ok(TipReading::new(
+            ChainTip {
+                height: BlockHeight::from(0),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+            },
+            groundhog_xdr::network_config::NetworkConfig::_0 {
+                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+                    params: VecM(vec![]),
+                },
+            },
+        ))
     }
 
     async fn get_block_by_number(

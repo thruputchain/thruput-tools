@@ -8,7 +8,7 @@ use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
 use groundhog_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
-    RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
+    RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
@@ -122,11 +122,18 @@ impl SubmitPlane for PopulatedReadBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for PopulatedReadBackend {
-    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
-        Ok(ChainTip {
-            height: BlockHeight::from(42),
-            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(TIP_HASH)),
-        })
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
+        Ok(TipReading::new(
+            ChainTip {
+                height: BlockHeight::from(42),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(TIP_HASH)),
+            },
+            groundhog_xdr::network_config::NetworkConfig::_0 {
+                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+                    params: VecM(vec![]),
+                },
+            },
+        ))
     }
 
     async fn get_block_by_number(

@@ -13,6 +13,7 @@ members = [
     "crates/json-rpc/open-rpc-spec",
     "crates/x23/x23-transport",
     "crates/tools/signing",
+    "crates/tools/tx-validation",
     "crates/tools/cli",
     "crates/rv32/artifact",
     "crates/rv32/lower",
@@ -56,6 +57,7 @@ groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.16.0-rc.
 groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.16.0-rc.1", registry = "groundhog" }
 groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.16.0-rc.1", registry = "groundhog" }
 groundhog-signing = { path = "crates/tools/signing", version = "=0.16.0-rc.1", registry = "groundhog" }
+groundhog-tx-validation = { path = "crates/tools/tx-validation", version = "=0.16.0-rc.1", registry = "groundhog" }
 groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.16.0-rc.1", registry = "groundhog" }
 groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.16.0-rc.1", registry = "groundhog" }
 groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.16.0-rc.1", registry = "groundhog" }

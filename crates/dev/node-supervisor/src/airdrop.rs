@@ -23,6 +23,7 @@ use groundhog_signing::{
     BuildSignedDevWalletHogTransfer, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_signed_dev_wallet_hog_transfer, derive_dev_account_signer,
 };
+use groundhog_tx_validation::NetworkConfigParams;
 use jsonrpsee::core::RpcResult;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -532,7 +533,10 @@ where
         &self,
         context: RpcRequestContext,
     ) -> Result<groundhog_json_rpc_types::block::ChainTip, RpcServerError> {
-        within_request_deadline(context, self.submit_chain.chain_tip(context)).await
+        within_request_deadline(context, async {
+            Ok(self.submit_chain.chain_tip(context).await?.tip)
+        })
+        .await
     }
 
     async fn submit(
@@ -540,11 +544,13 @@ where
         context: RpcRequestContext,
         signed: &SignedAirdrop,
     ) -> Result<(), RpcServerError> {
-        let tx = validate_raw_transaction_bytes(signed.bytes.clone(), None).map_err(|error| {
-            RpcServerError::BackendUnavailable(format!(
-                "locally constructed airdrop transaction failed validation: {error}"
-            ))
-        })?;
+        let tx =
+            validate_raw_transaction_bytes(signed.bytes.clone(), &NetworkConfigParams::default())
+                .map_err(|error| {
+                RpcServerError::BackendUnavailable(format!(
+                    "locally constructed airdrop transaction failed validation: {error}"
+                ))
+            })?;
         if tx.hash != signed.tx_hash {
             return Err(RpcServerError::BackendUnavailable(
                 "retained local airdrop transaction hash does not match its signed bytes".into(),

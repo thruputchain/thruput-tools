@@ -13,7 +13,7 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::{RpcRequestContext, TxLimits};
+use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
 use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
 use groundhog_scheduler::{ExpectedDBTip, RPCError};
 use groundhog_xdr::network_config::NetworkConfig;
@@ -338,22 +338,22 @@ impl TipCoalescer {
             .map_err(|_| GatewayError::BackendUnavailable("tip coalescer dropped reply".into()))?
     }
 
-    /// Ask for the current chain tip.
-    #[tracing::instrument(skip_all)]
+    /// Ask for the current chain tip alone; production callers take
+    /// [`Self::tip_reading`] so the config travels with it.
+    #[cfg(test)]
     pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
         Ok(self.tip_snapshot(context).await?.tip)
     }
 
-    /// Ask for the transaction bounds in force at the current chain tip.
+    /// Ask for the current chain tip together with the network config it
+    /// carries.
     #[tracing::instrument(skip_all)]
-    pub async fn transaction_limits(
+    pub async fn tip_reading(
         &self,
         context: RpcRequestContext,
-    ) -> Result<TxLimits, GatewayError> {
+    ) -> Result<TipReading, GatewayError> {
         let snapshot = self.tip_snapshot(context).await?;
-        TxLimits::from_network_config(&snapshot.network_config).map_err(|error| {
-            GatewayError::BackendUnavailable(format!("scheduler tip network config: {error}"))
-        })
+        Ok(TipReading::new(snapshot.tip, snapshot.network_config))
     }
 }
 
@@ -558,7 +558,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transaction_limits_come_from_the_tip_network_config() {
+    async fn tip_reading_carries_the_network_config() {
         let mock = MockSink::new(42);
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(4, 100),
@@ -566,13 +566,11 @@ mod tests {
             GatewayMetrics::for_tests(),
         );
 
-        let limits = coalescer
-            .transaction_limits(request_context())
-            .await
-            .unwrap();
+        let reading = coalescer.tip_reading(request_context()).await.unwrap();
 
-        assert_eq!(limits.max_new_contracts_per_tx, 6);
-        assert_eq!(mock.seen(), 1, "limits ride on the same tip RPC");
+        assert_eq!(reading.tip.height, BlockHeight::new(42));
+        assert_eq!(reading.network_config, default_tip(42).network_config);
+        assert_eq!(mock.seen(), 1, "config rides on the same tip RPC");
     }
 
     #[tokio::test]

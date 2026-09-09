@@ -5,11 +5,11 @@ use groundhog_json_rpc_client::{
 };
 use groundhog_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
-    RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
+    RpcServerError, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
-    block::{BlockInfo, ChainTip},
+    block::BlockInfo,
     events::{EventPage, EventQuery},
     hex::{Hex0x, HexBytes},
     network_info::NetworkInfo,
@@ -84,7 +84,7 @@ impl SubmitPlane for RecentFailureBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for RecentFailureBackend {
-    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
 

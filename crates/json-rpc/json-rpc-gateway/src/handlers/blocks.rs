@@ -1,14 +1,15 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
-use groundhog_json_rpc_server::{RpcRequestContext, TxLimits};
+use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
 use groundhog_json_rpc_types::BlockHeight;
-use groundhog_json_rpc_types::block::{BlockInfo, ChainTip};
+use groundhog_json_rpc_types::block::BlockInfo;
 
 use crate::context::GatewayContext;
 use crate::error::{self, GatewayError};
 
-/// Current chain tip: height + block hash.
+/// Current chain tip (height + block hash) with the network config it
+/// carries.
 ///
 /// Routes through the per-gateway `TipCoalescer` so that concurrent
 /// client requests share a single in-flight `schedgateway_get_tip` RPC.
@@ -17,21 +18,8 @@ use crate::error::{self, GatewayError};
 pub async fn chain_tip(
     ctx: &GatewayContext,
     context: RpcRequestContext,
-) -> Result<ChainTip, GatewayError> {
-    ctx.tip_coalescer.chain_tip(context).await
-}
-
-/// Transaction bounds in force at the current chain tip, for the
-/// `sendRawTransaction` pre-checks.
-///
-/// Shares the `TipCoalescer` with `chain_tip`: the bounds ride on the same
-/// `schedgateway_get_tip` reply, so no extra backend RPC is introduced.
-#[tracing::instrument(skip_all)]
-pub async fn transaction_limits(
-    ctx: &GatewayContext,
-    context: RpcRequestContext,
-) -> Result<TxLimits, GatewayError> {
-    ctx.tip_coalescer.transaction_limits(context).await
+) -> Result<TipReading, GatewayError> {
+    ctx.tip_coalescer.tip_reading(context).await
 }
 
 /// Block data at a given height.
