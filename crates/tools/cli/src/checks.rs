@@ -243,7 +243,9 @@ pub fn check_project(
                     "global"
                 }
             });
-            if let Some(ref key_name) = profile_key {
+            if let Some(ref key_name) = profile_key
+                && !crate::dev_keys::is_dev_key(key_name)
+            {
                 let key_path = crate::config::keys_dir()?.join(format!("{key_name}.json"));
                 if !key_path.exists() {
                     findings.push(Finding {
@@ -439,7 +441,6 @@ pub fn collect_report(
         &keys,
         &project,
         effective_default_key.as_deref(),
-        effective_default_key_source,
         &mut findings,
     );
 
@@ -1225,15 +1226,16 @@ fn add_key_findings(
     keys: &KeyStatus,
     project: &ProjectContext,
     effective_default_key: Option<&str>,
-    effective_default_key_source: Option<&str>,
     findings: &mut Vec<Finding>,
 ) {
-    let uses_builtin_local_key = effective_default_key_source == Some("local built-in");
+    // Dev keys are derived, regardless of whether a profile, global config, or
+    // the local default selected them. Runtime-manifest checks happen at use.
+    let uses_dev_key = effective_default_key.is_some_and(crate::dev_keys::is_dev_key);
     let has_profile_key_warning = project.findings.iter().any(|f| f.code == "key_not_on_disk");
     let effective_default_exists =
         effective_default_key_summary(&keys.keys, effective_default_key).is_some();
 
-    if keys.keys.is_empty() && !uses_builtin_local_key {
+    if keys.keys.is_empty() && !uses_dev_key {
         add_missing_keys_finding(findings);
         if let Some(selected) = effective_default_key
             && !effective_default_exists
@@ -1259,7 +1261,7 @@ fn add_key_findings(
             )),
         });
     } else if let Some(selected) = effective_default_key
-        && !uses_builtin_local_key
+        && !uses_dev_key
         && !effective_default_exists
         && !has_profile_key_warning
     {
@@ -1867,6 +1869,76 @@ mod tests {
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn profile_key_findings_distinguish_derived_and_missing_keys() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        }
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        for (key, missing) in [
+            ("dev-1", false),
+            ("dev-99", false),
+            ("alice", true),
+            ("dev-", true),
+            ("dev-abc", true),
+        ] {
+            std::fs::write(
+                project.join("groundhog.toml"),
+                format!("[profile.default]\ndefault_key = \"{key}\"\n"),
+            )
+            .unwrap();
+            let context = check_project(&project, Some("default")).unwrap();
+            assert_eq!(
+                context.findings.iter().any(|f| f.code == "key_not_on_disk"),
+                missing,
+                "{key}",
+            );
+        }
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    fn selected_key_findings_distinguish_derived_and_missing_keys() {
+        for stored_keys in [
+            Vec::new(),
+            vec![KeySummary {
+                name: "stored".into(),
+                address: "unused".into(),
+                is_default: false,
+            }],
+        ] {
+            let keys = KeyStatus {
+                keys: stored_keys,
+                global_default_key: None,
+            };
+            for (key, missing) in [
+                ("dev-1", false),
+                ("dev-99", false),
+                ("alice", true),
+                ("dev-", true),
+                ("dev-abc", true),
+            ] {
+                let mut findings = Vec::new();
+                add_key_findings(&keys, &ProjectContext::default(), Some(key), &mut findings);
+                assert_eq!(
+                    findings.iter().any(|f| f.code == "no_keys"),
+                    missing && keys.keys.is_empty(),
+                    "{key}"
+                );
+                assert_eq!(
+                    findings.iter().any(|f| f.code == "default_key_not_on_disk"),
+                    missing,
+                    "{key}",
+                );
+            }
         }
     }
 
