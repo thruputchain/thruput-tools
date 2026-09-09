@@ -77,9 +77,10 @@ impl FromStr for HealthBackend {
 /// batch is in flight and drain together when it completes.
 ///
 /// Used for both `sendRawTransaction` (packing tx blobs into
-/// `submit_unvetted`) and `getStorageAt` (packing item reads into
-/// `dbgateway_get_items`); see `GatewayConfig::batch` and
-/// `GatewayConfig::storage` for the per-RPC tuning slots.
+/// `schedgateway_submit_tx_batch`) and `getStorageAt`
+/// (packing item reads into `dbgateway_get_items`); see
+/// `GatewayConfig::batch` and `GatewayConfig::storage` for the per-RPC
+/// tuning slots.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdaptiveBatchConfig {
@@ -128,7 +129,7 @@ impl Default for AdaptiveBatchConfig {
 
 /// Request-coalescing config for `chainTip`.
 ///
-/// A single task serializes backend `schedcoord_get_tip` calls. While
+/// A single task serializes backend `schedgateway_get_tip` calls. While
 /// one call is in flight, subsequent `chainTip` requests accumulate in
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
@@ -205,7 +206,7 @@ pub struct GatewayConfig {
     /// connection pool.
     ///
     /// Older hogd schedulers accept TCP connections before coordinator
-    /// registration makes `schedcoord_get_tip` safe to call.
+    /// registration makes `schedgateway_get_tip` safe to call.
     pub scheduler_reconnect_grace_ms: u64,
 
     /// Maximum total time to drain gateway servers and background health work
@@ -371,7 +372,11 @@ impl GatewayConfig {
         }
         let defaults = GatewayConfig::default();
         let network_hash = Some(manifest.network_hash.clone());
-        let scheduler_address = manifest.endpoints.scheduler.to_string();
+        let scheduler_address = manifest
+            .endpoints
+            .scheduler_gateway
+            .ok_or(RuntimeManifestConfigError::MissingSchedulerGateway)?
+            .to_string();
         let indexer_address = manifest.endpoints.indexer.map(|addr| addr.to_string());
         let db_gateway_address = manifest.endpoints.db_gateway.map(|addr| addr.to_string());
         let view_gateway_address = manifest.endpoints.view_gateway.map(|addr| addr.to_string());
@@ -470,6 +475,10 @@ pub enum RuntimeManifestConfigError {
     /// The manifest does not identify whether the chain was initialized or recovered.
     #[error("hog-devnode runtime manifest is missing chainState")]
     MissingChainState,
+
+    /// The manifest predates the separate scheduler gateway endpoint.
+    #[error("runtime manifest is missing required endpoint `schedulerGateway`")]
+    MissingSchedulerGateway,
 
     /// The config file already set a backend field to a conflicting value.
     #[error("runtime manifest conflicts with configured field `{field}`")]
@@ -612,6 +621,7 @@ network_hash = "0x1234"
         let mut config = GatewayConfig::default();
         let manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
             "indexer": "127.0.0.1:1001",
             "dbGateway": "127.0.0.1:1002",
             "viewGateway": "127.0.0.1:1003",
@@ -621,7 +631,7 @@ network_hash = "0x1234"
             .apply_runtime_manifest(&manifest)
             .expect("bug: manifest should configure gateway");
 
-        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.scheduler_address, "127.0.0.1:1010");
         assert_eq!(config.network_hash, Some(manifest.network_hash.clone()));
         assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
         assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
@@ -640,13 +650,14 @@ network_hash = "0x1234"
         let mut config = GatewayConfig::default();
         let manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
         }));
 
         config
             .apply_runtime_manifest(&manifest)
             .expect("bug: scheduler-only manifest should configure gateway");
 
-        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.scheduler_address, "127.0.0.1:1010");
         assert_eq!(config.indexer_address, None);
         assert_eq!(config.db_gateway_address, None);
         assert_eq!(config.view_gateway_address, None);
@@ -657,10 +668,23 @@ network_hash = "0x1234"
     }
 
     #[test]
+    fn runtime_manifest_requires_scheduler_gateway() {
+        let manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+
+        assert_eq!(
+            GatewayConfig::default().apply_runtime_manifest(&manifest),
+            Err(RuntimeManifestConfigError::MissingSchedulerGateway)
+        );
+    }
+
+    #[test]
     fn runtime_manifest_rejects_unsupported_schema_version() {
         let mut config = GatewayConfig::default();
         let mut manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
         }));
         manifest.schema_version = 3;
 
@@ -702,6 +726,7 @@ network_hash = "0x1234"
         let mut config = GatewayConfig::default();
         let mut manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
             "indexer": "127.0.0.1:1001",
             "dbGateway": "127.0.0.1:1002",
             "viewGateway": "127.0.0.1:1003",
@@ -713,7 +738,7 @@ network_hash = "0x1234"
             .apply_runtime_manifest(&manifest)
             .expect("bug: hosted runtime manifest should configure gateway");
 
-        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.scheduler_address, "127.0.0.1:1010");
         assert_eq!(config.network_hash, Some(manifest.network_hash.clone()));
         assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
         assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
@@ -735,6 +760,7 @@ network_hash = "0x1234"
         };
         let manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
         }));
 
         let err = config
@@ -754,24 +780,26 @@ network_hash = "0x1234"
         let mut config = GatewayConfig {
             network_hash: Some(NetworkHashHex::from([0; 32])),
             genesis_hash: Some(hash(0x42)),
-            scheduler_address: "127.0.0.1:1000".into(),
+            scheduler_address: "127.0.0.1:1010".into(),
             ..GatewayConfig::default()
         };
         let manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
         }));
 
         config
             .apply_runtime_manifest(&manifest)
             .expect("bug: matching scheduler should not conflict");
 
-        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.scheduler_address, "127.0.0.1:1010");
     }
 
     #[test]
     fn runtime_manifest_rejects_conflicting_network_identity() {
         let manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
+            "schedulerGateway": "127.0.0.1:1010",
         }));
         let mut network_config = GatewayConfig {
             network_hash: Some(NetworkHashHex::from([0x41; 32])),

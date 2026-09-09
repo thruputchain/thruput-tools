@@ -1392,7 +1392,7 @@ mod tests {
           "protocol": "hogp/test00000000000",
           "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
           "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
-          "endpoints": {"scheduler": "127.0.0.1:12345"},
+          "endpoints": {"scheduler": "127.0.0.1:12345", "schedulerGateway": "127.0.0.1:12346"},
           "bootstrapAccountDerivation": {
             "scheme": "groundhog-bootstrap-account-v1",
             "seed": "groundhog-dev-accounts"

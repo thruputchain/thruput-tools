@@ -11,7 +11,7 @@ use crate::error::{self, GatewayError};
 /// Current chain tip: height + block hash.
 ///
 /// Routes through the per-gateway `TipCoalescer` so that concurrent
-/// client requests share a single in-flight `schedcoord_get_tip` RPC.
+/// client requests share a single in-flight `schedgateway_get_tip` RPC.
 /// See `crate::tip_coalescer` for the linearizable coalescing design.
 #[tracing::instrument(skip_all)]
 pub async fn chain_tip(
@@ -35,7 +35,8 @@ pub async fn get_block_by_number(
 
 /// Number of transactions in the mempool.
 ///
-/// **Deferred** — no `size()` RPC on the scheduler interface yet.
+/// **Deferred** — the scheduler-gateway RPC exists, but standalone handler
+/// plumbing remains deferred. See `docs/gateway/open-questions.md`.
 #[tracing::instrument(skip_all)]
 pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, GatewayError> {
     Err(error::not_implemented("pendingTransactionCount"))

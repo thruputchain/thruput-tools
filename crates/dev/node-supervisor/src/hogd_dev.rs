@@ -70,9 +70,13 @@ pub struct HogdDevEndpoints {
     /// `SchedulerCoord` endpoint. Also accepts hogd-dev's compact
     /// readiness key `scheduler`.
     ///
-    /// Required for submit, chain tip, and pending tx probes.
+    /// Required for genesis and local block driving.
     #[serde(alias = "scheduler")]
     pub scheduler_coord: SocketAddr,
+    /// `SchedGateway` endpoint for public submit and read-side scheduler probes.
+    /// Absent only in legacy readiness payloads without a runtime manifest.
+    #[serde(default)]
+    pub scheduler_gateway: Option<SocketAddr>,
     /// `IndexerBlockExplorer` endpoint. Also accepts hogd-dev's compact
     /// readiness key `read`. Absent in the reduced contract.
     #[serde(default, alias = "read")]
@@ -1031,6 +1035,13 @@ fn readiness_from_runtime_manifest(
                 program: program.to_string(),
                 reason: "hog-devnode runtime manifest is missing chainState".to_string(),
             })?;
+    let scheduler_gateway = manifest.endpoints.scheduler_gateway.ok_or_else(|| {
+        NodeSupervisorError::InvalidRuntimeManifest {
+            program: program.to_string(),
+            reason: "hog-devnode runtime manifest is missing endpoints.schedulerGateway"
+                .to_string(),
+        }
+    })?;
     let dev_accounts = manifest
         .bootstrap_accounts
         .iter()
@@ -1063,6 +1074,7 @@ fn readiness_from_runtime_manifest(
         protocol: Some(manifest.protocol.clone()),
         endpoints: HogdDevEndpoints {
             scheduler_coord: manifest.endpoints.scheduler,
+            scheduler_gateway: Some(scheduler_gateway),
             indexer_block_explorer: manifest.endpoints.indexer,
             db_gateway: manifest.endpoints.db_gateway,
             view_gateway: manifest.endpoints.view_gateway,
@@ -1768,6 +1780,8 @@ mod tests {
 
     const V1_READY: &str = r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
     const COMPACT_READY: &str = r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
+    const MANIFEST_SCHEDULER_ENDPOINTS: &str =
+        r#"{"scheduler":"127.0.0.1:12345","schedulerGateway":"127.0.0.1:12349"}"#;
     const GRACEFUL_SHUTDOWN_FILE_ENV: &str = "GROUNDHOG_FAKE_GRACEFUL_SHUTDOWN_FILE";
 
     #[test]
@@ -1918,7 +1932,7 @@ mod tests {
 
     #[test]
     fn runtime_identity_rejects_non_bootstrap_network() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
         readiness.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32]);
@@ -1935,7 +1949,7 @@ mod tests {
 
     #[test]
     fn runtime_identity_rejects_protocol_mismatch() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
 
@@ -2042,6 +2056,7 @@ mod tests {
         let line = manifest_readiness_line(
             r#"{
               "scheduler":"127.0.0.1:12345",
+              "schedulerGateway":"127.0.0.1:12349",
               "indexer":"127.0.0.1:12346",
               "dbGateway":"127.0.0.1:12347",
               "viewGateway":"127.0.0.1:12348"
@@ -2084,6 +2099,14 @@ mod tests {
                 .expect("bug: address should parse")
         );
         assert_eq!(
+            readiness.endpoints.scheduler_gateway,
+            Some(
+                "127.0.0.1:12349"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+        assert_eq!(
             readiness.endpoints.indexer_block_explorer,
             Some(
                 "127.0.0.1:12346"
@@ -2112,7 +2135,7 @@ mod tests {
 
     #[test]
     fn readiness_line_carries_recovered_chain_state() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let path = PathBuf::from(
@@ -2139,7 +2162,7 @@ mod tests {
 
     #[test]
     fn manifest_readiness_requires_chain_state() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let path = PathBuf::from(
@@ -2169,8 +2192,39 @@ mod tests {
     }
 
     #[test]
+    fn manifest_readiness_requires_scheduler_gateway() {
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("bug: manifest should be readable"))
+                .expect("bug: manifest should parse");
+        manifest["endpoints"]
+            .as_object_mut()
+            .expect("bug: endpoints is an object")
+            .remove("schedulerGateway");
+        let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
+        fs::write(&path, &bytes).expect("bug: manifest should be writable");
+        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+
+        let error = parse_readiness_line("hogd-dev", &pointer.to_string())
+            .expect_err("manifest readiness without schedulerGateway should fail");
+
+        assert!(matches!(
+            error,
+            NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
+                if reason.contains("schedulerGateway")
+        ));
+    }
+
+    #[test]
     fn manifest_readiness_requires_hogd_dev_runtime_kind() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let path = PathBuf::from(
@@ -2198,10 +2252,10 @@ mod tests {
     }
 
     #[test]
-    fn readiness_line_accepts_v1_scheduler_only_endpoint() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+    fn readiness_line_accepts_scheduler_endpoints_without_optional_read_endpoints() {
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let readiness = parse_readiness_line("hogd-dev", &line)
-            .expect("bug: v1 readiness payload should parse");
+            .expect("bug: minimal current readiness payload should parse");
 
         assert_eq!(readiness.status, "ready");
         assert_eq!(readiness.network_hash.as_str(), "00".repeat(32));
@@ -2212,6 +2266,14 @@ mod tests {
                 .expect("bug: address should parse")
         );
         assert_eq!(readiness.endpoints.indexer_block_explorer, None);
+        assert_eq!(
+            readiness.endpoints.scheduler_gateway,
+            Some(
+                "127.0.0.1:12349"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
         assert_eq!(readiness.endpoints.db_gateway, None);
         assert_eq!(readiness.endpoints.view_gateway, None);
         assert_eq!(readiness.endpoints.dev_control, None);
@@ -2256,7 +2318,7 @@ mod tests {
 
     #[test]
     fn readiness_manifest_hash_mismatch_is_rejected() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let path = PathBuf::from(
@@ -2279,7 +2341,7 @@ mod tests {
 
     #[test]
     fn readiness_manifest_hash_accepts_uppercase_hex_digits() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let hash = pointer["manifestHash"]
@@ -2298,7 +2360,7 @@ mod tests {
 
     #[test]
     fn readiness_manifest_rejects_group_or_world_permissions() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let path = PathBuf::from(
@@ -2320,7 +2382,7 @@ mod tests {
 
     #[test]
     fn readiness_manifest_rejects_symlink_path() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         let path = PathBuf::from(
@@ -2344,7 +2406,7 @@ mod tests {
 
     #[test]
     fn readiness_manifest_rejects_relative_path() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let mut pointer: serde_json::Value =
             serde_json::from_str(&line).expect("bug: pointer line should parse");
         pointer["manifestPath"] = serde_json::Value::String("runtime-manifest.json".into());
@@ -2398,6 +2460,7 @@ mod tests {
         let line = manifest_readiness_line(
             r#"{
               "scheduler":"127.0.0.1:12345",
+              "schedulerGateway":"127.0.0.1:12349",
               "indexer":"127.0.0.1:12346",
               "dbGateway":"127.0.0.1:12347",
               "viewGateway":"127.0.0.1:12348"
@@ -2422,7 +2485,13 @@ mod tests {
 
         assert_eq!(
             sorted(endpoint_keys),
-            sorted(["dbGateway", "indexer", "scheduler", "viewGateway"])
+            sorted([
+                "dbGateway",
+                "indexer",
+                "scheduler",
+                "schedulerGateway",
+                "viewGateway"
+            ])
         );
     }
 
@@ -2437,7 +2506,7 @@ mod tests {
             "12".repeat(32),
             hex::encode(user_signer.verifying_key_bytes()),
         );
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
 
@@ -2477,7 +2546,7 @@ mod tests {
 
     #[test]
     fn dev_account_count_mismatch_is_rejected() {
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload parses");
         let err = validate_dev_accounts(&readiness, &HogdDevConfig::default())
@@ -2499,7 +2568,7 @@ mod tests {
             "11".repeat(32),
             "22".repeat(32),
         );
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
         let config = HogdDevConfig::default().with_dev_account_count(0);
@@ -2521,7 +2590,7 @@ mod tests {
             hex::encode(signer.verifying_key_bytes()),
         );
         let line = manifest_readiness_line_with_derivation(
-            r#"{"scheduler":"127.0.0.1:12345"}"#,
+            MANIFEST_SCHEDULER_ENDPOINTS,
             &accounts,
             "groundhog-bootstrap-account-v2",
             "groundhog-dev-accounts",
@@ -2548,7 +2617,7 @@ mod tests {
             hex::encode(signer.verifying_key_bytes()),
         );
         let line = manifest_readiness_line_with_derivation(
-            r#"{"scheduler":"127.0.0.1:12345"}"#,
+            MANIFEST_SCHEDULER_ENDPOINTS,
             &accounts,
             super::SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME,
             "different-seed",
@@ -2575,7 +2644,7 @@ mod tests {
             hex::encode(signer.verifying_key_bytes()),
         );
         let line = manifest_readiness_line_with_derivation(
-            r#"{"scheduler":"127.0.0.1:12345"}"#,
+            MANIFEST_SCHEDULER_ENDPOINTS,
             &accounts,
             "groundhog-bootstrap-account-v2",
             "different-seed",
@@ -2597,7 +2666,7 @@ mod tests {
             "11".repeat(32),
             hex::encode(signer.verifying_key_bytes()),
         );
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
         let readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
         let config = HogdDevConfig::default().with_dev_account_count(0);
@@ -2619,7 +2688,7 @@ mod tests {
             "11".repeat(32),
             hex::encode(signer.verifying_key_bytes()),
         );
-        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
+        let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
         let mut readiness =
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
         readiness.chain_state = Some(RuntimeManifestChainState::Recovered);
@@ -2792,6 +2861,14 @@ mod tests {
         assert!(process.readiness().manifest_path.is_some());
         assert!(process.readiness().manifest_hash.is_some());
         assert!(process.readiness().runtime_manifest.is_some());
+        assert_ne!(
+            process.readiness().endpoints.scheduler_coord,
+            process
+                .readiness()
+                .endpoints
+                .scheduler_gateway
+                .expect("bug: fake readiness should advertise schedulerGateway")
+        );
 
         let status = process.stop().await.expect("bug: fake child should stop");
         assert!(status.success());

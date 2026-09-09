@@ -15,7 +15,7 @@ use std::{sync::Arc, time::Duration, time::Instant};
 use async_trait::async_trait;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
-use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
+use groundhog_scheduler::{ExpectedDBTip, RPCError};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
@@ -41,7 +41,7 @@ pub trait TipSink: Send + Sync + 'static {
     async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError>;
 }
 
-/// Production sink: forwards to `schedcoord_get_tip` and maps the
+/// Production sink: forwards to `schedgateway_get_tip` and maps the
 /// outcome to a `ChainTip` (or a gateway error).
 pub struct SchedulerTipSink {
     scheduler: Arc<RwLock<Option<SchedulerClient>>>,
@@ -77,7 +77,7 @@ impl TipSink for SchedulerTipSink {
         if timeout.is_zero() {
             return Err(GatewayError::BackendTimeout);
         }
-        let mut call = tokio::spawn(async move { client.schedcoord_get_tip().await });
+        let mut call = tokio::spawn(async move { client.schedgateway_get_tip().await });
         let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
         let rpc_result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
             Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
@@ -88,14 +88,14 @@ impl TipSink for SchedulerTipSink {
             Err(())
         };
         let outcome = match &rpc_result {
-            Ok(Ok(SchedulerGetTipResult::SchedulerGetTipOK { .. })) => BackendRequestOutcome::Ok,
+            Ok(Ok(ExpectedDBTip::kRPCNone { .. })) => BackendRequestOutcome::Ok,
             Ok(Ok(_)) => BackendRequestOutcome::Rejected,
             Ok(Err(_)) => BackendRequestOutcome::Error,
             Err(()) => BackendRequestOutcome::Timeout,
         };
         self.metrics.observe_backend_request(
             HealthBackend::Scheduler,
-            "schedcoord_get_tip",
+            "schedgateway_get_tip",
             outcome,
             started_at.elapsed(),
         );
@@ -106,7 +106,7 @@ impl TipSink for SchedulerTipSink {
             .map_err(|()| GatewayError::BackendTimeout)?
             .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
         match result {
-            SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
+            ExpectedDBTip::kRPCNone { db_tip } => {
                 let block_hash = consensus_value_hash(&db_tip.value).map_err(|error| {
                     GatewayError::BackendUnavailable(format!(
                         "scheduler returned an unencodable consensus value: {error}"
@@ -119,7 +119,7 @@ impl TipSink for SchedulerTipSink {
                     },
                 })
             }
-            SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => Err(
+            ExpectedDBTip::Default { error } if RPCError(error) == RPCError::kRPCNotFound => Err(
                 GatewayError::BackendUnavailable("no committed blocks yet".into()),
             ),
             other => Err(GatewayError::BackendUnavailable(format!(

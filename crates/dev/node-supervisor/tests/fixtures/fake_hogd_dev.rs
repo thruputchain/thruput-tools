@@ -29,12 +29,14 @@ use groundhog_indexer::{
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_json_rpc_types::protocol_token::protocol_text;
 use groundhog_scheduler::{
-    BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ParallelBatch,
-    ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
-    ParallelTransactionHashBatch, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
+    BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ExpectedDBTip,
+    ParallelBatch, ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
+    ParallelTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
+    SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
     SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
+    sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
 };
 use groundhog_xdr::PROTOCOL_VERSION;
 use groundhog_xdr::contract::{ContractType, DeployedContractHash};
@@ -185,6 +187,19 @@ fn main() {
         Ok("ready") => run_ready(),
         Ok("dead-scheduler") => run_dead_scheduler(),
         Ok("scheduler-get-tip-error") => run_ready_with_scheduler(FakeSchedulerMode::GetTipError),
+        Ok("dead-scheduler-gateway") => run_dead_scheduler_gateway(),
+        Ok("scheduler-gateway-intro-rejected") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewayIntroRejected);
+        }
+        Ok("scheduler-gateway-submit-rejected") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewaySubmitRejected);
+        }
+        Ok("scheduler-gateway-network-hash-mismatch") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewayNetworkHashMismatch);
+        }
+        Ok("scheduler-gateway-tip-mismatch") => {
+            run_ready_with_scheduler(FakeSchedulerMode::GatewayTipMismatch);
+        }
         Ok("scheduler-network-hash-mismatch") => {
             run_ready_with_scheduler(FakeSchedulerMode::NetworkHashMismatch);
         }
@@ -270,7 +285,10 @@ fn main() {
 fn run_ready_then_exit() {
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    println!("{}", readiness_scheduler_only(scheduler.addr));
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, scheduler.gateway_addr)
+    );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready-then-exit"}}"#);
     // Flush stdout/stderr so the supervisor sees readiness before the
     // process disappears.
@@ -288,7 +306,10 @@ fn run_ready_with_scheduler(mode: FakeSchedulerMode) {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(mode);
-    println!("{}", readiness_scheduler_only(scheduler.addr));
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, scheduler.gateway_addr)
+    );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
     while !TERMINATED.load(Ordering::SeqCst) {
@@ -302,7 +323,24 @@ fn run_ready_with_scheduler(mode: FakeSchedulerMode) {
 fn run_dead_scheduler() {
     install_sigterm_handler();
     write_pid_file_if_requested();
-    println!("{}", readiness_scheduler_only(dead_loopback_addr()));
+    println!(
+        "{}",
+        readiness_scheduler_only(dead_loopback_addr(), dead_loopback_addr())
+    );
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn run_dead_scheduler_gateway() {
+    install_sigterm_handler();
+    write_pid_file_if_requested();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, dead_loopback_addr())
+    );
 
     while !TERMINATED.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(10));
@@ -312,7 +350,10 @@ fn run_dead_scheduler() {
 fn run_ignore_term() {
     ignore_sigterm();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    println!("{}", readiness_scheduler_only(scheduler.addr));
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, scheduler.gateway_addr)
+    );
     run_ignore_term_loop();
 }
 
@@ -328,7 +369,10 @@ fn run_with_helper() {
         .expect("bug: helper process should spawn");
 
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    println!("{}", readiness_scheduler_only(scheduler.addr));
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, scheduler.gateway_addr)
+    );
 
     while !TERMINATED.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(10));
@@ -344,7 +388,10 @@ fn run_with_helper_then_exit() {
         .expect("bug: helper process should spawn");
 
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    println!("{}", readiness_scheduler_only(scheduler.addr));
+    println!(
+        "{}",
+        readiness_scheduler_only(scheduler.addr, scheduler.gateway_addr)
+    );
     let _ = io::stdout().flush();
     thread::sleep(Duration::from_millis(100));
 }
@@ -374,7 +421,10 @@ fn run_with_indexer_no_gateway(indexer_mode: FakeIndexerMode) {
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     let indexer = start_fake_indexer(indexer_mode);
-    println!("{}", readiness_with_read(scheduler.addr, indexer.addr));
+    println!(
+        "{}",
+        readiness_with_read(scheduler.addr, scheduler.gateway_addr, indexer.addr)
+    );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
     while !TERMINATED.load(Ordering::SeqCst) {
@@ -391,7 +441,7 @@ fn run_with_db_gateway_no_indexer(db_gateway_mode: FakeDbGatewayMode) {
     let db_gateway = start_fake_db_gateway(db_gateway_mode);
     println!(
         "{}",
-        readiness_with_gateway(scheduler.addr, db_gateway.addr)
+        readiness_with_gateway(scheduler.addr, scheduler.gateway_addr, db_gateway.addr)
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -413,7 +463,12 @@ fn run_with_indexer_and_db_gateway(
     let db_gateway = start_fake_db_gateway(db_gateway_mode);
     println!(
         "{}",
-        readiness_full(scheduler.addr, indexer.addr, db_gateway.addr)
+        readiness_full(
+            scheduler.addr,
+            scheduler.gateway_addr,
+            indexer.addr,
+            db_gateway.addr,
+        )
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -436,7 +491,12 @@ fn run_indexer_connect_fail() {
     let dead_indexer_addr = dead_loopback_addr();
     println!(
         "{}",
-        readiness_full(scheduler.addr, dead_indexer_addr, db_gateway.addr)
+        readiness_full(
+            scheduler.addr,
+            scheduler.gateway_addr,
+            dead_indexer_addr,
+            db_gateway.addr,
+        )
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -453,7 +513,12 @@ fn run_db_gateway_connect_fail() {
     let dead_db_gateway_addr = dead_loopback_addr();
     println!(
         "{}",
-        readiness_full(scheduler.addr, indexer.addr, dead_db_gateway_addr)
+        readiness_full(
+            scheduler.addr,
+            scheduler.gateway_addr,
+            indexer.addr,
+            dead_db_gateway_addr,
+        )
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -492,36 +557,75 @@ fn ignore_sigterm() {
     }
 }
 
-/// Readiness JSON with only the `SchedulerCoord` endpoint (reduced contract).
-fn readiness_scheduler_only(scheduler: SocketAddr) -> String {
-    readiness_pointer(&endpoints_json(scheduler, None, None, None))
+/// Readiness JSON with only the required scheduler endpoints (reduced contract).
+fn readiness_scheduler_only(scheduler: SocketAddr, scheduler_gateway: SocketAddr) -> String {
+    readiness_pointer(&endpoints_json(
+        scheduler,
+        scheduler_gateway,
+        None,
+        None,
+        None,
+    ))
 }
 
 /// Readiness JSON with `SchedulerCoord` and `IndexerBlockExplorer`
 /// endpoints, but no `DbGateway` endpoint.
-fn readiness_with_read(scheduler: SocketAddr, read: SocketAddr) -> String {
-    readiness_pointer(&endpoints_json(scheduler, Some(read), None, None))
+fn readiness_with_read(
+    scheduler: SocketAddr,
+    scheduler_gateway: SocketAddr,
+    read: SocketAddr,
+) -> String {
+    readiness_pointer(&endpoints_json(
+        scheduler,
+        scheduler_gateway,
+        Some(read),
+        None,
+        None,
+    ))
 }
 
 /// Readiness JSON with `SchedulerCoord` and `DbGateway` endpoints, but no indexer endpoint.
-fn readiness_with_gateway(scheduler: SocketAddr, gateway: SocketAddr) -> String {
-    readiness_pointer(&endpoints_json(scheduler, None, Some(gateway), None))
+fn readiness_with_gateway(
+    scheduler: SocketAddr,
+    scheduler_gateway: SocketAddr,
+    gateway: SocketAddr,
+) -> String {
+    readiness_pointer(&endpoints_json(
+        scheduler,
+        scheduler_gateway,
+        None,
+        Some(gateway),
+        None,
+    ))
 }
 
 /// Readiness JSON with `SchedulerCoord`, `IndexerBlockExplorer`, and
 /// `DbGateway` endpoints.
-fn readiness_full(scheduler: SocketAddr, read: SocketAddr, gateway: SocketAddr) -> String {
-    readiness_pointer(&endpoints_json(scheduler, Some(read), Some(gateway), None))
+fn readiness_full(
+    scheduler: SocketAddr,
+    scheduler_gateway: SocketAddr,
+    read: SocketAddr,
+    gateway: SocketAddr,
+) -> String {
+    readiness_pointer(&endpoints_json(
+        scheduler,
+        scheduler_gateway,
+        Some(read),
+        Some(gateway),
+        None,
+    ))
 }
 
 fn endpoints_json(
     scheduler: SocketAddr,
+    scheduler_gateway: SocketAddr,
     indexer: Option<SocketAddr>,
     db_gateway: Option<SocketAddr>,
     view_gateway: Option<SocketAddr>,
 ) -> Value {
     let mut endpoints = serde_json::Map::new();
     endpoints.insert("scheduler".to_string(), json!(scheduler));
+    endpoints.insert("schedulerGateway".to_string(), json!(scheduler_gateway));
     if let Some(indexer) = indexer {
         endpoints.insert("indexer".to_string(), json!(indexer));
     }
@@ -700,6 +804,7 @@ fn dead_loopback_addr() -> SocketAddr {
 struct FakeSchedulerRuntime {
     _runtime: Runtime,
     addr: SocketAddr,
+    gateway_addr: SocketAddr,
 }
 
 fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
@@ -708,24 +813,38 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
         .enable_all()
         .build()
         .expect("bug: fake scheduler runtime should build");
-    let addr = runtime.block_on(async {
+    let (addr, gateway_addr) = runtime.block_on(async {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: fake scheduler should bind");
         let addr = listener
             .local_addr()
             .expect("bug: fake scheduler should have local addr");
+        let gateway_listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: fake scheduler gateway should bind");
+        let gateway_addr = gateway_listener
+            .local_addr()
+            .expect("bug: fake scheduler gateway should have local addr");
+        let scheduler = FakeScheduler::new(mode);
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
-            Box::new(FakeScheduler::new(mode)),
+            Box::new(scheduler.clone()),
         )));
         let server = RpcServer::new(listener, services);
         let _server_handle = server.start().await;
-        addr
+        let mut gateway_services = ServiceMap::new();
+        gateway_services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
+            Box::new(FakeSchedulerGateway(scheduler)),
+        )));
+        let gateway_server = RpcServer::new(gateway_listener, gateway_services);
+        let _gateway_server_handle = gateway_server.start().await;
+        (addr, gateway_addr)
     });
     FakeSchedulerRuntime {
         _runtime: runtime,
         addr,
+        gateway_addr,
     }
 }
 
@@ -746,6 +865,10 @@ enum FakeSchedulerMode {
     GetTipError,
     NetworkHashMismatch,
     NoGenesis,
+    GatewayIntroRejected,
+    GatewaySubmitRejected,
+    GatewayNetworkHashMismatch,
+    GatewayTipMismatch,
 }
 
 impl FakeSchedulerMode {
@@ -766,7 +889,7 @@ impl FakeSchedulerMode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FakeScheduler {
     tip: Arc<Mutex<Option<DbTip>>>,
     pending_submits: Arc<AtomicU64>,
@@ -835,6 +958,59 @@ impl FakeScheduler {
                 upgrades: VecM::default(),
             },
         }
+    }
+
+    async fn admit_batch(
+        &self,
+        batch: &ParallelSignedTransactionBatch,
+    ) -> Result<(), ProgramError> {
+        let submit_call = self.submit_calls.fetch_add(1, Ordering::SeqCst);
+        if self.mode == FakeSchedulerMode::SubmitBatchProbe {
+            if submit_call == 0 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if let Ok(path) = env::var(SUBMIT_LOG_ENV) {
+                let mut file = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .map_err(|error| ProgramError::msg(error.to_string()))?;
+                writeln!(file, "{}", batch.segment_tokens.0.len())
+                    .map_err(|error| ProgramError::msg(error.to_string()))?;
+            }
+        }
+        if batch.segment_tokens.0.iter().any(|tokens| *tokens != 1) {
+            return Err(ProgramError::msg(
+                "fake scheduler expected one token per transaction segment",
+            ));
+        }
+        if batch.segment_bytes.0.len() != batch.segment_tokens.0.len() {
+            return Err(ProgramError::msg(
+                "fake scheduler token and byte segment counts did not match",
+            ));
+        }
+        if batch
+            .segment_bytes
+            .0
+            .iter()
+            .map(|length| *length as usize)
+            .sum::<usize>()
+            != batch.xdr.0.len()
+        {
+            return Err(ProgramError::msg(
+                "fake scheduler byte segment lengths did not match xdr payload",
+            ));
+        }
+        if batch.xdr.0.is_empty() {
+            return Err(ProgramError::msg(
+                "fake scheduler expected non-empty signed transaction xdr",
+            ));
+        }
+        if self.mode.supports_block_driver() {
+            self.pending_submits
+                .fetch_add(batch.segment_tokens.0.len() as u64, Ordering::SeqCst);
+        }
+        Ok(())
     }
 }
 
@@ -913,53 +1089,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         batch: ParallelSignedTransactionBatch,
     ) -> Result<(), ProgramError> {
-        let submit_call = self.submit_calls.fetch_add(1, Ordering::SeqCst);
-        if self.mode == FakeSchedulerMode::SubmitBatchProbe {
-            if submit_call == 0 {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            if let Ok(path) = env::var(SUBMIT_LOG_ENV) {
-                let mut file = fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(|error| ProgramError::msg(error.to_string()))?;
-                writeln!(file, "{}", batch.segment_tokens.0.len())
-                    .map_err(|error| ProgramError::msg(error.to_string()))?;
-            }
-        }
-        if batch.segment_tokens.0.iter().any(|tokens| *tokens != 1) {
-            return Err(ProgramError::msg(
-                "fake scheduler expected one token per transaction segment",
-            ));
-        }
-        if batch.segment_bytes.0.len() != batch.segment_tokens.0.len() {
-            return Err(ProgramError::msg(
-                "fake scheduler token and byte segment counts did not match",
-            ));
-        }
-        if batch
-            .segment_bytes
-            .0
-            .iter()
-            .map(|length| *length as usize)
-            .sum::<usize>()
-            != batch.xdr.0.len()
-        {
-            return Err(ProgramError::msg(
-                "fake scheduler byte segment lengths did not match xdr payload",
-            ));
-        }
-        if batch.xdr.0.is_empty() {
-            return Err(ProgramError::msg(
-                "fake scheduler expected non-empty signed transaction xdr",
-            ));
-        }
-        if self.mode.supports_block_driver() {
-            self.pending_submits
-                .fetch_add(batch.segment_tokens.0.len() as u64, Ordering::SeqCst);
-        }
-        Ok(())
+        self.admit_batch(&batch).await
     }
 
     async fn schedulercoord_submit_vetted(
@@ -1110,7 +1240,10 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
             return Err(ProgramError::msg("fake get_tip failure"));
         }
         let call = self.get_tip_calls.fetch_add(1, Ordering::SeqCst);
-        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call >= 2 {
+        // Startup genesis validation is the first coordinator tip call. Public
+        // chainTip uses SchedGateway, so the next coordinator call belongs to
+        // the block driver and is the intended runtime failure.
+        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call >= 1 {
             return Err(ProgramError::msg("fake runtime get_tip failure"));
         }
 
@@ -1147,6 +1280,71 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         // One slot per queried hash: nothing is ever pending in the fake,
         // but each hash still gets an explicit per-transaction answer.
         Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
+    }
+}
+
+struct FakeSchedulerGateway(FakeScheduler);
+
+#[async_trait]
+impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
+    async fn schedgateway_intro(
+        &self,
+        _protocol: ProtocolCommit,
+    ) -> Result<SchedGatewayIntroOutcome, ProgramError> {
+        if self.0.mode == FakeSchedulerMode::GatewayIntroRejected {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol)
+        } else {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
+        }
+    }
+
+    async fn schedgateway_submit_tx_batch(
+        &self,
+        batch: ParallelSignedTransactionBatch,
+    ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
+        self.0.admit_batch(&batch).await?;
+        let outcome = if self.0.mode == FakeSchedulerMode::GatewaySubmitRejected {
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected
+        } else {
+            SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted
+        };
+        Ok(VecM(vec![outcome; batch.segment_tokens.0.len()]))
+    }
+
+    async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
+        match self
+            .0
+            .tip
+            .lock()
+            .expect("bug: fake tip mutex poisoned")
+            .clone()
+        {
+            Some(mut db_tip) => {
+                if self.0.mode == FakeSchedulerMode::GatewayNetworkHashMismatch {
+                    db_tip.value.proposal_header.network_hash =
+                        NetworkHash::new(SHA256Hash::from([0xff; 32]));
+                }
+                if self.0.mode == FakeSchedulerMode::GatewayTipMismatch {
+                    db_tip.id += 1;
+                }
+                Ok(ExpectedDBTip::kRPCNone { db_tip })
+            }
+            None => Ok(ExpectedDBTip::Default {
+                error: RPCError::kRPCNotFound.0,
+            }),
+        }
+    }
+
+    async fn schedgateway_lookup_tx(
+        &self,
+        hashes: TransactionHashBatch,
+    ) -> Result<OptSignedTransactionBatch, ProgramError> {
+        Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
+    }
+
+    async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+        i64::try_from(self.0.pending_submits.load(Ordering::SeqCst))
+            .map_err(|_| ProgramError::msg("fake pending count overflow"))
     }
 }
 

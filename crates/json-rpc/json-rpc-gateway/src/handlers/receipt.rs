@@ -217,7 +217,7 @@ async fn transaction_is_pending(
     let started_at = Instant::now();
     let worker = tokio::spawn(async move {
         let _permit = permit;
-        lookup_client.schedcoord_lookup_transactions(&batch).await
+        lookup_client.schedgateway_lookup_tx(&batch).await
     });
     let mut guard = SchedulerLookupGuard::new(ctx.scheduler.clone(), generation, worker);
     let rpc_result = if let Ok(result) = tokio::time::timeout(
@@ -237,7 +237,7 @@ async fn transaction_is_pending(
     guard.disarm();
     ctx.metrics.observe_backend_request(
         HealthBackend::Scheduler,
-        "schedcoord_lookup_transactions",
+        "schedgateway_lookup_tx",
         match &rpc_result {
             Ok(Ok(_)) => BackendRequestOutcome::Ok,
             Ok(Err(_)) => BackendRequestOutcome::Error,
@@ -246,13 +246,15 @@ async fn transaction_is_pending(
         started_at.elapsed(),
     );
     match rpc_result {
-        Ok(Ok(results)) => match results.iter().next() {
+        Ok(Ok(results)) if results.0.len() == 1 => match results.iter().next() {
             Some(Some(_)) => Ok(true),
             Some(None) => Ok(false),
-            None => Err(GatewayError::BackendUnavailable(
-                "scheduler lookup returned no slot for the queried transaction".into(),
-            )),
+            None => unreachable!("exactly one scheduler result was checked above"),
         },
+        Ok(Ok(results)) => Err(GatewayError::BackendUnavailable(format!(
+            "scheduler returned {} lookup results for one transaction",
+            results.0.len()
+        ))),
         Ok(Err(error)) => Err(GatewayError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
@@ -351,22 +353,18 @@ mod tests {
         TransactionPageResult, TransactionQuery, TransactionRefPageResult, TxInfoOutcome,
     };
     use groundhog_scheduler::{
-        ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult,
-        ParallelSignedTransactionBatch, Proposal, SchedulerCommitOutcome, SchedulerGetTipResult,
-        SchedulerProposalResult, SchedulerValidationResult,
-        sched_coord::{
-            SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Client,
-            SchedulerCoord_SchedulerCoord1_Dispatcher,
+        ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, SchedGatewayIntroOutcome,
+        SchedGatewaySubmitOutcomeBatch,
+        sched_gateway::{
+            SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Client,
+            SchedGateway_SchedGateway1_Dispatcher,
         },
     };
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_x23_transport::try_connect;
     use groundhog_xdr::{
-        genesis::GenesisConfiguration,
-        header::ProposalContext,
         transaction::{OptSignedTransactionBatch, TransactionHashBatch},
         types::SHA256Hash,
-        validator::ValidatorID,
     };
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
@@ -453,6 +451,8 @@ mod tests {
         MempoolMiss,
         /// Mempool lookup succeeds but returns no slot for the queried hash.
         EmptyBatch,
+        /// Mempool lookup violates the exact-cardinality response contract.
+        ExtraSlot,
         /// Mempool lookup fails at the RPC layer.
         RpcFail,
         /// Mempool lookup waits until the test replaces the active generation.
@@ -474,82 +474,33 @@ mod tests {
     }
 
     #[async_trait]
-    impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
-        async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
-            Ok(())
-        }
-
-        async fn schedulercoord_intro_coord(
+    impl SchedGateway_SchedGateway1 for FakeScheduler {
+        async fn schedgateway_intro(
             &self,
-            _arg0: groundhog_scheduler::CoordCard,
-        ) -> Result<CoordinatorRegistrationOutcome, ProgramError> {
-            panic!("bug: status tests should not call intro_coord")
+            _arg0: Protocol,
+        ) -> Result<SchedGatewayIntroOutcome, ProgramError> {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
         }
 
-        async fn schedulercoord_submit_unvetted(
+        async fn schedgateway_submit_tx_batch(
             &self,
             _arg0: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
             panic!("bug: status tests should not submit")
         }
 
-        async fn schedulercoord_submit_vetted(
-            &self,
-            _arg0: ValidatorID,
-            _arg1: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            panic!("bug: status tests should not submit")
-        }
-
-        async fn schedulercoord_propose_block(
-            &self,
-            _arg0: groundhog_scheduler::BlockID,
-            _arg1: ProposalContext,
-        ) -> Result<SchedulerProposalResult, ProgramError> {
-            panic!("bug: status tests should not propose")
-        }
-
-        async fn schedulercoord_validate_block(
-            &self,
-            _arg0: groundhog_scheduler::BlockID,
-            _arg1: Proposal,
-        ) -> Result<SchedulerValidationResult, ProgramError> {
-            panic!("bug: status tests should not validate")
-        }
-
-        async fn schedulercoord_commit_block(
-            &self,
-            _arg0: groundhog_scheduler::BlockID,
-            _arg1: ConsensusValue,
-        ) -> Result<SchedulerCommitOutcome, ProgramError> {
-            panic!("bug: status tests should not commit")
-        }
-
-        async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
+        async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
             panic!("bug: status tests should not read the tip")
         }
 
-        async fn schedcoord_load_genesis_configuration(
-            &self,
-            _arg0: GenesisConfiguration,
-        ) -> Result<DbSchedResult, ProgramError> {
-            panic!("bug: status tests should not load genesis")
-        }
-
-        async fn schedulercoord_commit_genesis_ceremony(
-            &self,
-            _request: groundhog_scheduler::GenesisCeremonyRequest,
-        ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
-            panic!("bug: status tests should not commit a genesis ceremony")
-        }
-
-        async fn schedcoord_lookup_transactions(
+        async fn schedgateway_lookup_tx(
             &self,
             _arg0: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             match &self.mode {
                 FakeSchedulerMode::MempoolMiss => Ok(VecM(vec![None])),
                 FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
+                FakeSchedulerMode::ExtraSlot => Ok(VecM(vec![None, None])),
                 FakeSchedulerMode::RpcFail => {
                     Err(ProgramError::msg("fake scheduler lookup failure"))
                 }
@@ -572,6 +523,10 @@ mod tests {
                     Ok(VecM(vec![None]))
                 }
             }
+        }
+
+        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+            panic!("bug: status tests should not read the pending count")
         }
     }
 
@@ -607,7 +562,7 @@ mod tests {
             .local_addr()
             .expect("bug: test scheduler should have local addr");
         let mut services = ServiceMap::new();
-        services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
+        services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
             Box::new(FakeScheduler { mode }),
         )));
         let server = RpcServer::new(listener, services);
@@ -620,7 +575,7 @@ mod tests {
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => connect_optional_scheduler(&addr.to_string(), 1)
+            Some(addr) => connect_optional_scheduler(&addr.to_string(), 1, PROTOCOL_VERSION, None)
                 .await
                 .expect("bug: test scheduler should connect"),
             None => None,
@@ -692,6 +647,19 @@ mod tests {
         let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
             .await
             .expect_err("bug: a lookup with no per-tx answer must not produce a definite status");
+
+        assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+    }
+
+    #[tokio::test]
+    async fn status_errors_when_lookup_returns_extra_slot_and_indexer_misses() {
+        let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::ExtraSlot).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+
+        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+            .await
+            .expect_err("bug: extra per-tx answers must not produce a definite status");
 
         assert!(matches!(err, GatewayError::BackendUnavailable(_)));
     }
@@ -775,7 +743,7 @@ mod tests {
             .clone();
         tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            normal_client.schedulercoord_null(),
+            normal_client.schedgateway_intro(&PROTOCOL_VERSION),
         )
         .await
         .expect("blocked lookup must not occupy the normal scheduler lane")
@@ -785,7 +753,7 @@ mod tests {
             "replacement scheduler",
             &new_scheduler_addr.to_string(),
             1,
-            SchedulerCoord_SchedulerCoord1_Client::new,
+            SchedGateway_SchedGateway1_Client::new,
         )
         .await
         .expect("replacement scheduler should connect")
@@ -876,7 +844,7 @@ mod tests {
             .expect("scheduler should remain connected")
             .clone();
         scheduler
-            .schedulercoord_null()
+            .schedgateway_intro(&PROTOCOL_VERSION)
             .await
             .expect("normal scheduler lane should remain available");
         let status = tokio::time::timeout(

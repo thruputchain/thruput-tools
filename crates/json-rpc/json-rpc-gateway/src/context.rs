@@ -12,7 +12,9 @@ use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
 };
 use groundhog_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
-use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
+use groundhog_scheduler::sched_gateway::{
+    SchedGateway_SchedGateway1_Client, SchedGatewayIntroOutcome,
+};
 use groundhog_scp::network::ProtocolCommit;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{
@@ -71,17 +73,17 @@ pub(crate) type ViewGatewayClient = BackendClient<ViewGateway_ViewGateway1_Clien
 
 #[derive(Clone)]
 pub(crate) struct SchedulerClient {
-    client: SchedulerCoord_SchedulerCoord1_Client,
-    lookup_client: SchedulerCoord_SchedulerCoord1_Client,
-    probe_client: SchedulerCoord_SchedulerCoord1_Client,
+    client: SchedGateway_SchedGateway1_Client,
+    lookup_client: SchedGateway_SchedGateway1_Client,
+    probe_client: SchedGateway_SchedGateway1_Client,
     generation: u64,
 }
 
 impl SchedulerClient {
     pub(crate) fn new(
-        client: SchedulerCoord_SchedulerCoord1_Client,
-        lookup_client: SchedulerCoord_SchedulerCoord1_Client,
-        probe_client: SchedulerCoord_SchedulerCoord1_Client,
+        client: SchedGateway_SchedGateway1_Client,
+        lookup_client: SchedGateway_SchedGateway1_Client,
+        probe_client: SchedGateway_SchedGateway1_Client,
     ) -> Self {
         Self {
             client,
@@ -95,17 +97,17 @@ impl SchedulerClient {
         self.generation
     }
 
-    pub(crate) fn probe_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
+    pub(crate) fn probe_client(&self) -> &SchedGateway_SchedGateway1_Client {
         &self.probe_client
     }
 
-    pub(crate) fn lookup_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
+    pub(crate) fn lookup_client(&self) -> &SchedGateway_SchedGateway1_Client {
         &self.lookup_client
     }
 }
 
 impl Deref for SchedulerClient {
-    type Target = SchedulerCoord_SchedulerCoord1_Client;
+    type Target = SchedGateway_SchedGateway1_Client;
 
     fn deref(&self) -> &Self::Target {
         &self.client
@@ -156,8 +158,8 @@ pub struct GatewayContext {
     /// at construction, so nothing downstream re-parses operator text.
     pub(crate) protocol: ProtocolCommit,
 
-    /// x23 RPC client to hogd scheduler.
-    /// Used for: `submit_unvetted`, `get_tip`, `lookup_transactions`, `size`.
+    /// x23 RPC client to hogd scheduler gateway.
+    /// Used for: transaction submission, tip, lookup, and pending count.
     pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
 
     /// Admission bound for direct transaction-status scheduler lookups.
@@ -172,8 +174,9 @@ pub struct GatewayContext {
     pub indexer: Arc<RwLock<Option<IndexerClient>>>,
 
     /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
-    /// incoming client submissions and packs them into `submit_unvetted`
-    /// RPCs to amortize per-call overhead at high load.
+    /// incoming client submissions and packs them into
+    /// `schedgateway_submit_tx_batch` RPCs to amortize
+    /// per-call overhead at high load.
     pub batch_submitter: BatchSubmitter,
 
     /// Adaptive batching reader for `getStorageAt`. Accumulates
@@ -209,6 +212,19 @@ impl GatewayContext {
     pub async fn new(config: GatewayConfig, metrics: GatewayMetrics) -> Result<Self, ConnectError> {
         let config = Arc::new(config);
 
+        // Resolved once, here, so a malformed override fails startup with the
+        // text the operator wrote rather than reaching a backend as some other
+        // token and coming back as a protocol mismatch.
+        let protocol_override = config
+            .hogd_protocol_override
+            .as_deref()
+            .map(protocol_from_text)
+            .transpose()
+            .map_err(|source| ConnectError::InvalidProtocolOverride {
+                reason: source.to_string(),
+            })?;
+        let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
+
         // `FixedSerialPool` is 1 in-flight per connection by choice (FIFO
         // dispatch per connection, modeling x23 sync RPC; the x23 wire
         // protocol itself multiplexes via xid).  Size the pool to cover the
@@ -218,7 +234,12 @@ impl GatewayContext {
         let sched_pool_size = scheduler_pool_size(&config);
         let scheduler_candidate = if let Ok(result) = tokio::time::timeout(
             startup_timeout,
-            connect_optional_scheduler(&config.scheduler_address, sched_pool_size),
+            connect_optional_scheduler(
+                &config.scheduler_address,
+                sched_pool_size,
+                protocol,
+                Some(&metrics),
+            ),
         )
         .await
         {
@@ -232,18 +253,6 @@ impl GatewayContext {
             None
         };
         let scheduler = Arc::new(RwLock::new(None));
-
-        // Resolved once, here, so a malformed override fails startup with the
-        // text the operator wrote rather than reaching a backend as some other
-        // token and coming back as a protocol mismatch.
-        let protocol_override = config
-            .hogd_protocol_override
-            .as_deref()
-            .map(protocol_from_text)
-            .transpose()
-            .map_err(|source| ConnectError::InvalidProtocolOverride {
-                reason: source.to_string(),
-            })?;
 
         let indexer = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_indexer(
@@ -278,7 +287,7 @@ impl GatewayContext {
         )?));
 
         let context = Self::assemble(
-            protocol_override.unwrap_or(PROTOCOL_VERSION),
+            protocol,
             scheduler,
             indexer,
             view_gateway,
@@ -393,13 +402,15 @@ pub(crate) struct QuarantinedScheduler {
 pub(crate) async fn connect_optional_scheduler(
     address: &str,
     pool_size: usize,
+    protocol: ProtocolCommit,
+    metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<SchedulerClient>, ConnectError> {
     let Some(client) = try_connect_with_canceled_call_policy(
         "scheduler",
         address,
         pool_size,
         CanceledCallPolicy::PoisonConnection,
-        SchedulerCoord_SchedulerCoord1_Client::new,
+        SchedGateway_SchedGateway1_Client::new,
     )
     .await?
     else {
@@ -411,7 +422,7 @@ pub(crate) async fn connect_optional_scheduler(
         SCHEDULER_LOOKUP_CONCURRENCY,
         hogd_large_message_config(),
         CanceledCallPolicy::ReplaceConnection,
-        SchedulerCoord_SchedulerCoord1_Client::new,
+        SchedGateway_SchedGateway1_Client::new,
     )
     .await?
     else {
@@ -422,17 +433,65 @@ pub(crate) async fn connect_optional_scheduler(
         address,
         1,
         CanceledCallPolicy::PoisonConnection,
-        SchedulerCoord_SchedulerCoord1_Client::new,
+        SchedGateway_SchedGateway1_Client::new,
     )
     .await?
     else {
         return Ok(None);
     };
-    Ok(Some(SchedulerClient::new(
-        client,
-        lookup_client,
-        probe_client,
-    )))
+    let client = SchedulerClient::new(client, lookup_client, probe_client);
+    let protocol_version = protocol_text(&protocol);
+    let started_at = Instant::now();
+    let intro_result = client.probe_client().schedgateway_intro(&protocol).await;
+    if let Some(metrics) = metrics {
+        let outcome = match &intro_result {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess) => BackendRequestOutcome::Ok,
+            Ok(_) => BackendRequestOutcome::Rejected,
+            Err(_) => BackendRequestOutcome::Error,
+        };
+        metrics.observe_backend_request(
+            HealthBackend::Scheduler,
+            "schedgateway_intro",
+            outcome,
+            started_at.elapsed(),
+        );
+    }
+    match intro_result {
+        Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess) => Ok(Some(client)),
+        Ok(outcome) => Err(ConnectError::StartupRejected {
+            service: "scheduler_gateway",
+            addr: address.to_string(),
+            reason: scheduler_gateway_intro_rejection_reason(outcome, &protocol_version),
+        }),
+        Err(source) => {
+            tracing::warn!(
+                addr = address,
+                service = "schedgateway_intro",
+                error = %source,
+                "scheduler gateway intro failed, starting in degraded mode"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn scheduler_gateway_intro_rejection_reason(
+    outcome: SchedGatewayIntroOutcome,
+    protocol_version: &str,
+) -> String {
+    if outcome == SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol {
+        return format!(
+            "SchedGateway intro mismatch: gateway speaks protocol {protocol_version}, \
+             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
+             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
+             against a matching groundhog-xdr"
+        );
+    }
+
+    format!(
+        "SchedGateway intro rejected with outcome {outcome}; gateway speaks protocol \
+         {protocol_version}"
+    )
 }
 
 async fn connect_backend_pair<C, F>(
@@ -863,10 +922,17 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
         TransactionQuery, TransactionRefPageResult, TxInfoResult,
     };
+    use groundhog_scheduler::{
+        ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount,
+        SchedGatewaySubmitOutcomeBatch,
+        sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
+    };
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
     };
-    use groundhog_xdr::transaction::TransactionHash;
+    use groundhog_xdr::transaction::{
+        OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
+    };
     use groundhog_xdr::view::TransactionViewQuery;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
@@ -915,10 +981,61 @@ mod tests {
     struct TestDbGateway {
         mode: IntroMode,
     }
+    struct TestSchedulerGateway {
+        mode: IntroMode,
+    }
     struct ProtocolCheckingViewGateway {
         expected: &'static str,
     }
     struct SlowIntroViewGateway;
+
+    #[async_trait]
+    impl SchedGateway_SchedGateway1 for TestSchedulerGateway {
+        async fn schedgateway_intro(
+            &self,
+            protocol: Protocol,
+        ) -> Result<SchedGatewayIntroOutcome, ProgramError> {
+            match self.mode {
+                IntroMode::Expect(expected)
+                    if protocol_from_text(expected).is_ok_and(|want| protocol == want) =>
+                {
+                    Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
+                }
+                IntroMode::Reject | IntroMode::Expect(_) => {
+                    Ok(SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol)
+                }
+                IntroMode::Slow => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
+                }
+                IntroMode::RpcFail => {
+                    Err(ProgramError::msg("fake scheduler gateway intro failure"))
+                }
+            }
+        }
+
+        async fn schedgateway_submit_tx_batch(
+            &self,
+            _batch: ParallelSignedTransactionBatch,
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
+            panic!("bug: intro test should not submit")
+        }
+
+        async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
+            panic!("bug: intro test should not read the tip")
+        }
+
+        async fn schedgateway_lookup_tx(
+            &self,
+            _hashes: TransactionHashBatch,
+        ) -> Result<OptSignedTransactionBatch, ProgramError> {
+            panic!("bug: intro test should not look up transactions")
+        }
+
+        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+            panic!("bug: intro test should not read pending count")
+        }
+    }
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for IntroRejectedViewGateway {
@@ -1113,6 +1230,27 @@ mod tests {
         (addr, handle)
     }
 
+    async fn start_test_scheduler_gateway(
+        mode: IntroMode,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test scheduler gateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test scheduler gateway should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
+            Box::new(TestSchedulerGateway { mode }),
+        )));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
     async fn start_test_db_gateway(
         mode: IntroMode,
     ) -> (
@@ -1223,6 +1361,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_scheduler_gateway_intro_rejection_fails_startup_probe() {
+        let (addr, _server) = start_test_scheduler_gateway(IntroMode::Reject).await;
+
+        let Err(err) =
+            connect_optional_scheduler(&addr.to_string(), 1, PROTOCOL_VERSION, None).await
+        else {
+            panic!("configured scheduler gateway intro rejection should fail startup");
+        };
+
+        match err {
+            ConnectError::StartupRejected { reason, .. } => {
+                assert!(reason.contains("SchedGateway intro mismatch"));
+                assert!(reason.contains(&protocol_text(&PROTOCOL_VERSION)));
+                assert!(reason.contains("SchedGatewayIntroMismatchedProtocol"));
+                assert!(reason.contains("--hogd-protocol"));
+            }
+            other => panic!("expected StartupRejected, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn configured_indexer_intro_rejection_fails_startup_probe() {
         let (addr, _server) = start_test_indexer(IntroMode::Reject).await;
 
@@ -1284,6 +1443,21 @@ mod tests {
         .await
         .expect("matching protocol override should pass startup")
         .expect("configured ViewGateway should be connected");
+
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn configured_scheduler_gateway_uses_protocol_override_for_startup_probe() {
+        let (addr, _server) =
+            start_test_scheduler_gateway(IntroMode::Expect("hogp/test-smoke00000")).await;
+        let protocol =
+            protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes");
+
+        let client = connect_optional_scheduler(&addr.to_string(), 1, protocol, None)
+            .await
+            .expect("matching scheduler gateway protocol override should pass startup")
+            .expect("configured scheduler gateway should be connected");
 
         drop(client);
     }

@@ -514,10 +514,11 @@ view_gateway
 Standard backend `operation` values:
 
 ```text
-schedcoord_get_tip
-schedulercoord_null
-schedcoord_submit_unvetted
-schedcoord_lookup_transactions
+schedgateway_intro
+schedgateway_get_tip
+schedgateway_submit_tx_batch
+schedgateway_lookup_tx
+schedgateway_pending_tx_count
 indexer_block_explorer_intro
 get_events
 get_transaction_info
@@ -869,9 +870,9 @@ gateway.rpc.groundhog_getEvents
 gateway.rpc.groundhog_getStorageAt
 gateway.rpc.groundhog_getBalance
 gateway.rpc.groundhog_view
-gateway.backend.scheduler.schedcoord_get_tip
-gateway.backend.scheduler.submit_unvetted
-gateway.backend.scheduler.lookup_transactions
+gateway.backend.scheduler.schedgateway_get_tip
+gateway.backend.scheduler.schedgateway_submit_tx_batch
+gateway.backend.scheduler.schedgateway_lookup_tx
 gateway.backend.indexer.get_transaction_info
 gateway.backend.indexer.get_events
 gateway.backend.db_gateway.get_items

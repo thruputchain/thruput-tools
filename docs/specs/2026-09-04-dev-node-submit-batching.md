@@ -1,6 +1,6 @@
 # Dev-Node Transaction Submission Batching
 
-**Status:** Active implementation spec
+**Status:** Implemented; admission outcomes integrated with GH-329/GH-336
 **Baseline:** `groundhog-rpc` `origin/main` (`b3cf718` when implementation was finalized)
 **Scope:** Embedded JSON-RPC backend used by `groundhog node`
 
@@ -8,12 +8,12 @@
 
 Keep the public `groundhog_sendRawTransaction` API unchanged, but combine concurrent calls into larger internal `ParallelSignedTransactionBatch` submissions before forwarding them to hog-devnode's scheduler.
 
-Today, the embedded dev-node backend creates one internal batch and one x23 call for every public transaction. Under sustained load, this path admits about 5,000 transactions per second even when the client sends many concurrent JSON-RPC requests. The production gateway already batches the same public method; the embedded backend should provide equivalent batching behavior.
+Before batching, the embedded dev-node backend created one internal batch and one x23 call for every public transaction. Under sustained load, this path admits about 5,000 transactions per second even when the client sends many concurrent JSON-RPC requests. The production gateway already batches the same public method; the embedded backend should provide equivalent batching behavior.
 
 ## Goals
 
 - Preserve the existing public JSON-RPC method, parameters, result, and errors.
-- Preserve the rule that RPC success is returned only after the authoritative scheduler call succeeds.
+- Return RPC success only when the authoritative scheduler reports admission for that transaction.
 - Pack concurrent submissions into valid multi-transaction `ParallelSignedTransactionBatch` values.
 - Bound memory usage and reject excess load with `RpcServerError::Overloaded`.
 - Respect request deadlines and avoid delivering replies to canceled requests.
@@ -25,12 +25,12 @@ Today, the embedded dev-node backend creates one internal batch and one x23 call
 - Add a public bulk-submission RPC method.
 - Change the XDR or hogd scheduler protocol.
 - Change hogd authentication, scheduler locking, or commit behavior.
-- Promise that every submitted transaction is semantically accepted. The current internal `submit_unvetted` response remains `void` and cannot report per-transaction rejection.
+- Promise that admission guarantees nomination or commitment.
 - Refactor the production gateway's batching implementation in this first slice.
 
-## Current Behavior
+## Behavior Before Batching
 
-`HogdDevSchedulerBackend::submit_raw_transaction` currently:
+Before batching, `HogdDevSchedulerBackend::submit_raw_transaction`:
 
 1. Wraps one validated transaction in a `ParallelSignedTransactionBatch`.
 2. Calls `schedulercoord_submit_unvetted` and waits for it to return.
@@ -57,8 +57,8 @@ The batcher uses one bounded Tokio channel and one scheduler batch in flight. A 
 2. Drains all items currently available, up to the configured maximum batch size.
 3. Removes canceled and expired items.
 4. Packs one XDR segment per transaction: `segment_tokens` contains `1` for each transaction, `segment_bytes` contains each encoded length, and `xdr` contains the concatenated transaction bytes.
-5. Makes one `schedulercoord_submit_unvetted` call.
-6. Fans the shared scheduler result out to each live request.
+5. Makes one `schedgateway_submit_tx_batch` call and validates that it returned exactly one outcome per transaction.
+6. Returns each positional admission outcome to its corresponding request.
 7. Triggers on-demand block production once after a successful internal batch.
 
 There is no time-based collection delay. At low load, one transaction is submitted immediately. Under load, requests accumulate while the previous scheduler call is in flight and are drained together on the next iteration.
@@ -135,4 +135,4 @@ Initial performance validation used `hog-devnode 0.1.26` and a release build bas
 - At 100,000 transactions and concurrency 64, successful RPC completion throughput increased from about 4,800 to 16,555 transactions per second. Blocks contained as many as 18,560 transactions. These are RPC completion measurements, not committed-transaction throughput.
 - The same 100,000 run committed 98,899 transactions while the `void` scheduler RPC reported success for all 100,000. Concurrency 128 increased RPC completion throughput to 18,079 transactions per second but increased the missing count. Final state matched committed receipts, so receipt polling loss alone does not explain the discrepancy.
 
-These older-version results show improved RPC completion throughput, but do not establish current-main committed throughput or the cause of missing transactions. Diagnosing the discrepancy requires downstream evidence distinguishing authentication failures, proposal execution failures, HOG discards, and pending transactions. A typed per-transaction scheduler result remains follow-up protocol work.
+These older-version results show improved RPC completion throughput, but do not establish current-main committed throughput or the cause of missing transactions. Diagnosing the discrepancy requires downstream evidence distinguishing authentication failures, proposal execution failures, HOG discards, and pending transactions. GH-329/GH-336 adds typed per-transaction admission results; those results still do not establish eventual commitment.

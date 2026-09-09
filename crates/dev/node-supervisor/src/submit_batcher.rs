@@ -9,8 +9,8 @@ use std::{
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
 use groundhog_scheduler::{
-    ParallelBatch, parallel::ParallelSignedTransactionBatch,
-    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    ParallelBatch, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
+    parallel::ParallelSignedTransactionBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
@@ -31,22 +31,28 @@ const MAX_DEADLINE_SKEW: Duration = Duration::from_secs(1);
 
 #[async_trait]
 trait SubmitSink: Send + Sync + 'static {
-    async fn submit(&self, batch: ParallelSignedTransactionBatch) -> Result<(), RpcServerError>;
+    async fn submit(
+        &self,
+        batch: ParallelSignedTransactionBatch,
+    ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError>;
 }
 
 struct SchedulerSink {
-    scheduler: SchedulerCoord_SchedulerCoord1_Client,
+    scheduler: SchedGateway_SchedGateway1_Client,
 }
 
 #[async_trait]
 impl SubmitSink for SchedulerSink {
-    async fn submit(&self, batch: ParallelSignedTransactionBatch) -> Result<(), RpcServerError> {
+    async fn submit(
+        &self,
+        batch: ParallelSignedTransactionBatch,
+    ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
         self.scheduler
-            .schedulercoord_submit_unvetted(&batch)
+            .schedgateway_submit_tx_batch(&batch)
             .await
             .map_err(|error| {
                 RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev scheduler submit failed: {error}"
+                    "hogd-dev scheduler gateway submit outcome is indeterminate: {error}"
                 ))
             })
     }
@@ -89,7 +95,7 @@ impl SubmitBatcher {
     ///
     /// Clones share one queue and worker, with at most one scheduler batch in flight.
     /// Dropping the last handle aborts the worker rather than draining queued work.
-    pub(crate) fn spawn(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
+    pub(crate) fn spawn(scheduler: SchedGateway_SchedGateway1_Client) -> Self {
         Self::spawn_with(
             Arc::new(SchedulerSink { scheduler }),
             MAX_BATCH_SIZE,
@@ -127,13 +133,13 @@ impl SubmitBatcher {
         }
     }
 
-    /// Queue validated transaction bytes and await the shared scheduler submission result.
+    /// Queue validated transaction bytes and await their individual admission result.
     ///
     /// Exhausted queue capacity or payload-byte budget returns `Overloaded` immediately.
     /// The backend deadline is capped at 30 seconds from request start, or the earlier
     /// request deadline. Canceled callers are skipped before packing where possible;
     /// canceling this future does not cancel a scheduler batch already in flight.
-    /// Success confirms scheduler RPC completion, not individual transaction commitment.
+    /// Success confirms individual admission, not transaction commitment.
     #[tracing::instrument(skip_all, fields(tx_bytes_len = tx_bytes.len()))]
     pub(crate) async fn submit(
         &self,
@@ -190,7 +196,7 @@ impl SubmitBatcher {
 
     /// Install or replace the block-driver trigger shared by all batcher clones.
     ///
-    /// The worker invokes the current trigger once after each successful scheduler batch.
+    /// The worker invokes the current trigger once after each scheduler batch with at least one admitted transaction.
     pub(crate) fn set_block_driver(&self, block_driver: BlockDriverTrigger) {
         *self
             .inner
@@ -271,7 +277,23 @@ async fn run(
                 Ok(batch) => submit_before(&sink, batch, deadline).await,
                 Err(error) => Err(error),
             };
-            if result.is_ok()
+            let results = match result {
+                Ok(outcomes) if outcomes.0.len() == cohort.len() => outcomes
+                    .0
+                    .into_iter()
+                    .map(result_for_outcome)
+                    .collect::<Vec<_>>(),
+                Ok(outcomes) => vec![
+                    Err(RpcServerError::BackendUnavailable(format!(
+                        "scheduler gateway returned {} admission outcomes for {} transactions",
+                        outcomes.0.len(),
+                        cohort.len()
+                    )));
+                    cohort.len()
+                ],
+                Err(error) => vec![Err(error); cohort.len()],
+            };
+            if results.iter().any(Result::is_ok)
                 && let Some(trigger) = block_driver
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -279,8 +301,8 @@ async fn run(
             {
                 trigger.trigger_after_submit();
             }
-            for item in cohort {
-                let _ = item.reply.send(result.clone());
+            for (item, result) in cohort.into_iter().zip(results) {
+                let _ = item.reply.send(result);
             }
         }
     }
@@ -290,11 +312,32 @@ async fn submit_before(
     sink: &Arc<dyn SubmitSink>,
     batch: ParallelSignedTransactionBatch,
     deadline: Instant,
-) -> Result<(), RpcServerError> {
+) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
     let submit = sink.submit(batch);
     tokio::time::timeout_at(deadline.into(), submit)
         .await
         .map_err(|_| RpcServerError::BackendTimeout)?
+}
+
+fn result_for_outcome(outcome: SchedGatewaySubmitOutcome) -> Result<(), RpcServerError> {
+    match outcome {
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected => {
+            Err(RpcServerError::TxRejected(
+                "scheduler rejected authentication for the signed transaction".into(),
+            ))
+        }
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(RpcServerError::Overloaded(
+            "scheduler could not admit the transaction; retry with backoff".into(),
+        )),
+        SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => Err(
+            RpcServerError::BackendUnavailable("scheduler admission dependency failed".into()),
+        ),
+        unknown => Err(RpcServerError::BackendUnavailable(format!(
+            "scheduler returned unknown submission outcome {}",
+            unknown.0
+        ))),
+    }
 }
 
 fn live_items(items: Vec<Item>, now: Instant) -> Vec<Item> {
@@ -391,12 +434,15 @@ mod tests {
         async fn submit(
             &self,
             batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), RpcServerError> {
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
+            let count = batch.segment_tokens.0.len();
             self.batches
                 .lock()
                 .expect("bug: test batch lock should be available")
                 .push(batch);
-            Ok(())
+            Ok(VecM(
+                vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted; count],
+            ))
         }
     }
 
@@ -405,7 +451,8 @@ mod tests {
         async fn submit(
             &self,
             batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), RpcServerError> {
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
+            let count = batch.segment_tokens.0.len();
             self.batches
                 .lock()
                 .expect("bug: test batch lock should be available")
@@ -416,7 +463,9 @@ mod tests {
                 .await
                 .expect("bug: test semaphore should remain open")
                 .forget();
-            Ok(())
+            Ok(VecM(
+                vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted; count],
+            ))
         }
     }
 
@@ -834,12 +883,15 @@ mod tests {
         impl SubmitSink for SlowFirstSink {
             async fn submit(
                 &self,
-                _batch: ParallelSignedTransactionBatch,
-            ) -> Result<(), RpcServerError> {
+                batch: ParallelSignedTransactionBatch,
+            ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
+                let count = batch.segment_tokens.0.len();
                 if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
-                Ok(())
+                Ok(VecM(
+                    vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted; count],
+                ))
             }
         }
 
@@ -899,7 +951,7 @@ mod tests {
             async fn submit(
                 &self,
                 _batch: ParallelSignedTransactionBatch,
-            ) -> Result<(), RpcServerError> {
+            ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
                 Err(RpcServerError::BackendUnavailable("test failure".into()))
             }
         }
@@ -945,6 +997,109 @@ mod tests {
                 Ok(Err(RpcServerError::BackendUnavailable(_)))
             ));
         }
+    }
+
+    struct OutcomeSink(Vec<SchedGatewaySubmitOutcome>);
+
+    #[async_trait]
+    impl SubmitSink for OutcomeSink {
+        async fn submit(
+            &self,
+            _batch: ParallelSignedTransactionBatch,
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, RpcServerError> {
+            Ok(VecM(self.0.clone()))
+        }
+    }
+
+    async fn outcome_batch(
+        outcomes: Vec<SchedGatewaySubmitOutcome>,
+        count: usize,
+    ) -> (Vec<Result<(), RpcServerError>>, bool) {
+        let (tx, rx) = mpsc::channel(count);
+        let mut replies = Vec::new();
+        for _ in 0..count {
+            let (item, reply) = item_with_reply(vec![1], Instant::now() + BACKEND_TIMEOUT);
+            tx.try_send(item).unwrap();
+            replies.push(reply);
+        }
+        drop(tx);
+        let notify = Arc::new(Notify::new());
+        run(
+            rx,
+            Arc::new(OutcomeSink(outcomes)),
+            count,
+            100,
+            Arc::new(RwLock::new(Some(BlockDriverTrigger::new(notify.clone())))),
+        )
+        .await;
+        let mut results = Vec::new();
+        for reply in replies {
+            results.push(reply.await.unwrap());
+        }
+        let woke = tokio::time::timeout(Duration::from_millis(10), notify.notified())
+            .await
+            .is_ok();
+        (results, woke)
+    }
+
+    #[tokio::test]
+    async fn mixed_outcomes_reach_their_own_waiters_and_wake_block_driver() {
+        use SchedGatewaySubmitOutcome as O;
+        let (results, woke) = outcome_batch(
+            vec![
+                O::SchedGatewaySubmitAuthenticationRejected,
+                O::SchedGatewaySubmitAdmitted,
+                O::SchedGatewaySubmitRetryable,
+                O::SchedGatewaySubmitInternalError,
+                O(99),
+            ],
+            5,
+        )
+        .await;
+        assert!(matches!(results[0], Err(RpcServerError::TxRejected(_))));
+        assert!(results[1].is_ok());
+        assert!(matches!(results[2], Err(RpcServerError::Overloaded(_))));
+        assert!(matches!(
+            results[3],
+            Err(RpcServerError::BackendUnavailable(_))
+        ));
+        assert!(matches!(
+            results[4],
+            Err(RpcServerError::BackendUnavailable(_))
+        ));
+        assert!(woke);
+    }
+
+    #[tokio::test]
+    async fn malformed_cardinality_fails_every_waiter_without_waking_driver() {
+        for count in [0, 1, 3] {
+            let (results, woke) = outcome_batch(
+                vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted; count],
+                2,
+            )
+            .await;
+            assert!(
+                results
+                    .iter()
+                    .all(|r| matches!(r, Err(RpcServerError::BackendUnavailable(_))))
+            );
+            assert!(!woke);
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_batch_does_not_wake_block_driver() {
+        let (results, woke) = outcome_batch(
+            vec![SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected; 2],
+            2,
+        )
+        .await;
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r, Err(RpcServerError::TxRejected(_))))
+        );
+        assert!(!woke);
     }
 
     #[tokio::test]

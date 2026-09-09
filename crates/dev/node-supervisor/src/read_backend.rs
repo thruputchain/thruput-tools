@@ -7,7 +7,7 @@
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
-//! The scheduler client is shared from [`HogdDevSchedulerBackend`] — no
+//! The scheduler gateway client is shared from the chain/submit backend — no
 //! second pool is created.
 
 use std::{fmt, net::SocketAddr};
@@ -36,7 +36,7 @@ use groundhog_json_rpc_types::{
         TransactionStatus, TxHash,
     },
 };
-use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
+use groundhog_scheduler::{RPCError, sched_gateway::SchedGateway_SchedGateway1_Client};
 use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use groundhog_xdr::{
     event::TxEmittedEvent,
@@ -46,10 +46,7 @@ use groundhog_xdr::{
 };
 use xdr_common::VecM;
 
-use crate::{
-    NodeSupervisorError, request_deadline::within_request_deadline,
-    rpc_backend::HogdDevSchedulerBackend,
-};
+use crate::{NodeSupervisorError, request_deadline::within_request_deadline};
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
 const TOPIC_SIZE: usize = 32;
@@ -97,7 +94,7 @@ fn indexer_transaction_ref_page(
 pub(crate) struct HogdDevReadBackend {
     indexer: IndexerBlockExplorer_IndexerBlockExplorer1_Client,
     db_gateway: Option<DbGateway_DbGateway1_Client>,
-    scheduler: SchedulerCoord_SchedulerCoord1_Client,
+    scheduler_gateway: SchedGateway_SchedGateway1_Client,
 }
 
 impl fmt::Debug for HogdDevReadBackend {
@@ -108,14 +105,14 @@ impl fmt::Debug for HogdDevReadBackend {
 
 impl HogdDevReadBackend {
     /// Connect to hogd-dev's `IndexerBlockExplorer` endpoint and wire the
-    /// shared `SchedulerCoord` client for pending-tx probes.
+    /// shared `SchedGateway` client for pending-tx probes.
     ///
     /// Fails hard if the `IndexerBlockExplorer` endpoint is unreachable: the supervisor
     /// should not start if its child's `IndexerBlockExplorer` endpoint is down.
     pub(crate) async fn connect(
         endpoint: SocketAddr,
         gateway_endpoint: Option<SocketAddr>,
-        scheduler_backend: &HogdDevSchedulerBackend,
+        scheduler_gateway: SchedGateway_SchedGateway1_Client,
         protocol_version: &str,
         expected_protocol: Option<&str>,
     ) -> Result<Self, NodeSupervisorError> {
@@ -167,7 +164,7 @@ impl HogdDevReadBackend {
         Ok(Self {
             indexer,
             db_gateway,
-            scheduler: scheduler_backend.scheduler_client().clone(),
+            scheduler_gateway,
         })
     }
 }
@@ -369,22 +366,26 @@ impl ReadPlane for HogdDevReadBackend {
         // answered.
         let mut mempool_checked = false;
         let batch: VecM<TransactionHash> = VecM(vec![hash]);
-        match self.scheduler.schedcoord_lookup_transactions(&batch).await {
-            // Only a per-hash slot counts as a mempool answer; an empty
-            // batch left the queried transaction unaccounted for.
-            Ok(results) => match results.iter().next() {
+        match self.scheduler_gateway.schedgateway_lookup_tx(&batch).await {
+            // Exactly one per-hash slot counts as a mempool answer. Any
+            // cardinality mismatch leaves the queried transaction unaccounted
+            // for and therefore cannot support an `Unknown` result.
+            Ok(results) if results.len() == 1 => match results.iter().next() {
                 Some(Some(_)) => return Ok(TransactionStatus::Pending),
                 Some(None) => mempool_checked = true,
-                None => {
-                    tracing::warn!(
-                        "hogd-dev scheduler lookup returned no slot for the queried tx hash"
-                    );
-                }
+                None => unreachable!("length was checked above"),
             },
+            Ok(results) => {
+                tracing::warn!(
+                    actual = results.len(),
+                    expected = 1,
+                    "hogd-dev scheduler gateway lookup returned the wrong slot count"
+                );
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    "hogd-dev scheduler unreachable, cannot detect pending txs"
+                    "hogd-dev scheduler gateway unreachable, cannot detect pending txs"
                 );
             }
         }
@@ -427,7 +428,7 @@ impl ReadPlane for HogdDevReadBackend {
                 // a mempool answer that claim is unverified and a still-pending
                 // transaction would read as gone (inviting an unsafe re-sign).
                 Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev scheduler unreachable: transaction is not committed but may still be \
+                    "hogd-dev scheduler gateway unavailable: transaction is not committed but may still be \
                      pending"
                         .into(),
                 ))
@@ -809,20 +810,16 @@ mod tests {
         hex::Hex0x,
         transaction::{TransactionStatus, TxHash},
     };
-    use groundhog_scheduler::rpc_types::RPCError;
-    use groundhog_scheduler::{BlockID, ConsensusValue, ParallelSignedTransactionBatch, Proposal};
     use groundhog_scheduler::{
-        CoordinatorRegistrationOutcome, DbSchedResult, SchedulerCommitOutcome,
-        SchedulerGetTipResult, SchedulerProposalResult, SchedulerValidationResult,
-        sched_coord::{
-            SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Client,
-            SchedulerCoord_SchedulerCoord1_Dispatcher,
+        ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, RPCError,
+        SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
+        sched_gateway::{
+            SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Client,
+            SchedGateway_SchedGateway1_Dispatcher,
         },
     };
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
-    use groundhog_xdr::genesis::GenesisConfiguration;
-    use groundhog_xdr::header::ProposalContext;
     use groundhog_xdr::transaction::{
         Invocation, OptSignedTransactionBatch, SignedTransaction, Transaction,
         TransactionHashBatch, Uniquifier,
@@ -835,13 +832,10 @@ mod tests {
         storage_item::WireStorageItem,
         transaction::TransactionHash,
         types::{ContractAddress, SHA256Hash},
-        validator::ValidatorID,
     };
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
     use xdr_common::{BytesM, VecM};
-
-    use crate::rpc_backend::HogdDevSchedulerBackend;
 
     use super::HogdDevReadBackend;
 
@@ -902,7 +896,7 @@ mod tests {
     // Fake scheduler
     // -----------------------------------------------------------------------
 
-    /// Controls what `schedcoord_lookup_transactions` returns.
+    /// Controls what `schedgateway_lookup_tx` returns.
     #[derive(Debug, Clone, Copy)]
     enum FakeSchedulerMode {
         /// Returns one `None` per queried hash — nothing pending.
@@ -911,6 +905,8 @@ mod tests {
         AllPending,
         /// Returns an empty batch — no per-hash answer at all.
         EmptyBatch,
+        /// Returns more slots than hashes — an invalid cardinality response.
+        ExtraSlot,
         /// RPC call itself fails.
         RpcFail,
     }
@@ -965,76 +961,31 @@ mod tests {
     }
 
     #[async_trait]
-    impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
-        async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
-            Ok(())
-        }
-
-        async fn schedulercoord_intro_coord(
+    impl SchedGateway_SchedGateway1 for FakeScheduler {
+        async fn schedgateway_intro(
             &self,
-            _card: groundhog_scheduler::CoordCard,
-        ) -> Result<CoordinatorRegistrationOutcome, ProgramError> {
-            Ok(CoordinatorRegistrationOutcome::CoordinatorRegistrationOK)
+            _protocol: Protocol,
+        ) -> Result<SchedGatewayIntroOutcome, ProgramError> {
+            Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess)
         }
 
-        async fn schedulercoord_submit_unvetted(
+        async fn schedgateway_submit_tx_batch(
             &self,
-            _batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            Ok(())
+            batch: ParallelSignedTransactionBatch,
+        ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
+            Ok(VecM(vec![
+                SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted;
+                batch.segment_tokens.0.len()
+            ]))
         }
 
-        async fn schedulercoord_submit_vetted(
-            &self,
-            _validator_id: ValidatorID,
-            _batch: ParallelSignedTransactionBatch,
-        ) -> Result<(), ProgramError> {
-            Ok(())
+        async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
+            Ok(ExpectedDBTip::Default {
+                error: RPCError::kRPCNotFound.0,
+            })
         }
 
-        async fn schedulercoord_propose_block(
-            &self,
-            _block_id: BlockID,
-            _proposal_context: ProposalContext,
-        ) -> Result<SchedulerProposalResult, ProgramError> {
-            Err(ProgramError::msg("not implemented in fake"))
-        }
-
-        async fn schedulercoord_validate_block(
-            &self,
-            _block_id: BlockID,
-            _proposal: Proposal,
-        ) -> Result<SchedulerValidationResult, ProgramError> {
-            Err(ProgramError::msg("not implemented in fake"))
-        }
-
-        async fn schedulercoord_commit_block(
-            &self,
-            _block_id: BlockID,
-            _value: ConsensusValue,
-        ) -> Result<SchedulerCommitOutcome, ProgramError> {
-            Err(ProgramError::msg("not implemented in fake"))
-        }
-
-        async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
-            Ok(SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock)
-        }
-
-        async fn schedcoord_load_genesis_configuration(
-            &self,
-            _config: GenesisConfiguration,
-        ) -> Result<DbSchedResult, ProgramError> {
-            Ok(DbSchedResult::DbSchedResultOK)
-        }
-
-        async fn schedulercoord_commit_genesis_ceremony(
-            &self,
-            _request: groundhog_scheduler::GenesisCeremonyRequest,
-        ) -> Result<groundhog_scheduler::GenesisCeremonyResult, ProgramError> {
-            Err(ProgramError::msg("not implemented in fake"))
-        }
-
-        async fn schedcoord_lookup_transactions(
+        async fn schedgateway_lookup_tx(
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
@@ -1052,10 +1003,15 @@ mod tests {
                     Ok(VecM(results))
                 }
                 FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
+                FakeSchedulerMode::ExtraSlot => Ok(VecM(vec![None, None])),
                 FakeSchedulerMode::RpcFail => {
                     Err(ProgramError::msg("fake scheduler lookup rpc-fail"))
                 }
             }
+        }
+
+        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+            Ok(0)
         }
     }
 
@@ -1072,7 +1028,7 @@ mod tests {
             .local_addr()
             .expect("bug: test scheduler should have local addr");
         let mut services = ServiceMap::new();
-        services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
+        services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
             Box::new(FakeScheduler { mode }),
         )));
         let server = RpcServer::new(listener, services);
@@ -1432,14 +1388,14 @@ mod tests {
     // Test helpers
     // -----------------------------------------------------------------------
 
-    async fn make_scheduler_client(addr: SocketAddr) -> SchedulerCoord_SchedulerCoord1_Client {
+    async fn make_scheduler_client(addr: SocketAddr) -> SchedGateway_SchedGateway1_Client {
         use std::sync::Arc;
         let pool = Arc::new(
             FixedSerialPool::connect(&addr, 1)
                 .await
                 .expect("bug: test scheduler client should connect"),
         );
-        SchedulerCoord_SchedulerCoord1_Client::new(pool)
+        SchedGateway_SchedGateway1_Client::new(pool)
     }
 
     async fn make_indexer_client(
@@ -1469,11 +1425,11 @@ mod tests {
         scheduler_addr: SocketAddr,
     ) -> HogdDevReadBackend {
         let indexer = make_indexer_client(indexer_addr).await;
-        let scheduler = make_scheduler_client(scheduler_addr).await;
+        let scheduler_gateway = make_scheduler_client(scheduler_addr).await;
         HogdDevReadBackend {
             indexer,
             db_gateway: None,
-            scheduler,
+            scheduler_gateway,
         }
     }
 
@@ -1483,12 +1439,12 @@ mod tests {
         db_gateway_addr: SocketAddr,
     ) -> HogdDevReadBackend {
         let indexer = make_indexer_client(indexer_addr).await;
-        let scheduler = make_scheduler_client(scheduler_addr).await;
+        let scheduler_gateway = make_scheduler_client(scheduler_addr).await;
         let db_gateway = make_db_gateway_client(db_gateway_addr).await;
         HogdDevReadBackend {
             indexer,
             db_gateway: Some(db_gateway),
-            scheduler,
+            scheduler_gateway,
         }
     }
 
@@ -1994,6 +1950,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transaction_status_extra_lookup_slot_and_indexer_miss_surfaces_backend_unavailable() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::ExtraSlot).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+
+        let result = backend
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+            .await;
+
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "lookup with an extra per-tx answer should surface BackendUnavailable, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn transaction_status_indexer_rpc_fail_surfaces_backend_unavailable() {
         // Arrange
         let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
@@ -2160,8 +2133,7 @@ mod tests {
         drop(listener);
 
         let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-        let scheduler_client = make_scheduler_client(sched_addr).await;
-        let sched_backend = HogdDevSchedulerBackend::_new_for_test(scheduler_client);
+        let scheduler_gateway = make_scheduler_client(sched_addr).await;
 
         // Act
         let result = tokio::time::timeout(
@@ -2169,7 +2141,7 @@ mod tests {
             HogdDevReadBackend::connect(
                 dead_addr,
                 None,
-                &sched_backend,
+                scheduler_gateway,
                 &protocol_text(&PROTOCOL_VERSION),
                 None,
             ),

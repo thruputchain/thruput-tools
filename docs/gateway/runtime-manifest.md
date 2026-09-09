@@ -156,9 +156,9 @@ cargo run -p groundhog-bench -- \
 This submit benchmark follows the same confirmation behavior.
 
 CLI flags on `hog-gateway` are still explicit overrides. For example,
-`--scheduler` can intentionally replace the manifest scheduler endpoint. TOML
-configuration conflicts with manifest backend fields are rejected so a benchmark
-run does not silently target a mixed topology.
+`--scheduler` can intentionally replace the manifest `schedulerGateway`
+endpoint. TOML configuration conflicts with manifest backend fields are rejected
+so a benchmark run does not silently target a mixed topology.
 
 ## Example Manifest
 
@@ -208,6 +208,13 @@ configuration.
 Optional endpoints are absent when unavailable. They are never emitted as
 `null`.
 
+The endpoint roles are deliberately separate: `scheduler` is the internal
+`SchedulerCoord` service used for genesis and local block driving, while
+`schedulerGateway` is the public `SchedGateway` service used for transaction
+submission and scheduler reads. Gateway consumers require `schedulerGateway`;
+they must not fall back to `scheduler`.
+
 Runtime manifest schema 2 permits additive optional fields. `chainState` was
-added under that rule, so schema 2 is preserved; hog-devnode emits it and the
-local node supervisor requires it for authoritative startup reporting.
+added under that rule, and `schedulerGateway` followed the same rule, so schema
+2 is preserved. Current hog-devnode emits both and the local node supervisor
+requires them for authoritative startup readiness.
