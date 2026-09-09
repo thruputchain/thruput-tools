@@ -348,8 +348,11 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 ### CLI Output
 
-- Use the `Print` struct (`print.status()`, `print.warn()`,
-  `print.prompt()`), not raw `eprintln!`.
+- Commands in `groundhog-cli` use the `Print` struct (`print.status()`,
+  `print.warn()`, `print.prompt()`), not raw `eprintln!`.
+  Standalone build tools such as `groundhog-agent-knowledge` may report errors
+  directly to stderr and exit nonzero; do not depend on the product CLI solely
+  for its output helper.
 - When a command's `data` payload is intended to be a stable
   machine-readable contract, include a command-specific
   `schemaVersion` field inside `data` from v1 onward. Do not version
