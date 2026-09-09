@@ -8,7 +8,13 @@ pub fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
     let contracts = dir.join("contracts");
     std::fs::create_dir(&contracts).unwrap();
-    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 4], &[], 0).unwrap();
+    let artifact = groundhog_rv32_artifact::build_artifact(
+        &[0; 4],
+        &[],
+        0,
+        groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES,
+    )
+    .unwrap();
     std::fs::write(contracts.join("dev_wallet.rv32a"), artifact).unwrap();
     binary
 }

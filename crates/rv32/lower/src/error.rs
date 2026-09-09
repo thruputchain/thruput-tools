@@ -7,25 +7,26 @@ pub enum LowerError {
     /// These are user-facing: the contract or its build is malformed.
     #[error("{0}")]
     Invalid(String),
-    /// `.text` exceeds the artifact format's code-size cap. The contract is
-    /// well-formed, just too big — a distinct case from [`Self::Invalid`] so
-    /// consumers can give size-reduction guidance instead of treating the ELF
-    /// as malformed.
+    /// `.text` exceeds the code limit the lowering targets (the deploying
+    /// chain's `max_rv32_code_bytes`, 64 KiB unless configured otherwise).
+    /// The contract is well-formed, just too big — a distinct case from
+    /// [`Self::Invalid`] so consumers can give size-reduction guidance
+    /// instead of treating the ELF as malformed.
     #[error(
-        ".text is {size} bytes; the current artifact format caps code at {max} bytes \
+        ".text is {size} bytes; the target chain's code limit is {max} bytes \
          ({over} bytes over)",
         over = .size.saturating_sub(*.max)
     )]
     CodeTooLarge {
         /// Actual `.text` size in bytes.
         size: usize,
-        /// The artifact format's code-size cap in bytes.
+        /// The code limit in bytes.
         max: usize,
     },
-    /// A data section ends past the VM's data address space. Under the
-    /// stack-first layout, data sections sit above the reserved stack, so
-    /// shrinking the stack reserve is a legitimate fix alongside reducing
-    /// static data.
+    /// A data section ends past the guest data address space the lowering
+    /// targets (64 KiB unless the chain admits more). Under the stack-first
+    /// layout, data sections sit above the reserved stack, so shrinking the
+    /// stack reserve is a legitimate fix alongside reducing static data.
     #[error(
         "section {section} ends at {end}, exceeding the {max}-byte VM data memory \
          by {over} bytes",

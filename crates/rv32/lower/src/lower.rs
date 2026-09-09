@@ -10,7 +10,9 @@ use std::collections::HashSet;
 
 use crate::elf::{self, Section};
 use crate::error::{LowerError, Result, invalid};
-use groundhog_rv32_artifact::{MAX_CODE_BYTES, MAX_MEMORY_BYTES, build_artifact, verify_artifact};
+use groundhog_rv32_artifact::{
+    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact, verify_artifact,
+};
 
 /// Allocatable sections an rv32 contract image may contain. Anything else with
 /// the ALLOC flag is rejected.
@@ -91,19 +93,58 @@ pub struct Lowered {
     pub warnings: Vec<String>,
 }
 
-/// Parse, validate, and lower an rv32im contract ELF into a v5 artifact.
+/// The guest bounds a lowering targets: what the deploying chain admits.
+///
+/// The defaults are the protocol's (`kDefaultMaxRv32CodeBytes` and
+/// `kDefaultMaxRv32MemoryBytes`); a chain configured above them lets a
+/// contract lower with matching values here. A contract only uses a larger
+/// `memory_bytes` once its linker script provides a matching `__memory_size`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LowerOptions {
+    /// Largest `.text` accepted, in bytes.
+    pub max_code_bytes: usize,
+    /// Guest data address space stamped into the artifact, in bytes; every
+    /// data section must end within it.
+    pub memory_bytes: usize,
+}
+
+impl Default for LowerOptions {
+    fn default() -> Self {
+        Self {
+            max_code_bytes: DEFAULT_MAX_CODE_BYTES,
+            memory_bytes: DEFAULT_MEMORY_BYTES,
+        }
+    }
+}
+
+/// Parse, validate, and lower an rv32im contract ELF into a v5 artifact under
+/// the protocol-default bounds.
 pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
+    lower_with(elf_bytes, &LowerOptions::default())
+}
+
+/// [`lower`] under explicit bounds.
+pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
+    if options.memory_bytes == 0 {
+        return Err(invalid("memory_bytes must be nonzero"));
+    }
     let sections = elf::parse_elf(elf_bytes)?;
-    let (code, initial_memory, initial_memory_start) = validate_sections(elf_bytes, &sections)?;
+    let (code, initial_memory, initial_memory_start) =
+        validate_sections(elf_bytes, &sections, options)?;
     let warnings = check_interface_table(elf_bytes, &sections)?;
-    let artifact = build_artifact(&code, &initial_memory, initial_memory_start)?;
+    let artifact = build_artifact(
+        &code,
+        &initial_memory,
+        initial_memory_start,
+        options.memory_bytes,
+    )?;
     verify_artifact(&artifact)?;
     Ok(Lowered {
         artifact,
         code,
         initial_memory,
         initial_memory_start,
-        memory_bytes: MAX_MEMORY_BYTES,
+        memory_bytes: options.memory_bytes,
         warnings,
     })
 }
@@ -185,7 +226,11 @@ fn unique_text(sections: &[Section]) -> Result<&Section> {
 /// `start` is the data address it is staged at (the runtime zero-fills the
 /// rest of the address space).
 #[allow(clippy::too_many_lines)]
-fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<u8>, usize)> {
+fn validate_sections(
+    data: &[u8],
+    sections: &[Section],
+    options: &LowerOptions,
+) -> Result<(Vec<u8>, Vec<u8>, usize)> {
     let text = unique_text(sections)?;
     if !text.is_exec() || !text.is_alloc() {
         return Err(invalid(".text must be alloc+exec"));
@@ -202,10 +247,10 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
     if !text.size.is_multiple_of(4) {
         return Err(invalid(".text size must be four-byte aligned"));
     }
-    if text.size as usize > MAX_CODE_BYTES {
+    if text.size as usize > options.max_code_bytes {
         return Err(LowerError::CodeTooLarge {
             size: text.size as usize,
-            max: MAX_CODE_BYTES,
+            max: options.max_code_bytes,
         });
     }
     let text_off = text.offset as usize;
@@ -221,7 +266,7 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
             && section.size > 0
     });
 
-    let mut memory = vec![0u8; MAX_MEMORY_BYTES];
+    let mut memory = vec![0u8; options.memory_bytes];
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
         if (section.sh_type == elf::SHT_REL || section.sh_type == elf::SHT_RELA)
@@ -282,11 +327,11 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
             }
         }
         data_ranges.push((section.name.clone(), sec_start, sec_end));
-        if sec_end as usize > MAX_MEMORY_BYTES {
+        if sec_end as usize > options.memory_bytes {
             return Err(LowerError::DataTooLarge {
                 section: section.name.clone(),
                 end: sec_end as usize,
-                max: MAX_MEMORY_BYTES,
+                max: options.memory_bytes,
             });
         }
         if section.is_nobits() {

@@ -11,7 +11,8 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use groundhog_rv32_lower::{
-    FORMAT_FINGERPRINT, LowerError, MetadataInput, lower, render_metadata, summary_json,
+    FORMAT_FINGERPRINT, LowerError, LowerOptions, MetadataInput, lower_with, render_metadata,
+    summary_json,
 };
 
 const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::build_version!();
@@ -44,6 +45,15 @@ struct Cli {
     /// Print the pinned artifact-format fingerprint and exit.
     #[arg(long)]
     print_format_fingerprint: bool,
+    /// Guest data address space to stamp into the artifact, in bytes. Defaults
+    /// to the protocol's 64 KiB; raise it only for a chain whose
+    /// `max_rv32_memory_bytes` admits it.
+    #[arg(long, value_name = "BYTES")]
+    memory_bytes: Option<usize>,
+    /// Largest .text accepted, in bytes. Defaults to the protocol's 64 KiB;
+    /// raise it only for a chain whose `max_rv32_code_bytes` admits it.
+    #[arg(long, value_name = "BYTES")]
+    max_code_bytes: Option<usize>,
 }
 
 fn run(cli: &Cli) -> Result<(), LowerError> {
@@ -72,7 +82,12 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
         .ok_or_else(|| LowerError::Invalid("--out is required".to_string()))?;
 
     let elf_bytes = fs::read(elf)?;
-    let lowered = lower(&elf_bytes)?;
+    let defaults = LowerOptions::default();
+    let options = LowerOptions {
+        max_code_bytes: cli.max_code_bytes.unwrap_or(defaults.max_code_bytes),
+        memory_bytes: cli.memory_bytes.unwrap_or(defaults.memory_bytes),
+    };
+    let lowered = lower_with(&elf_bytes, &options)?;
     fs::write(out, &lowered.artifact)?;
     // The JSON summary carries `warnings`; plain mode prints them where a
     // human building a contract will see them.

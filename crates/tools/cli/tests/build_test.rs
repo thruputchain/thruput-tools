@@ -235,7 +235,7 @@ fn build_rejects_conflicting_target_dir_passthrough() {
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -286,7 +286,7 @@ fn build_prefers_metadata_failure_over_redundant_target_dir_precheck() {
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -349,7 +349,7 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
         &["--config".into(), "target-config.toml".into()],
         &artifacts,
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -395,7 +395,7 @@ fn build_rejects_missing_active_profile_before_compiling() {
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -515,7 +515,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         &["--locked".into()],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -642,7 +642,10 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         &["--locked".into()],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
-        Some(0x6000),
+        groundhog_cli::build::GuestSizes {
+            stack_size: Some(0x6000),
+            ..Default::default()
+        },
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -669,6 +672,111 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         "cargo --config .cargo/contract.toml rustc --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
     );
 }
+#[test]
+#[serial]
+fn build_rv32_project_with_memory_size_stamps_the_artifact() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_contract_toml(&project_root);
+
+    let target_dir = project_root.join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract_rv32");
+    let processed_metadata = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32.json");
+    let cargo_args_log = project_root.join("cargo-args.log");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            cargo_args_log.display(),
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        groundhog_cli::build::GuestSizes {
+            stack_size: Some(0x6000),
+            memory_size: Some(0x20000),
+        },
+        &[],
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: rv32 build with --memory-size should succeed");
+
+    // Both symbols ride on the same `cargo rustc` trailing flags.
+    let cargo_args = fs::read_to_string(&cargo_args_log).unwrap();
+    assert!(
+        cargo_args.contains(
+            "--locked -- -C link-arg=--defsym=__stack_size=24576 \
+             -C link-arg=--defsym=__memory_size=131072"
+        ),
+        "cargo args: {cargo_args}"
+    );
+
+    // The lowering stamps the requested address space into the artifact
+    // header and reports it in the metadata, whatever the linker script did
+    // with the symbol.
+    let metadata: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
+    assert_eq!(metadata["memory_bytes"], 0x20000);
+    let artifact = fs::read(
+        target_dir
+            .join("groundhog")
+            .join("demo_contract_rv32.rv32a"),
+    )
+    .expect("bug: artifact should be written");
+    assert_eq!(
+        u32::from_le_bytes(artifact[48..52].try_into().unwrap()),
+        0x20000,
+        "memory_bytes header field"
+    );
+}
+
 #[test]
 fn build_rejects_env_rustflags_before_running_cargo() {
     let tmp = TempDir::new().unwrap();
@@ -1561,7 +1669,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
         &["--locked".into()],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )
@@ -1650,7 +1758,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
         &["--locked".into()],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
-        None,
+        groundhog_cli::build::GuestSizes::default(),
         &[],
         &groundhog_cli::Print::quiet(),
     )

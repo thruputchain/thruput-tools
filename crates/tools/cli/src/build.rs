@@ -38,11 +38,55 @@ pub struct BuildResult {
     pub cargo_stderr: String,
 }
 
+/// The guest memory layout a build asks for, both optional: absent means the
+/// SDK linker script's stack reserve and the protocol-default 64 KiB data
+/// address space.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GuestSizes {
+    /// `--stack-size`: the guest's `__stack_size` linker symbol.
+    pub stack_size: Option<u32>,
+    /// `--memory-size`: the data address space stamped into the artifact and
+    /// offered to the linker script as `__memory_size`. Only a chain whose
+    /// `max_rv32_memory_bytes` admits it will accept the result.
+    pub memory_size: Option<u32>,
+}
+
+impl GuestSizes {
+    /// The data address space in force: the request, else the protocol default.
+    pub fn memory_bytes(self) -> usize {
+        self.memory_size
+            .map_or(groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES, |size| {
+                size as usize
+            })
+    }
+
+    /// Whether the build has to go through `cargo rustc` to pass a `--defsym`.
+    fn needs_defsym(self) -> bool {
+        self.stack_size.is_some() || self.memory_size.is_some()
+    }
+
+    /// The stack reserve has to leave room for data below the address space.
+    fn validate(self) -> Result<(), CliError> {
+        if let Some(stack) = self.stack_size
+            && stack as usize >= self.memory_bytes()
+        {
+            return Err(CliError::InvalidArgument {
+                argument: "--stack-size".to_string(),
+                message: format!(
+                    "stack size {stack} must be below the {}-byte data address space",
+                    self.memory_bytes()
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Build the contract to an RV32 artifact.
 pub fn run(
     package: Option<&str>,
     bindings: &[String],
-    stack_size: Option<u32>,
+    sizes: GuestSizes,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
@@ -53,7 +97,7 @@ pub fn run(
         cargo_args,
         artifacts,
         explicit_profile,
-        stack_size,
+        sizes,
         bindings,
         print,
     )?;
@@ -99,8 +143,8 @@ fn ensure_no_env_rustflags() -> Result<(), CliError> {
 /// `K`/`M`/`G` suffixed size such as `32K`.
 ///
 /// The value becomes the guest's `__stack_size` linker symbol, so it carries
-/// the SDK linker-script contract: a positive multiple of 16 below the 64 KiB
-/// data address space.
+/// the SDK linker-script contract: a positive multiple of 16. That it fits
+/// below the data address space is checked once `--memory-size` is known.
 pub fn parse_stack_size(value: &str) -> Result<u32, String> {
     let parsed = crate::byte_size::parse_byte_size(value)?;
     if parsed == 0 || !parsed.is_multiple_of(16) {
@@ -110,13 +154,22 @@ pub fn parse_stack_size(value: &str) -> Result<u32, String> {
     }
     u32::try_from(parsed)
         .ok()
-        .filter(|size| (*size as usize) < groundhog_rv32_artifact::MAX_MEMORY_BYTES)
-        .ok_or_else(|| {
-            format!(
-                "stack size {parsed} must be below the {} data address space",
-                groundhog_rv32_artifact::MAX_MEMORY_BYTES
-            )
-        })
+        .ok_or_else(|| format!("stack size {parsed} does not fit a 32-bit address space"))
+}
+
+/// Parse and validate a `--memory-size` value in the same notation as
+/// [`parse_stack_size`]: the guest data address space, a positive multiple of
+/// 16 that fits the artifact header's 32-bit field.
+pub fn parse_memory_size(value: &str) -> Result<u32, String> {
+    let parsed = crate::byte_size::parse_byte_size(value)?;
+    if parsed == 0 || !parsed.is_multiple_of(16) {
+        return Err(format!(
+            "memory size {parsed} must be a positive multiple of 16"
+        ));
+    }
+    u32::try_from(parsed)
+        .ok()
+        .ok_or_else(|| format!("memory size {parsed} does not fit a 32-bit address space"))
 }
 
 /// True when a requested stack reserve visibly did not happen: the lowered
@@ -143,11 +196,12 @@ pub fn build_rv32_project(
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
-    stack_size: Option<u32>,
+    sizes: GuestSizes,
     bindings: &[String],
     print: &Print,
 ) -> Result<BuildResult, CliError> {
     ensure_no_env_rustflags()?;
+    sizes.validate()?;
     crate::require_cargo()?;
 
     let cwd = std::env::current_dir()?;
@@ -172,9 +226,10 @@ pub fn build_rv32_project(
 
     print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
-    // `--stack-size` switches to `cargo rustc`: its trailing flags append to
-    // the final rustc invocation, which is the only way to add a one-off
-    // `--defsym` on top of the project's own .cargo/config.toml rustflags.
+    // `--stack-size` / `--memory-size` switch to `cargo rustc`: its trailing
+    // flags append to the final rustc invocation, which is the only way to add
+    // a one-off `--defsym` on top of the project's own .cargo/config.toml
+    // rustflags.
     // (`RUSTFLAGS` would replace that whole target rustflags list, losing the
     // linker script; `--config` joins rather than replaces, which is why the
     // contract.toml overlay below is safe but cannot carry rustflags.)
@@ -182,7 +237,7 @@ pub fn build_rv32_project(
     cmd.current_dir(&metadata.workspace_root)
         .arg("--config")
         .arg(&contract_toml)
-        .arg(if stack_size.is_some() {
+        .arg(if sizes.needs_defsym() {
             "rustc"
         } else {
             "build"
@@ -203,10 +258,11 @@ pub fn build_rv32_project(
     for arg in cargo_args {
         cmd.arg(arg);
     }
-    if let Some(size) = stack_size {
-        cmd.arg("--")
-            .arg("-C")
-            .arg(format!("link-arg=--defsym=__stack_size={size}"));
+    if sizes.needs_defsym() {
+        cmd.arg("--");
+        for flag in defsym_flags(sizes) {
+            cmd.arg("-C").arg(flag);
+        }
     }
 
     let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
@@ -225,8 +281,14 @@ pub fn build_rv32_project(
 
     print.status("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
-    let lowered = groundhog_rv32_lower::lower(&elf_bytes)?;
-    if let Some(size) = stack_size
+    let lowered = groundhog_rv32_lower::lower_with(
+        &elf_bytes,
+        &groundhog_rv32_lower::LowerOptions {
+            memory_bytes: sizes.memory_bytes(),
+            ..groundhog_rv32_lower::LowerOptions::default()
+        },
+    )?;
+    if let Some(size) = sizes.stack_size
         && stack_size_defsym_ignored(
             lowered.initial_memory_start,
             lowered.initial_memory.len(),
@@ -250,7 +312,7 @@ pub fn build_rv32_project(
             memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
-            build_flags: Some(rv32_build_flags(pkg_name, cargo_args, stack_size)),
+            build_flags: Some(rv32_build_flags(pkg_name, cargo_args, sizes)),
         });
     fs::write(&rv32, &lowered.artifact)?;
     if let Err(error) = fs::write(&lower_metadata, lower_metadata_doc) {
@@ -315,12 +377,27 @@ const RV32_ENTRYPOINTS_FEATURE: &str = "entrypoints";
 /// recorded command reproduces the artifact without embedding the absolute
 /// path of the machine that built it. It cannot be omitted: the overlay
 /// carries `build-std`, which changes codegen.
-fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], stack_size: Option<u32>) -> String {
+/// The `-C link-arg=--defsym=...` values a build's sizes add to the final
+/// rustc invocation. `__memory_size` takes effect only where the SDK linker
+/// script `PROVIDE`s it; older scripts fix 64 KiB and ignore the request,
+/// while the artifact header carries the size regardless.
+fn defsym_flags(sizes: GuestSizes) -> Vec<String> {
+    let mut flags = Vec::new();
+    if let Some(size) = sizes.stack_size {
+        flags.push(format!("link-arg=--defsym=__stack_size={size}"));
+    }
+    if let Some(size) = sizes.memory_size {
+        flags.push(format!("link-arg=--defsym=__memory_size={size}"));
+    }
+    flags
+}
+
+fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], sizes: GuestSizes) -> String {
     let mut flags = vec![
         "cargo".to_string(),
         "--config".to_string(),
         CONTRACT_TOML_RELATIVE_PATH.to_string(),
-        if stack_size.is_some() {
+        if sizes.needs_defsym() {
             "rustc"
         } else {
             "build"
@@ -338,10 +415,12 @@ fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], stack_size: Option<u3
         crate::scaffold::to_snake(pkg_name),
     ];
     flags.extend(cargo_args.iter().cloned());
-    if let Some(size) = stack_size {
+    if sizes.needs_defsym() {
         flags.push("--".to_string());
-        flags.push("-C".to_string());
-        flags.push(format!("link-arg=--defsym=__stack_size={size}"));
+        for flag in defsym_flags(sizes) {
+            flags.push("-C".to_string());
+            flags.push(flag);
+        }
     }
     flags.join(" ")
 }
@@ -851,8 +930,9 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Rv32ConfigCheck, classify_rv32_config_probe, member_leftover_cargo_config,
-        parse_stack_size, rv32_linker_script, stack_size_defsym_ignored,
+        CliError, GuestSizes, Rv32ConfigCheck, classify_rv32_config_probe, defsym_flags,
+        member_leftover_cargo_config, parse_memory_size, parse_stack_size, rv32_linker_script,
+        stack_size_defsym_ignored,
     };
     use tempfile::TempDir;
 
@@ -979,14 +1059,95 @@ mod tests {
     #[test]
     fn parse_stack_size_rejects_invalid_values() {
         for bad in [
-            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16", "64K", "1M",
-            "1G", "2.5K",
+            "0", "0x0", "24", "0x6008", "", "abc", "0x", "-16", "2.5K", "5G",
         ] {
             assert!(
                 parse_stack_size(bad).is_err(),
                 "expected {bad:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn stack_size_is_bounded_by_the_memory_size_not_the_parser() {
+        // A stack the size of the whole default address space parses; whether
+        // it fits is decided against the memory size the build asks for.
+        for at_or_over in ["65536", "0x10000", "64K", "1M"] {
+            let stack = parse_stack_size(at_or_over).expect("parses");
+            let under_default = GuestSizes {
+                stack_size: Some(stack),
+                memory_size: None,
+            };
+            assert!(under_default.validate().is_err(), "{at_or_over} vs 64K");
+            let under_raised = GuestSizes {
+                stack_size: Some(stack),
+                memory_size: Some(2 * 1024 * 1024),
+            };
+            assert!(under_raised.validate().is_ok(), "{at_or_over} vs 2M");
+        }
+    }
+
+    #[test]
+    fn parse_memory_size_accepts_byte_size_notation() {
+        assert_eq!(parse_memory_size("0x20000"), Ok(131_072));
+        assert_eq!(parse_memory_size("128K"), Ok(131_072));
+        assert_eq!(parse_memory_size("1M"), Ok(1_048_576));
+        for bad in ["0", "12", "64.5K", "5G"] {
+            assert!(parse_memory_size(bad).is_err(), "input {bad:?}");
+        }
+    }
+
+    #[test]
+    fn guest_sizes_default_to_the_protocol_memory_and_no_defsym() {
+        let sizes = GuestSizes::default();
+        assert_eq!(
+            sizes.memory_bytes(),
+            groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES
+        );
+        assert!(!sizes.needs_defsym());
+        assert!(defsym_flags(sizes).is_empty());
+        assert!(sizes.validate().is_ok());
+    }
+
+    #[test]
+    fn guest_sizes_pass_both_symbols_and_bound_the_stack_by_the_memory() {
+        let sizes = GuestSizes {
+            stack_size: Some(0x6000),
+            memory_size: Some(0x20000),
+        };
+        assert_eq!(sizes.memory_bytes(), 0x20000);
+        assert_eq!(
+            defsym_flags(sizes),
+            vec![
+                "link-arg=--defsym=__stack_size=24576".to_string(),
+                "link-arg=--defsym=__memory_size=131072".to_string(),
+            ]
+        );
+        assert!(sizes.validate().is_ok());
+
+        // A stack reserve that leaves no data address space is refused, and
+        // the default 64 KiB is the bound when no memory size is given.
+        let too_big = GuestSizes {
+            stack_size: Some(0x20000),
+            memory_size: Some(0x20000),
+        };
+        assert!(matches!(
+            too_big.validate(),
+            Err(CliError::InvalidArgument { .. })
+        ));
+        let default_bound = GuestSizes {
+            stack_size: Some(0x10000),
+            memory_size: None,
+        };
+        assert!(default_bound.validate().is_err());
+        assert!(
+            GuestSizes {
+                stack_size: Some(0xFFF0),
+                memory_size: None,
+            }
+            .validate()
+            .is_ok()
+        );
     }
 
     #[test]

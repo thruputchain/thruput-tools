@@ -3,7 +3,7 @@
 //! verifier enforces on it.
 
 use groundhog_rv32_artifact::{
-    HEADER_BYTES, MAX_MEMORY_BYTES, build_artifact, sha256, verify_artifact,
+    DEFAULT_MEMORY_BYTES, HEADER_BYTES, build_artifact, sha256, verify_artifact,
 };
 
 fn read_u32(bytes: &[u8], off: usize) -> u32 {
@@ -15,7 +15,7 @@ fn v5_header_layout_and_field_values() {
     let code = [0u8; 8];
     let memory = [0xAAu8, 0xBB, 0xCC];
     let start = 0x1008;
-    let artifact = build_artifact(&code, &memory, start).expect("builds");
+    let artifact = build_artifact(&code, &memory, start, DEFAULT_MEMORY_BYTES).expect("builds");
 
     assert_eq!(&artifact[..8], b"GHRV32A1");
     assert_eq!(read_u32(&artifact, 8), 5, "format_version");
@@ -26,7 +26,7 @@ fn v5_header_layout_and_field_values() {
         3,
         "entry_abi_version (sp seeded 0)"
     );
-    assert_eq!(read_u32(&artifact, 48) as usize, MAX_MEMORY_BYTES);
+    assert_eq!(read_u32(&artifact, 48) as usize, DEFAULT_MEMORY_BYTES);
     assert_eq!(read_u32(&artifact, 52), 8, "code_size");
     assert_eq!(read_u32(&artifact, 56), 3, "initial_memory_size");
     assert_eq!(
@@ -55,7 +55,8 @@ fn v5_header_layout_and_field_values() {
 
 #[test]
 fn verify_rejects_trailing_bytes_and_truncation() {
-    let artifact = build_artifact(&[0u8; 8], &[1, 2, 3], 0x100).expect("builds");
+    let artifact =
+        build_artifact(&[0u8; 8], &[1, 2, 3], 0x100, DEFAULT_MEMORY_BYTES).expect("builds");
 
     let mut padded = artifact.clone();
     padded.push(0);
@@ -71,27 +72,43 @@ fn verify_rejects_trailing_bytes_and_truncation() {
 fn build_rejects_start_plus_size_past_memory_end() {
     let code = [0u8; 4];
     let memory = vec![1u8; 16];
-    // start + 16 == MAX_MEMORY_BYTES is the last valid placement.
-    assert!(build_artifact(&code, &memory, MAX_MEMORY_BYTES - 16).is_ok());
-    assert!(build_artifact(&code, &memory, MAX_MEMORY_BYTES - 15).is_err());
+    // start + 16 == DEFAULT_MEMORY_BYTES is the last valid placement.
+    assert!(
+        build_artifact(
+            &code,
+            &memory,
+            DEFAULT_MEMORY_BYTES - 16,
+            DEFAULT_MEMORY_BYTES
+        )
+        .is_ok()
+    );
+    assert!(
+        build_artifact(
+            &code,
+            &memory,
+            DEFAULT_MEMORY_BYTES - 15,
+            DEFAULT_MEMORY_BYTES
+        )
+        .is_err()
+    );
     // Also guard the overflow path.
-    assert!(build_artifact(&code, &memory, usize::MAX).is_err());
+    assert!(build_artifact(&code, &memory, usize::MAX, DEFAULT_MEMORY_BYTES).is_err());
 }
 
 #[test]
 fn build_rejects_nonzero_start_for_empty_image() {
     let code = [0u8; 4];
-    assert!(build_artifact(&code, &[], 0).is_ok());
-    assert!(build_artifact(&code, &[], 8).is_err());
+    assert!(build_artifact(&code, &[], 0, DEFAULT_MEMORY_BYTES).is_ok());
+    assert!(build_artifact(&code, &[], 8, DEFAULT_MEMORY_BYTES).is_err());
 }
 
 #[test]
 fn verify_rejects_start_pushed_past_memory_end() {
     let code = [0u8; 4];
     let memory = vec![1u8; 16];
-    let mut artifact = build_artifact(&code, &memory, 0x100).expect("builds");
+    let mut artifact = build_artifact(&code, &memory, 0x100, DEFAULT_MEMORY_BYTES).expect("builds");
     // Tamper initial_memory_start (u32 @ 60) so start + size > memory_bytes.
-    let bad = u32::try_from(MAX_MEMORY_BYTES - 15).unwrap();
+    let bad = u32::try_from(DEFAULT_MEMORY_BYTES - 15).unwrap();
     artifact[60..64].copy_from_slice(&bad.to_le_bytes());
     let err = verify_artifact(&artifact).expect_err("should reject");
     assert!(
@@ -103,11 +120,32 @@ fn verify_rejects_start_pushed_past_memory_end() {
 #[test]
 fn verify_rejects_nonzero_start_for_empty_image() {
     let code = [0u8; 4];
-    let mut artifact = build_artifact(&code, &[], 0).expect("builds");
+    let mut artifact = build_artifact(&code, &[], 0, DEFAULT_MEMORY_BYTES).expect("builds");
     artifact[60..64].copy_from_slice(&8u32.to_le_bytes());
     let err = verify_artifact(&artifact).expect_err("should reject");
     assert!(
         err.to_string().contains("initial_memory_start"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn build_stamps_the_requested_memory_bytes() {
+    // memory_bytes is the caller's: a larger data address space is stamped as
+    // given, the stored span is bounded by it rather than by the default, and
+    // the verifier accepts the result -- how large a chain admits is checked
+    // at deploy, not here.
+    let code = [0u8; 4];
+    let memory = vec![1u8; 16];
+    let larger = 2 * DEFAULT_MEMORY_BYTES;
+    let artifact = build_artifact(&code, &memory, larger - 16, larger).expect("builds");
+    assert_eq!(read_u32(&artifact, 48) as usize, larger);
+    verify_artifact(&artifact).expect("verifies");
+    assert!(build_artifact(&code, &memory, larger - 15, larger).is_err());
+    assert!(build_artifact(&code, &memory, 0, 0).is_err(), "zero memory");
+
+    // Code past the former 64 KiB constant builds and verifies too.
+    let big_code = vec![0u8; DEFAULT_MEMORY_BYTES + 4];
+    let artifact = build_artifact(&big_code, &[], 0, DEFAULT_MEMORY_BYTES).expect("builds");
+    verify_artifact(&artifact).expect("verifies");
 }

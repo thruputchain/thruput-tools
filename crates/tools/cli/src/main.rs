@@ -139,10 +139,16 @@ enum Command {
         #[arg(long)]
         bindings: Vec<String>,
         /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
-        /// multiple of 16, below 64K). RV32 only; sets the SDK linker
-        /// script's `__stack_size`.
+        /// multiple of 16, below the data address space). RV32 only; sets
+        /// the SDK linker script's `__stack_size`.
         #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
         stack_size: Option<u32>,
+        /// Guest data address space (same notation; multiple of 16). Defaults
+        /// to the protocol's 64K. Stamped into the artifact and offered to the
+        /// SDK linker script as `__memory_size`; only a chain whose
+        /// `max_rv32_memory_bytes` admits it will accept the result.
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_memory_size)]
+        memory_size: Option<u32>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -1119,6 +1125,7 @@ fn main() {
             package,
             bindings,
             stack_size,
+            memory_size,
             profile,
             artifacts,
             cargo_args,
@@ -1132,7 +1139,10 @@ fn main() {
                 groundhog_cli::build::run(
                     package.as_deref(),
                     &bindings,
-                    stack_size,
+                    groundhog_cli::build::GuestSizes {
+                        stack_size,
+                        memory_size,
+                    },
                     &cargo_args,
                     &artifacts,
                     profile.as_deref(),

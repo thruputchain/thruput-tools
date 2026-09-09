@@ -934,33 +934,81 @@ fn verify_artifact_rejects_nonzero_flags() {
 }
 
 #[test]
-fn build_artifact_rejects_code_outside_limits() {
-    use groundhog_rv32_artifact::{MAX_CODE_BYTES, build_artifact};
+fn build_artifact_rejects_empty_code_only() {
+    use groundhog_rv32_artifact::{DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact};
     let memory: Vec<u8> = Vec::new();
-    assert!(build_artifact(&[], &memory, 0).is_err()); // empty code
-    let oversized = vec![0u8; MAX_CODE_BYTES + 4];
-    assert!(build_artifact(&oversized, &memory, 0).is_err()); // > 64 KiB
+    assert!(build_artifact(&[], &memory, 0, DEFAULT_MEMORY_BYTES).is_err()); // empty code
+    // The code limit is the lowering's, not the format's: the writer emits
+    // code past the protocol default for a chain that admits it.
+    let oversized = vec![0u8; DEFAULT_MAX_CODE_BYTES + 4];
+    assert!(build_artifact(&oversized, &memory, 0, DEFAULT_MEMORY_BYTES).is_ok());
 }
 
 #[test]
-fn build_artifact_accepts_span_up_to_max_memory() {
-    use groundhog_rv32_artifact::{MAX_MEMORY_BYTES, build_artifact};
+fn build_artifact_accepts_span_up_to_memory_bytes() {
+    use groundhog_rv32_artifact::{DEFAULT_MEMORY_BYTES, build_artifact};
     let code = vec![0u8; 4];
+    let m = DEFAULT_MEMORY_BYTES;
     // A short span and a full-size span are both valid; only past-the-end is not.
-    assert!(build_artifact(&code, &[], 0).is_ok());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4], 4).is_ok());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES], 0).is_ok());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4], 0).is_err());
+    assert!(build_artifact(&code, &[], 0, m).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; m - 4], 4, m).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; m], 0, m).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; m + 4], 0, m).is_err());
+    // ... unless the caller declares a larger address space.
+    assert!(build_artifact(&code, &vec![0u8; m + 4], 0, m + 4).is_ok());
 }
 
 #[test]
-fn verify_artifact_rejects_oversized_code_size() {
+fn verify_artifact_rejects_code_size_disagreeing_with_the_body() {
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
-    // Overwrite code_size (u32 @ 52) with a value past MAX_CODE_BYTES.
+    // Overwrite code_size (u32 @ 52) with a value the body does not carry. No
+    // fixed cap applies any more; the layout check is what refuses it.
     bytes[52..56].copy_from_slice(&0x0002_0000u32.to_le_bytes());
     let err = verify_artifact(&bytes).expect_err("should reject");
-    assert!(err.to_string().contains("code size"));
+    assert!(err.to_string().contains("non-canonical"), "got: {err}");
+}
+
+#[test]
+fn lower_with_bounds_code_and_stamps_memory() {
+    use groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES;
+    use groundhog_rv32_lower::{LowerError, LowerOptions, lower_with};
+    let elf = assemble(happy_spec());
+    let default = lower(&elf).expect("lowers");
+
+    // A raised memory size is stamped into the header and reported back.
+    let raised = LowerOptions {
+        memory_bytes: 2 * DEFAULT_MEMORY_BYTES,
+        ..LowerOptions::default()
+    };
+    let lowered = lower_with(&elf, &raised).expect("lowers under a raised memory size");
+    assert_eq!(lowered.memory_bytes, 2 * DEFAULT_MEMORY_BYTES);
+    assert_eq!(
+        u32::from_le_bytes(lowered.artifact[48..52].try_into().unwrap()) as usize,
+        2 * DEFAULT_MEMORY_BYTES
+    );
+    assert_eq!(lowered.code, default.code);
+    assert_eq!(lowered.initial_memory, default.initial_memory);
+
+    // A code limit below the contract's .text is a CodeTooLarge, naming the
+    // limit that applied.
+    let tight = LowerOptions {
+        max_code_bytes: default.code.len() - 4,
+        ..LowerOptions::default()
+    };
+    match lower_with(&elf, &tight) {
+        Err(LowerError::CodeTooLarge { size, max }) => {
+            assert_eq!(size, default.code.len());
+            assert_eq!(max, default.code.len() - 4);
+        }
+        other => panic!("expected CodeTooLarge, got {other:?}"),
+    }
+
+    let zero = LowerOptions {
+        memory_bytes: 0,
+        ..LowerOptions::default()
+    };
+    assert!(lower_with(&elf, &zero).is_err());
 }
 
 #[test]

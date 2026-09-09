@@ -463,7 +463,7 @@ fn build_integration_artifact(
         &[],
         artifacts,
         explicit_profile,
-        None,
+        crate::build::GuestSizes::default(),
         &[],
         print,
     )?;
@@ -733,7 +733,7 @@ fn build_local_test_artifact(
         &[],
         artifacts,
         explicit_profile,
-        None,
+        crate::build::GuestSizes::default(),
         &[],
         print,
     )?;

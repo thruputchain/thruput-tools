@@ -51,13 +51,19 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Result, invalid, verify};
 
-/// Maximum size of the contract code (`.text`) section.
-pub const MAX_CODE_BYTES: usize = 64 * 1024;
-/// Total guest data address space. The stored initial-memory image is the
-/// span staged at `initial_memory_start`; the runtime zero-fills the rest.
-/// The lowerer stamps this exact value; the verifier accepts any nonzero
-/// `memory_bytes` up to this cap so the format is per-contract capable.
-pub const MAX_MEMORY_BYTES: usize = 64 * 1024;
+/// Code (`.text`) bytes a chain admits in an attached artifact unless its
+/// configuration states otherwise (`kConfigParamMaxRv32CodeBytes` in the
+/// protocol). The format itself does not cap `code_size` beyond its 32-bit
+/// field; the lowerer refuses code past the limit it is given, which defaults
+/// to this.
+pub const DEFAULT_MAX_CODE_BYTES: usize = 64 * 1024;
+/// Guest data address space the lowerer stamps into `memory_bytes` unless
+/// told otherwise, and the size a chain admits unless its configuration
+/// states otherwise (`kConfigParamMaxRv32MemoryBytes`). The stored
+/// initial-memory image is the span staged at `initial_memory_start`; the
+/// runtime zero-fills the rest. A contract only benefits from a larger value
+/// once its linker script provides a matching `__memory_size`.
+pub const DEFAULT_MEMORY_BYTES: usize = 64 * 1024;
 /// RV32 instruction width in bytes.
 pub const INSTRUCTION_BYTES: usize = 4;
 /// Artifact magic: `GHRV32A1`.
@@ -115,8 +121,9 @@ const SECTION_DIGEST_ALGORITHM: &[u8] = b"sha256";
 const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory";
 const FLAGS_REQUIRED_VALUE: u32 = 0;
 
-/// Pinned v5 artifact-format contract fingerprint.
-pub const FORMAT_FINGERPRINT: u64 = 0x8e5c_af3e_9cd2_3b22;
+/// Pinned v5 artifact-format contract fingerprint. hogd pins the same value
+/// as the accepted gas-table-v3 fingerprint in `rv32/artifact.h`.
+pub const FORMAT_FINGERPRINT: u64 = 0xc5f0_0a7d_4451_045e;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
@@ -362,8 +369,9 @@ const fn compute_format_fingerprint_with_inputs(
     );
     digest = format_fingerprint_u64(digest, b"digest_bytes", DIGEST_BYTES as u64);
     digest = format_fingerprint_u64(digest, b"instruction_bytes", INSTRUCTION_BYTES as u64);
-    digest = format_fingerprint_u64(digest, b"max_code_bytes", MAX_CODE_BYTES as u64);
-    digest = format_fingerprint_u64(digest, b"max_memory_bytes", MAX_MEMORY_BYTES as u64);
+    // The code and memory bounds are a chain's configuration, not part of the
+    // format: the header fields are 32-bit either way, and what a chain admits
+    // is checked where a contract is attached.
 
     digest = format_fingerprint_u64(digest, b"memory_bytes_nonzero", 1);
     digest = format_fingerprint_u64(digest, b"memory_bytes_le_max", 1);
@@ -404,26 +412,31 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// (`base + len <= MAX_MEMORY_BYTES`), and an empty image must use base 0.
 /// `memory_bytes` is stamped as `MAX_MEMORY_BYTES` (the full data address
 /// space).
+/// `memory_bytes` is the guest data address space the artifact declares; the
+/// stored image must fit inside it. The code and memory bounds a chain admits
+/// are its configuration, checked at deploy rather than here, so a caller
+/// building for a chain with raised limits passes what that chain allows.
 pub fn build_artifact(
     code: &[u8],
     initial_memory: &[u8],
     initial_memory_start: usize,
+    memory_bytes: usize,
 ) -> Result<Vec<u8>> {
-    // The loader rejects code_size == 0 || > MAX_CODE_BYTES; refuse to emit
-    // such an artifact even when called directly (not via `lower`).
-    if code.is_empty() || code.len() > MAX_CODE_BYTES {
-        return Err(invalid(format!(
-            "code size {} out of range (1..={MAX_CODE_BYTES})",
-            code.len()
-        )));
+    // The loader rejects code_size == 0; refuse to emit such an artifact even
+    // when called directly (not via `lower`).
+    if code.is_empty() {
+        return Err(invalid("code size 0 out of range"));
+    }
+    if memory_bytes == 0 {
+        return Err(invalid("memory_bytes must be nonzero"));
     }
     // The stored span must fit the data address space.
     let span_end = initial_memory_start
         .checked_add(initial_memory.len())
         .ok_or_else(|| invalid("initial memory span overflows"))?;
-    if span_end > MAX_MEMORY_BYTES {
+    if span_end > memory_bytes {
         return Err(invalid(format!(
-            "initial memory span end {span_end} exceeds {MAX_MEMORY_BYTES}"
+            "initial memory span end {span_end} exceeds memory_bytes {memory_bytes}"
         )));
     }
     // Keep the format canonical: an empty image has exactly one encoding.
@@ -450,7 +463,7 @@ pub fn build_artifact(
     header.extend_from_slice(&SYSCALL_ABI_VERSION.to_le_bytes());
     header.extend_from_slice(&GAS_TABLE_VERSION.to_le_bytes());
     header.extend_from_slice(&GAS_SCHEDULE_DIGEST.to_le_bytes());
-    header.extend_from_slice(&to_u32(MAX_MEMORY_BYTES, "memory bytes")?.to_le_bytes());
+    header.extend_from_slice(&to_u32(memory_bytes, "memory bytes")?.to_le_bytes());
     header.extend_from_slice(&code_size.to_le_bytes());
     header.extend_from_slice(&memory_size.to_le_bytes());
     header.extend_from_slice(&memory_base.to_le_bytes());
@@ -531,14 +544,16 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let init_mem_start = read_u32(INITIAL_MEMORY_START_OFFSET) as usize;
 
     // Canonical layout: the body is exactly header || code || initial_memory
-    // with no gaps or trailing bytes, code fits the declared limit, and the
-    // stored memory prefix fits the declared data address space. This mirrors
-    // the acceptance set the consensus C++ loader enforces, so the writer's
-    // self-check rejects anything the loader would.
-    if memory_bytes == 0 || memory_bytes > MAX_MEMORY_BYTES {
+    // with no gaps or trailing bytes, and the stored memory prefix fits the
+    // declared data address space. This mirrors the structural acceptance set
+    // the consensus C++ loader enforces, so the writer's self-check rejects
+    // anything the loader would on shape alone. How large `code_size` and
+    // `memory_bytes` may be is the deploying chain's configuration, checked
+    // there rather than here.
+    if memory_bytes == 0 {
         return Err(verify("memory_bytes out of range"));
     }
-    if code_size == 0 || code_size > MAX_CODE_BYTES {
+    if code_size == 0 {
         return Err(verify("code size out of range"));
     }
     // The staged span must fit the data address space; checked math so a
