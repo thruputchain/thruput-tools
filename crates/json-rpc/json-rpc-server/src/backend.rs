@@ -19,6 +19,7 @@
 //!
 //! - `SubmitPlane`                            → scheduler
 //! - `ChainPlane::chain_tip`                  → scheduler
+//! - `ChainPlane::transaction_limits`         → scheduler (same tip read)
 //! - `ChainPlane::get_block_by_number`        → coordinator (TBD)
 //! - `ChainPlane::pending_transaction_count`  → scheduler
 //! - `ReadPlane::transaction_receipt`         → indexer
@@ -75,7 +76,7 @@ use groundhog_json_rpc_types::{
 };
 use std::time::{Duration, Instant};
 
-use crate::error::RpcServerError;
+use crate::{error::RpcServerError, limits::TxLimits};
 
 /// Absolute timing budget for one public JSON-RPC request.
 #[derive(Debug, Clone, Copy)]
@@ -173,6 +174,19 @@ pub trait SubmitPlane: Send + Sync + 'static {
 pub trait ChainPlane: Send + Sync + 'static {
     /// Return the current chain tip.
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError>;
+
+    /// Return the transaction bounds in force at the current chain tip.
+    ///
+    /// Feeds the advisory `sendRawTransaction` pre-checks, which cache the
+    /// reading and tolerate a stale or missing one. The default reports
+    /// `NotImplemented`, under which the shared server skips the
+    /// chain-derived checks and keeps the protocol-constant ones.
+    async fn transaction_limits(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<TxLimits, RpcServerError> {
+        Err(RpcServerError::NotImplemented("transactionLimits".into()))
+    }
 
     /// Return block data at a specific height, if available.
     async fn get_block_by_number(

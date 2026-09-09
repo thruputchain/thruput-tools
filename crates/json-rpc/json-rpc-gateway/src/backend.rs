@@ -2,8 +2,8 @@ use std::{future::Future, sync::Arc};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
-    ViewPlane,
+    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, TxLimits,
+    ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -72,6 +72,19 @@ impl ChainPlane for GatewayBackend {
         let context = self.bounded_context(context);
         self.with_deadline(context, handlers::blocks::chain_tip(&self.ctx, context))
             .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn transaction_limits(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<TxLimits, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::blocks::transaction_limits(&self.ctx, context),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?height))]

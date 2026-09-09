@@ -206,6 +206,39 @@ bare hex (no `0x` prefix) via `serde_arrays::hex`. The public RPC boundary wraps
 byte-like values in `json-rpc-types` so JSON-RPC clients see the
 `0x`-prefixed format consistently.
 
+### Structured error data
+
+JSON-RPC error objects carry `code` and `message` for every catalog error.
+`data` is present only when the server has a typed detail to offer, and its
+shape is a tagged object modeled in `json-rpc-types`:
+
+| Error | `data` type | Discriminator |
+|-------|-------------|---------------|
+| `TxInvalid` (`-32000`) | `TxInvalidDetail` | `reason`: `tooManyContracts`, `contractTooLarge`, `duplicateContract` |
+
+Example rejection from the `sendRawTransaction` pre-checks:
+
+```json
+{
+  "code": -32000,
+  "message": "invalid transaction: transaction attaches 5 contracts; chain permits 4",
+  "data": { "reason": "tooManyContracts", "attached": 5, "max": 4 }
+}
+```
+
+The pre-checks mirror the executor's deterministic pre-execution gate
+(`SystemCallHandler::perform_initial_validation` in hogd): attached-contract
+count against the `maxNewContractsPerTx` parameter of the tip's network
+config, each RV32 blob against the 256 KiB per-contract cap, and no contract
+attached twice. The network config is read from `schedgateway_get_tip`
+(the same reply that serves `chainTip`) and cached for
+`tx_limits_cache_ttl_ms`; a stale reading can only lag a config-upgrade
+block, and a missing reading skips the chain-derived checks so an
+unreachable scheduler never blocks submission on its own. The executor
+re-checks everything, so these are a round-trip saver, not a trust
+boundary. The OpenRPC artifact documents each payload shape on its error
+component as `x-data-schema`.
+
 ---
 
 ## Event Parsing

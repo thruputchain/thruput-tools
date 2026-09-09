@@ -1,8 +1,9 @@
 use groundhog_json_rpc_api::{
     AirdropApiOpenRpc, GroundhogApiOpenRpc, WIRE_FORMAT_VERSION,
-    types::error::{ERROR_INFOS, RpcErrorInfo, codes, error_info_by_code},
+    types::error::{ERROR_INFOS, RpcErrorInfo, TxInvalidDetail, codes, error_info_by_code},
 };
 use groundhog_open_rpc::{Project, ProjectInfo};
+use schemars::generate::SchemaSettings;
 
 /// Build the canonical `OpenRPC` artifact for the current RPC surface.
 ///
@@ -70,12 +71,31 @@ fn add_error_docs(spec: &mut serde_json::Value) {
 }
 
 fn error_object(info: &RpcErrorInfo) -> serde_json::Value {
-    serde_json::json!({
+    let mut object = serde_json::json!({
         "code": info.code,
         "message": info.message,
         "x-description": info.description,
         "x-name": info.name,
-    })
+    });
+    // OpenRPC's `data` on an error object is an example value, not a schema,
+    // so the typed payload shape rides on an extension key. `data` itself
+    // stays reserved.
+    if let Some(schema) = error_data_schema(info.code) {
+        object["x-data-schema"] = schema;
+    }
+    object
+}
+
+/// JSON Schema of the structured `data` a documented error may carry.
+fn error_data_schema(code: i32) -> Option<serde_json::Value> {
+    let schema = match code {
+        codes::TX_INVALID => SchemaSettings::draft2020_12()
+            .with(|settings| settings.meta_schema = None)
+            .into_generator()
+            .into_root_schema_for::<TxInvalidDetail>(),
+        _ => return None,
+    };
+    Some(serde_json::to_value(schema).expect("bug: schemars Schema serialization cannot fail"))
 }
 
 fn method_error_codes(method: &str) -> &'static [i32] {

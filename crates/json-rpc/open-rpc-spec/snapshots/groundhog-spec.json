@@ -40,7 +40,101 @@
       "TxInvalid": {
         "code": -32000,
         "message": "Invalid transaction",
-        "x-description": "The submitted transaction is malformed, has invalid XDR, or fails local validation before backend submission.",
+        "x-data-schema": {
+          "description": "Machine-readable detail carried in the `data` field of a `TxInvalid`\nerror raised by pre-submission bound checks.\n\n`reason` discriminates the variant; the remaining fields are the\nnumbers a client needs to repair the transaction, which the error\n`message` restates in prose. A `TxInvalid` error without `data` had no\nstructured detail to offer (for example, undecodable XDR).\n\nThese checks are advisory: they mirror what the executor rejects\ndeterministically before running a transaction, so a rejection here\nsaves a round trip, but passing them does not guarantee acceptance.",
+          "oneOf": [
+            {
+              "description": "`contractsToDeploy` attaches more contracts than the chain permits\nper transaction.",
+              "properties": {
+                "attached": {
+                  "description": "Contracts attached to the transaction.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "max": {
+                  "description": "Per-transaction cap in force at the chain tip.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "const": "tooManyContracts",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "attached",
+                "max"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "One attached contract's code exceeds the per-contract size cap.",
+              "properties": {
+                "index": {
+                  "description": "Zero-based position in `contractsToDeploy`.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxBytes": {
+                  "description": "Per-contract cap.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "const": "contractTooLarge",
+                  "type": "string"
+                },
+                "sizeBytes": {
+                  "description": "Code size of the offending contract.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "reason",
+                "index",
+                "sizeBytes",
+                "maxBytes"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "The same contract appears twice in `contractsToDeploy`.",
+              "properties": {
+                "firstIndex": {
+                  "description": "Zero-based position of its first occurrence.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "index": {
+                  "description": "Zero-based position of the repeated attachment.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "const": "duplicateContract",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "index",
+                "firstIndex"
+              ],
+              "type": "object"
+            }
+          ],
+          "title": "TxInvalidDetail"
+        },
+        "x-description": "The submitted transaction is malformed, has invalid XDR, or fails local validation before backend submission. When the rejection comes from a pre-submission bound check, `data` carries a `TxInvalidDetail` object whose `reason` names the violated bound.",
         "x-name": "TxInvalid"
       },
       "TxNotFound": {
@@ -1275,7 +1369,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.0.0"
+    "version": "5.1.0"
   },
   "methods": [
     {
@@ -1318,7 +1412,7 @@
           "$ref": "#/components/schemas/TxHash"
         }
       },
-      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available.",
+      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
       "tags": [
         {
           "name": "Core API"

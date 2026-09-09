@@ -1,7 +1,11 @@
 use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
 use sha2::Digest;
 
-use crate::{ValidatedTransaction, error::RpcServerError};
+use crate::{
+    ValidatedTransaction,
+    error::RpcServerError,
+    limits::{self, TxLimits},
+};
 
 /// The `signatures` field of `SignedTransaction`, decoded for validation only.
 type SignaturesField = xdrs::VecM<groundhog_xdr::transaction::DecoratedSignature>;
@@ -18,7 +22,14 @@ const _: fn(groundhog_xdr::transaction::SignedTransaction) = |signed| {
 };
 
 /// Decode, validate, and hash a raw signed transaction parameter.
-pub fn validate_raw_transaction(tx_hex: &str) -> Result<ValidatedTransaction, RpcServerError> {
+///
+/// `limits` is the chain-derived bound reading for
+/// [`limits::check_transaction`]; pass `None` when no reading is available
+/// and only the protocol-constant checks should run.
+pub fn validate_raw_transaction(
+    tx_hex: &str,
+    limits: Option<&TxLimits>,
+) -> Result<ValidatedTransaction, RpcServerError> {
     let hex_str = tx_hex
         .strip_prefix("0x")
         .or_else(|| tx_hex.strip_prefix("0X"))
@@ -26,7 +37,7 @@ pub fn validate_raw_transaction(tx_hex: &str) -> Result<ValidatedTransaction, Rp
     let tx_bytes =
         hex::decode(hex_str).map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))?;
 
-    validate_raw_transaction_bytes(tx_bytes)
+    validate_raw_transaction_bytes(tx_bytes, limits)
 }
 
 /// Validate and hash raw signed transaction XDR bytes.
@@ -38,8 +49,14 @@ pub fn validate_raw_transaction(tx_hex: &str) -> Result<ValidatedTransaction, Rp
 ///
 /// Accepts exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
 /// accepts: trailing bytes after the signatures are rejected.
+///
+/// A transaction that decodes but breaks an executor pre-execution bound
+/// (see [`limits::check_transaction`]) is rejected with
+/// [`RpcServerError::TxInvalidDetailed`], which carries the violated bound
+/// as structured error data.
 pub fn validate_raw_transaction_bytes(
     tx_bytes: Vec<u8>,
+    limits: Option<&TxLimits>,
 ) -> Result<ValidatedTransaction, RpcServerError> {
     if u32::try_from(tx_bytes.len()).is_err() {
         return Err(RpcServerError::TxInvalid("transaction too large".into()));
@@ -61,6 +78,8 @@ pub fn validate_raw_transaction_bytes(
     let tx: groundhog_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
     let tx_end = reader.position();
+
+    limits::check_transaction(&tx, limits).map_err(RpcServerError::TxInvalidDetailed)?;
 
     // Decode the signatures too, and reject trailing bytes, so this accepts
     // exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
@@ -84,31 +103,75 @@ pub fn validate_raw_transaction_bytes(
     })
 }
 
+/// Signed-transaction fixtures shared by this crate's unit tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_fixtures {
+    use groundhog_xdr::{contract::Contract, transaction::SignedTransaction};
 
-    // Canonical XDR/hash vector only. This transaction is structurally valid
-    // and has a stable hash, but it is not auth-valid against empty hogd-dev
-    // genesis.
-    const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
+    /// Canonical XDR/hash vector. Structurally valid with a stable hash, but
+    /// not auth-valid against empty hogd-dev genesis.
+    pub(crate) const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
 0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000000000\
 000000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695\
 031c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
-    const CANONICAL_HASH: &str = "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+    /// Hash of the inner transaction of the canonical vector.
+    pub(crate) const CANONICAL_HASH: &str =
+        "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
+
+    /// The canonical vector, decoded.
+    pub(crate) fn canonical_signed_transaction() -> SignedTransaction {
+        let canonical = hex::decode(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR)
+            .expect("bug: canonical hash vector should be valid hex");
+        xdrs::txs::decode(&canonical).expect("bug: canonical hash vector should decode")
+    }
+
+    /// The canonical vector with `contracts` attached in `contracts_to_deploy`.
+    ///
+    /// Built through the XDR types rather than by splicing hex so the fixture
+    /// tracks the schema instead of hard-coded field offsets.
+    pub(crate) fn signed_transaction_with_contracts(contracts: Vec<Contract>) -> SignedTransaction {
+        let mut signed = canonical_signed_transaction();
+        signed.tx.contracts_to_deploy = xdrs::VecM(contracts);
+        signed
+    }
+
+    /// `signed_transaction_with_contracts`, encoded as raw signed-transaction bytes.
+    pub(crate) fn signed_tx_bytes_with_contracts(contracts: Vec<Contract>) -> Vec<u8> {
+        xdrs::txs::encode(&signed_transaction_with_contracts(contracts))
+            .expect("bug: re-encoded signed tx should encode")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_json_rpc_types::error::TxInvalidDetail;
+    use groundhog_xdr::contract::{Contract, ContractBlob};
+    use xdr_common::BytesM;
+
+    use super::test_fixtures::{
+        CANONICAL_HASH, CANONICAL_HASH_VECTOR_SIGNED_TX_XDR, canonical_signed_transaction,
+        signed_tx_bytes_with_contracts,
+    };
+    use super::*;
+    use crate::limits::MAX_CONTRACT_SIZE_BYTES;
+
+    fn rv32(size: usize, fill: u8) -> Contract {
+        Contract::kRv32 {
+            rv32_contract: ContractBlob {
+                data: BytesM(vec![fill; size]),
+            },
+        }
+    }
 
     /// Re-encodes the canonical vector carrying `count` copies of its signature.
     ///
     /// Built through the XDR types rather than by splicing hex so the variants
     /// track the schema instead of hard-coded field offsets.
     fn signed_tx_with_signature_count(count: usize) -> Vec<u8> {
-        let canonical = hex::decode(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR)
-            .expect("bug: canonical hash vector should be valid hex");
-        let mut signed: groundhog_xdr::transaction::SignedTransaction =
-            xdrs::txs::decode(&canonical).expect("bug: canonical hash vector should decode");
+        let mut signed = canonical_signed_transaction();
 
         let signature = signed.signatures.0[0].clone();
         signed.signatures = xdrs::VecM(vec![signature; count]);
@@ -129,7 +192,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
             let reencoded = xdrs::txs::encode(&signed.tx).expect("bug: inner tx should encode");
             let expected: [u8; 32] = sha2::Sha256::digest(&reencoded).into();
 
-            let validated = validate_raw_transaction_bytes(bytes)
+            let validated = validate_raw_transaction_bytes(bytes, None)
                 .expect("bug: re-encoded signed tx should validate");
 
             assert_eq!(
@@ -146,8 +209,9 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
         // The hash covers the inner transaction only, so adding, removing, or
         // replacing signatures must leave it untouched.
         for count in [0usize, 1, 2, 5] {
-            let validated = validate_raw_transaction_bytes(signed_tx_with_signature_count(count))
-                .expect("bug: re-encoded signed tx should validate");
+            let validated =
+                validate_raw_transaction_bytes(signed_tx_with_signature_count(count), None)
+                    .expect("bug: re-encoded signed tx should validate");
 
             assert_eq!(
                 hex::encode(validated.hash.0.0.as_ref()),
@@ -159,7 +223,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn invalid_hex_is_rejected() {
-        let err = validate_raw_transaction("not-valid-hex")
+        let err = validate_raw_transaction("not-valid-hex", None)
             .expect_err("bug: invalid hex should be rejected");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
@@ -167,14 +231,14 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn invalid_xdr_is_rejected() {
-        let err = validate_raw_transaction("0x00").expect_err("bug: invalid XDR should fail");
+        let err = validate_raw_transaction("0x00", None).expect_err("bug: invalid XDR should fail");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }
 
     #[test]
     fn exposes_block_expiry_height_from_decoded_transaction() {
-        let tx = validate_raw_transaction(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR)
+        let tx = validate_raw_transaction(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR, None)
             .expect("bug: canonical hash vector should validate as XDR");
 
         assert_eq!(*tx.block_expiry_height, 1_000_000);
@@ -182,7 +246,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn computes_canonical_hash_from_inner_transaction() {
-        let tx = validate_raw_transaction(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR)
+        let tx = validate_raw_transaction(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR, None)
             .expect("bug: canonical hash vector should validate as XDR");
 
         assert_eq!(hex::encode(tx.hash.0.0.as_ref()), CANONICAL_HASH);
@@ -190,16 +254,18 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn uppercase_0x_prefix_is_accepted() {
-        let tx = validate_raw_transaction(&format!("0X{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
-            .expect("bug: uppercase 0X prefix should be accepted");
+        let tx =
+            validate_raw_transaction(&format!("0X{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"), None)
+                .expect("bug: uppercase 0X prefix should be accepted");
 
         assert_eq!(hex::encode(tx.hash.0.0.as_ref()), CANONICAL_HASH);
     }
 
     #[test]
     fn trailing_bytes_after_signed_transaction_are_rejected() {
-        let err = validate_raw_transaction(&format!("{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}00"))
-            .expect_err("bug: trailing bytes should be rejected");
+        let err =
+            validate_raw_transaction(&format!("{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}00"), None)
+                .expect_err("bug: trailing bytes should be rejected");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }
@@ -210,16 +276,65 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
         // the transaction prefix still decodes but the signature runs short.
         let truncated =
             &CANONICAL_HASH_VECTOR_SIGNED_TX_XDR[..CANONICAL_HASH_VECTOR_SIGNED_TX_XDR.len() - 8];
-        let err = validate_raw_transaction(truncated)
+        let err = validate_raw_transaction(truncated, None)
             .expect_err("bug: truncated signatures should be rejected");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }
 
     #[test]
+    fn bound_violation_is_rejected_with_structured_detail() {
+        let limits = TxLimits {
+            max_new_contracts_per_tx: 1,
+        };
+        let bytes = signed_tx_bytes_with_contracts(vec![rv32(8, 1), rv32(8, 2)]);
+
+        let err = validate_raw_transaction_bytes(bytes, Some(&limits))
+            .expect_err("bug: two contracts should exceed a cap of one");
+
+        assert_eq!(
+            err,
+            RpcServerError::TxInvalidDetailed(TxInvalidDetail::TooManyContracts {
+                attached: 2,
+                max: 1
+            })
+        );
+    }
+
+    #[test]
+    fn oversized_contract_is_rejected_without_a_limits_reading() {
+        let bytes =
+            signed_tx_bytes_with_contracts(vec![rv32(MAX_CONTRACT_SIZE_BYTES as usize + 1, 1)]);
+
+        let err = validate_raw_transaction_bytes(bytes, None)
+            .expect_err("bug: oversized contract should be rejected");
+
+        assert!(matches!(
+            err,
+            RpcServerError::TxInvalidDetailed(TxInvalidDetail::ContractTooLarge { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn attached_contracts_within_bounds_still_hash_the_inner_transaction() {
+        let limits = TxLimits {
+            max_new_contracts_per_tx: 2,
+        };
+        let signed = super::test_fixtures::signed_transaction_with_contracts(vec![rv32(8, 1)]);
+        let bytes = xdrs::txs::encode(&signed).unwrap();
+        let reencoded = xdrs::txs::encode(&signed.tx).unwrap();
+        let expected: [u8; 32] = sha2::Sha256::digest(&reencoded).into();
+
+        let validated = validate_raw_transaction_bytes(bytes, Some(&limits))
+            .expect("bug: in-bounds attachments should validate");
+
+        assert_eq!(validated.hash.0.0.as_ref(), expected.as_slice());
+    }
+
+    #[test]
     fn empty_hex_input_is_rejected() {
-        let err =
-            validate_raw_transaction("").expect_err("bug: empty hex input should fail XDR decode");
+        let err = validate_raw_transaction("", None)
+            .expect_err("bug: empty hex input should fail XDR decode");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }

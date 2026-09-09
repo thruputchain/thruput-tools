@@ -540,7 +540,7 @@ where
         context: RpcRequestContext,
         signed: &SignedAirdrop,
     ) -> Result<(), RpcServerError> {
-        let tx = validate_raw_transaction_bytes(signed.bytes.clone()).map_err(|error| {
+        let tx = validate_raw_transaction_bytes(signed.bytes.clone(), None).map_err(|error| {
             RpcServerError::BackendUnavailable(format!(
                 "locally constructed airdrop transaction failed validation: {error}"
             ))

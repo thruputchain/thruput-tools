@@ -22,6 +22,7 @@ workspace = true
 [dependencies]
 groundhog-open-rpc = { workspace = true }
 groundhog-json-rpc-api = { workspace = true }
+schemars = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

@@ -1676,6 +1676,7 @@ dependencies = [
  "groundhog-xdr",
  "hex",
  "jsonrpsee",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
@@ -1783,6 +1784,7 @@ dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
  "pretty_assertions",
+ "schemars",
  "semver",
  "serde_json",
 ]

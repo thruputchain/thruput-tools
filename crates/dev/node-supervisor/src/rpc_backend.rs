@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{
-    ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
+    ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TxLimits, ValidatedTransaction,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, NetworkHashHex,
@@ -207,30 +207,48 @@ impl SubmitPlane for HogdDevSchedulerBackend {
     }
 }
 
+impl HogdDevSchedulerBackend {
+    /// Read the scheduler gateway's committed db tip.
+    async fn db_tip(&self) -> Result<DbTip, RpcServerError> {
+        let result = self
+            .gateway
+            .schedgateway_get_tip()
+            .await
+            .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+        match result {
+            ExpectedDBTip::kRPCNone { db_tip } => Ok(db_tip),
+            ExpectedDBTip::Default { error } if error == RPCError::kRPCNotFound.0 => {
+                tracing::error!(
+                    "hogd-dev scheduler gateway reported no genesis after startup bootstrap"
+                );
+                Err(RpcServerError::BackendUnavailable(
+                    "hogd-dev scheduler gateway has no genesis block".into(),
+                ))
+            }
+            other => Err(RpcServerError::BackendUnavailable(format!(
+                "unexpected scheduler gateway tip result: {other:?}"
+            ))),
+        }
+    }
+}
+
 #[async_trait]
 impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         within_request_deadline(context, async {
-            let result = self
-                .gateway
-                .schedgateway_get_tip()
-                .await
-                .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
-            match result {
-                ExpectedDBTip::kRPCNone { db_tip } => chain_tip_from_db_tip(db_tip),
-                ExpectedDBTip::Default { error } if error == RPCError::kRPCNotFound.0 => {
-                    tracing::error!(
-                        "hogd-dev scheduler gateway reported no genesis after startup bootstrap"
-                    );
-                    Err(RpcServerError::BackendUnavailable(
-                        "hogd-dev scheduler gateway has no genesis block".into(),
-                    ))
-                }
-                other => Err(RpcServerError::BackendUnavailable(format!(
-                    "unexpected scheduler gateway tip result: {other:?}"
-                ))),
-            }
+            chain_tip_from_db_tip(self.db_tip().await?)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn transaction_limits(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<TxLimits, RpcServerError> {
+        within_request_deadline(context, async {
+            TxLimits::from_network_config(&self.db_tip().await?.network_config)
         })
         .await
     }

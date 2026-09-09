@@ -23,7 +23,7 @@ use groundhog_json_rpc_types::{
 
 use crate::{
     BuildVersion, ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError,
-    SubmitPlane, ViewPlane, tx::validate_raw_transaction,
+    SubmitPlane, TxLimits, ViewPlane, tx::validate_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -39,27 +39,88 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     build_info: BuildInfo,
     release_version: Option<String>,
     bundle_manifest_digest: Option<String>,
-    tip_probe: TipProbe,
+    tip_probe: CachedProbe<i64>,
+    limits_probe: CachedProbe<TxLimits>,
 }
 
-/// Rate-limited chain-tip reading shared by all `sendRawTransaction`
-/// expiry pre-checks on this server.
+/// Rate-limited, best-effort backend reading shared by all
+/// `sendRawTransaction` pre-checks on this server.
 ///
-/// The backend is asked at most once per `tip_cache_ttl_ms`; submits
-/// inside the window reuse the last reading. The submit that finds the
-/// window expired claims the refresh before awaiting it, so concurrent
-/// submits keep using the stale reading instead of queuing behind the
-/// probe. Failed or timed-out probes keep the previous reading — the tip
-/// only grows, so a stale value can only under-detect expiry.
-#[derive(Debug, Clone, Default)]
-struct TipProbe {
-    state: Arc<tokio::sync::Mutex<TipProbeState>>,
+/// The backend is asked at most once per TTL; submits inside the window
+/// reuse the last reading. The submit that finds the window expired claims
+/// the refresh before awaiting it, so concurrent submits keep using the
+/// stale reading instead of queuing behind the probe. Failed or timed-out
+/// probes keep the previous reading: the tip only grows, so a stale height
+/// can only under-detect expiry, and limits change only at explicit config
+/// upgrades.
+#[derive(Debug, Clone)]
+struct CachedProbe<T> {
+    state: Arc<tokio::sync::Mutex<CachedProbeState<T>>>,
 }
 
-#[derive(Debug, Default)]
-struct TipProbeState {
+#[derive(Debug)]
+struct CachedProbeState<T> {
     last_attempt: Option<Instant>,
-    tip_height: Option<i64>,
+    value: Option<T>,
+}
+
+impl<T> Default for CachedProbe<T> {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(tokio::sync::Mutex::new(CachedProbeState {
+                last_attempt: None,
+                value: None,
+            })),
+        }
+    }
+}
+
+impl<T: Copy> CachedProbe<T> {
+    /// Current reading, refreshing it through `fetch` when the TTL has
+    /// lapsed. Returns `None` only when no reading has ever succeeded.
+    async fn reading<Fut>(
+        &self,
+        ttl: Duration,
+        probe_timeout: Duration,
+        context: RpcRequestContext,
+        what: &'static str,
+        fetch: impl FnOnce(RpcRequestContext) -> Fut,
+    ) -> Option<T>
+    where
+        Fut: Future<Output = Result<T, RpcServerError>>,
+    {
+        let now = Instant::now();
+        {
+            let mut state = self.state.lock().await;
+            match state.last_attempt {
+                Some(at) if now.duration_since(at) < ttl => return state.value,
+                _ => state.last_attempt = Some(now),
+            }
+        }
+
+        let probe_context = context.capped(probe_timeout);
+        let Some(remaining) = probe_context.remaining() else {
+            return self.state.lock().await.value;
+        };
+        match tokio::time::timeout(remaining, fetch(probe_context)).await {
+            Ok(Ok(value)) => {
+                self.state.lock().await.value = Some(value);
+                Some(value)
+            }
+            Ok(Err(error @ RpcServerError::NotImplemented(_))) => {
+                tracing::debug!(%error, what, "backend cannot supply reading, pre-check skipped");
+                self.state.lock().await.value
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, what, "reading unavailable, pre-check uses last reading");
+                self.state.lock().await.value
+            }
+            Err(_) => {
+                tracing::warn!(what, "probe timed out, pre-check uses last reading");
+                self.state.lock().await.value
+            }
+        }
+    }
 }
 
 /// Build-time implementation metadata exposed by `groundhog_version`.
@@ -126,7 +187,8 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
             build_info,
             release_version: None,
             bundle_manifest_digest: None,
-            tip_probe: TipProbe::default(),
+            tip_probe: CachedProbe::default(),
+            limits_probe: CachedProbe::default(),
         }
     }
 
@@ -175,36 +237,35 @@ where
     /// (probe failed or timed out with no prior success); the caller
     /// skips the pre-check in that case.
     async fn expiry_check_tip_height(&self, context: RpcRequestContext) -> Option<i64> {
-        let ttl = Duration::from_millis(self.config.tip_cache_ttl_ms);
-        let now = Instant::now();
-        {
-            let mut state = self.tip_probe.state.lock().await;
-            match state.last_attempt {
-                Some(at) if now.duration_since(at) < ttl => return state.tip_height,
-                _ => state.last_attempt = Some(now),
-            }
-        }
+        self.tip_probe
+            .reading(
+                Duration::from_millis(self.config.tip_cache_ttl_ms),
+                Duration::from_millis(self.config.tip_probe_timeout_ms),
+                context,
+                "chain tip",
+                |probe_context| async move {
+                    self.chain
+                        .chain_tip(probe_context)
+                        .await
+                        .map(|tip| *tip.height)
+                },
+            )
+            .await
+    }
 
-        let timeout = Duration::from_millis(self.config.tip_probe_timeout_ms);
-        let probe_context = context.capped(timeout);
-        let Some(remaining) = probe_context.remaining() else {
-            return self.tip_probe.state.lock().await.tip_height;
-        };
-        match tokio::time::timeout(remaining, self.chain.chain_tip(probe_context)).await {
-            Ok(Ok(tip)) => {
-                let height = *tip.height;
-                self.tip_probe.state.lock().await.tip_height = Some(height);
-                Some(height)
-            }
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "chain tip unavailable, expiry pre-check uses last reading");
-                self.tip_probe.state.lock().await.tip_height
-            }
-            Err(_) => {
-                tracing::warn!("chain tip probe timed out, expiry pre-check uses last reading");
-                self.tip_probe.state.lock().await.tip_height
-            }
-        }
+    /// Transaction bounds for the submit pre-checks, served from the shared
+    /// rate-limited probe. Returns `None` when no reading is available; the
+    /// caller then runs only the protocol-constant checks.
+    async fn submit_limits(&self, context: RpcRequestContext) -> Option<TxLimits> {
+        self.limits_probe
+            .reading(
+                Duration::from_millis(self.config.tx_limits_cache_ttl_ms),
+                Duration::from_millis(self.config.tip_probe_timeout_ms),
+                context,
+                "transaction limits",
+                |probe_context| self.chain.transaction_limits(probe_context),
+            )
+            .await
     }
 }
 
@@ -244,7 +305,11 @@ where
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            let tx = validate_raw_transaction(&tx_hex)?;
+            // Bound checks are advisory mirrors of the executor's own gate:
+            // a missing limits reading skips the chain-derived checks rather
+            // than blocking submission.
+            let limits = self.submit_limits(context).await;
+            let tx = validate_raw_transaction(&tx_hex, limits.as_ref())?;
             // A transaction can only be included at heights strictly above the
             // current tip, so `expiry <= tip` can never commit. The tip reading
             // is rate-limited and best-effort: an unavailable tip must not block
@@ -1080,6 +1145,187 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let submit_context = submit_contexts.lock().await[0];
         assert_eq!(tip_context.started_at(), submit_context.started_at());
         assert_eq!(tip_context.deadline(), submit_context.deadline());
+    }
+
+    /// Chain plane that reports a fixed transaction-limits reading and
+    /// counts how often it is asked, with a pre-expiry tip.
+    #[derive(Clone)]
+    struct LimitsChain {
+        limits: TxLimits,
+        limits_calls: Arc<Mutex<u32>>,
+    }
+
+    impl LimitsChain {
+        fn new(max_new_contracts_per_tx: u32) -> Self {
+            Self {
+                limits: TxLimits {
+                    max_new_contracts_per_tx,
+                },
+                limits_calls: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChainPlane for LimitsChain {
+        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+            Ok(ChainTip {
+                height: BlockHeight::from(42),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+            })
+        }
+
+        async fn transaction_limits(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<TxLimits, RpcServerError> {
+            *self.limits_calls.lock().await += 1;
+            Ok(self.limits)
+        }
+
+        async fn get_block_by_number(
+            &self,
+            _context: RpcRequestContext,
+            _height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            Ok(None)
+        }
+
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
+            Ok(0)
+        }
+    }
+
+    fn rv32_contract(size: usize, fill: u8) -> groundhog_xdr::contract::Contract {
+        groundhog_xdr::contract::Contract::kRv32 {
+            rv32_contract: groundhog_xdr::contract::ContractBlob {
+                data: xdr_common::BytesM(vec![fill; size]),
+            },
+        }
+    }
+
+    fn signed_tx_hex_with_contracts(contracts: Vec<groundhog_xdr::contract::Contract>) -> String {
+        format!(
+            "0x{}",
+            hex::encode(crate::tx::test_fixtures::signed_tx_bytes_with_contracts(
+                contracts
+            ))
+        )
+    }
+
+    #[tokio::test]
+    async fn limits_precheck_probes_backend_at_most_once_per_ttl() {
+        let chain = LimitsChain::new(4);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server =
+            expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted.clone());
+
+        for _ in 0..3 {
+            server
+                .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+                .await
+                .expect("bug: one attached contract is within a cap of four");
+        }
+
+        assert_eq!(
+            *chain.limits_calls.lock().await,
+            1,
+            "limits should be probed once within the cache TTL"
+        );
+        assert_eq!(submitted.lock().await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn limits_precheck_probes_backend_again_after_ttl() {
+        let chain = LimitsChain::new(4);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default().with_tx_limits_cache_ttl_ms(0),
+            submitted.clone(),
+        );
+
+        for _ in 0..2 {
+            server
+                .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+                .await
+                .expect("bug: contract-free transaction should submit");
+        }
+
+        assert_eq!(
+            *chain.limits_calls.lock().await,
+            2,
+            "an expired limits reading should trigger a fresh probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn too_many_contracts_is_rejected_with_structured_data_before_submit() {
+        let chain = LimitsChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(chain, RpcServerConfig::default(), submitted.clone());
+
+        let error = server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![
+                rv32_contract(8, 1),
+                rv32_contract(8, 2),
+            ]))
+            .await
+            .expect_err("bug: two contracts should exceed a cap of one");
+
+        assert_eq!(error.code(), codes::TX_INVALID);
+        assert_eq!(
+            error.message(),
+            "invalid transaction: transaction attaches 2 contracts; chain permits 1"
+        );
+        let data: serde_json::Value =
+            serde_json::from_str(error.data().expect("bound violation carries data").get())
+                .unwrap();
+        assert_eq!(
+            data,
+            serde_json::json!({"reason": "tooManyContracts", "attached": 2, "max": 1})
+        );
+        assert!(submitted.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn oversized_contract_is_rejected_when_backend_has_no_limits() {
+        // `CountingTipChain` keeps the default `transaction_limits`, which
+        // reports `NotImplemented`: chain-derived checks are skipped, but the
+        // protocol-constant size cap still applies.
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(
+            CountingTipChain {
+                tip_calls: Arc::new(Mutex::new(0)),
+            },
+            RpcServerConfig::default(),
+            submitted.clone(),
+        );
+        let oversized = crate::limits::MAX_CONTRACT_SIZE_BYTES as usize + 1;
+
+        let error = server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(
+                oversized, 1,
+            )]))
+            .await
+            .expect_err("bug: oversized contract should be rejected");
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(
+                (1..=8).map(|fill| rv32_contract(1, fill)).collect(),
+            ))
+            .await
+            .expect("bug: without a limits reading the count check is skipped");
+
+        assert_eq!(error.code(), codes::TX_INVALID);
+        let data: serde_json::Value =
+            serde_json::from_str(error.data().expect("bound violation carries data").get())
+                .unwrap();
+        assert_eq!(data["reason"], "contractTooLarge");
+        assert_eq!(data["index"], 0);
+        assert_eq!(submitted.lock().await.len(), 1);
     }
 
     #[tokio::test]

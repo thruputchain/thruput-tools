@@ -387,7 +387,19 @@ groundhog-bench --url http://127.0.0.1:9546 \
   method requires updating that mapping or
   the snapshot test fails. Error component `name` / `message` /
   `description` are sibling fields on the error object; `data` stays
-  reserved for future typed runtime payloads.
+  reserved for future typed runtime payloads. When an error carries a
+  structured `data` payload, model the payload as a serde type in
+  `json-rpc-types` (currently `TxInvalidDetail` for `TxInvalid`) and let
+  `open-rpc-spec` project its schema onto the error component as
+  `x-data-schema`; never hand-author the shape in the spec.
+- `sendRawTransaction` pre-checks (expiry against the tip, attached-contract
+  count from the tip's network config, per-contract size, duplicate
+  attachments) live in `json-rpc-server` (`tx.rs`, `limits.rs`) and mirror
+  what hogd's executor rejects before running a transaction. They are
+  advisory, not a trust boundary: readings are cached with a TTL and a
+  missing reading skips the chain-derived checks rather than blocking
+  submission. Backends supply the reading through
+  `ChainPlane::transaction_limits`.
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 

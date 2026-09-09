@@ -13,9 +13,10 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::RpcRequestContext;
+use groundhog_json_rpc_server::{RpcRequestContext, TxLimits};
 use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
 use groundhog_scheduler::{ExpectedDBTip, RPCError};
+use groundhog_xdr::network_config::NetworkConfig;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
@@ -32,6 +33,8 @@ const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
 pub struct TipSnapshot {
     /// Chain state that advances with each commit.
     pub tip: ChainTip,
+    /// Execution parameters in force for the block that follows the tip.
+    pub network_config: NetworkConfig,
 }
 
 /// Backend for chain-tip lookups.  In production this wraps the
@@ -117,6 +120,7 @@ impl TipSink for SchedulerTipSink {
                         height: db_tip.value.proposal_header.block_height.clone(),
                         block_hash,
                     },
+                    network_config: db_tip.network_config,
                 })
             }
             ExpectedDBTip::Default { error } if RPCError(error) == RPCError::kRPCNotFound => Err(
@@ -339,6 +343,18 @@ impl TipCoalescer {
     pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
         Ok(self.tip_snapshot(context).await?.tip)
     }
+
+    /// Ask for the transaction bounds in force at the current chain tip.
+    #[tracing::instrument(skip_all)]
+    pub async fn transaction_limits(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<TxLimits, GatewayError> {
+        let snapshot = self.tip_snapshot(context).await?;
+        TxLimits::from_network_config(&snapshot.network_config).map_err(|error| {
+            GatewayError::BackendUnavailable(format!("scheduler tip network config: {error}"))
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +429,21 @@ mod tests {
             tip: ChainTip {
                 height: BlockHeight::new(height),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
+            },
+            network_config: NetworkConfig::_0 {
+                v0: groundhog_xdr::network_config::NetworkConfigV0 {
+                    params: xdr_common::VecM(vec![
+                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
+                            max_sha256_buffers: 8,
+                        },
+                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxCrossInvokeDepth {
+                            max_cross_invoke_depth: 256,
+                        },
+                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
+                            max_new_contracts_per_tx: 6,
+                        },
+                    ]),
+                },
             },
         }
     }
@@ -524,6 +555,24 @@ mod tests {
         let tip = coalescer.chain_tip(request_context()).await.unwrap();
         assert_eq!(tip.height, BlockHeight::new(42));
         assert_eq!(mock.seen(), 1, "one backend call for one client call");
+    }
+
+    #[tokio::test]
+    async fn transaction_limits_come_from_the_tip_network_config() {
+        let mock = MockSink::new(42);
+        let coalescer = TipCoalescer::spawn(
+            &config_for_tests(4, 100),
+            &(mock.clone() as Arc<dyn TipSink>),
+            GatewayMetrics::for_tests(),
+        );
+
+        let limits = coalescer
+            .transaction_limits(request_context())
+            .await
+            .unwrap();
+
+        assert_eq!(limits.max_new_contracts_per_tx, 6);
+        assert_eq!(mock.seen(), 1, "limits ride on the same tip RPC");
     }
 
     #[tokio::test]

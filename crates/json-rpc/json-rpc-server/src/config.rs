@@ -43,10 +43,18 @@ pub struct RpcServerConfig {
     /// staleness can only under-detect expiry, never falsely reject.
     pub tip_cache_ttl_ms: u64,
 
-    /// Upper bound on a single chain-tip probe issued by the expiry
-    /// pre-check. The pre-check is advisory, so a slow or stalled tip
-    /// backend must not delay submission past this bound.
+    /// Upper bound on a single backend probe issued by a `sendRawTransaction`
+    /// pre-check (chain tip or transaction limits). The pre-checks are
+    /// advisory, so a slow or stalled backend must not delay submission
+    /// past this bound.
     pub tip_probe_timeout_ms: u64,
+
+    /// How long a transaction-limits reading is reused by the
+    /// `sendRawTransaction` bound checks before the backend is asked
+    /// again. Limits change only through explicit config upgrades, so a
+    /// longer window than the tip cache costs nothing in accuracy beyond
+    /// the upgrade block itself.
+    pub tx_limits_cache_ttl_ms: u64,
 }
 
 impl Default for RpcServerConfig {
@@ -60,6 +68,7 @@ impl Default for RpcServerConfig {
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
             tip_cache_ttl_ms: 3_000,
             tip_probe_timeout_ms: 2_000,
+            tx_limits_cache_ttl_ms: 30_000,
         }
     }
 }
@@ -114,10 +123,17 @@ impl RpcServerConfig {
         self
     }
 
-    /// Override the expiry pre-check's per-probe timeout.
+    /// Override the pre-checks' per-probe timeout.
     #[must_use]
     pub fn with_tip_probe_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.tip_probe_timeout_ms = timeout_ms;
+        self
+    }
+
+    /// Override how long the bound checks reuse a transaction-limits reading.
+    #[must_use]
+    pub fn with_tx_limits_cache_ttl_ms(mut self, ttl_ms: u64) -> Self {
+        self.tx_limits_cache_ttl_ms = ttl_ms;
         self
     }
 }
