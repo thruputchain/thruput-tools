@@ -1,0 +1,16 @@
+schema_version = 1
+id = "groundhog"
+owners = ["groundhog-rpc"]
+
+[compatibility]
+groundhog-cli = "{{GROUNDHOG_CLI_VERSION}}"
+
+[skill]
+name = "groundhog"
+description_lines = [
+    "Guides Groundhog contract and application development with the installed",
+    "CLI, Rust SDK, generated TypeScript bindings, TypeScript client, wallets,",
+    "local nodes, and JSON-RPC. Use when a task mentions Groundhog or a project",
+    "contains Groundhog configuration, SDK dependencies, or generated artifacts.",
+]
+version_component = "groundhog-cli"
