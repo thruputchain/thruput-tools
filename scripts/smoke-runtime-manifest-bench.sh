@@ -495,7 +495,8 @@ case "$BENCH_SCENARIO" in
     smoke)
         run_smoke "$NODE_RPC_URL" "$GATEWAY_RPC_URL" "$RUNTIME_MANIFEST"
         for admission_url in "$NODE_RPC_URL" "$GATEWAY_RPC_URL"; do
-            RPC_URL="$admission_url" cargo test -p groundhog-e2e-tests \
+            RPC_URL="$admission_url" cargo test --manifest-path "$REPO_ROOT/Cargo.toml" \
+                -p groundhog-e2e-tests \
                 invalid_signature_returns_transaction_rejection -- --ignored
         done
         ;;
