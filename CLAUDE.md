@@ -397,7 +397,7 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `open-rpc-spec` project its schema onto the error component as
   `x-data-schema`; never hand-author the shape in the spec.
 - `sendRawTransaction` pre-checks (expiry against the tip, attached-contract
-  count from the tip's network config, per-contract size, duplicate
+  count and per-contract size from the tip's network config, duplicate
   attachments) mirror what hogd's executor rejects before running a
   transaction. The bound logic lives in `groundhog-tx-validation`;
   `json-rpc-server` applies it from one cached db-tip reading
@@ -405,9 +405,11 @@ groundhog-bench --url http://127.0.0.1:9546 \
   that every tip fetch refreshes: a submit that finds it stale, the public
   `chainTip` method, and a background task `GroundhogRpcServer::new` starts
   on `tip_refresh_interval_ms`. The checks are advisory, not a trust
-  boundary: a bound the config does not state, or a missing reading, skips
-  the chain-derived checks rather than blocking submission. Never
-  substitute protocol defaults for unstated parameters.
+  boundary: a missing reading never blocks submission. A bound is enforced
+  only with a value the protocol defines: the one the tip's config states,
+  or a constant the protocol fixes for the unstated case (today only
+  `kDefaultMaxContractSizeBytes`). Never copy hogd's own fallbacks for
+  parameters the protocol leaves unstated.
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 

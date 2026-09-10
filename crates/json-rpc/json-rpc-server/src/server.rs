@@ -696,18 +696,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         tip_reading_with_params(height, vec![])
     }
 
-    /// A tip reading whose network config states only `maxNewContractsPerTx`.
-    fn tip_reading_with_max_contracts(height: i64, max_new_contracts_per_tx: u32) -> TipReading {
-        tip_reading_with_params(
-            height,
-            vec![
-                groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
-                    max_new_contracts_per_tx,
-                },
-            ],
-        )
-    }
-
     fn tip_reading_with_params(
         height: i64,
         params: Vec<groundhog_xdr::network_config::ConfigParam>,
@@ -1256,18 +1244,27 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(tip_context.deadline(), submit_context.deadline());
     }
 
-    /// Chain plane whose tip carries a chosen `maxNewContractsPerTx` and
+    /// Chain plane whose tip carries chosen network config parameters and
     /// that counts how often it is asked, with a pre-expiry tip.
     #[derive(Clone)]
     struct ConfigChain {
-        max_new_contracts_per_tx: u32,
+        params: Vec<groundhog_xdr::network_config::ConfigParam>,
         tip_calls: Arc<Mutex<u32>>,
     }
 
     impl ConfigChain {
+        /// A tip whose config states only `maxNewContractsPerTx`.
         fn new(max_new_contracts_per_tx: u32) -> Self {
+            Self::with_params(vec![
+                groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
+                    max_new_contracts_per_tx,
+                },
+            ])
+        }
+
+        fn with_params(params: Vec<groundhog_xdr::network_config::ConfigParam>) -> Self {
             Self {
-                max_new_contracts_per_tx,
+                params,
                 tip_calls: Arc::new(Mutex::new(0)),
             }
         }
@@ -1280,10 +1277,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             _context: RpcRequestContext,
         ) -> Result<TipReading, RpcServerError> {
             *self.tip_calls.lock().await += 1;
-            Ok(tip_reading_with_max_contracts(
-                42,
-                self.max_new_contracts_per_tx,
-            ))
+            Ok(tip_reading_with_params(42, self.params.clone()))
         }
 
         async fn get_block_by_number(
@@ -1402,14 +1396,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[tokio::test]
     async fn oversized_contract_is_rejected_when_tip_is_unavailable() {
         // Without a tip reading the chain-configured count check is skipped,
-        // but the protocol-constant size cap still applies.
+        // but the size cap the protocol fixes for an unstated config is
+        // still in force.
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
             UnavailableChain,
             RpcServerConfig::default(),
             submitted.clone(),
         );
-        let oversized = groundhog_tx_validation::MAX_CONTRACT_SIZE_BYTES as usize + 1;
+        let oversized = groundhog_xdr::contract::kDefaultMaxContractSizeBytes as usize + 1;
 
         let error = server
             .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(
@@ -1430,6 +1425,43 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 .unwrap();
         assert_eq!(data["reason"], "contractTooLarge");
         assert_eq!(data["index"], 0);
+        assert_eq!(submitted.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stated_contract_size_cap_from_the_tip_bounds_submissions() {
+        // The tip's config states a cap far below the protocol default; the
+        // submit path must apply the stated value, not the constant.
+        let chain = ConfigChain::with_params(vec![
+            groundhog_xdr::network_config::ConfigParam::kConfigParamMaxContractSizeBytes {
+                max_contract_size_bytes: 64,
+            },
+        ]);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(chain, RpcServerConfig::default(), submitted.clone());
+
+        let error = server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(65, 1)]))
+            .await
+            .expect_err("bug: a 65-byte contract should exceed the stated 64-byte cap");
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(64, 1)]))
+            .await
+            .expect("bug: a contract at the stated cap should be admitted");
+
+        assert_eq!(error.code(), codes::TX_INVALID);
+        let data: serde_json::Value =
+            serde_json::from_str(error.data().expect("bound violation carries data").get())
+                .unwrap();
+        assert_eq!(
+            data,
+            serde_json::json!({
+                "reason": "contractTooLarge",
+                "index": 0,
+                "sizeBytes": 65,
+                "maxBytes": 64
+            })
+        );
         assert_eq!(submitted.lock().await.len(), 1);
     }
 

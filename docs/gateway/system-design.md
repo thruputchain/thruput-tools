@@ -229,8 +229,8 @@ Example rejection from the `sendRawTransaction` pre-checks:
 The pre-checks mirror the executor's deterministic pre-execution gate
 (`SystemCallHandler::perform_initial_validation` in hogd): attached-contract
 count against the `maxNewContractsPerTx` parameter of the tip's network
-config, each RV32 blob against the 256 KiB per-contract cap, and no contract
-attached twice. The bound logic is the `groundhog-tx-validation` crate. The
+config, each RV32 blob against its `maxContractSizeBytes` parameter, and no
+contract attached twice. The bound logic is the `groundhog-tx-validation` crate. The
 network config arrives with every `schedgateway_get_tip` reply (the same
 one that serves `chainTip`); the shared server flattens it into
 `NetworkConfigParams` once per fetch and keeps a single cached db-tip
@@ -238,8 +238,11 @@ reading (height plus params) that every fetch refreshes: a submit that
 finds it older than `tip_cache_ttl_ms`, the public `chainTip` method, and
 a background task that probes every `tip_refresh_interval_ms` on an idle
 server. A parameter the config does not state is `None` and its check is
-skipped; no protocol default is substituted. A stale reading can only lag
-a config-upgrade block, and a missing one skips the chain-derived checks
+skipped, except where the protocol itself fixes the value in force for an
+unstated config: `maxContractSizeBytes` falls back to
+`kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
+parameter ran under. hogd's own fallbacks are never copied. A stale reading
+can only lag a config-upgrade block, and a missing one skips the chain-derived checks
 so an unreachable scheduler never blocks submission on its own. The
 executor re-checks everything, so these are a round-trip saver, not a
 trust boundary. The OpenRPC artifact documents each payload shape on its

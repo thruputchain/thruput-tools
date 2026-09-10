@@ -22,8 +22,9 @@ const _: fn(groundhog_xdr::transaction::SignedTransaction) = |signed| {
 /// Decode, validate, and hash a raw signed transaction parameter.
 ///
 /// `params` is the chain config reading for [`check_transaction`]; pass
-/// `NetworkConfigParams::default()` when no reading is available so only
-/// the protocol-constant checks run.
+/// `NetworkConfigParams::default()` when no reading is available, which
+/// skips the checks that need a stated bound and applies the protocol's
+/// own value for the rest.
 pub fn validate_raw_transaction(
     tx_hex: &str,
     params: &NetworkConfigParams,
@@ -154,7 +155,7 @@ mod tests {
         signed_tx_bytes_with_contracts,
     };
     use super::*;
-    use groundhog_tx_validation::MAX_CONTRACT_SIZE_BYTES;
+    use groundhog_xdr::contract::kDefaultMaxContractSizeBytes;
 
     fn rv32(size: usize, fill: u8) -> Contract {
         Contract::kRv32 {
@@ -315,8 +316,11 @@ mod tests {
 
     #[test]
     fn oversized_contract_is_rejected_without_a_config_reading() {
-        let bytes =
-            signed_tx_bytes_with_contracts(vec![rv32(MAX_CONTRACT_SIZE_BYTES as usize + 1, 1)]);
+        // No reading leaves the protocol's default cap in force.
+        let bytes = signed_tx_bytes_with_contracts(vec![rv32(
+            kDefaultMaxContractSizeBytes as usize + 1,
+            1,
+        )]);
 
         let err = validate_raw_transaction_bytes(bytes, &NetworkConfigParams::default())
             .expect_err("bug: oversized contract should be rejected");
