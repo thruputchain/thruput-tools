@@ -89,7 +89,8 @@ impl TipState {
 /// the stale reading instead of queuing behind the probe. Failed or
 /// timed-out probes keep the previous reading: the tip only grows, so a
 /// stale height can only under-detect expiry, and the config changes only
-/// at explicit upgrade blocks.
+/// at explicit upgrade blocks. Fetches that overlap may complete out of
+/// order; the reading with the higher tip is the later one and is kept.
 #[derive(Debug, Clone, Default)]
 struct TipCache {
     state: Arc<tokio::sync::Mutex<TipCacheState>>,
@@ -101,23 +102,50 @@ struct TipCacheState {
     reading: Option<TipState>,
 }
 
+impl TipCacheState {
+    /// Keep `reading` unless a newer one is already stored; says whether it
+    /// was kept.
+    fn record(&mut self, reading: TipState) -> bool {
+        let newer = self
+            .reading
+            .is_none_or(|current| reading.height >= current.height);
+        if newer {
+            self.reading = Some(reading);
+        }
+        newer
+    }
+}
+
+/// What a cache read returned, and whether this call went to the backend
+/// for it (successfully or not) rather than serving the cache, so a caller
+/// wanting a fresher reading knows a second probe would only repeat the
+/// first.
+#[derive(Debug, Clone, Copy)]
+struct TipRead {
+    /// `None` only when no reading has ever succeeded.
+    state: Option<TipState>,
+    probed: bool,
+}
+
 impl TipCache {
-    /// Record a reading obtained by any path, restarting the TTL window.
+    /// Record a reading obtained by any path, restarting the TTL window
+    /// when it is the newest.
     async fn store(&self, reading: TipState) {
         let mut state = self.state.lock().await;
-        state.last_attempt = Some(Instant::now());
-        state.reading = Some(reading);
+        if state.record(reading) {
+            state.last_attempt = Some(Instant::now());
+        }
     }
 
     /// Current reading, refreshing it through `fetch` when the TTL has
-    /// lapsed. Returns `None` only when no reading has ever succeeded.
+    /// lapsed.
     async fn reading<Fut>(
         &self,
         ttl: Duration,
         probe_timeout: Duration,
         context: RpcRequestContext,
         fetch: impl FnOnce(RpcRequestContext) -> Fut,
-    ) -> Option<TipState>
+    ) -> TipRead
     where
         Fut: Future<Output = Result<TipReading, RpcServerError>>,
     {
@@ -125,20 +153,28 @@ impl TipCache {
         {
             let mut state = self.state.lock().await;
             match state.last_attempt {
-                Some(at) if now.duration_since(at) < ttl => return state.reading,
+                Some(at) if now.duration_since(at) < ttl => {
+                    return TipRead {
+                        state: state.reading,
+                        probed: false,
+                    };
+                }
                 _ => state.last_attempt = Some(now),
             }
         }
 
         let probe_context = context.capped(probe_timeout);
         let Some(remaining) = probe_context.remaining() else {
-            return self.state.lock().await.reading;
+            return TipRead {
+                state: self.state.lock().await.reading,
+                probed: false,
+            };
         };
-        match tokio::time::timeout(remaining, fetch(probe_context)).await {
+        let state = match tokio::time::timeout(remaining, fetch(probe_context)).await {
             Ok(Ok(reading)) => {
-                let reading = TipState::from_reading(&reading);
-                self.state.lock().await.reading = Some(reading);
-                Some(reading)
+                let mut state = self.state.lock().await;
+                state.record(TipState::from_reading(&reading));
+                state.reading
             }
             Ok(Err(error)) => {
                 tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
@@ -148,6 +184,10 @@ impl TipCache {
                 tracing::warn!("chain tip probe timed out, pre-checks use last reading");
                 self.state.lock().await.reading
             }
+        };
+        TipRead {
+            state,
+            probed: true,
         }
     }
 }
@@ -319,13 +359,24 @@ where
     C: ChainPlane,
 {
     /// Db-tip reading for the submit pre-checks, served from the shared
-    /// rate-limited cache. Returns `None` when no reading is available
+    /// rate-limited cache. Its state is `None` when no reading is available
     /// (probe failed or timed out with no prior success); the caller then
-    /// runs only the protocol-constant checks.
-    async fn submit_tip_state(&self, context: RpcRequestContext) -> Option<TipState> {
+    /// runs only the checks that need no chain reading.
+    async fn submit_tip_state(&self, context: RpcRequestContext) -> TipRead {
+        self.tip_state_within(Duration::from_millis(self.config.tip_cache_ttl_ms), context)
+            .await
+    }
+
+    /// Db-tip reading fetched now regardless of the cache window, for a
+    /// decision that must not rest on a reading that may lag the chain.
+    async fn fresh_tip_state(&self, context: RpcRequestContext) -> TipRead {
+        self.tip_state_within(Duration::ZERO, context).await
+    }
+
+    async fn tip_state_within(&self, ttl: Duration, context: RpcRequestContext) -> TipRead {
         self.tip_cache
             .reading(
-                Duration::from_millis(self.config.tip_cache_ttl_ms),
+                ttl,
                 Duration::from_millis(self.config.tip_probe_timeout_ms),
                 context,
                 |probe_context| self.chain.chain_tip(probe_context),
@@ -373,12 +424,25 @@ where
             // The pre-checks are advisory mirrors of what the scheduler and
             // executor enforce authoritatively: an unavailable tip reading
             // skips the chain-dependent checks rather than blocking submission.
-            let tip = self.submit_tip_state(context).await;
-            let params = tip.map(|tip| tip.params).unwrap_or_default();
-            let tx = validate_raw_transaction(&tx_hex, &params)?;
+            let mut tip = self.submit_tip_state(context).await;
+            let params = tip.state.map(|tip| tip.params).unwrap_or_default();
+            let tx = match validate_raw_transaction(&tx_hex, &params) {
+                Ok(tx) => tx,
+                // A cached config can lag, by up to the TTL, an upgrade block
+                // that raised the violated bound. Read the tip again before
+                // rejecting, so a stale bound never turns away a transaction
+                // the current config admits. A reading this request fetched
+                // itself is already current, and the rejection stands.
+                Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
+                    tip = self.fresh_tip_state(context).await;
+                    let params = tip.state.map_or(params, |tip| tip.params);
+                    validate_raw_transaction(&tx_hex, &params)?
+                }
+                Err(error) => return Err(error.into()),
+            };
             // A transaction can only be included at heights strictly above the
             // current tip, so `expiry <= tip` can never commit.
-            if let Some(tip_height) = tip.map(|tip| tip.height)
+            if let Some(tip_height) = tip.state.map(|tip| tip.height)
                 && *tx.block_expiry_height <= tip_height
             {
                 return Err(RpcServerError::TxRejected(format!(
@@ -1248,25 +1312,37 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     /// that counts how often it is asked, with a pre-expiry tip.
     #[derive(Clone)]
     struct ConfigChain {
-        params: Vec<groundhog_xdr::network_config::ConfigParam>,
+        params: Arc<Mutex<Vec<groundhog_xdr::network_config::ConfigParam>>>,
         tip_calls: Arc<Mutex<u32>>,
+    }
+
+    /// A config stating only `maxNewContractsPerTx`.
+    fn max_contracts_params(
+        max_new_contracts_per_tx: u32,
+    ) -> Vec<groundhog_xdr::network_config::ConfigParam> {
+        vec![
+            groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
+                max_new_contracts_per_tx,
+            },
+        ]
     }
 
     impl ConfigChain {
         /// A tip whose config states only `maxNewContractsPerTx`.
         fn new(max_new_contracts_per_tx: u32) -> Self {
-            Self::with_params(vec![
-                groundhog_xdr::network_config::ConfigParam::kConfigParamMaxNewContractsPerTx {
-                    max_new_contracts_per_tx,
-                },
-            ])
+            Self::with_params(max_contracts_params(max_new_contracts_per_tx))
         }
 
         fn with_params(params: Vec<groundhog_xdr::network_config::ConfigParam>) -> Self {
             Self {
-                params,
+                params: Arc::new(Mutex::new(params)),
                 tip_calls: Arc::new(Mutex::new(0)),
             }
+        }
+
+        /// Replace the config the next tip reports, as an upgrade block does.
+        async fn set_params(&self, params: Vec<groundhog_xdr::network_config::ConfigParam>) {
+            *self.params.lock().await = params;
         }
     }
 
@@ -1277,7 +1353,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             _context: RpcRequestContext,
         ) -> Result<TipReading, RpcServerError> {
             *self.tip_calls.lock().await += 1;
-            Ok(tip_reading_with_params(42, self.params.clone()))
+            Ok(tip_reading_with_params(
+                42,
+                self.params.lock().await.clone(),
+            ))
         }
 
         async fn get_block_by_number(
@@ -1475,19 +1554,95 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .chain_tip()
             .await
             .expect("bug: tip should be readable");
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within the cap the chainTip call fetched");
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "the submit should reuse the reading the chainTip call stored"
+        );
+    }
+
+    #[tokio::test]
+    async fn bound_violation_is_rechecked_against_a_fresh_tip_before_rejecting() {
+        // The cached config caps attachments at one; an upgrade then raises
+        // it to two. A submit inside the TTL must not reject on the stale
+        // cap: it reads the tip again and applies the raised one.
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server =
+            expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted.clone());
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within a cap of one");
+        chain.set_params(max_contracts_params(2)).await;
+
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![
+                rv32_contract(8, 1),
+                rv32_contract(8, 2),
+            ]))
+            .await
+            .expect("bug: the raised cap should admit two contracts");
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            2,
+            "the violation should trigger exactly one fresh probe"
+        );
+        assert_eq!(submitted.lock().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bound_violation_on_a_fresh_reading_is_rejected_without_a_second_probe() {
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server =
+            expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted.clone());
+
         let error = server
             .send_raw_transaction(signed_tx_hex_with_contracts(vec![
                 rv32_contract(8, 1),
                 rv32_contract(8, 2),
             ]))
             .await
-            .expect_err("bug: the config fetched by chainTip should reject two contracts");
+            .expect_err("bug: two contracts should exceed a cap of one");
 
         assert_eq!(error.code(), codes::TX_INVALID);
         assert_eq!(
             *chain.tip_calls.lock().await,
             1,
-            "the submit should reuse the reading the chainTip call stored"
+            "the reading this request fetched is already current"
+        );
+        assert!(submitted.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn newer_reading_survives_an_older_fetch_completing_later() {
+        // A chainTip request stored height 10 while a probe claimed earlier
+        // was still in flight; that probe comes back with height 9.
+        let cache = TipCache::default();
+        cache.store(TipState::from_reading(&tip_reading(10))).await;
+
+        let read = cache
+            .reading(
+                Duration::ZERO,
+                Duration::from_secs(1),
+                RpcRequestContext::unbounded(),
+                |_| async { Ok(tip_reading(9)) },
+            )
+            .await;
+
+        assert!(read.probed);
+        assert_eq!(read.state.map(|tip| tip.height), Some(10));
+        cache.store(TipState::from_reading(&tip_reading(9))).await;
+        assert_eq!(
+            cache.state.lock().await.reading.map(|tip| tip.height),
+            Some(10)
         );
     }
 

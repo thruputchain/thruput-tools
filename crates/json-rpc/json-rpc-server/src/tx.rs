@@ -49,10 +49,11 @@ pub fn validate_raw_transaction(
 /// Accepts exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
 /// accepts: trailing bytes after the signatures are rejected.
 ///
-/// A transaction that decodes but breaks an executor pre-execution bound
-/// (see [`check_transaction`]) is rejected with
+/// A signed transaction that decodes completely but breaks an executor
+/// pre-execution bound (see [`check_transaction`]) is rejected with
 /// [`RpcServerError::TxInvalidDetailed`], which carries the violated bound
-/// as structured error data.
+/// as structured error data. Framing errors come first, so that detail
+/// always describes an otherwise well-formed request.
 pub fn validate_raw_transaction_bytes(
     tx_bytes: Vec<u8>,
     params: &NetworkConfigParams,
@@ -78,8 +79,6 @@ pub fn validate_raw_transaction_bytes(
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
     let tx_end = reader.position();
 
-    check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
-
     // Decode the signatures too, and reject trailing bytes, so this accepts
     // exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
     // would have accepted. The type must stay in step with the field it
@@ -91,6 +90,8 @@ pub fn validate_raw_transaction_bytes(
             "invalid XDR: trailing bytes after signed transaction".into(),
         ));
     }
+
+    check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
 
     let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_bytes[..tx_end]).into();
     let hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(hash_bytes)));
@@ -311,6 +312,29 @@ mod tests {
                 attached: 2,
                 max: 1
             })
+        );
+    }
+
+    #[test]
+    fn framing_errors_are_reported_before_bound_violations() {
+        // Structured bound detail is only useful for a request that is
+        // otherwise well-formed; trailing garbage after the signatures must
+        // surface as the framing error it is.
+        let params = NetworkConfigParams {
+            max_new_contracts_per_tx: Some(1),
+            ..NetworkConfigParams::default()
+        };
+        let mut bytes = signed_tx_bytes_with_contracts(vec![rv32(8, 1), rv32(8, 2)]);
+        bytes.push(0);
+
+        let err = validate_raw_transaction_bytes(bytes, &params)
+            .expect_err("bug: trailing bytes should be rejected");
+
+        assert_eq!(
+            err,
+            RpcServerError::TxInvalid(
+                "invalid XDR: trailing bytes after signed transaction".into()
+            )
         );
     }
 

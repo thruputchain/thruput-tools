@@ -241,8 +241,11 @@ server. A parameter the config does not state is `None` and its check is
 skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
-parameter ran under. hogd's own fallbacks are never copied. A stale reading
-can only lag a config-upgrade block, and a missing one skips the chain-derived checks
+parameter ran under. hogd's own fallbacks are never copied. A bound
+violation found against a cached reading is re-checked against a freshly
+fetched tip before it is returned, so a reading that lags a config-upgrade
+block never rejects what the current config admits. A stale reading
+can otherwise only lag a config-upgrade block, and a missing one skips the chain-derived checks
 so an unreachable scheduler never blocks submission on its own. The
 executor re-checks everything, so these are a round-trip saver, not a
 trust boundary. The OpenRPC artifact documents each payload shape on its
