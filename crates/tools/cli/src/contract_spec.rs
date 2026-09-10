@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use groundhog_contract_spec::{ContractSpec, ContractSpecInterface};
@@ -154,12 +155,50 @@ fn canonicalize_rv32_raw_fragments(
     raw_fragments: &[groundhog_spec_tool::SpecFragment],
 ) -> Result<Option<ContractSpec>, CliError> {
     match groundhog_spec_tool::canonicalize_spec(raw_fragments) {
-        Ok(spec) => Ok(Some(spec)),
+        Ok(spec) => {
+            reject_duplicate_event_signatures(&spec)?;
+            Ok(Some(spec))
+        }
         Err(groundhog_spec_tool::SpecToolError::NoSpecFragments) => Ok(None),
         Err(e) => Err(CliError::SpecFailed(format!(
             "failed to canonicalize rv32 contract spec: {e}"
         ))),
     }
+}
+
+/// Reject a spec whose retained events do not all have distinct signatures.
+///
+/// An event's signature is topic 0 of every emission, and the only thing a
+/// consumer has to tell events apart on the wire. It is hashed from (crate,
+/// MAJOR, ident), which is less than an event's spec name distinguishes: two
+/// events in different modules of one crate have distinct names and one
+/// signature, so the spec would promise a distinction the wire cannot deliver.
+///
+/// This belongs in `groundhog-spec-tool` beside the equivalent rule for
+/// exception selectors, and it is there — but this CLI takes that crate from
+/// the registry, so the rule cannot reach a build until a release carrying it
+/// is published and pinned here. Checking it in the CLI closes the window in
+/// between, where an SDK that can express the collision ships against a build
+/// system that cannot catch it.
+///
+/// Delete this once the pinned `groundhog-spec-tool` carries the rule; the
+/// wording matches so the diagnostic does not change when it does.
+fn reject_duplicate_event_signatures(spec: &ContractSpec) -> Result<(), CliError> {
+    let mut by_signature: BTreeMap<&[u8], &str> = BTreeMap::new();
+    for event in spec.events.iter() {
+        let name = spec_string_text(&event.name)?;
+        let signature: &[u8] = event.signature.as_ref();
+        if let Some(first) = by_signature.insert(signature, name) {
+            let hex: String = signature.iter().map(|b| format!("{b:02x}")).collect();
+            return Err(CliError::SpecFailed(format!(
+                "failed to canonicalize rv32 contract spec: events share an \
+                 event signature: {first} and {name} both hash to {hex}; they \
+                 differ only in a module path, which the signature does not \
+                 carry — rename one"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Load registered interfaces from the built RV32 contract spec.
@@ -300,7 +339,8 @@ mod tests {
     use super::{
         InterfaceSpec, canonicalize_rv32_raw_fragments, find_method_interfaces,
         load_built_contract_spec, load_contract_spec_from_file, load_contract_spec_from_xdr,
-        registered_interfaces, remove_spec_sidecars, spec_json_sidecar_path, spec_xdr_sidecar_path,
+        registered_interfaces, reject_duplicate_event_signatures, remove_spec_sidecars,
+        spec_json_sidecar_path, spec_xdr_sidecar_path,
     };
 
     #[test]
@@ -575,5 +615,55 @@ mod tests {
             .expect("bug: should load")
             .expect("bug: should exist");
         assert_eq!(loaded, spec);
+    }
+
+    fn event(name: &str, signature: [u8; 32]) -> groundhog_contract_spec::ContractEventDef {
+        groundhog_contract_spec::ContractEventDef {
+            name: name.try_into().unwrap(),
+            signature: signature.into(),
+            topics: vec![].try_into().unwrap(),
+            fields: vec![].try_into().unwrap(),
+        }
+    }
+
+    fn spec_with_events(events: Vec<groundhog_contract_spec::ContractEventDef>) -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![].try_into().unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: events.try_into().unwrap(),
+        }
+    }
+
+    /// Two events the spec names apart and the wire cannot: distinct ids, one
+    /// signature, which is topic 0 of every emission.
+    #[test]
+    fn duplicate_event_signatures_are_rejected() {
+        let spec = spec_with_events(vec![
+            event("evt@1::ledger::Updated", [7u8; 32]),
+            event("evt@1::vault::Updated", [7u8; 32]),
+        ]);
+
+        let err = reject_duplicate_event_signatures(&spec).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("events share an event signature"), "{msg}");
+        assert!(msg.contains("evt@1::ledger::Updated"), "{msg}");
+        assert!(msg.contains("evt@1::vault::Updated"), "{msg}");
+    }
+
+    /// The ordinary case: two crates' events share an ident but not a
+    /// signature, because the crate name is in the preimage.
+    #[test]
+    fn distinct_event_signatures_are_accepted() {
+        let spec = spec_with_events(vec![
+            event("a@1::Updated", [1u8; 32]),
+            event("b@1::Updated", [2u8; 32]),
+        ]);
+
+        assert!(reject_duplicate_event_signatures(&spec).is_ok());
+    }
+
+    #[test]
+    fn a_spec_with_no_events_is_accepted() {
+        assert!(reject_duplicate_event_signatures(&spec_with_events(vec![])).is_ok());
     }
 }
