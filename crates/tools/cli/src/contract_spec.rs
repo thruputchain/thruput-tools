@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use groundhog_contract_spec::{ContractSpec, ContractSpecInterface};
@@ -189,7 +190,10 @@ fn reject_duplicate_event_signatures(spec: &ContractSpec) -> Result<(), CliError
         let name = spec_string_text(&event.name)?;
         let signature: &[u8] = event.signature.as_ref();
         if let Some(first) = by_signature.insert(signature, name) {
-            let hex: String = signature.iter().map(|b| format!("{b:02x}")).collect();
+            let hex = signature.iter().fold(String::new(), |mut acc, b| {
+                let _ = write!(acc, "{b:02x}");
+                acc
+            });
             return Err(CliError::SpecFailed(format!(
                 "failed to canonicalize rv32 contract spec: events share an \
                  event signature: {first} and {name} both hash to {hex}; they \
