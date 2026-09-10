@@ -49,6 +49,10 @@ pub struct GuestSizes {
     /// offered to the linker script as `__memory_size`. Only a chain whose
     /// `max_rv32_memory_bytes` admits it will accept the result.
     pub memory_size: Option<u32>,
+    /// `--max-code-bytes`: the code (`.text`) limit the lowering enforces,
+    /// the target chain's `max_rv32_code_bytes`. Only that chain will accept
+    /// code past the protocol default.
+    pub max_code_bytes: Option<u32>,
 }
 
 impl GuestSizes {
@@ -56,6 +60,14 @@ impl GuestSizes {
     pub fn memory_bytes(self) -> usize {
         self.memory_size
             .map_or(groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES, |size| {
+                size as usize
+            })
+    }
+
+    /// The code limit in force: the request, else the protocol default.
+    pub fn max_code_bytes(self) -> usize {
+        self.max_code_bytes
+            .map_or(groundhog_rv32_artifact::DEFAULT_MAX_CODE_BYTES, |size| {
                 size as usize
             })
     }
@@ -172,6 +184,21 @@ pub fn parse_memory_size(value: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("memory size {parsed} does not fit a 32-bit address space"))
 }
 
+/// Parse and validate a `--max-code-bytes` value in the same notation: the
+/// code limit a target chain admits, a positive multiple of the four-byte
+/// instruction size that fits the artifact header's 32-bit field.
+pub fn parse_code_size(value: &str) -> Result<u32, String> {
+    let parsed = crate::byte_size::parse_byte_size(value)?;
+    if parsed == 0 || !parsed.is_multiple_of(4) {
+        return Err(format!(
+            "code limit {parsed} must be a positive multiple of 4"
+        ));
+    }
+    u32::try_from(parsed)
+        .ok()
+        .ok_or_else(|| format!("code limit {parsed} does not fit a 32-bit field"))
+}
+
 /// True when a requested stack reserve visibly did not happen: the lowered
 /// image stages data below the requested stack top, which the stack-first
 /// linker script never produces. Old SDK linker scripts ignore the
@@ -284,8 +311,8 @@ pub fn build_rv32_project(
     let lowered = groundhog_rv32_lower::lower_with(
         &elf_bytes,
         &groundhog_rv32_lower::LowerOptions {
+            max_code_bytes: sizes.max_code_bytes(),
             memory_bytes: sizes.memory_bytes(),
-            ..groundhog_rv32_lower::LowerOptions::default()
         },
     )?;
     if let Some(size) = sizes.stack_size
@@ -931,8 +958,8 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 mod tests {
     use super::{
         CliError, GuestSizes, Rv32ConfigCheck, classify_rv32_config_probe, defsym_flags,
-        member_leftover_cargo_config, parse_memory_size, parse_stack_size, rv32_linker_script,
-        stack_size_defsym_ignored,
+        member_leftover_cargo_config, parse_code_size, parse_memory_size, parse_stack_size,
+        rv32_linker_script, stack_size_defsym_ignored,
     };
     use tempfile::TempDir;
 
@@ -1077,11 +1104,13 @@ mod tests {
             let under_default = GuestSizes {
                 stack_size: Some(stack),
                 memory_size: None,
+                max_code_bytes: None,
             };
             assert!(under_default.validate().is_err(), "{at_or_over} vs 64K");
             let under_raised = GuestSizes {
                 stack_size: Some(stack),
                 memory_size: Some(2 * 1024 * 1024),
+                max_code_bytes: None,
             };
             assert!(under_raised.validate().is_ok(), "{at_or_over} vs 2M");
         }
@@ -1095,6 +1124,24 @@ mod tests {
         for bad in ["0", "12", "64.5K", "5G"] {
             assert!(parse_memory_size(bad).is_err(), "input {bad:?}");
         }
+    }
+
+    #[test]
+    fn guest_sizes_default_the_code_limit_and_pass_a_raised_one() {
+        assert_eq!(
+            GuestSizes::default().max_code_bytes(),
+            groundhog_rv32_artifact::DEFAULT_MAX_CODE_BYTES
+        );
+        let raised = GuestSizes {
+            max_code_bytes: Some(parse_code_size("256K").expect("parses")),
+            ..GuestSizes::default()
+        };
+        assert_eq!(raised.max_code_bytes(), 256 * 1024);
+        // The code limit is the lowering's, not the linker's: no defsym.
+        assert!(!raised.needs_defsym());
+        assert!(parse_code_size("0").is_err());
+        assert!(parse_code_size("6").is_err());
+        assert!(parse_code_size("8G").is_err());
     }
 
     #[test]
@@ -1114,6 +1161,7 @@ mod tests {
         let sizes = GuestSizes {
             stack_size: Some(0x6000),
             memory_size: Some(0x20000),
+            max_code_bytes: None,
         };
         assert_eq!(sizes.memory_bytes(), 0x20000);
         assert_eq!(
@@ -1130,6 +1178,7 @@ mod tests {
         let too_big = GuestSizes {
             stack_size: Some(0x20000),
             memory_size: Some(0x20000),
+            max_code_bytes: None,
         };
         assert!(matches!(
             too_big.validate(),
@@ -1138,12 +1187,14 @@ mod tests {
         let default_bound = GuestSizes {
             stack_size: Some(0x10000),
             memory_size: None,
+            max_code_bytes: None,
         };
         assert!(default_bound.validate().is_err());
         assert!(
             GuestSizes {
                 stack_size: Some(0xFFF0),
                 memory_size: None,
+                max_code_bytes: None,
             }
             .validate()
             .is_ok()

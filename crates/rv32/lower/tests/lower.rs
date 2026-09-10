@@ -1140,3 +1140,37 @@ fn matches_golden_when_provided() {
         );
     }
 }
+
+#[test]
+fn a_large_memory_size_stages_only_the_placed_data() {
+    use groundhog_rv32_lower::{LowerOptions, lower_with};
+    let elf = assemble(happy_spec());
+    let default = lower(&elf).expect("lowers");
+
+    // Declaring 3 GiB of address space must not allocate 3 GiB to stage a
+    // few bytes of data; the image is the same span as under the default.
+    let huge = LowerOptions {
+        memory_bytes: 3 << 30,
+        ..LowerOptions::default()
+    };
+    let lowered = lower_with(&elf, &huge).expect("lowers under a large memory size");
+    assert_eq!(lowered.memory_bytes, 3 << 30);
+    assert_eq!(lowered.initial_memory, default.initial_memory);
+    assert_eq!(lowered.initial_memory_start, default.initial_memory_start);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn rejects_a_memory_size_past_the_header_field() {
+    use groundhog_rv32_lower::{LowerError, LowerOptions, lower_with};
+    let elf = assemble(happy_spec());
+    let past = LowerOptions {
+        memory_bytes: u32::MAX as usize + 1,
+        ..LowerOptions::default()
+    };
+    let err = lower_with(&elf, &past).expect_err("cannot be stamped");
+    assert!(
+        matches!(err, LowerError::Invalid(ref message) if message.contains("32-bit")),
+        "{err}"
+    );
+}

@@ -149,6 +149,12 @@ enum Command {
         /// `max_rv32_memory_bytes` admits it will accept the result.
         #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_memory_size)]
         memory_size: Option<u32>,
+        /// Code (`.text`) limit the build enforces (same notation; multiple
+        /// of 4). Defaults to the protocol's 64K. Raise it only to the
+        /// target chain's `max_rv32_code_bytes`; no other chain will accept
+        /// the result.
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_code_size)]
+        max_code_bytes: Option<u32>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -177,6 +183,18 @@ enum Command {
         /// Package to test (required in workspaces)
         #[arg(short, long)]
         package: Option<String>,
+        /// Guest stack size for the contract build, as `groundhog build
+        /// --stack-size`
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
+        stack_size: Option<u32>,
+        /// Guest data address space for the contract build, as `groundhog
+        /// build --memory-size`
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_memory_size)]
+        memory_size: Option<u32>,
+        /// Code limit for the contract build, as `groundhog build
+        /// --max-code-bytes`
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_code_size)]
+        max_code_bytes: Option<u32>,
         /// Run only tests whose names contain this substring
         #[arg(long = "match-test")]
         match_test: Option<String>,
@@ -1126,6 +1144,7 @@ fn main() {
             bindings,
             stack_size,
             memory_size,
+            max_code_bytes,
             profile,
             artifacts,
             cargo_args,
@@ -1142,6 +1161,7 @@ fn main() {
                     groundhog_cli::build::GuestSizes {
                         stack_size,
                         memory_size,
+                        max_code_bytes,
                     },
                     &cargo_args,
                     &artifacts,
@@ -1151,6 +1171,9 @@ fn main() {
             }),
         Command::Test {
             package,
+            stack_size,
+            memory_size,
+            max_code_bytes,
             match_test,
             fail_fast,
             show_output,
@@ -1182,6 +1205,11 @@ fn main() {
                         fail_fast,
                         show_output,
                         no_capture,
+                    },
+                    sizes: groundhog_cli::build::GuestSizes {
+                        stack_size,
+                        memory_size,
+                        max_code_bytes,
                     },
                 };
                 if integration {

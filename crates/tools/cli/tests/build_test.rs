@@ -742,6 +742,7 @@ fn build_rv32_project_with_memory_size_stamps_the_artifact() {
         groundhog_cli::build::GuestSizes {
             stack_size: Some(0x6000),
             memory_size: Some(0x20000),
+            max_code_bytes: None,
         },
         &[],
         &groundhog_cli::Print::quiet(),

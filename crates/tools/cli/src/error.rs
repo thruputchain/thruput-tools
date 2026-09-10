@@ -888,10 +888,11 @@ impl CliError {
             )),
             Self::Rv32LowerFailed(error) => Some(Cow::Borrowed(match error {
                 groundhog_rv32_lower::LowerError::CodeTooLarge { .. } => {
-                    "the contract's code section exceeds the current artifact \
-                     format's code-size cap; reduce code size — common causes \
-                     are formatted panics pulling in `core::fmt` and large \
-                     generic instantiations"
+                    "the contract's code section exceeds the code limit the \
+                     build targets; reduce code size — common causes are \
+                     formatted panics pulling in `core::fmt` and large \
+                     generic instantiations — or pass `groundhog build \
+                     --max-code-bytes` when the target chain admits more"
                 }
                 groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
                     "static data plus the reserved stack exceed the VM's data \

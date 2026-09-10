@@ -36,6 +36,10 @@ pub struct TestOptions {
     pub watch: bool,
     /// Boolean controls forwarded to the local test harness.
     pub harness: TestHarnessOptions,
+    /// The guest memory layout to build the contract with, as `groundhog
+    /// build` takes it, so the artifact under test is the one that would
+    /// deploy.
+    pub sizes: crate::build::GuestSizes,
 }
 
 /// Options for the `groundhog test --integration` orchestration path.
@@ -246,7 +250,8 @@ fn run_integration_with_dev_node(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let build = build_integration_artifact(package, artifacts, explicit_profile, print)?;
+    let build =
+        build_integration_artifact(package, artifacts, explicit_profile, options.sizes, print)?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
         &build.project_root,
@@ -456,6 +461,7 @@ fn build_integration_artifact(
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
+    sizes: crate::build::GuestSizes,
     print: &Print,
 ) -> Result<IntegrationBuild, CliError> {
     let build = crate::build::build_rv32_project(
@@ -463,7 +469,7 @@ fn build_integration_artifact(
         &[],
         artifacts,
         explicit_profile,
-        crate::build::GuestSizes::default(),
+        sizes,
         &[],
         print,
     )?;
@@ -635,7 +641,8 @@ fn run_once_with_options(
     )?;
 
     // Build the contract artifact (validates project root, checks for cargo on PATH, etc.).
-    let build = build_local_test_artifact(package, artifacts, explicit_profile, print)?;
+    let build =
+        build_local_test_artifact(package, artifacts, explicit_profile, options.sizes, print)?;
 
     let root = build.project_root.clone();
     let profile = build.profile.clone();
@@ -726,6 +733,7 @@ fn build_local_test_artifact(
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
+    sizes: crate::build::GuestSizes,
     print: &Print,
 ) -> Result<LocalTestBuild, CliError> {
     let build = crate::build::build_rv32_project(
@@ -733,7 +741,7 @@ fn build_local_test_artifact(
         &[],
         artifacts,
         explicit_profile,
-        crate::build::GuestSizes::default(),
+        sizes,
         &[],
         print,
     )?;
@@ -2108,6 +2116,7 @@ mod tests {
                 show_output: true,
                 no_capture: true,
             },
+            sizes: crate::build::GuestSizes::default(),
         };
 
         apply_harness_options(

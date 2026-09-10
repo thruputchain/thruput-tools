@@ -170,10 +170,12 @@ bindings.
 The guest layout defaults to the SDK linker script's stack reserve and a
 64 KiB data address space. `--stack-size` overrides the reserve, and
 `--memory-size` stamps a larger address space into the artifact (and offers
-it to the linker script as `__memory_size`). A chain admits an artifact only
-up to its configured `max_rv32_memory_bytes` and `max_rv32_code_bytes`, 64 KiB
-each unless the chain raised them, so keep the defaults unless the target
-chain says otherwise.
+it to the linker script as `__memory_size`); `--max-code-bytes` raises the
+code limit the lowering enforces. `groundhog test` takes the same flags, so
+the artifact under test is the one that would deploy. A chain admits an
+artifact only up to its configured `max_rv32_memory_bytes` and
+`max_rv32_code_bytes`, 64 KiB each unless the chain raised them, so keep the
+defaults unless the target chain says otherwise.
 
 Generate a TypeScript binding as part of the build:
 

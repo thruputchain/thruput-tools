@@ -128,6 +128,12 @@ pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
     if options.memory_bytes == 0 {
         return Err(invalid("memory_bytes must be nonzero"));
     }
+    if u32::try_from(options.memory_bytes).is_err() {
+        return Err(invalid(format!(
+            "memory_bytes {} exceeds the artifact's 32-bit field",
+            options.memory_bytes
+        )));
+    }
     let sections = elf::parse_elf(elf_bytes)?;
     let (code, initial_memory, initial_memory_start) =
         validate_sections(elf_bytes, &sections, options)?;
@@ -266,7 +272,10 @@ fn validate_sections(
             && section.size > 0
     });
 
-    let mut memory = vec![0u8; options.memory_bytes];
+    // (guest address, file offset, size) of every section with file bytes to
+    // stage, and the highest address any of them reaches.
+    let mut placements: Vec<(usize, usize, usize)> = Vec::new();
+    let mut extent = 0usize;
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
         if (section.sh_type == elf::SHT_REL || section.sh_type == elf::SHT_RELA)
@@ -346,6 +355,15 @@ fn validate_sections(
             )));
         }
         let addr = section.addr as usize;
+        extent = extent.max(addr + size);
+        placements.push((addr, off, size));
+    }
+
+    // Stage only as far as the ELF places data, not the whole declared address
+    // space: `memory_bytes` is the caller's and can be far larger than any
+    // image, and the per-section check above already bounds `extent` by it.
+    let mut memory = vec![0u8; extent];
+    for (addr, off, size) in placements {
         memory[addr..addr + size].copy_from_slice(&data[off..off + size]);
     }
 
