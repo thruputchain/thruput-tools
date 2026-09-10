@@ -117,10 +117,16 @@ jobs:
           done
 
   cli-smoke:
-    name: CLI smoke (new + cargo build + cargo test + clippy + groundhog test)
+    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
+    # Every template renders its own sources, so each one gets the full
+    # build/test/lint loop a fresh project runs.
+    strategy:
+      fail-fast: false
+      matrix:
+        template: [counter, stub]
     steps:
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
@@ -140,13 +146,13 @@ jobs:
       # config rather than inheriting the workspace.
       - name: Scaffold project (groundhog new)
         working-directory: ${{ runner.temp }}
-        run: groundhog new my-counter
+        run: groundhog new my-${{ matrix.template }} --template ${{ matrix.template }}
 
       # A release PR advances the scaffold to a client version that does not
       # exist in the registry until after merge. Exercise that exact source
       # without weakening the version emitted for real generated projects.
       - name: Use checked-out RPC client before registry publication
-        working-directory: ${{ runner.temp }}/my-counter
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: |
           printf '\n[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]\ngroundhog-json-rpc-client = { path = "%s" }\n' \
             "$GITHUB_WORKSPACE/crates/json-rpc/json-rpc-client" \
@@ -154,21 +160,21 @@ jobs:
 
       # Plain `cargo build` is what IDEs run; it must succeed without `dev`.
       - name: Host build (cargo build)
-        working-directory: ${{ runner.temp }}/my-counter
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: cargo build
 
       - name: Host tests (cargo test)
-        working-directory: ${{ runner.temp }}/my-counter
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: cargo test
 
       # The generated code is the first Rust a new user lints. It must be
       # clean under the same clippy a fresh project runs, tests included.
       - name: Host lint (cargo clippy)
-        working-directory: ${{ runner.temp }}/my-counter
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Contract tests (groundhog test)
-        working-directory: ${{ runner.temp }}/my-counter
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: groundhog test
 
       # A user-level rustflags override makes cargo drop the project's
@@ -176,7 +182,8 @@ jobs:
       # as -Z trap-unreachable=false), yielding artifacts that fail validation.
       # The CLI must refuse to build instead of proceeding silently.
       - name: RUSTFLAGS guard (groundhog build refuses env rustflags)
-        working-directory: ${{ runner.temp }}/my-counter
+        if: matrix.template == 'counter'
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: |
           set -euo pipefail
           for probe in 'RUSTFLAGS=-C opt-level=2' 'CARGO_ENCODED_RUSTFLAGS='; do
@@ -202,6 +209,7 @@ jobs:
       # directory so the runner's global cargo config cannot satisfy the
       # check.
       - name: Rv32 linker-script guard (groundhog build refuses missing rustflags)
+        if: matrix.template == 'counter'
         working-directory: ${{ runner.temp }}
         run: |
           set -euo pipefail
