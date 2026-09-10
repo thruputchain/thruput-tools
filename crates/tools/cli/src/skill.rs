@@ -1,7 +1,7 @@
 //! Embedded, release-matched instructions for coding agents.
 
 const CLI_VERSION_PLACEHOLDER: &str = "{{GROUNDHOG_CLI_VERSION}}";
-const SKILL_TEMPLATE: &str = include_str!("../assets/groundhog/SKILL.md");
+const SKILL_TEMPLATE: &str = include_str!("../assets/groundhog/knowledge/generated/SKILL.md");
 
 /// Render the skill bundled with this CLI build.
 #[must_use]

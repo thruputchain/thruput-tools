@@ -1389,6 +1389,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-agent-knowledge"
+version = "0.16.0-rc.1"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
 name = "groundhog-bench"
 version = "0.16.0-rc.1"
 dependencies = [
