@@ -19,15 +19,25 @@ SHELL := /bin/bash
 CARGO ?= cargo
 PROFILE ?= release
 
+# Where cargo puts the artifacts, which CARGO_TARGET_DIR relocates. The targets
+# below read binaries out of this tree, so it has to track cargo rather than
+# assume ./target.
+TARGET_ROOT := $(or $(CARGO_TARGET_DIR),target)
+
+# `dev` and `debug` are the same profile under two names and both land in
+# $(TARGET_ROOT)/debug, so neither can be pasted into the directory as-is.
 ifeq ($(PROFILE),release)
 CARGO_PROFILE_FLAG := --release
-TARGET_DIR := target/release
+TARGET_DIR := $(TARGET_ROOT)/release
 else ifeq ($(PROFILE),debug)
 CARGO_PROFILE_FLAG :=
-TARGET_DIR := target/debug
+TARGET_DIR := $(TARGET_ROOT)/debug
+else ifeq ($(PROFILE),dev)
+CARGO_PROFILE_FLAG :=
+TARGET_DIR := $(TARGET_ROOT)/debug
 else
 CARGO_PROFILE_FLAG := --profile $(PROFILE)
-TARGET_DIR := target/$(PROFILE)
+TARGET_DIR := $(TARGET_ROOT)/$(PROFILE)
 endif
 
 # Binaries `make install` copies. The workspace builds more (groundhog-bench,
@@ -135,16 +145,23 @@ version:
 # cargo install --path crates/tools/cli is the other way to get the CLI on PATH;
 # it rebuilds into ~/.cargo/bin. This copies what is already built, so the
 # binary installed is the one just tested.
+# Every binary in BINS has to be there. Skipping the missing ones and still
+# exiting 0 would let a caller that checks the status treat a clean or
+# half-built tree as installed. Narrow BINS to install a subset on purpose.
 .PHONY: install
 install:
-	@mkdir -p "$(DESTDIR)$(BINDIR)"
-	@for b in $(BINS); do \
-		if [ -f $(TARGET_DIR)/$$b ]; then \
-			install -m 755 $(TARGET_DIR)/$$b "$(DESTDIR)$(BINDIR)/" || exit 1; \
-			echo "  $(DESTDIR)$(BINDIR)/$$b"; \
-		else \
-			echo "  $$b: not built, skipped" >&2; \
-		fi; \
+	@missing=""; \
+	for b in $(BINS); do \
+		test -f $(TARGET_DIR)/$$b || missing="$$missing $$b"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "not built in $(TARGET_DIR):$$missing; run 'make build' first" >&2; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(DESTDIR)$(BINDIR)"; \
+	for b in $(BINS); do \
+		install -m 755 $(TARGET_DIR)/$$b "$(DESTDIR)$(BINDIR)/" || exit 1; \
+		echo "  $(DESTDIR)$(BINDIR)/$$b"; \
 	done
 
 .PHONY: clean
