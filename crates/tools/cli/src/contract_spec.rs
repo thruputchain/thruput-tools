@@ -142,24 +142,35 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
     // section only when there are no raw fragments. A stale or malformed
     // `groundhogspecv0` section must not fail the build when the raw fragments
     // already fully describe the spec.
-    if !raw_fragments.is_empty() {
-        return canonicalize_rv32_raw_fragments(&raw_fragments);
-    }
+    let spec = if raw_fragments.is_empty() {
+        match final_data {
+            Some(data) => Some(load_contract_spec_from_xdr(data)?),
+            None => None,
+        }
+    } else {
+        canonicalize_rv32_raw_fragments(&raw_fragments)?
+    };
 
-    match final_data {
-        Some(data) => load_contract_spec_from_xdr(data).map(Some),
-        None => Ok(None),
+    // Whatever produced it, this is the spec the build publishes, so the
+    // check belongs here rather than on one of the two paths into it: a
+    // finalized `groundhogspecv0` section can carry the same collision, and
+    // decoding rather than canonicalizing it is not a reason to write out
+    // sidecars that misdescribe the wire.
+    //
+    // Not inside `load_contract_spec_from_xdr`: other commands read specs
+    // through it to report on artifacts that already exist, and refusing to
+    // read one is a different thing from refusing to build it.
+    if let Some(spec) = &spec {
+        reject_duplicate_event_signatures(spec)?;
     }
+    Ok(spec)
 }
 
 fn canonicalize_rv32_raw_fragments(
     raw_fragments: &[groundhog_spec_tool::SpecFragment],
 ) -> Result<Option<ContractSpec>, CliError> {
     match groundhog_spec_tool::canonicalize_spec(raw_fragments) {
-        Ok(spec) => {
-            reject_duplicate_event_signatures(&spec)?;
-            Ok(Some(spec))
-        }
+        Ok(spec) => Ok(Some(spec)),
         Err(groundhog_spec_tool::SpecToolError::NoSpecFragments) => Ok(None),
         Err(e) => Err(CliError::SpecFailed(format!(
             "failed to canonicalize rv32 contract spec: {e}"
@@ -167,7 +178,7 @@ fn canonicalize_rv32_raw_fragments(
     }
 }
 
-/// Reject a spec whose retained events do not all have distinct signatures.
+/// Reject a spec whose events do not all have distinct signatures.
 ///
 /// An event's signature is topic 0 of every emission, and the only thing a
 /// consumer has to tell events apart on the wire. It is hashed from (crate,
