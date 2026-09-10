@@ -83,11 +83,13 @@ pub const SYSCALL_ABI_VERSION: u32 = 1;
 /// Gas-schedule table version.
 /// v3: hogd admitted canonical UNIMP (0xc0001073) as a deterministic
 /// invalid-instruction trap.
-/// v4: hogd prices `NNInt` storage access and the bytestring syscalls, and
-/// charges the cold storage read on a transaction's first touch of a key.
-pub const GAS_TABLE_VERSION: u32 = 4;
+/// hogd meters v4 (`NNInt` storage access and the bytestring syscalls priced,
+/// the cold storage read charged on first touch), but every published runtime
+/// still accepts v3, so the lowerer stamps v3 until a runtime that prices v4
+/// ships; stamping v4 would tie this build to one hogd release's digest.
+pub const GAS_TABLE_VERSION: u32 = 3;
 /// Gas-schedule consensus digest (folds in instruction + host-syscall costs).
-pub const GAS_SCHEDULE_DIGEST: u64 = 0x9019_deb6_06f5_759b;
+pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
@@ -125,7 +127,7 @@ const FLAGS_REQUIRED_VALUE: u32 = 0;
 
 /// Pinned v5 artifact-format contract fingerprint. hogd pins the same value
 /// as `kArtifactFormatFingerprint` in `rv32/artifact.h`.
-pub const FORMAT_FINGERPRINT: u64 = 0x33c1_3073_a37d_e665;
+pub const FORMAT_FINGERPRINT: u64 = 0xc5f0_0a7d_4451_045e;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
