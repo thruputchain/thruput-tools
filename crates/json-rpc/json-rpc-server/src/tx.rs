@@ -1,4 +1,5 @@
 use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+use groundhog_xdr::transaction::Transaction;
 use sha2::Digest;
 
 use groundhog_tx_validation::{NetworkConfigParams, check_transaction};
@@ -10,7 +11,7 @@ type SignaturesField = xdrs::VecM<groundhog_xdr::transaction::DecoratedSignature
 
 /// Compile-time guard tying [`SignaturesField`] to the field it stands in for.
 ///
-/// [`validate_raw_transaction_bytes`] hand-decodes the two fields of
+/// [`decode_raw_transaction_bytes`] hand-decodes the two fields of
 /// `SignedTransaction` rather than decoding the struct, so a change to the
 /// signatures type — including a tighter `VecM` bound — must fail the build
 /// instead of silently letting the gateway accept what a whole-struct decode
@@ -19,16 +20,41 @@ const _: fn(groundhog_xdr::transaction::SignedTransaction) = |signed| {
     let _: SignaturesField = signed.signatures;
 };
 
-/// Decode, validate, and hash a raw signed transaction parameter.
+/// A raw signed transaction whose framing has been checked and whose hash
+/// is known, ahead of the executor-bound checks that need a chain reading.
 ///
-/// `params` is the chain config reading for [`check_transaction`]; pass
-/// `NetworkConfigParams::default()` when no reading is available, which
-/// skips the checks that need a stated bound and applies the protocol's
-/// own value for the rest.
-pub fn validate_raw_transaction(
-    tx_hex: &str,
-    params: &NetworkConfigParams,
-) -> Result<ValidatedTransaction, RpcServerError> {
+/// Decoding once and checking bounds separately lets a submit re-check
+/// against a fresher network config without decoding or hashing again.
+#[derive(Debug, Clone)]
+pub struct DecodedTransaction {
+    tx: Transaction,
+    validated: ValidatedTransaction,
+}
+
+impl DecodedTransaction {
+    /// Check the executor's pre-execution bounds (see [`check_transaction`])
+    /// against `params`. A violation is
+    /// [`RpcServerError::TxInvalidDetailed`], carrying the bound as
+    /// structured error data; because the framing was checked first, that
+    /// detail always describes an otherwise well-formed request.
+    ///
+    /// Pass `NetworkConfigParams::default()` when no chain reading is
+    /// available, which skips the checks that need a stated bound and
+    /// applies the protocol's own value for the rest.
+    pub fn check_bounds(&self, params: &NetworkConfigParams) -> Result<(), RpcServerError> {
+        check_transaction(&self.tx, params).map_err(RpcServerError::TxInvalidDetailed)
+    }
+
+    /// The transaction, ready to submit once [`Self::check_bounds`] passed
+    /// for the config in force.
+    pub fn into_validated(self) -> ValidatedTransaction {
+        self.validated
+    }
+}
+
+/// Decode and hash a raw signed transaction parameter, the `0x`-prefixed
+/// hex `sendRawTransaction` takes. See [`decode_raw_transaction_bytes`].
+pub fn decode_raw_transaction(tx_hex: &str) -> Result<DecodedTransaction, RpcServerError> {
     let hex_str = tx_hex
         .strip_prefix("0x")
         .or_else(|| tx_hex.strip_prefix("0X"))
@@ -36,28 +62,43 @@ pub fn validate_raw_transaction(
     let tx_bytes =
         hex::decode(hex_str).map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))?;
 
-    validate_raw_transaction_bytes(tx_bytes, params)
+    decode_raw_transaction_bytes(tx_bytes)
 }
 
-/// Validate and hash raw signed transaction XDR bytes.
-///
-/// The returned hash is SHA-256 over the inner `Transaction` only — the
-/// signatures are excluded, so re-signing a transaction does not change its
-/// hash. Signatures are decoded to reject malformed input, but are *not*
-/// cryptographically verified here; authorization is the node's job.
-///
-/// Accepts exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
-/// accepts: trailing bytes after the signatures are rejected.
-///
-/// A signed transaction that decodes completely but breaks an executor
-/// pre-execution bound (see [`check_transaction`]) is rejected with
-/// [`RpcServerError::TxInvalidDetailed`], which carries the violated bound
-/// as structured error data. Framing errors come first, so that detail
-/// always describes an otherwise well-formed request.
+/// Decode, check, and hash a raw signed transaction parameter in one step:
+/// [`decode_raw_transaction`] followed by
+/// [`DecodedTransaction::check_bounds`] against `params`.
+pub fn validate_raw_transaction(
+    tx_hex: &str,
+    params: &NetworkConfigParams,
+) -> Result<ValidatedTransaction, RpcServerError> {
+    let decoded = decode_raw_transaction(tx_hex)?;
+    decoded.check_bounds(params)?;
+    Ok(decoded.into_validated())
+}
+
+/// [`validate_raw_transaction`] over already-decoded hex.
 pub fn validate_raw_transaction_bytes(
     tx_bytes: Vec<u8>,
     params: &NetworkConfigParams,
 ) -> Result<ValidatedTransaction, RpcServerError> {
+    let decoded = decode_raw_transaction_bytes(tx_bytes)?;
+    decoded.check_bounds(params)?;
+    Ok(decoded.into_validated())
+}
+
+/// Decode and hash raw signed transaction XDR bytes.
+///
+/// The hash is SHA-256 over the inner `Transaction` only — the signatures
+/// are excluded, so re-signing a transaction does not change its hash.
+/// Signatures are decoded to reject malformed input, but are *not*
+/// cryptographically verified here; authorization is the node's job.
+///
+/// Accepts exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
+/// accepts: trailing bytes after the signatures are rejected.
+pub fn decode_raw_transaction_bytes(
+    tx_bytes: Vec<u8>,
+) -> Result<DecodedTransaction, RpcServerError> {
     if u32::try_from(tx_bytes.len()).is_err() {
         return Err(RpcServerError::TxInvalid("transaction too large".into()));
     }
@@ -75,7 +116,7 @@ pub fn validate_raw_transaction_bytes(
     // is what catches it.
     let mut reader = xdrs::txs::buf_reader::BufReader::new(&tx_bytes);
 
-    let tx: groundhog_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
+    let tx: Transaction = xdrs::read_xdr(&mut reader)
         .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
     let tx_end = reader.position();
 
@@ -91,15 +132,16 @@ pub fn validate_raw_transaction_bytes(
         ));
     }
 
-    check_transaction(&tx, params).map_err(RpcServerError::TxInvalidDetailed)?;
-
     let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_bytes[..tx_end]).into();
     let hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(hash_bytes)));
 
-    Ok(ValidatedTransaction {
-        bytes: tx_bytes,
-        hash,
-        block_expiry_height: tx.uniquifier.block_expiry_height,
+    Ok(DecodedTransaction {
+        validated: ValidatedTransaction {
+            bytes: tx_bytes,
+            hash,
+            block_expiry_height: tx.uniquifier.block_expiry_height.clone(),
+        },
+        tx,
     })
 }
 
@@ -312,6 +354,38 @@ mod tests {
                 attached: 2,
                 max: 1
             })
+        );
+    }
+
+    #[test]
+    fn bounds_are_checked_on_the_decoded_transaction_without_redecoding() {
+        // The submit path decodes once and may check bounds more than once
+        // against different configs; a violation must not need a re-decode.
+        let bytes = signed_tx_bytes_with_contracts(vec![rv32(8, 1), rv32(8, 2)]);
+        let decoded = decode_raw_transaction_bytes(bytes.clone())
+            .expect("bug: a well-framed transaction decodes regardless of bounds");
+        let capped = NetworkConfigParams {
+            max_new_contracts_per_tx: Some(1),
+            ..NetworkConfigParams::default()
+        };
+        let raised = NetworkConfigParams {
+            max_new_contracts_per_tx: Some(2),
+            ..NetworkConfigParams::default()
+        };
+
+        assert_eq!(
+            decoded.check_bounds(&capped),
+            Err(RpcServerError::TxInvalidDetailed(
+                TxInvalidDetail::TooManyContracts {
+                    attached: 2,
+                    max: 1
+                }
+            ))
+        );
+        assert_eq!(decoded.check_bounds(&raised), Ok(()));
+        assert_eq!(
+            decoded.into_validated().hash,
+            validate_raw_transaction_bytes(bytes, &raised).unwrap().hash
         );
     }
 

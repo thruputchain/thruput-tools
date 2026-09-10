@@ -54,7 +54,8 @@ pub struct RpcServerConfig {
     /// (and with it the network config) fresh on an idle server. Each tick
     /// asks the backend only if no probe ran within the interval, so a
     /// busy server pays for at most one probe per `tip_cache_ttl_ms` and
-    /// an idle one for at most one per interval.
+    /// an idle one for at most one per interval. Zero turns the task off;
+    /// submits and `chainTip` calls alone then refresh the reading.
     pub tip_refresh_interval_ms: u64,
 }
 
@@ -131,7 +132,7 @@ impl RpcServerConfig {
         self
     }
 
-    /// Override the background tip refresh interval.
+    /// Override the background tip refresh interval; zero turns it off.
     #[must_use]
     pub fn with_tip_refresh_interval_ms(mut self, interval_ms: u64) -> Self {
         self.tip_refresh_interval_ms = interval_ms;

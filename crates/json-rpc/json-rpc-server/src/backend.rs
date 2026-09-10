@@ -145,7 +145,8 @@ impl RpcRequestContext {
 
 /// A transaction that has passed shared RPC-layer validation.
 ///
-/// Obtain instances via `tx::validate_raw_transaction`.
+/// Obtain instances via `tx::validate_raw_transaction` or
+/// `tx::DecodedTransaction::into_validated`.
 /// No public constructor is provided so callers do not bypass validation.
 #[derive(Debug, Clone)]
 #[non_exhaustive]

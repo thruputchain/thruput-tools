@@ -50,23 +50,19 @@ pub enum RpcServerError {
 
 impl From<RpcServerError> for ErrorObjectOwned {
     fn from(err: RpcServerError) -> Self {
-        if let RpcServerError::TxInvalidDetailed(detail) = &err {
-            return ErrorObjectOwned::owned(codes::TX_INVALID, err.to_string(), Some(detail));
-        }
-        let (code, msg) = match &err {
-            RpcServerError::TxInvalid(_) | RpcServerError::TxInvalidDetailed(_) => {
-                (codes::TX_INVALID, err.to_string())
-            }
-            RpcServerError::TxRejected(_) => (codes::TX_REJECTED, err.to_string()),
-            RpcServerError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
-            RpcServerError::BlockNotFound => (codes::BLOCK_NOT_FOUND, err.to_string()),
-            RpcServerError::InvalidParam(_) => (codes::INVALID_PARAMS, err.to_string()),
-            RpcServerError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
-            RpcServerError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
-            RpcServerError::Overloaded(_) => (codes::OVERLOADED, err.to_string()),
-            RpcServerError::NotImplemented(_) => (codes::NOT_IMPLEMENTED, err.to_string()),
+        let (code, data) = match &err {
+            RpcServerError::TxInvalidDetailed(detail) => (codes::TX_INVALID, Some(detail)),
+            RpcServerError::TxInvalid(_) => (codes::TX_INVALID, None),
+            RpcServerError::TxRejected(_) => (codes::TX_REJECTED, None),
+            RpcServerError::TxNotFound => (codes::TX_NOT_FOUND, None),
+            RpcServerError::BlockNotFound => (codes::BLOCK_NOT_FOUND, None),
+            RpcServerError::InvalidParam(_) => (codes::INVALID_PARAMS, None),
+            RpcServerError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, None),
+            RpcServerError::BackendTimeout => (codes::BACKEND_TIMEOUT, None),
+            RpcServerError::Overloaded(_) => (codes::OVERLOADED, None),
+            RpcServerError::NotImplemented(_) => (codes::NOT_IMPLEMENTED, None),
         };
-        ErrorObjectOwned::owned(code, msg, None::<()>)
+        ErrorObjectOwned::owned(code, err.to_string(), data)
     }
 }
 

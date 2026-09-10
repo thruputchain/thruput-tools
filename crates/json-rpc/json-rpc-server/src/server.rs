@@ -25,7 +25,7 @@ use groundhog_tx_validation::NetworkConfigParams;
 
 use crate::{
     BuildVersion, ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError,
-    SubmitPlane, TipReading, ViewPlane, tx::validate_raw_transaction,
+    SubmitPlane, TipReading, ViewPlane, tx::decode_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -206,18 +206,22 @@ impl Drop for AbortOnDrop {
 ///
 /// Each tick refreshes only if no probe ran within the interval, so the
 /// task never adds load to a server whose submits already keep the reading
-/// current. Returns `None` outside a Tokio runtime, where no background
-/// work can run and submits alone refresh the cache.
+/// current. Returns `None` when the interval is zero, which turns the task
+/// off, and outside a Tokio runtime, where no background work can run;
+/// submits alone then refresh the cache.
 fn spawn_tip_refresh<C: ChainPlane>(
     chain: Arc<C>,
     cache: TipCache,
     config: &RpcServerConfig,
 ) -> Option<AbortOnDrop> {
+    if config.tip_refresh_interval_ms == 0 {
+        return None;
+    }
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::debug!("no tokio runtime, chain tip refresh task not started");
         return None;
     };
-    let interval = Duration::from_millis(config.tip_refresh_interval_ms.max(1));
+    let interval = Duration::from_millis(config.tip_refresh_interval_ms);
     let probe_timeout = Duration::from_millis(config.tip_probe_timeout_ms);
     let task = handle.spawn(async move {
         loop {
@@ -286,8 +290,8 @@ where
     ///
     /// When called inside a Tokio runtime this also starts the background
     /// task that refreshes the cached db-tip reading every
-    /// `tip_refresh_interval_ms`; it stops when the last clone of the
-    /// server is dropped.
+    /// `tip_refresh_interval_ms` (zero turns it off); it stops when the last
+    /// clone of the server is dropped.
     pub fn new(
         submit: S,
         chain: C,
@@ -421,25 +425,26 @@ where
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
+            let decoded = decode_raw_transaction(&tx_hex)?;
             // The pre-checks are advisory mirrors of what the scheduler and
             // executor enforce authoritatively: an unavailable tip reading
             // skips the chain-dependent checks rather than blocking submission.
             let mut tip = self.submit_tip_state(context).await;
             let params = tip.state.map(|tip| tip.params).unwrap_or_default();
-            let tx = match validate_raw_transaction(&tx_hex, &params) {
-                Ok(tx) => tx,
+            if let Err(error) = decoded.check_bounds(&params) {
                 // A cached config can lag, by up to the TTL, an upgrade block
                 // that raised the violated bound. Read the tip again before
                 // rejecting, so a stale bound never turns away a transaction
                 // the current config admits. A reading this request fetched
                 // itself is already current, and the rejection stands.
-                Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
-                    tip = self.fresh_tip_state(context).await;
-                    let params = tip.state.map_or(params, |tip| tip.params);
-                    validate_raw_transaction(&tx_hex, &params)?
+                if tip.probed {
+                    return Err(error.into());
                 }
-                Err(error) => return Err(error.into()),
-            };
+                tip = self.fresh_tip_state(context).await;
+                let params = tip.state.map_or(params, |tip| tip.params);
+                decoded.check_bounds(&params)?;
+            }
+            let tx = decoded.into_validated();
             // A transaction can only be included at heights strictly above the
             // current tip, so `expiry <= tip` can never commit.
             if let Some(tip_height) = tip.state.map(|tip| tip.height)
@@ -1686,6 +1691,24 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             *chain.tip_calls.lock().await,
             after_drop,
             "no probes should run after the last server clone is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_refresh_is_off_when_the_interval_is_zero() {
+        let chain = ConfigChain::new(4);
+        let _server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default().with_tip_refresh_interval_ms(0),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            0,
+            "zero turns the background refresh off"
         );
     }
 

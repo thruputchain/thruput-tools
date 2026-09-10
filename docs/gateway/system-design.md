@@ -237,7 +237,7 @@ one that serves `chainTip`); the shared server flattens it into
 reading (height plus params) that every fetch refreshes: a submit that
 finds it older than `tip_cache_ttl_ms`, the public `chainTip` method, and
 a background task that probes every `tip_refresh_interval_ms` on an idle
-server. A parameter the config does not state is `None` and its check is
+server (zero turns it off). A parameter the config does not state is `None` and its check is
 skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
