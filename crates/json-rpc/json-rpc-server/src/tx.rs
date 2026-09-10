@@ -25,8 +25,11 @@ const _: fn(groundhog_xdr::transaction::SignedTransaction) = |signed| {
 ///
 /// Decoding once and checking bounds separately lets a submit re-check
 /// against a fresher network config without decoding or hashing again.
+/// Crate-private so that outside this crate a [`ValidatedTransaction`]
+/// still only comes out of [`validate_raw_transaction`] and
+/// [`validate_raw_transaction_bytes`], which never skip the bound check.
 #[derive(Debug, Clone)]
-pub struct DecodedTransaction {
+pub(crate) struct DecodedTransaction {
     tx: Transaction,
     validated: ValidatedTransaction,
 }
@@ -41,20 +44,20 @@ impl DecodedTransaction {
     /// Pass `NetworkConfigParams::default()` when no chain reading is
     /// available, which skips the checks that need a stated bound and
     /// applies the protocol's own value for the rest.
-    pub fn check_bounds(&self, params: &NetworkConfigParams) -> Result<(), RpcServerError> {
+    pub(crate) fn check_bounds(&self, params: &NetworkConfigParams) -> Result<(), RpcServerError> {
         check_transaction(&self.tx, params).map_err(RpcServerError::TxInvalidDetailed)
     }
 
     /// The transaction, ready to submit once [`Self::check_bounds`] passed
     /// for the config in force.
-    pub fn into_validated(self) -> ValidatedTransaction {
+    pub(crate) fn into_validated(self) -> ValidatedTransaction {
         self.validated
     }
 }
 
 /// Decode and hash a raw signed transaction parameter, the `0x`-prefixed
 /// hex `sendRawTransaction` takes. See [`decode_raw_transaction_bytes`].
-pub fn decode_raw_transaction(tx_hex: &str) -> Result<DecodedTransaction, RpcServerError> {
+pub(crate) fn decode_raw_transaction(tx_hex: &str) -> Result<DecodedTransaction, RpcServerError> {
     let hex_str = tx_hex
         .strip_prefix("0x")
         .or_else(|| tx_hex.strip_prefix("0X"))
@@ -66,8 +69,16 @@ pub fn decode_raw_transaction(tx_hex: &str) -> Result<DecodedTransaction, RpcSer
 }
 
 /// Decode, check, and hash a raw signed transaction parameter in one step:
-/// [`decode_raw_transaction`] followed by
-/// [`DecodedTransaction::check_bounds`] against `params`.
+/// the framing and hash first, then the executor bounds against `params`.
+///
+/// `params` is the chain config reading for [`check_transaction`]; pass
+/// `NetworkConfigParams::default()` when no reading is available, which
+/// skips the checks that need a stated bound and applies the protocol's
+/// own value for the rest. A signed transaction that decodes completely
+/// but breaks a bound is rejected with
+/// [`RpcServerError::TxInvalidDetailed`], carrying the violated bound as
+/// structured error data; framing errors come first, so that detail always
+/// describes an otherwise well-formed request.
 pub fn validate_raw_transaction(
     tx_hex: &str,
     params: &NetworkConfigParams,
@@ -96,7 +107,7 @@ pub fn validate_raw_transaction_bytes(
 ///
 /// Accepts exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
 /// accepts: trailing bytes after the signatures are rejected.
-pub fn decode_raw_transaction_bytes(
+pub(crate) fn decode_raw_transaction_bytes(
     tx_bytes: Vec<u8>,
 ) -> Result<DecodedTransaction, RpcServerError> {
     if u32::try_from(tx_bytes.len()).is_err() {
