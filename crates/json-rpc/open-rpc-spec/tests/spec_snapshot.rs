@@ -244,10 +244,11 @@ fn assert_error_docs_are_wired(
         assert_eq!(
             errors[info.name]["data"],
             serde_json::Value::Null,
-            "error.data is reserved for future typed runtime payloads"
+            "error.data is an example slot in OpenRPC; typed payload shapes use x-data-schema"
         );
     }
 
+    assert_error_data_schemas_are_wired(errors);
     let send_errors = send_raw_transaction["errors"]
         .as_array()
         .expect("sendRawTransaction should document possible errors");
@@ -286,6 +287,36 @@ fn assert_error_docs_are_wired(
             );
         }
     }
+}
+
+fn assert_error_data_schemas_are_wired(errors: &serde_json::Map<String, serde_json::Value>) {
+    let tx_invalid_data = &errors["TxInvalid"]["x-data-schema"];
+    assert!(
+        tx_invalid_data.is_object(),
+        "TxInvalid should document its structured data payload"
+    );
+    let reasons: Vec<&str> = tx_invalid_data["oneOf"]
+        .as_array()
+        .expect("TxInvalid data schema should be a tagged union")
+        .iter()
+        .map(|variant| {
+            variant["properties"]["reason"]["const"]
+                .as_str()
+                .expect("each TxInvalid data variant should pin its reason tag")
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        ["tooManyContracts", "contractTooLarge", "duplicateContract"],
+        "TxInvalid data variants should be discriminated by camelCase reason tags"
+    );
+    assert!(
+        errors
+            .values()
+            .filter(|error| error["x-name"] != "TxInvalid")
+            .all(|error| error["x-data-schema"].is_null()),
+        "only TxInvalid documents a structured data payload today"
+    );
 }
 
 fn snapshot_path() -> PathBuf {

@@ -120,8 +120,11 @@ fn transaction_hash_vector_matches_the_server_side_hash() {
     .expect("bug: transaction should sign");
     let signed_xdr =
         encode_signed_transaction_xdr(&signed_tx).expect("bug: signed tx should encode");
-    let validated = groundhog_json_rpc_server::tx::validate_raw_transaction_bytes(signed_xdr)
-        .expect("bug: signed tx should validate server-side");
+    let validated = groundhog_json_rpc_server::tx::validate_raw_transaction_bytes(
+        signed_xdr,
+        &groundhog_tx_validation::NetworkConfigParams::default(),
+    )
+    .expect("bug: signed tx should validate server-side");
 
     assert_eq!(validated.hash.0.0.as_ref(), tx_hash.as_ref());
     assert_eq!(*validated.block_expiry_height, 2_000_000);

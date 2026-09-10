@@ -19,6 +19,7 @@ env:
     groundhog-json-rpc-api
     groundhog-open-rpc-spec
     groundhog-x23-transport
+    groundhog-tx-validation
     groundhog-json-rpc-server
     groundhog-json-rpc-client
     groundhog-signing

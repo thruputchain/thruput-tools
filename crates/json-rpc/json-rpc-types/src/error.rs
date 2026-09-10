@@ -1,3 +1,6 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 /// Groundhog-specific JSON-RPC error codes.
 /// Standard JSON-RPC reserves -32000 to -32099 for server errors.
 /// We follow Substrate's pattern of per-module ranges.
@@ -81,7 +84,10 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
         message: "Invalid transaction",
         description: concat!(
             "The submitted transaction is malformed, has invalid XDR, or ",
-            "fails local validation before backend submission."
+            "fails local validation before backend submission. When the ",
+            "rejection comes from a pre-submission bound check, `data` ",
+            "carries a `TxInvalidDetail` object whose `reason` names the ",
+            "violated bound."
         ),
     },
     RpcErrorInfo {
@@ -154,6 +160,54 @@ pub fn error_info_by_code(code: i32) -> Option<&'static RpcErrorInfo> {
     ERROR_INFOS.iter().find(|info| info.code == code)
 }
 
+/// Machine-readable detail carried in the `data` field of a `TxInvalid`
+/// error raised by pre-submission bound checks.
+///
+/// `reason` discriminates the variant; the remaining fields are the
+/// numbers a client needs to repair the transaction, which the error
+/// `message` restates in prose. A `TxInvalid` error without `data` had no
+/// structured detail to offer (for example, undecodable XDR).
+///
+/// These checks are advisory: they mirror what the executor rejects
+/// deterministically before running a transaction, so a rejection here
+/// saves a round trip, but passing them does not guarantee acceptance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, thiserror::Error)]
+#[serde(tag = "reason", rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum TxInvalidDetail {
+    /// `contractsToDeploy` attaches more contracts than the chain permits
+    /// per transaction.
+    #[error("transaction attaches {attached} contracts; chain permits {max}")]
+    TooManyContracts {
+        /// Contracts attached to the transaction.
+        attached: u32,
+        /// Per-transaction cap in force at the chain tip.
+        max: u32,
+    },
+
+    /// One attached contract's code exceeds the per-contract size cap.
+    #[error("contract {index} in contractsToDeploy is {size_bytes} bytes; limit is {max_bytes}")]
+    #[serde(rename_all = "camelCase")]
+    ContractTooLarge {
+        /// Zero-based position in `contractsToDeploy`.
+        index: u32,
+        /// Code size of the offending contract.
+        size_bytes: u32,
+        /// Per-contract cap.
+        max_bytes: u32,
+    },
+
+    /// The same contract appears twice in `contractsToDeploy`.
+    #[error("contract {index} in contractsToDeploy duplicates contract {first_index}")]
+    #[serde(rename_all = "camelCase")]
+    DuplicateContract {
+        /// Zero-based position of the repeated attachment.
+        index: u32,
+        /// Zero-based position of its first occurrence.
+        first_index: u32,
+    },
+}
+
 /// Bounded Prometheus outcome label for a JSON-RPC error code.
 ///
 /// This intentionally accepts any `i32`, because gateway RPC middleware also
@@ -197,6 +251,50 @@ mod tests {
             documented_codes, public_codes,
             "codes::ALL and ERROR_INFOS must stay one-to-one"
         );
+    }
+
+    #[test]
+    fn tx_invalid_detail_serializes_with_reason_tag_and_camel_case_fields() {
+        let cases = [
+            (
+                TxInvalidDetail::TooManyContracts {
+                    attached: 5,
+                    max: 4,
+                },
+                serde_json::json!({"reason": "tooManyContracts", "attached": 5, "max": 4}),
+                "transaction attaches 5 contracts; chain permits 4",
+            ),
+            (
+                TxInvalidDetail::ContractTooLarge {
+                    index: 1,
+                    size_bytes: 262_145,
+                    max_bytes: 262_144,
+                },
+                serde_json::json!({
+                    "reason": "contractTooLarge",
+                    "index": 1,
+                    "sizeBytes": 262_145,
+                    "maxBytes": 262_144,
+                }),
+                "contract 1 in contractsToDeploy is 262145 bytes; limit is 262144",
+            ),
+            (
+                TxInvalidDetail::DuplicateContract {
+                    index: 2,
+                    first_index: 0,
+                },
+                serde_json::json!({"reason": "duplicateContract", "index": 2, "firstIndex": 0}),
+                "contract 2 in contractsToDeploy duplicates contract 0",
+            ),
+        ];
+
+        for (detail, expected_json, expected_message) in cases {
+            let json = serde_json::to_value(&detail).unwrap();
+            assert_eq!(json, expected_json);
+            let roundtrip: TxInvalidDetail = serde_json::from_value(json).unwrap();
+            assert_eq!(roundtrip, detail);
+            assert_eq!(detail.to_string(), expected_message);
+        }
     }
 
     #[test]

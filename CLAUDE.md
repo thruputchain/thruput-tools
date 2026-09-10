@@ -70,6 +70,10 @@ Workspace crates are grouped by boundary:
 - **signing** — off-chain transaction signing and construction. Signer trait,
   local Ed25519 signer, canonical address derivation, tx builders for deploy
   and call, XDR encoding.
+- **tx-validation** — off-chain mirror of the bounds hogd's executor checks
+  before running a transaction. `NetworkConfigParams` flattens a db tip's
+  network config into per-parameter fields (`None` when unstated);
+  `check_transaction` reports violations as `TxInvalidDetail`.
 - **rv32-artifact** — Rust source of truth for the Groundhog RV32 artifact
   format: constants, offsets, fingerprint, writer, and validator.
 - **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The
@@ -401,7 +405,28 @@ groundhog-bench --url http://127.0.0.1:9546 \
   method requires updating that mapping or
   the snapshot test fails. Error component `name` / `message` /
   `description` are sibling fields on the error object; `data` stays
-  reserved for future typed runtime payloads.
+  reserved for future typed runtime payloads. When an error carries a
+  structured `data` payload, model the payload as a serde type in
+  `json-rpc-types` (currently `TxInvalidDetail` for `TxInvalid`) and let
+  `open-rpc-spec` project its schema onto the error component as
+  `x-data-schema`; never hand-author the shape in the spec.
+- `sendRawTransaction` pre-checks (expiry against the tip, attached-contract
+  count and per-contract size from the tip's network config, duplicate
+  attachments) mirror what hogd's executor rejects before running a
+  transaction. The bound logic lives in `groundhog-tx-validation`;
+  `json-rpc-server` applies it from one cached db-tip reading
+  (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
+  that every tip fetch refreshes: a submit that finds it stale, the public
+  `chainTip` method, and a background task `GroundhogRpcServer::new` starts
+  on `tip_refresh_interval_ms`. A bound violation found against a cached
+  reading is re-checked against a freshly fetched tip before it is
+  returned, so a reading that lags a config upgrade never rejects what the
+  current config admits. The checks are advisory, not a trust
+  boundary: a missing reading never blocks submission. A bound is enforced
+  only with a value the protocol defines: the one the tip's config states,
+  or a constant the protocol fixes for the unstated case (today only
+  `kDefaultMaxContractSizeBytes`). Never copy hogd's own fallbacks for
+  parameters the protocol leaves unstated.
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 

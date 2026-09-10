@@ -28,7 +28,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "5.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "5.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -49,6 +49,9 @@ pub trait GroundhogApi {
     /// Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash.
     /// Transactions whose `blockExpiryHeight` is at or below the current chain tip can
     /// never commit and are rejected with `TxRejected` when the tip is available.
+    /// Transactions that break an executor pre-execution bound (too many attached
+    /// contracts for the chain config, an oversized contract, or a duplicate attachment)
+    /// are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.
     #[method(name = "sendRawTransaction")]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash>;
 

@@ -16,12 +16,12 @@
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
-    ViewPlane,
+    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading,
+    ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
-    block::{BlockInfo, ChainTip},
+    block::BlockInfo,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -51,7 +51,7 @@ impl SubmitPlane for StubBackend {
 
 #[async_trait]
 impl ChainPlane for StubBackend {
-    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
 
