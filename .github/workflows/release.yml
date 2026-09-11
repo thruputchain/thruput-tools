@@ -219,6 +219,25 @@ jobs:
         if: matrix.platform == 'linux' && matrix.architecture == 'x86_64'
         run: cp agent-guide.md artifacts/agent-guide.md
 
+      # Explicit target keeps CI host features out of the artifact contract.
+      # Runtime qualification belongs on a Zen 5 deployment host.
+      - name: Build and package Zen 5 gateway
+        if: matrix.platform == 'linux' && matrix.architecture == 'x86_64'
+        env:
+          RUSTFLAGS: "-C target-cpu=znver5"
+          CARGO_TARGET_DIR: target/znver5
+        run: |
+          set -euo pipefail
+          unset GROUNDHOG_DISTRIBUTION_VERSION
+          export GROUNDHOG_SOURCE_COMMIT="$EXPECTED_SOURCE_COMMIT"
+          cargo build --locked --release --target x86_64-unknown-linux-gnu \
+            -p groundhog-json-rpc-gateway --bin hog-gateway
+          release_ref=${GITHUB_REF_NAME//\//-}
+          archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
+          mkdir -p "package/$archive_base"
+          cp target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway README.md LICENSE "package/$archive_base/"
+          tar -czf "artifacts/$archive_base.tar.gz" -C package "$archive_base"
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -257,7 +276,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 11
+          test "${#archives[@]}" -eq 12
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done
