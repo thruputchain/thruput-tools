@@ -371,10 +371,16 @@ where
             .await
     }
 
-    /// Db-tip reading fetched now regardless of the cache window, for a
-    /// decision that must not rest on a reading that may lag the chain.
-    async fn fresh_tip_state(&self, context: RpcRequestContext) -> TipRead {
-        self.tip_state_within(Duration::ZERO, context).await
+    /// Db-tip reading for re-checking a bound violation found against a
+    /// cached reading. Reads the tip again only when the last read is older
+    /// than `bound_recheck_interval_ms`, so rejected submissions cannot
+    /// drive more than one tip read per interval.
+    async fn recheck_tip_state(&self, context: RpcRequestContext) -> TipRead {
+        self.tip_state_within(
+            Duration::from_millis(self.config.bound_recheck_interval_ms),
+            context,
+        )
+        .await
     }
 
     async fn tip_state_within(&self, ttl: Duration, context: RpcRequestContext) -> TipRead {
@@ -434,13 +440,15 @@ where
             if let Err(error) = decoded.check_bounds(&params) {
                 // A cached config can lag, by up to the TTL, an upgrade block
                 // that raised the violated bound. Read the tip again before
-                // rejecting, so a stale bound never turns away a transaction
-                // the current config admits. A reading this request fetched
-                // itself is already current, and the rejection stands.
+                // rejecting, at most once per `bound_recheck_interval_ms`, so
+                // a stale bound rarely turns away a transaction the current
+                // config admits while rejected submissions cannot drive tip
+                // reads. A reading this request fetched itself is already
+                // current, and the rejection stands.
                 if tip.probed {
                     return Err(error.into());
                 }
-                tip = self.fresh_tip_state(context).await;
+                tip = self.recheck_tip_state(context).await;
                 let params = tip.state.map_or(params, |tip| tip.params);
                 decoded.check_bounds(&params)?;
             }
@@ -1574,17 +1582,22 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[tokio::test]
     async fn bound_violation_is_rechecked_against_a_fresh_tip_before_rejecting() {
         // The cached config caps attachments at one; an upgrade then raises
-        // it to two. A submit inside the TTL must not reject on the stale
-        // cap: it reads the tip again and applies the raised one.
+        // it to two. Once the re-check interval has passed, a submit inside
+        // the TTL must not reject on the stale cap: it reads the tip again
+        // and applies the raised one.
         let chain = ConfigChain::new(1);
         let submitted = Arc::new(Mutex::new(Vec::new()));
-        let server =
-            expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted.clone());
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default().with_bound_recheck_interval_ms(1),
+            submitted.clone(),
+        );
         server
             .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
             .await
             .expect("bug: one contract is within a cap of one");
         chain.set_params(max_contracts_params(2)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
 
         server
             .send_raw_transaction(signed_tx_hex_with_contracts(vec![
@@ -1600,6 +1613,38 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "the violation should trigger exactly one fresh probe"
         );
         assert_eq!(submitted.lock().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bound_violations_read_the_tip_at_most_once_per_interval() {
+        // A burst of rejected submissions inside the re-check interval must
+        // not drive tip reads: each is rejected on the cached reading.
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server =
+            expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted.clone());
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within a cap of one");
+
+        for fill in 1..=5 {
+            let error = server
+                .send_raw_transaction(signed_tx_hex_with_contracts(vec![
+                    rv32_contract(8, fill),
+                    rv32_contract(8, fill + 1),
+                ]))
+                .await
+                .expect_err("bug: two contracts should exceed a cap of one");
+            assert_eq!(error.code(), codes::TX_INVALID);
+        }
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "rejections inside the interval reuse the cached reading"
+        );
+        assert_eq!(submitted.lock().await.len(), 1);
     }
 
     #[tokio::test]

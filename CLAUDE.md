@@ -419,10 +419,11 @@ groundhog-bench --url http://127.0.0.1:9546 \
   that every tip fetch refreshes: a submit that finds it stale, the public
   `chainTip` method, and a background task `GroundhogRpcServer::new` starts
   on `tip_refresh_interval_ms` (zero turns it off). A bound violation found
-  against a cached
-  reading is re-checked against a freshly fetched tip before it is
-  returned, so a reading that lags a config upgrade never rejects what the
-  current config admits. The checks are advisory, not a trust
+  against a cached reading is re-checked against a fresh tip before it is
+  returned, at most once per `bound_recheck_interval_ms` across the server,
+  so a reading that lags a config upgrade rarely rejects what the current
+  config admits while rejected submissions cannot drive tip reads. The
+  checks are advisory, not a trust
   boundary: a missing reading never blocks submission. A bound is enforced
   only with a value the protocol defines: the one the tip's config states,
   or a constant the protocol fixes for the unstated case (today only

@@ -57,6 +57,14 @@ pub struct RpcServerConfig {
     /// an idle one for at most one per interval. Zero turns the task off;
     /// submits and `chainTip` calls alone then refresh the reading.
     pub tip_refresh_interval_ms: u64,
+
+    /// Minimum spacing of the tip reads a bound violation triggers. A
+    /// violation found against a cached reading reads the tip again before
+    /// rejecting, so a reading that lags a config upgrade rarely rejects what
+    /// the current config admits; spacing those reads keeps a stream of
+    /// rejected submissions from driving more than one tip read per
+    /// interval across the server.
+    pub bound_recheck_interval_ms: u64,
 }
 
 impl Default for RpcServerConfig {
@@ -71,6 +79,7 @@ impl Default for RpcServerConfig {
             tip_cache_ttl_ms: 3_000,
             tip_probe_timeout_ms: 2_000,
             tip_refresh_interval_ms: 5_000,
+            bound_recheck_interval_ms: 1_000,
         }
     }
 }
@@ -136,6 +145,14 @@ impl RpcServerConfig {
     #[must_use]
     pub fn with_tip_refresh_interval_ms(mut self, interval_ms: u64) -> Self {
         self.tip_refresh_interval_ms = interval_ms;
+        self
+    }
+
+    /// Override the minimum spacing of the tip reads bound violations
+    /// trigger.
+    #[must_use]
+    pub fn with_bound_recheck_interval_ms(mut self, interval_ms: u64) -> Self {
+        self.bound_recheck_interval_ms = interval_ms;
         self
     }
 }

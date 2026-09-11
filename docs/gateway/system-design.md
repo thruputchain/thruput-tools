@@ -242,9 +242,11 @@ skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
 parameter ran under. hogd's own fallbacks are never copied. A bound
-violation found against a cached reading is re-checked against a freshly
-fetched tip before it is returned, so a reading that lags a config-upgrade
-block never rejects what the current config admits. A stale reading
+violation found against a cached reading is re-checked against a fresh tip
+before it is returned, at most once per `bound_recheck_interval_ms` (one
+second by default) across the server, so a reading that lags a
+config-upgrade block rarely rejects what the current config admits while
+rejected submissions cannot drive tip reads. A stale reading
 can otherwise only lag a config-upgrade block, and a missing one skips the chain-derived checks
 so an unreachable scheduler never blocks submission on its own. The
 executor re-checks everything, so these are a round-trip saver, not a
