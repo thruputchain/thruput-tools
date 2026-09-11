@@ -24,6 +24,13 @@ fn readiness(server: &mut Server) -> serde_json::Value {
     });
     let line = rx.recv_timeout(Duration::from_secs(15)).unwrap();
     let ready: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let report: groundhog_cli::docs_json::DocsReport =
+        serde_json::from_value(ready["data"].clone()).unwrap();
+    assert_eq!(
+        report.schema_version,
+        groundhog_cli::docs_json::DOCS_JSON_SCHEMA_VERSION
+    );
+    assert_eq!(serde_json::to_value(report).unwrap(), ready["data"]);
     ready
 }
 
