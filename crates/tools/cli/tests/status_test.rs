@@ -14,7 +14,7 @@ fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
     fs::create_dir_all(cargo_home).unwrap();
     fs::write(
         cargo_home.join("config.toml"),
-        "[registries.groundhog]\nindex = \"sparse+https://groundhog.dev/crates/api/v1/crates/\"\n",
+        "[registries.groundhog]\nindex = \"sparse+https://thruput.network/crates/api/v1/crates/\"\n",
     )
     .unwrap();
 }
