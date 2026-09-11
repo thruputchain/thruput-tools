@@ -461,7 +461,7 @@ The full documentation set can evolve independently of CLI releases; changing
 what a CLI ships is an explicit selection. A guide version in the manifest does
 not assert that every SDK example or deployed Devnet matches that version.
 
-### AMD server gateway artifact
+## AMD server gateway artifact
 
 Linux releases additionally publish
 `hog-gateway-v<VERSION>-x86_64-unknown-linux-gnu-znver5.tar.gz`, covered by the
