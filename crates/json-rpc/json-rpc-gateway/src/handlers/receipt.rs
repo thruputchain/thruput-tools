@@ -549,7 +549,9 @@ mod tests {
         }
 
         async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
-            panic!("bug: status tests should not read the tip")
+            Ok(ExpectedDBTip::Default {
+                error: groundhog_scheduler::RPCError::kRPCNotFound.0,
+            })
         }
 
         async fn schedgateway_lookup_tx(
@@ -994,8 +996,9 @@ mod tests {
             .clone();
         assert_eq!(scheduler.generation(), generation);
         assert!(matches!(
-            watchdog(scheduler.schedcoord_get_tip()).await.unwrap(),
-            SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock
+            watchdog(scheduler.schedgateway_get_tip()).await.unwrap(),
+            ExpectedDBTip::Default { error }
+                if error == groundhog_scheduler::RPCError::kRPCNotFound.0
         ));
 
         // The backend may finish the canceled call later; the replacement lane remains usable.
@@ -1034,10 +1037,15 @@ mod tests {
             test_hash(),
         ));
         poll_pending(lookup.as_mut());
-        let replacement = watchdog(connect_optional_scheduler(&new_addr.to_string(), 1))
-            .await
-            .unwrap()
-            .unwrap();
+        let replacement = watchdog(connect_optional_scheduler(
+            &new_addr.to_string(),
+            1,
+            PROTOCOL_VERSION,
+            None,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
         let generation = replacement.generation();
         *ctx.scheduler.write().await = Some(replacement);
         drop(slots);
