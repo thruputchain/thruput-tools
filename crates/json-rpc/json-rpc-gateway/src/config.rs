@@ -183,6 +183,9 @@ pub struct GatewayConfig {
     /// Maximum simultaneous TCP/WebSocket connections.
     pub max_connections: u32,
 
+    /// Active plus buffered entries per JSON-RPC array (1..=1024, default 128).
+    pub rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
+
     /// Private health/metrics HTTP listener.
     pub observability_listen: String,
 
@@ -289,6 +292,7 @@ impl Default for GatewayConfig {
             listen_address: "127.0.0.1:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
+            rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
             observability_listen: "127.0.0.1:9646".into(),
             health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
             health_chain_tip_max_age_ms: 30_000,
@@ -315,6 +319,18 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
+    pub(crate) fn batch_service<S>(
+        &self,
+        inner: S,
+        max_response_body_size: u32,
+    ) -> groundhog_json_rpc_server::batch::ConcurrentBatchService<S> {
+        groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+            inner,
+            max_response_body_size,
+            self.rpc_batch_concurrency,
+        )
+    }
+
     /// Resolve the immutable identity required before the gateway starts.
     pub fn network_info(&self) -> Result<NetworkInfo, NetworkIdentityConfigError> {
         let network_hash = self
@@ -498,6 +514,31 @@ mod tests {
 
     use super::{GatewayConfig, NetworkIdentityConfigError, RuntimeManifestConfigError};
 
+    #[test]
+    fn rpc_batch_concurrency_toml_defaults_and_bounds() {
+        assert_eq!(
+            toml::from_str::<super::GatewayConfig>("")
+                .unwrap()
+                .rpc_batch_concurrency
+                .get(),
+            128
+        );
+        for value in [0, 1025] {
+            let error =
+                toml::from_str::<super::GatewayConfig>(&format!("rpc_batch_concurrency = {value}"))
+                    .unwrap_err();
+            assert!(error.to_string().contains("1..=1024"));
+        }
+        for value in [1, 17, 1024] {
+            assert_eq!(
+                toml::from_str::<super::GatewayConfig>(&format!("rpc_batch_concurrency = {value}"))
+                    .unwrap()
+                    .rpc_batch_concurrency
+                    .get(),
+                value
+            );
+        }
+    }
     #[test]
     fn toml_with_unknown_top_level_key_is_rejected() {
         let error = toml::from_str::<GatewayConfig>(

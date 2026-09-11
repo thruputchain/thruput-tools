@@ -49,6 +49,7 @@ struct HostedAirdropInner {
     genesis_hash: SHA256Hash,
     validation: tokio::sync::RwLock<ValidationState>,
     admission: Semaphore,
+    execution: Semaphore,
     request_timeout: Duration,
     metrics: GatewayMetrics,
 }
@@ -141,7 +142,10 @@ impl HostedAirdrop {
                 network,
                 genesis_hash,
                 validation: tokio::sync::RwLock::new(ValidationState::default()),
-                admission: Semaphore::new(MAX_IN_FLIGHT),
+                // Bound active calls plus waiters to 16 execution waves across all
+                // connections/batches, without raising concurrent faucet operations.
+                admission: Semaphore::new(MAX_IN_FLIGHT * 16),
+                execution: Semaphore::new(MAX_IN_FLIGHT),
                 request_timeout,
                 metrics,
             }),
@@ -271,11 +275,17 @@ impl HostedAirdrop {
         request: AirdropRequest,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
         let deadline = tokio::time::Instant::now() + self.inner.request_timeout;
-        let _permit = self
-            .inner
-            .admission
-            .try_acquire()
-            .map_err(|_| RpcServerError::Overloaded("faucet request limit reached".into()))?;
+        let _permit =
+            self.inner.admission.try_acquire().map_err(|_| {
+                RpcServerError::Overloaded("faucet admission capacity reached".into())
+            })?;
+        let _execution = tokio::time::timeout_at(deadline, self.inner.execution.acquire())
+            .await
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(|_| RpcServerError::BackendUnavailable("faucet execution is closed".into()))?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(RpcServerError::BackendTimeout);
+        }
         tokio::time::timeout_at(deadline, self.ensure_validated())
             .await
             .map_err(|_| RpcServerError::BackendTimeout)?
@@ -503,6 +513,171 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test]
+    async fn registered_http_small_array_waits_without_raising_execution_limit() {
+        use groundhog_json_rpc_server::batch::{ConcurrentBatchService, RpcBatchConcurrency};
+
+        for concurrency in [1, RpcBatchConcurrency::default().get()] {
+            let gate = Arc::new(Semaphore::new(0));
+            let requests = Arc::new(AtomicUsize::new(0));
+            let app = Router::new()
+                .route(
+                    "/v1/network",
+                    get(|| async { Json(network_descriptor("devnet")) }),
+                )
+                .route(
+                    "/v1/airdrop",
+                    post({
+                        let gate = gate.clone();
+                        let requests = requests.clone();
+                        move |Json(request): Json<HostedAirdropRequest>| {
+                            let gate = gate.clone();
+                            let requests = requests.clone();
+                            async move {
+                                requests.fetch_add(1, Ordering::SeqCst);
+                                gate.acquire().await.unwrap().forget();
+                                Json(json!({
+                                    "attemptStatus": "pending", "recipient": request.recipient,
+                                    "rawAmount": "100000000", "retryAfterSeconds": 5
+                                }))
+                            }
+                        }
+                    }),
+                );
+            let (base_url, faucet) = spawn_app(app).await;
+            let mut config = config(&base_url);
+            config.request_timeout_ms = 5_000;
+            let facade = HostedAirdrop::from_config(&config, network_info())
+                .await
+                .unwrap()
+                .unwrap();
+            let middleware =
+                jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
+                    ConcurrentBatchService::new(inner, 100_000, concurrency.try_into().unwrap())
+                });
+            let server = jsonrpsee::server::Server::builder()
+                .set_rpc_middleware(middleware)
+                .build("127.0.0.1:0")
+                .await
+                .unwrap();
+            let address = server.local_addr().unwrap();
+            let handle = server.start(facade.clone().into_rpc());
+            let body: Vec<_> = (1..=65).map(|id| json!({
+                "jsonrpc": "2.0", "id": id, "method": "groundhog_requestAirdrop",
+                "params": [{"recipient": format!("0x{}", format!("{id:02x}").repeat(32)), "clientNonce": "0x01"}]
+            })).collect();
+            let response = tokio::spawn(async move {
+                reqwest::Client::new()
+                    .post(format!("http://{address}"))
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<Vec<serde_json::Value>>()
+                    .await
+                    .unwrap()
+            });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while requests.load(Ordering::SeqCst) < concurrency.min(MAX_IN_FLIGHT) {
+                    tokio::task::yield_now().await;
+                }
+                assert_eq!(
+                    requests.load(Ordering::SeqCst),
+                    concurrency.min(MAX_IN_FLIGHT)
+                );
+                assert_eq!(
+                    facade.inner.admission.available_permits(),
+                    MAX_IN_FLIGHT * 16 - concurrency.min(65)
+                );
+                gate.add_permits(65);
+                let responses = response.await.unwrap();
+                assert_eq!(responses.len(), 65);
+                for response in responses {
+                    assert!(response.get("error").is_none(), "{response}");
+                    assert_eq!(response["result"]["attemptStatus"], "pending");
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(requests.load(Ordering::SeqCst), 65);
+            assert_eq!(facade.inner.execution.available_permits(), MAX_IN_FLIGHT);
+            assert_eq!(
+                facade.inner.admission.available_permits(),
+                MAX_IN_FLIGHT * 16
+            );
+            handle.stop().unwrap();
+            handle.stopped().await;
+            faucet.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_admission_bounds_waiters_and_cancellation_and_deadline_release_them() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let (base_url, faucet) = spawn_server(
+            network_descriptor("devnet"),
+            StatusCode::ACCEPTED,
+            json!({"attemptStatus": "pending", "recipient": airdrop_request().recipient,
+                "rawAmount": "100000000", "retryAfterSeconds": 5}),
+            requests.clone(),
+        )
+        .await;
+        let facade = HostedAirdrop::from_config(&config(&base_url), network_info())
+            .await
+            .unwrap()
+            .unwrap();
+        let execution = facade
+            .inner
+            .execution
+            .acquire_many(MAX_IN_FLIGHT.try_into().unwrap())
+            .await
+            .unwrap();
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..MAX_IN_FLIGHT * 16 {
+            let facade = facade.clone();
+            tasks.spawn(async move { facade.request_airdrop(airdrop_request()).await });
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while facade.inner.admission.available_permits() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            facade
+                .request_airdrop(airdrop_request())
+                .await
+                .unwrap_err()
+                .code(),
+            codes::OVERLOADED
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+        assert_eq!(
+            facade.inner.admission.available_permits(),
+            MAX_IN_FLIGHT * 16
+        );
+        assert_eq!(
+            facade
+                .request_airdrop(airdrop_request())
+                .await
+                .unwrap_err()
+                .code(),
+            codes::BACKEND_TIMEOUT
+        );
+        assert_eq!(
+            facade.inner.admission.available_permits(),
+            MAX_IN_FLIGHT * 16
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        drop(execution);
+        facade.request_airdrop(airdrop_request()).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        faucet.abort();
+    }
+
     #[test]
     fn unconfigured_facade_does_not_register_airdrop_method() {
         let mut rpc = RpcModule::new(());
@@ -513,6 +688,72 @@ mod tests {
             !rpc.method_names()
                 .any(|name| name == "groundhog_requestAirdrop")
         );
+    }
+
+    #[tokio::test]
+    async fn cancelled_and_timed_out_posts_release_capacity_and_preserve_retry_body() {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new(Semaphore::new(0));
+        let app = Router::new()
+            .route("/v1/network", get(|| async { Json(network_descriptor("devnet")) }))
+            .route("/v1/airdrop", post({
+                let bodies = bodies.clone();
+                let gate = gate.clone();
+                move |body: axum::body::Bytes| {
+                    let bodies = bodies.clone();
+                    let gate = gate.clone();
+                    async move {
+                        bodies.lock().unwrap().push(body);
+                        gate.acquire().await.unwrap().forget();
+                        Json(json!({
+                            "attemptStatus": "pending", "recipient": airdrop_request().recipient,
+                            "rawAmount": "100000000", "retryAfterSeconds": 5
+                        }))
+                    }
+                }
+            }));
+        let (base_url, faucet) = spawn_app(app).await;
+        let facade = HostedAirdrop::from_config(&config(&base_url), network_info())
+            .await
+            .unwrap()
+            .unwrap();
+        let cancelled = tokio::spawn({
+            let facade = facade.clone();
+            async move { facade.request_airdrop(airdrop_request()).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while bodies.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+        assert_eq!(facade.inner.execution.available_permits(), MAX_IN_FLIGHT);
+        assert_eq!(
+            facade.inner.admission.available_permits(),
+            MAX_IN_FLIGHT * 16
+        );
+        assert_eq!(
+            facade
+                .request_airdrop(airdrop_request())
+                .await
+                .unwrap_err()
+                .code(),
+            codes::BACKEND_TIMEOUT
+        );
+        assert_eq!(facade.inner.execution.available_permits(), MAX_IN_FLIGHT);
+        assert_eq!(
+            facade.inner.admission.available_permits(),
+            MAX_IN_FLIGHT * 16
+        );
+        gate.add_permits(3);
+        facade.request_airdrop(airdrop_request()).await.unwrap();
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies.windows(2).all(|pair| pair[0] == pair[1]));
+        faucet.abort();
     }
 
     #[tokio::test]

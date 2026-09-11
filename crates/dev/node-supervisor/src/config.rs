@@ -126,6 +126,8 @@ pub struct NodeSupervisorConfig {
     pub rpc_listen_address: String,
     /// Maximum simultaneous public JSON-RPC connections.
     pub rpc_max_connections: u32,
+    /// Active plus buffered entries per JSON-RPC array (1..=1024, default 128).
+    pub rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
     /// Configuration for the supervised hogd-dev child process.
     pub hogd_dev: HogdDevConfig,
     /// Optional protocol string used for hogd-dev intro handshakes.
@@ -151,6 +153,7 @@ impl Default for NodeSupervisorConfig {
         Self {
             rpc_listen_address: DEFAULT_RPC_LISTEN_ADDRESS.to_string(),
             rpc_max_connections: DEFAULT_RPC_MAX_CONNECTIONS,
+            rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
             hogd_dev: HogdDevConfig::default(),
             hogd_protocol_override: None,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
@@ -163,6 +166,15 @@ impl Default for NodeSupervisorConfig {
 }
 
 impl NodeSupervisorConfig {
+    /// Return a copy with a validated per-array JSON-RPC concurrency limit.
+    #[must_use]
+    pub const fn with_rpc_batch_concurrency(
+        mut self,
+        concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency,
+    ) -> Self {
+        self.rpc_batch_concurrency = concurrency;
+        self
+    }
     /// Return a copy with a different public JSON-RPC listen address.
     #[must_use]
     pub fn with_rpc_listen_address(mut self, listen_address: impl Into<String>) -> Self {
@@ -612,6 +624,24 @@ mod tests {
             config.manual_request_timeout,
             std::time::Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn rpc_batch_concurrency_defaults_and_builder_are_validated() {
+        assert_eq!(
+            super::NodeSupervisorConfig::default()
+                .rpc_batch_concurrency
+                .get(),
+            128
+        );
+        for value in [0, 1025] {
+            assert!(crate::RpcBatchConcurrency::try_from(value).is_err());
+        }
+        for value in [1, 1024] {
+            let config = super::NodeSupervisorConfig::default()
+                .with_rpc_batch_concurrency(value.try_into().unwrap());
+            assert_eq!(config.rpc_batch_concurrency.get(), value);
+        }
     }
 
     #[test]

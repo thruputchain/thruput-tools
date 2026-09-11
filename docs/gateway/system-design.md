@@ -67,6 +67,41 @@ embedding it in chuckd or chuckd-rs. Reasons:
       events          tx lookup      (Phase 2)        │
 ```
 
+### JSON-RPC Arrays
+
+The gateway and embedded dev node dispatch every nonempty JSON-RPC array with
+bounded concurrency, including mixed methods. The window defaults to 128 entries,
+counting both active work and completed responses awaiting earlier entries.
+Execution order is unspecified; responses retain request order. An array is
+not a transaction or a sequence: a read can run before an earlier mutation
+finishes. Send dependent requests separately and wait for the required state.
+
+Notifications use jsonrpsee's notification path, not its call path, and add no
+response. Empty arrays retain jsonrpsee's invalid-request response. Completed
+responses share the response byte limit even when an earlier entry is pending;
+overflow cancels outstanding dispatch immediately. Cancellation does not roll
+back side effects already accepted by a backend.
+
+Override the window with `hog-gateway --rpc-batch-concurrency 256` or
+`groundhog node --rpc-batch-concurrency 256`. The gateway also accepts the
+top-level TOML key `rpc_batch_concurrency = 256`; the CLI overrides TOML.
+Supervisor embedders use `NodeSupervisorConfig::with_rpc_batch_concurrency`
+with a validated `RpcBatchConcurrency` value. Values outside 1..=1024 fail
+configuration parsing; 1 gives sequential array dispatch.
+
+The 1024 ceiling bounds per-array work even on the embedded server, which has
+no array-entry count cap. The gateway's existing 1000-entry array cap remains
+unchanged. This is not a global concurrency cap and does not change response
+byte limits, scheduler submit batch size, in-flight backend batch limits, or
+storage batching. Those backend controls remain independent.
+
+Airdrop handlers also separate execution slots from bounded waiting capacity.
+Local airdrops allow 16 outstanding requests per configured execution slot
+(256 outstanding and 16 executing by default); the hosted gateway adapter allows
+1024 outstanding and 64 executing. Queueing and execution share one request
+deadline. Full admission, attempt-store capacity, and upstream faucet quotas can
+still produce per-entry overload errors.
+
 ### Data Sources (via x23 RPC)
 
 | Data | Source | Existing RPC | Notes |
@@ -290,6 +325,17 @@ Validation: `serialized_event.len() >= num_topics * 32`.
 ---
 
 ## Transaction Status Lookup Order
+
+Scheduler lookups share a gateway-local bound of 68 outstanding calls: four
+executing on a dedicated connection pool and 64 waiting asynchronously. Queueing,
+execution, and indexer fallback share one absolute backend deadline. A lookup
+deadline or cancellation releases permits and replaces only its active lookup
+connection, without invalidating the scheduler's normal submit/tip lane. Actual
+RPC failures invalidate only the matching scheduler generation. This finite
+backend bound is independent of the default JSON-RPC array concurrency of 128:
+a sufficiently contended array can intentionally receive per-entry `Overloaded`
+errors. Terminal indexer answers may still resolve admission failures, but an
+indexer miss must not turn a failed scheduler admission into `Unknown`.
 
 `getTransactionStatus` checks two backends in order:
 

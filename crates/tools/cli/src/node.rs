@@ -137,6 +137,8 @@ pub struct LocalNodeOptions {
     pub block_interval: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
+    /// Override active plus buffered entries per JSON-RPC array (1..=1024).
+    pub rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
     /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
     pub ramdb_bytes: Option<u64>,
     /// Validated release identity supplied by an embedding client process.
@@ -657,6 +659,10 @@ fn local_node_config(
         Some(max_connections) => config.with_rpc_max_connections(max_connections),
         None => config,
     };
+    let config = match options.rpc_batch_concurrency {
+        Some(concurrency) => config.with_rpc_batch_concurrency(concurrency),
+        None => config,
+    };
     let config = match (options.block_driver, options.block_interval) {
         (None, None) => config,
         (mode, interval) => {
@@ -919,6 +925,7 @@ mod tests {
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
+            rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
             bundle_identity: Some(supplied_identity.clone()),
         })
@@ -956,6 +963,7 @@ mod tests {
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
+        assert_eq!(config.rpc_batch_concurrency.get(), 17);
         assert_eq!(config.bundle_identity.as_ref(), Some(&supplied_identity));
     }
 

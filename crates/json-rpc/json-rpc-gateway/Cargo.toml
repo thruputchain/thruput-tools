@@ -60,6 +60,7 @@ reqwest = { version = "0.12", features = ["json"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+groundhog-trace = { workspace = true }
 groundhog_coordinator = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }

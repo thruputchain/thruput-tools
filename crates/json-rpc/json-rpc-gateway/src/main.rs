@@ -63,6 +63,10 @@ struct Cli {
     #[arg(long)]
     listen: Option<String>,
 
+    /// Concurrent entries per JSON-RPC array (1..=1024, default 128; overrides config)
+    #[arg(long)]
+    rpc_batch_concurrency: Option<groundhog_json_rpc_server::batch::RpcBatchConcurrency>,
+
     /// Private health/metrics listen address (overrides config file)
     #[arg(long)]
     observability_listen: Option<String>,
@@ -208,14 +212,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // --- Server ---
+    let max_response_body_size = jsonrpsee::core::TEN_MB_SIZE_BYTES;
     let server_cfg = jsonrpsee::server::ServerConfig::builder()
         .max_connections(ctx.config.max_connections)
+        .max_response_body_size(max_response_body_size)
         .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
         .build();
     let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
     let rpc_metrics = metrics.clone();
+    let batch_ctx = ctx.clone();
     let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()));
+        // Metrics must remain outermost: it observes each array once in response order.
+        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()))
+        .layer_fn(move |inner| {
+            batch_ctx
+                .config
+                .batch_service(inner, max_response_body_size)
+        });
     let server = jsonrpsee::server::Server::builder()
         .set_config(server_cfg)
         .set_http_middleware(http_mw)
@@ -301,6 +314,9 @@ fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
 }
 
 fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
+    if let Some(concurrency) = cli.rpc_batch_concurrency {
+        config.rpc_batch_concurrency = concurrency;
+    }
     if let Some(listen) = cli.listen {
         config.listen_address = listen;
     }
@@ -447,6 +463,31 @@ async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::erro
 mod tests {
     use super::*;
 
+    #[test]
+    fn rpc_batch_concurrency_cli_overrides_toml_and_rejects_invalid_values() {
+        for value in ["0", "1025"] {
+            assert!(
+                <super::Cli as clap::Parser>::try_parse_from([
+                    "hog-gateway",
+                    "--rpc-batch-concurrency",
+                    value
+                ])
+                .is_err()
+            );
+        }
+        let mut config =
+            toml::from_str::<super::GatewayConfig>("rpc_batch_concurrency = 17").unwrap();
+        let cli = <super::Cli as clap::Parser>::parse_from(["hog-gateway"]);
+        super::apply_cli_overrides(&mut config, cli);
+        assert_eq!(config.rpc_batch_concurrency.get(), 17);
+        let cli = <super::Cli as clap::Parser>::parse_from([
+            "hog-gateway",
+            "--rpc-batch-concurrency",
+            "1",
+        ]);
+        super::apply_cli_overrides(&mut config, cli);
+        assert_eq!(config.rpc_batch_concurrency.get(), 1);
+    }
     struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
 
     #[test]
