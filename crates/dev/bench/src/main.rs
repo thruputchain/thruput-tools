@@ -26,8 +26,9 @@ use groundhog_json_rpc_types::runtime_manifest::{
     RuntimeManifestEntrypointError, RuntimeManifestParseError, parse_runtime_manifest,
 };
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams, SigningError,
-    build_dev_wallet_do_action_transaction, derive_dev_account_signer,
+    BuildDevWalletDoActionTransaction, BuildSignedDevWalletHogTransfer, LocalSigner,
+    SignTransactionParams, SigningError, build_dev_wallet_do_action_transaction,
+    build_signed_dev_wallet_hog_transfer, derive_dev_account_signer,
     sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
@@ -42,6 +43,29 @@ const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const BENCH_RESULT_SCHEMA_VERSION: u32 = 1;
 const SUBMIT_CONFIRMATION_ACTION: &str = "submit signed state-changing benchmark transactions";
+
+/// What each pre-signed `sendRawTransaction` carries.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+enum Payload {
+    /// A dev-wallet `doAction` that targets the wallet itself with empty
+    /// calldata. It exercises the submit path only: the transaction commits
+    /// as a fault and emits no events.
+    #[default]
+    WalletNoop,
+    /// A native HOG transfer from each account's wallet to the next
+    /// account's wallet. It commits with a transfer event, so indexers and
+    /// the explorer see the traffic.
+    HogTransfer,
+}
+
+impl Payload {
+    fn as_str(self) -> &'static str {
+        match self {
+            Payload::WalletNoop => "wallet_noop",
+            Payload::HogTransfer => "hog_transfer",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RequestOutcome {
@@ -155,6 +179,8 @@ struct BenchConfiguration {
     connections_per_worker: usize,
     max_inflight_per_worker: usize,
     accounts: usize,
+    payload: &'static str,
+    transfer_raw_amount: Option<u128>,
     transaction_batch_size: usize,
     max_skew_seconds: f64,
     request_timeout_ms: u64,
@@ -315,6 +341,14 @@ struct Cli {
     #[arg(long, default_value = "sendRawTransaction")]
     method: String,
 
+    /// Transaction payload for sendRawTransaction.
+    #[arg(long, value_enum, default_value_t = Payload::WalletNoop)]
+    payload: Payload,
+
+    /// Indivisible HOG units moved by each hog-transfer payload.
+    #[arg(long, default_value = "1")]
+    transfer_raw_amount: u128,
+
     /// Warmup seconds (results discarded).
     #[arg(long, default_value = "2")]
     warmup: u64,
@@ -379,38 +413,78 @@ struct LoadedRuntimeManifest {
 }
 
 /// Pre-generate a batch of hex-encoded signed transactions.
+///
+/// Transfers take their nonces from `nonce_base` so successive runs do not
+/// resubmit transactions the replay cache has already seen; the no-op payload
+/// keeps its fixed nonces so existing benchmark results stay comparable.
 fn generate_tx_batch(
     count: usize,
     accounts: &[BenchAccount],
     wallet_entrypoint: ContractEntrypointID,
     network_hash: &NetworkHash,
+    payload: Payload,
+    transfer_raw_amount: u128,
+    nonce_base: u64,
 ) -> Result<Vec<String>, BenchError> {
     (0..count)
         .map(|i| {
             let idx = i % accounts.len();
             let account = &accounts[idx];
-            let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-                wallet_address: account.wallet_address,
-                wallet_entrypoint,
-                target_address: account.wallet_address,
-                target_entrypoint: wallet_entrypoint,
-                target_calldata: &[],
-                gas_limit: 10_000_000,
-                target_gas_limit: 10_000_000,
-                block_expiry_height: 10_000_000,
-                nonce: i as u64,
-            })
-            .map_err(|source| BenchError::WalletCalldata { source })?;
+            match payload {
+                Payload::WalletNoop => {
+                    let tx =
+                        build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+                            wallet_address: account.wallet_address,
+                            wallet_entrypoint,
+                            target_address: account.wallet_address,
+                            target_entrypoint: wallet_entrypoint,
+                            target_calldata: &[],
+                            gas_limit: 10_000_000,
+                            target_gas_limit: 10_000_000,
+                            block_expiry_height: 10_000_000,
+                            nonce: i as u64,
+                        })
+                        .map_err(|source| BenchError::WalletCalldata { source })?;
 
-            sign_and_encode_transaction_hex(
-                tx,
-                &account.signer,
-                SignTransactionParams::default(),
-                network_hash,
-            )
-            .map_err(|source| BenchError::SignAndEncodeTransaction { source })
+                    sign_and_encode_transaction_hex(
+                        tx,
+                        &account.signer,
+                        SignTransactionParams::default(),
+                        network_hash,
+                    )
+                    .map_err(|source| BenchError::SignAndEncodeTransaction { source })
+                }
+                Payload::HogTransfer => {
+                    let recipient = accounts[(idx + 1) % accounts.len()].wallet_address;
+                    let signed = build_signed_dev_wallet_hog_transfer(
+                        &BuildSignedDevWalletHogTransfer {
+                            wallet_address: account.wallet_address,
+                            wallet_entrypoint,
+                            recipient,
+                            raw_amount: transfer_raw_amount,
+                            gas_limit: 10_000_000,
+                            block_expiry_height: 10_000_000,
+                            nonce: nonce_base.wrapping_add(i as u64),
+                            sign_params: SignTransactionParams::default(),
+                            network_hash: network_hash.clone(),
+                        },
+                        &account.signer,
+                    )
+                    .map_err(|source| BenchError::SignAndEncodeTransaction { source })?;
+                    Ok(format!("0x{}", hex::encode(signed.bytes)))
+                }
+            }
         })
         .collect()
+}
+
+/// Nonce base for transfer payloads: wall-clock nanoseconds, so each run
+/// starts from a fresh window.
+fn transfer_nonce_base() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 fn manifest_bench_accounts(manifest: &RuntimeManifest) -> Result<Vec<BenchAccount>, BenchError> {
@@ -1084,6 +1158,9 @@ fn print_human_result(result: &BenchResult) {
 
     println!("\n=== Groundhog RPC Benchmark Results ===");
     println!("Method:      {}", config.method);
+    if config.method == "sendRawTransaction" {
+        println!("Payload:     {}", config.payload);
+    }
     if let Some(target) = config.target_requests_per_second {
         println!("Target:      {target} req/s");
         println!(
@@ -1226,7 +1303,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
 
     // --- Transaction pre-generation ---
     let tx_batch = if needs_transactions {
-        eprintln!("Generating transactions...");
+        eprintln!("Generating {} transactions...", cli.payload.as_str());
         let batch_size = cli.tx_batch_size.unwrap_or_else(|| {
             if cli.unthrottled {
                 100_000
@@ -1240,7 +1317,15 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             .ok_or(BenchError::MissingRuntimeManifest)?
             .network_hash
             .to_network_hash();
-        let batch = generate_tx_batch(batch_size, &accounts, entrypoint, &network_hash)?;
+        let batch = generate_tx_batch(
+            batch_size,
+            &accounts,
+            entrypoint,
+            &network_hash,
+            cli.payload,
+            cli.transfer_raw_amount,
+            transfer_nonce_base(),
+        )?;
         eprintln!("Generated {} transactions", batch.len());
         Arc::new(batch)
     } else {
@@ -1410,6 +1495,9 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             connections_per_worker,
             max_inflight_per_worker,
             accounts: cli.accounts,
+            payload: cli.payload.as_str(),
+            transfer_raw_amount: (cli.payload == Payload::HogTransfer)
+                .then_some(cli.transfer_raw_amount),
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,
@@ -1584,6 +1672,8 @@ mod tests {
                 connections_per_worker: 16,
                 max_inflight_per_worker: 32,
                 accounts: 10,
+                payload: "wallet_noop",
+                transfer_raw_amount: None,
                 transaction_batch_size: 0,
                 max_skew_seconds: 1.0,
                 request_timeout_ms: 10_000,
@@ -1665,6 +1755,8 @@ mod tests {
                     "connectionsPerWorker": 16,
                     "maxInflightPerWorker": 32,
                     "accounts": 10,
+                    "payload": "wallet_noop",
+                    "transferRawAmount": null,
                     "transactionBatchSize": 0,
                     "maxSkewSeconds": 1.0,
                     "requestTimeoutMs": 10_000,
@@ -1902,6 +1994,75 @@ mod tests {
 
         assert_eq!(accounts.len(), 1);
         assert_eq!(entrypoint, ContractEntrypointID::from(*b"doAction"));
+    }
+
+    #[test]
+    fn payload_defaults_to_the_wallet_noop_and_parses_hog_transfer() {
+        let cli = Cli::try_parse_from(["groundhog-bench"]).expect("bug: defaults should parse");
+        assert_eq!(cli.payload, Payload::WalletNoop);
+        assert_eq!(cli.transfer_raw_amount, 1);
+
+        let cli = Cli::try_parse_from([
+            "groundhog-bench",
+            "--payload",
+            "hog-transfer",
+            "--transfer-raw-amount",
+            "25",
+        ])
+        .expect("bug: hog-transfer payload should parse");
+        assert_eq!(cli.payload, Payload::HogTransfer);
+        assert_eq!(cli.transfer_raw_amount, 25);
+    }
+
+    #[test]
+    fn hog_transfer_payload_signs_a_native_transfer_to_the_next_account() {
+        let manifest = manifest_with_accounts(2);
+        let (accounts, entrypoint) =
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2)
+                .expect("bug: manifest has two accounts");
+        let network_hash = manifest.network_hash.to_network_hash();
+
+        let batch = generate_tx_batch(
+            3,
+            &accounts,
+            entrypoint,
+            &network_hash,
+            Payload::HogTransfer,
+            7,
+            1_000,
+        )
+        .expect("bug: transfer batch should sign");
+
+        for (i, (from, to)) in [(0usize, 1usize), (1, 0), (0, 1)].into_iter().enumerate() {
+            let expected = build_signed_dev_wallet_hog_transfer(
+                &BuildSignedDevWalletHogTransfer {
+                    wallet_address: accounts[from].wallet_address,
+                    wallet_entrypoint: entrypoint,
+                    recipient: accounts[to].wallet_address,
+                    raw_amount: 7,
+                    gas_limit: 10_000_000,
+                    block_expiry_height: 10_000_000,
+                    nonce: 1_000 + i as u64,
+                    sign_params: SignTransactionParams::default(),
+                    network_hash: network_hash.clone(),
+                },
+                &accounts[from].signer,
+            )
+            .expect("bug: reference transfer should sign");
+            assert_eq!(batch[i], format!("0x{}", hex::encode(expected.bytes)));
+        }
+
+        let noop = generate_tx_batch(
+            1,
+            &accounts,
+            entrypoint,
+            &network_hash,
+            Payload::WalletNoop,
+            7,
+            1_000,
+        )
+        .expect("bug: no-op batch should sign");
+        assert_ne!(noop[0], batch[0]);
     }
 
     #[test]

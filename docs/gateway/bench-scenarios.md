@@ -134,6 +134,27 @@ BENCH_SCENARIO=submit-ramp \
 scripts/smoke-runtime-manifest-bench.sh
 ```
 
+## Payloads
+
+`sendRawTransaction` runs default to `--payload wallet-noop`: a dev-wallet
+`doAction` that targets the wallet itself with empty calldata. It measures the
+submit path alone; the transaction commits as a fault and emits no events, so
+indexers and the explorer see nothing.
+
+`--payload hog-transfer` signs a native HOG transfer from each account's wallet
+to the next account's wallet (`--transfer-raw-amount`, default `1` indivisible
+unit). Each transaction commits with a transfer event, which is what the
+explorer's live page and event-based tooling count. Transfer nonces start from
+the wall clock so repeated runs do not resubmit replayed transactions. The
+payload is recorded in the JSON result configuration as `payload` and
+`transferRawAmount`.
+
+```bash
+target/release/groundhog-bench --url http://127.0.0.1:9545 \
+  --runtime-manifest "$RUNTIME_MANIFEST" --method sendRawTransaction \
+  --payload hog-transfer --rate 3000 --duration 60 --accounts 50 --workers 8 --force
+```
+
 ## Legacy Local Reference
 
 On a local `hog-devnode` runtime manifest from May 22, 2026, the standalone
