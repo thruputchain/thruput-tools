@@ -19,7 +19,7 @@ exclude = [
     "assets/groundhog/knowledge/generated/agent-guide.md",
     "assets/groundhog/knowledge/generated/records.jsonl",
     "assets/groundhog/knowledge/records/",
-    "docs/",
+    "/docs/",
     "tests/",
 ]
 
@@ -44,6 +44,8 @@ http-body-util = "0.1"
 clap_complete = "4.5.66"
 getrandom = "0.2.17"
 fs2 = "0.4"
+flate2 = "1"
+tar = { version = "0.4.46", default-features = false }
 hex = { workspace = true }
 sha2 = { workspace = true }
 base64 = "0.22"
@@ -64,6 +66,8 @@ xdrs = { workspace = true }
 xdr-common = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true, features = ["fs"] }
 tracing-subscriber = { workspace = true }
 groundhog-node-supervisor = { workspace = true }
 jsonrpsee = { workspace = true, features = ["client", "http-client"] }

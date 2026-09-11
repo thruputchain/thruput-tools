@@ -419,3 +419,44 @@ for the full chain-level architecture and open questions.
 ## License
 
 Apache-2.0
+
+## Local documentation
+
+```sh
+groundhog docs                 # Serve bundled docs at http://127.0.0.1:4321
+groundhog docs --port 8080     # Choose a port (0 selects an available one)
+groundhog docs --dir /path/to/developers-site/dist/docs-snapshot
+```
+
+The selected developer-site snapshot is embedded in the CLI. On first use it is
+verified and extracted under `${XDG_CACHE_HOME:-$HOME/.cache}/groundhog/docs/`,
+keyed by its archive SHA-256. Later runs verify and reuse those files. Damaged or
+partial cache entries are rebuilt from the bundled bytes; no network request or
+administrator access is needed. Clearing the docs cache is safe while servers
+are stopped; the next invocation recreates it.
+
+`--dir` serves a trusted local build directly and bypasses the bundled cache.
+Keep such a directory unchanged while serving. Open the printed loopback URL;
+Ctrl-C or SIGTERM stops the foreground server. `--json` reports readiness,
+resolved path, source identity, and guide/CLI version matching. No node, wallet,
+or project setup is required. External API references and network services still
+need access; page version notes remain authoritative for their examples.
+
+### Updating the bundled documentation
+
+1. In `developers-site`, build the selected clean commit with
+   `pnpm package:snapshot`, or download `docs-snapshot-<commit>` from its successful
+   CI run. It contains `snapshot.tar.gz` and `snapshot-lock.json`.
+2. Run `python3 scripts/import-docs-snapshot.py /path/to/artifact` here. This
+   validates the archive's checksum, size, clean source identity and contents,
+   then copies both files into `crates/tools/cli/assets/docs/`.
+3. Review the source revision, documentation/version notes, and archive pin;
+   commit both files with the CLI change. Never select the latest docs implicitly.
+4. Run the snapshot checks and CLI tests. Normal CLI packaging embeds those exact
+   bytes, so consumers need no build-time docs checkout or separate access token.
+
+`python3 scripts/import-docs-snapshot.py` without an argument verifies the current
+pin. The Rust bundle test checks the same pin/content contract and cache recovery.
+The full documentation set can evolve independently of CLI releases; changing
+what a CLI ships is an explicit selection. A guide version in the manifest does
+not assert that every SDK example or deployed Devnet matches that version.
