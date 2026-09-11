@@ -377,8 +377,8 @@ fn cleanup_written_local_runtime_state(cleanup: Option<LocalRuntimeStateCleanup>
 }
 
 #[cfg(unix)]
-fn prepare_stop_signal() -> Result<impl Future<Output = Result<(), std::io::Error>>, std::io::Error>
-{
+pub(crate) fn prepare_stop_signal()
+-> Result<impl Future<Output = Result<(), std::io::Error>>, std::io::Error> {
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     Ok(async move {
@@ -390,8 +390,8 @@ fn prepare_stop_signal() -> Result<impl Future<Output = Result<(), std::io::Erro
 }
 
 #[cfg(not(unix))]
-fn prepare_stop_signal() -> Result<impl Future<Output = Result<(), std::io::Error>>, std::io::Error>
-{
+pub(crate) fn prepare_stop_signal()
+-> Result<impl Future<Output = Result<(), std::io::Error>>, std::io::Error> {
     Ok(tokio::signal::ctrl_c())
 }
 

@@ -7,6 +7,8 @@ use crate::terminal::{render_shell_arg, terminal_safe};
 /// All errors returned by CLI commands.
 #[derive(Error, Debug)]
 pub enum CliError {
+    #[error(transparent)]
+    Docs(#[from] crate::docs::DocsError),
     #[error("cargo not found on PATH")]
     CargoNotFound,
     #[error("`.cargo/contract.toml` not found in {0}")]
@@ -431,6 +433,7 @@ impl CliError {
             Self::DirExists(_) => "dir_exists",
             Self::DirNotEmpty => "dir_not_empty",
             Self::UnknownTemplate(_) => "unknown_template",
+            Self::Docs(_) => "docs_error",
             Self::Io(_) => "io_error",
             Self::ProfileNotFound(_) => "profile_not_found",
             Self::ProfileNotFoundInScope { .. } => "profile_not_found_in_scope",
@@ -828,6 +831,7 @@ impl CliError {
             ))),
             // The version-skew message states the fix for its direction.
             Self::RawSpecFormat(_)
+            | Self::Docs(_)
             | Self::RuntimeInit(_)
             | Self::ReceiptPollingExhausted
             | Self::Io(_)

@@ -72,6 +72,13 @@ jobs:
       - name: Format
         run: cargo fmt --check
 
+      - name: Verify bundled documentation
+        run: |
+          python3 scripts/import-docs-snapshot.py
+          cargo package -p groundhog-cli --list --allow-dirty --locked > /tmp/cli-package-files.txt
+          grep -Fx 'assets/docs/snapshot.tar.gz' /tmp/cli-package-files.txt
+          grep -Fx 'assets/docs/snapshot-lock.json' /tmp/cli-package-files.txt
+
       - name: Test
         run: cargo test --workspace --locked
 

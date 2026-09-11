@@ -93,6 +93,15 @@ enum Command {
         )]
         template: String,
     },
+    /// Serve the bundled developer documentation on localhost
+    Docs {
+        /// Override the bundled docs with a trusted local snapshot directory
+        #[arg(long, value_name = "DIRECTORY")]
+        dir: Option<PathBuf>,
+        /// Loopback port (0 chooses an available port)
+        #[arg(long, default_value_t = 4321)]
+        port: u16,
+    },
     /// Interactive first-run setup wizard
     #[command(long_about = "Guided setup for new users: checks tools, \
                       generates a signing key, stores mock-executor download credentials, \
@@ -930,6 +939,7 @@ impl Command {
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
+            Self::Docs { .. } => "docs",
             Self::Chain { command } => command.command_name(),
             Self::Config { command } => command.command_name(),
             Self::Keys { command } => command.command_name(),
@@ -1034,6 +1044,9 @@ fn main() {
     let result = match cli.command {
         Command::New { name, template } => {
             groundhog_cli::new::run(&name, &template, cmd_name, &print)
+        }
+        Command::Docs { dir, port } => {
+            groundhog_cli::docs::run(dir.as_deref(), port, cmd_name, &print)
         }
         Command::Init => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
