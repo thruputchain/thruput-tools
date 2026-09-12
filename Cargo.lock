@@ -1985,6 +1985,7 @@ name = "groundhog-tx-validation"
 version = "0.16.0-rc.2"
 dependencies = [
  "groundhog-json-rpc-types",
+ "groundhog-rv32-artifact",
  "groundhog-xdr",
  "hex",
  "thiserror 2.0.20",
