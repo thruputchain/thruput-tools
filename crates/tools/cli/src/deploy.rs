@@ -760,7 +760,7 @@ mod tests {
         std::fs::write(&manifest, "[package]\n").unwrap();
 
         let older = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let newer = older + Duration::from_secs(60);
+        let newer = older + Duration::from_mins(1);
         std::fs::File::open(&source)
             .unwrap()
             .set_modified(older)
@@ -776,7 +776,7 @@ mod tests {
 
         std::fs::File::open(&manifest)
             .unwrap()
-            .set_modified(older - Duration::from_secs(60))
+            .set_modified(older - Duration::from_mins(1))
             .unwrap();
         assert_eq!(newest_input_mtime(root), Some(older));
 
