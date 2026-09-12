@@ -1,11 +1,9 @@
 //! Known-answer vectors for address derivation, signing, and
 //! transaction hashing.
 //!
-//! The address and hash constants below were generated from the
-//! current implementation; they pin today's behavior against
-//! regression, not an externally-published test vector. A change that
-//! breaks one of these alters on-chain identity or wire hashes, so
-//! treat it as a consensus-affecting bug, not a test update.
+//! Address constants come from the literal CXS preimage specified by hogd.
+//! Historical wire/hash fixtures are kept separate from address derivation.
+//! Changes to either affect on-chain identity or wire hashes.
 
 use ed25519_dalek::{Verifier, VerifyingKey};
 use groundhog_signing::{
@@ -14,7 +12,7 @@ use groundhog_signing::{
     sign_transaction, transaction_hash,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::{NetworkHash, SHA256Hash, Signature};
+use groundhog_xdr::types::{ContractAddress, NetworkHash, SHA256Hash, Signature};
 
 /// Fixed secret so the derived addresses below are stable.
 const TEST_SECRET: [u8; 32] = [0x42; 32];
@@ -38,15 +36,16 @@ fn address_derivation_known_answers_at_two_nonces() {
         .address()
         .expect("bug: nonce-1 address should derive");
 
-    // Generated from the current implementation; pins address
-    // derivation (preimage encoding, tag XOR) against regression.
+    // SHA256 of the literal CXS prefix 00 0d "PubkeyAccount", followed by
+    // 00, the 32-byte public key, and the single-byte nonce (0 or 1).
+    // This is the derivation used by hogd/crypto/domain_separators.h.
     assert_eq!(
         hex::encode(address_nonce0.as_ref()),
-        "a240483ed9311b2394e4afc167e046fdbc83b3710ad9664287d50f083c27f677"
+        "aea3c931b977bf8ef933cc134e372d0efbf4bac0e576cc117d52108c80ea3d78"
     );
     assert_eq!(
         hex::encode(address_nonce1.as_ref()),
-        "1c61a02f7defe74a7f5eb781fd73203ededfaa2b848aeccd9fbc59689669e6b2"
+        "564859b1c9b7afe948a57854d8c6b45425ca1225a2170799a5a03ecfd139daef"
     );
     assert_ne!(address_nonce0, address_nonce1);
 }
@@ -90,7 +89,14 @@ fn transaction_hash_vector_matches_the_server_side_hash() {
     let signer = test_signer();
     let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
     let tx = build_call_transaction(BuildCallTransaction {
-        invoked_address: account.address().expect("bug: address should derive"),
+        // Preserve the old wire-hash fixture; address derivation is tested above.
+        invoked_address: ContractAddress::from(
+            <[u8; 32]>::try_from(
+                hex::decode("a240483ed9311b2394e4afc167e046fdbc83b3710ad9664287d50f083c27f677")
+                    .expect("valid historical address hex"),
+            )
+            .expect("valid historical address hex"),
+        ),
         entrypoint: ContractEntrypointID::from(*b"getvalue"),
         calldata: vec![0x01, 0x02],
         gas_limit: 500_000,

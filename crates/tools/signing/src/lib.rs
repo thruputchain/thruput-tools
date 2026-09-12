@@ -76,7 +76,7 @@ mod tests {
 
         assert_eq!(
             hex::encode(address.as_ref()),
-            "bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7"
+            "8b1568c894aeb3a704ec0dcd27fe18a4d40193ffa187edadc181b1660286b066"
         );
     }
 
@@ -85,7 +85,14 @@ mod tests {
         let signer = test_signer();
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
         let tx = build_call_transaction(BuildCallTransaction {
-            invoked_address: account.address().expect("bug: address should derive"),
+            // Keep the historical wire fixture independent of address derivation.
+            invoked_address: ContractAddress::from(
+                <[u8; 32]>::try_from(
+                    hex::decode("bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7")
+                        .expect("valid historical address hex"),
+                )
+                .expect("valid historical address hex"),
+            ),
             entrypoint: ContractEntrypointID::from([0u8; 8]),
             calldata: vec![],
             gas_limit: 1_000_000,

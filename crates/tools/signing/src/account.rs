@@ -2,13 +2,13 @@
 
 use crate::SigningError;
 use groundhog_xdr::auth_claim::{AuthClaim, PubkeyAccountPreimage};
-use groundhog_xdr::types::{ContractAddress, PublicKey, SHA256Hash};
-use sha2::{Digest, Sha256};
+use groundhog_xdr::types::{ContractAddress, PublicKey};
 
 /// Default nonce used for the first pubkey-account derived from a key.
 pub const DEFAULT_PUBKEY_ACCOUNT_NONCE: u64 = 0;
 
-/// Domain separation string used when deriving pubkey-account addresses.
+/// Legacy tag retained for source compatibility. Current addresses use the
+/// shared `PubkeyAccount` domain separator, not this tag.
 pub const PUBKEY_ACCOUNT_TAG_STR: &str = "PUBKEY_ACCOUNT_TAG";
 
 /// A pubkey-backed account with the nonce used in address derivation.
@@ -53,16 +53,8 @@ impl PubkeyAccount {
 
     /// Derives the canonical contract address for this pubkey account.
     pub fn address(&self) -> Result<ContractAddress, SigningError> {
-        let preimage_bytes = xdrs::txs::encode(&self.preimage())
-            .map_err(|e| SigningError::XdrEncode(e.to_string()))?;
-        let mut digest: [u8; 32] = Sha256::digest(&preimage_bytes).into();
-        let tag_bytes: [u8; 32] = Sha256::digest(PUBKEY_ACCOUNT_TAG_STR.as_bytes()).into();
-        let tag = SHA256Hash::from(tag_bytes);
-
-        for (digest_byte, tag_byte) in digest.iter_mut().zip(tag.as_ref().iter()) {
-            *digest_byte ^= tag_byte;
-        }
-
-        Ok(ContractAddress::from(digest))
+        Ok(groundhog_domain_separator::sha2::pubkey_account_address(
+            &self.preimage(),
+        ))
     }
 }
