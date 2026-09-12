@@ -1,4 +1,4 @@
-use groundhog_json_rpc_types::error::codes;
+use groundhog_json_rpc_types::error::{TxInvalidDetail, codes};
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use jsonrpsee::core::ClientError;
@@ -242,9 +242,12 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
             CliError::RpcConnect(format!("{rpc_url}: {source}"))
         }
         groundhog_json_rpc_client::SubmitAndPollError::SendRawTransaction(error) => {
-            CliError::RpcMethodFailed {
-                method: "sendRawTransaction",
-                message: error.to_string(),
+            match violated_bound(&error) {
+                Some(detail) => CliError::TransactionRejectedBeforeSubmission { detail },
+                None => CliError::RpcMethodFailed {
+                    method: "sendRawTransaction",
+                    message: error.to_string(),
+                },
             }
         }
         groundhog_json_rpc_client::SubmitAndPollError::GetTransactionReceipt(error) => {
@@ -286,6 +289,21 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
         }
         _ => CliError::ReceiptPollingExhausted,
     }
+}
+
+/// The bound a `sendRawTransaction` rejection names, when the endpoint's
+/// pre-submission checks refused the transaction with a `TxInvalidDetail` in
+/// the error data. A `TxInvalid` without readable detail (undecodable XDR, or
+/// a reason this build does not know) is `None` and stays a plain method
+/// failure.
+fn violated_bound(error: &ClientError) -> Option<TxInvalidDetail> {
+    let ClientError::Call(object) = error else {
+        return None;
+    };
+    if object.code() != codes::TX_INVALID {
+        return None;
+    }
+    serde_json::from_str(object.data()?.get()).ok()
 }
 
 fn receipt_poll_duration_seconds(attempts: usize) -> u64 {

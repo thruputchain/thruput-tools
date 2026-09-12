@@ -206,6 +206,36 @@ pub enum TxInvalidDetail {
         /// Zero-based position of its first occurrence.
         first_index: u32,
     },
+
+    /// One attached RV32 artifact declares more guest data memory than the chain admits.
+    #[error(
+        "contract {index} in contractsToDeploy declares {memory_bytes} bytes of guest memory; \
+         limit is {max_bytes}"
+    )]
+    #[serde(rename_all = "camelCase")]
+    Rv32MemoryTooLarge {
+        /// Zero-based position in `contractsToDeploy`.
+        index: u32,
+        /// `memory_bytes` from the artifact header.
+        memory_bytes: u32,
+        /// Guest memory cap in force at the chain tip.
+        max_bytes: u32,
+    },
+
+    /// One attached RV32 artifact's code section exceeds the chain's code limit.
+    #[error(
+        "contract {index} in contractsToDeploy carries {code_bytes} bytes of code; limit is \
+         {max_bytes}"
+    )]
+    #[serde(rename_all = "camelCase")]
+    Rv32CodeTooLarge {
+        /// Zero-based position in `contractsToDeploy`.
+        index: u32,
+        /// `code_size` from the artifact header.
+        code_bytes: u32,
+        /// Code cap in force at the chain tip.
+        max_bytes: u32,
+    },
 }
 
 /// Bounded Prometheus outcome label for a JSON-RPC error code.
@@ -285,6 +315,34 @@ mod tests {
                 },
                 serde_json::json!({"reason": "duplicateContract", "index": 2, "firstIndex": 0}),
                 "contract 2 in contractsToDeploy duplicates contract 0",
+            ),
+            (
+                TxInvalidDetail::Rv32MemoryTooLarge {
+                    index: 0,
+                    memory_bytes: 131_072,
+                    max_bytes: 65_536,
+                },
+                serde_json::json!({
+                    "reason": "rv32MemoryTooLarge",
+                    "index": 0,
+                    "memoryBytes": 131_072,
+                    "maxBytes": 65_536,
+                }),
+                "contract 0 in contractsToDeploy declares 131072 bytes of guest memory; limit is 65536",
+            ),
+            (
+                TxInvalidDetail::Rv32CodeTooLarge {
+                    index: 3,
+                    code_bytes: 65_540,
+                    max_bytes: 65_536,
+                },
+                serde_json::json!({
+                    "reason": "rv32CodeTooLarge",
+                    "index": 3,
+                    "codeBytes": 65_540,
+                    "maxBytes": 65_536,
+                }),
+                "contract 3 in contractsToDeploy carries 65540 bytes of code; limit is 65536",
             ),
         ];
 

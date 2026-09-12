@@ -4,27 +4,45 @@
 //! hogd's `SystemCallHandler::perform_initial_validation` rejects a
 //! transaction deterministically, before running any of it, when it
 //! attaches more contracts than the chain's network config permits, when
-//! any attached contract's code exceeds the size the config admits, or
-//! when the same contract is attached twice. Applying the same checks
-//! before submission turns a silent later failure into an immediate,
-//! structured [`TxInvalidDetail`].
+//! any attached contract's code exceeds the size the config admits, when
+//! the same contract is attached twice, or when an attached RV32 artifact
+//! declares more guest memory or code than the config admits (the
+//! attachment fails verification in `NewContractSet::make`). Applying the
+//! same checks before submission turns a silent later failure into an
+//! immediate, structured [`TxInvalidDetail`].
 //!
 //! The chain-configured bounds are read from the network config a db tip
 //! carries, flattened once into [`NetworkConfigParams`] so every later
 //! access is a field read. A bound is enforced only with a value the
-//! protocol defines: the one the config states, or, for the one parameter
+//! protocol defines: the one the config states, or, for the parameters
 //! whose unstated value the protocol itself fixes
-//! (`kDefaultMaxContractSizeBytes`), that constant. Nothing is copied from
+//! (`kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`,
+//! `kDefaultMaxRv32MemoryBytes`), that constant. Nothing is copied from
 //! hogd's own fallbacks. None of this is a trust boundary: the executor
 //! re-checks everything, and a reading that lags a block is harmless
 //! because these parameters change only through explicit config upgrades.
 
 use groundhog_json_rpc_types::error::TxInvalidDetail;
+use groundhog_rv32_artifact::{
+    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, declared_sizes,
+};
 use groundhog_xdr::{
     contract::{Contract, kDefaultMaxContractSizeBytes},
     network_config::{ConfigParam, NetworkConfig},
     transaction::Transaction,
 };
+
+/// `kDefaultMaxRv32CodeBytes` from the protocol's `hog_exec_constants.x`: the
+/// code bound in force for a configuration that does not state one.
+///
+/// The Rust protocol bindings do not bind that file yet, so the value is
+/// pinned here and held to the artifact crate's restatement of it.
+const DEFAULT_MAX_RV32_CODE_BYTES: u32 = 65_536;
+/// `kDefaultMaxRv32MemoryBytes` from `hog_exec_constants.x`: the guest memory
+/// bound in force for a configuration that does not state one.
+const DEFAULT_MAX_RV32_MEMORY_BYTES: u32 = 65_536;
+const _: () = assert!(DEFAULT_MAX_RV32_CODE_BYTES as usize == DEFAULT_MAX_CODE_BYTES);
+const _: () = assert!(DEFAULT_MAX_RV32_MEMORY_BYTES as usize == DEFAULT_MEMORY_BYTES);
 
 /// The execution parameters a chain's network config states, flattened
 /// from the list that carries them.
@@ -55,9 +73,12 @@ pub struct NetworkConfigParams {
     pub max_sha256_buffer_bytes: Option<u32>,
     /// Levels of node nesting an auth token may carry.
     pub max_auth_token_depth: Option<u32>,
-    /// Code bytes an RV32 artifact may carry to be attached.
+    /// Code bytes an RV32 artifact may carry to be attached. The value
+    /// applied when unstated is [`Self::max_rv32_code_bytes_in_force`].
     pub max_rv32_code_bytes: Option<u32>,
     /// Guest data memory bytes an RV32 artifact may declare to be attached.
+    /// The value applied when unstated is
+    /// [`Self::max_rv32_memory_bytes_in_force`].
     pub max_rv32_memory_bytes: Option<u32>,
 }
 
@@ -143,6 +164,23 @@ impl NetworkConfigParams {
         self.max_contract_size_bytes
             .unwrap_or(kDefaultMaxContractSizeBytes)
     }
+
+    /// Code bytes an attached RV32 artifact may carry under this config.
+    ///
+    /// The protocol fixes `kDefaultMaxRv32CodeBytes` as the value in force
+    /// for a configuration that does not state the parameter, so, like the
+    /// contract size, this bound is always known.
+    pub fn max_rv32_code_bytes_in_force(&self) -> u32 {
+        self.max_rv32_code_bytes
+            .unwrap_or(DEFAULT_MAX_RV32_CODE_BYTES)
+    }
+
+    /// Guest data memory bytes an attached RV32 artifact may declare under
+    /// this config; `kDefaultMaxRv32MemoryBytes` when unstated.
+    pub fn max_rv32_memory_bytes_in_force(&self) -> u32 {
+        self.max_rv32_memory_bytes
+            .unwrap_or(DEFAULT_MAX_RV32_MEMORY_BYTES)
+    }
 }
 
 /// A network config whose version this build cannot interpret.
@@ -158,7 +196,10 @@ pub struct UnsupportedNetworkConfig {
 /// The duplicate-attachment rule always applies. The attached-contract
 /// count is checked only when `params` states a bound for it. Each
 /// attached contract's code is checked against the size in force,
-/// [`NetworkConfigParams::max_contract_size_bytes_in_force`], so pass
+/// [`NetworkConfigParams::max_contract_size_bytes_in_force`], and each
+/// attached RV32 artifact's declared guest memory and code size against
+/// [`NetworkConfigParams::max_rv32_memory_bytes_in_force`] and
+/// [`NetworkConfigParams::max_rv32_code_bytes_in_force`], so pass
 /// `NetworkConfigParams::default()` when no chain reading is available and
 /// the protocol's own values apply.
 pub fn check_transaction(
@@ -200,7 +241,45 @@ pub fn check_transaction(
         }
     }
 
+    // hogd verifies each attachment after the gates above, and its artifact
+    // parser checks the declared memory before the code size; the same order
+    // here, so both name the same first violation.
+    let max_memory_bytes = params.max_rv32_memory_bytes_in_force();
+    let max_code_bytes = params.max_rv32_code_bytes_in_force();
+    for (index, contract) in contracts.iter().enumerate() {
+        let Some(sizes) = rv32_declared_sizes(contract) else {
+            continue;
+        };
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        if sizes.memory_bytes > max_memory_bytes {
+            return Err(TxInvalidDetail::Rv32MemoryTooLarge {
+                index,
+                memory_bytes: sizes.memory_bytes,
+                max_bytes: max_memory_bytes,
+            });
+        }
+        if sizes.code_bytes > max_code_bytes {
+            return Err(TxInvalidDetail::Rv32CodeTooLarge {
+                index,
+                code_bytes: sizes.code_bytes,
+                max_bytes: max_code_bytes,
+            });
+        }
+    }
+
     Ok(())
+}
+
+/// The sizes an attached RV32 artifact's header declares, when it carries one.
+///
+/// A blob without a readable v5 header is left to the executor, which rejects
+/// it as unverifiable: this pre-check speaks only for headers it can read, and
+/// a contract shape this build does not know carries none.
+fn rv32_declared_sizes(contract: &Contract) -> Option<DeclaredSizes> {
+    match contract {
+        Contract::kRv32 { rv32_contract } => declared_sizes(&rv32_contract.data.0),
+        _ => None,
+    }
 }
 
 /// Code bytes the executor charges an attached contract for.
@@ -268,6 +347,30 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
         NetworkConfigParams {
             max_contract_size_bytes: Some(max_contract_size_bytes),
             ..NetworkConfigParams::default()
+        }
+    }
+
+    fn rv32_caps(
+        max_rv32_code_bytes: Option<u32>,
+        max_rv32_memory_bytes: Option<u32>,
+    ) -> NetworkConfigParams {
+        NetworkConfigParams {
+            max_rv32_code_bytes,
+            max_rv32_memory_bytes,
+            ..NetworkConfigParams::default()
+        }
+    }
+
+    /// A well-formed v5 artifact carrying `code_bytes` of code and declaring
+    /// `memory_bytes` of guest memory, as an attached contract.
+    fn artifact(code_bytes: usize, memory_bytes: usize) -> Contract {
+        let artifact =
+            groundhog_rv32_artifact::build_artifact(&vec![0u8; code_bytes], &[], 0, memory_bytes)
+                .unwrap();
+        Contract::kRv32 {
+            rv32_contract: ContractBlob {
+                data: BytesM(artifact),
+            },
         }
     }
 
@@ -458,6 +561,109 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
                 index: 2,
                 first_index: 0,
             })
+        );
+    }
+
+    #[test]
+    fn rv32_bounds_in_force_are_the_stated_values_or_the_protocol_defaults() {
+        let unstated = NetworkConfigParams::default();
+        assert_eq!(unstated.max_rv32_code_bytes_in_force(), 65_536);
+        assert_eq!(unstated.max_rv32_memory_bytes_in_force(), 65_536);
+
+        let stated = rv32_caps(Some(4096), Some(1 << 20));
+        assert_eq!(stated.max_rv32_code_bytes_in_force(), 4096);
+        assert_eq!(stated.max_rv32_memory_bytes_in_force(), 1 << 20);
+    }
+
+    #[test]
+    fn rv32_sizes_at_the_protocol_defaults_pass() {
+        let tx = transaction_with(vec![artifact(DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES)]);
+
+        assert_eq!(
+            check_transaction(&tx, &NetworkConfigParams::default()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rv32_memory_over_the_bound_is_rejected_and_checked_before_code() {
+        // Both fields over: memory is reported, as hogd's artifact parser
+        // orders the two checks.
+        let tx = transaction_with(vec![
+            artifact(16, 1),
+            artifact(DEFAULT_MAX_CODE_BYTES + 4, DEFAULT_MEMORY_BYTES + 1),
+        ]);
+
+        assert_eq!(
+            check_transaction(&tx, &NetworkConfigParams::default()),
+            Err(TxInvalidDetail::Rv32MemoryTooLarge {
+                index: 1,
+                memory_bytes: 65_537,
+                max_bytes: 65_536,
+            })
+        );
+    }
+
+    #[test]
+    fn rv32_code_over_the_bound_is_rejected() {
+        let tx = transaction_with(vec![artifact(
+            DEFAULT_MAX_CODE_BYTES + 4,
+            DEFAULT_MEMORY_BYTES,
+        )]);
+
+        assert_eq!(
+            check_transaction(&tx, &NetworkConfigParams::default()),
+            Err(TxInvalidDetail::Rv32CodeTooLarge {
+                index: 0,
+                code_bytes: 65_540,
+                max_bytes: 65_536,
+            })
+        );
+    }
+
+    #[test]
+    fn stated_rv32_bounds_replace_the_protocol_defaults() {
+        // Above the defaults, a chain configured for it admits the artifact.
+        let large = transaction_with(vec![artifact(
+            DEFAULT_MAX_CODE_BYTES + 4,
+            DEFAULT_MEMORY_BYTES + 1,
+        )]);
+        assert_eq!(
+            check_transaction(&large, &rv32_caps(Some(65_540), Some(65_537))),
+            Ok(())
+        );
+
+        // Below the defaults, a stated cap rejects what the default admits.
+        let small = transaction_with(vec![artifact(1024, 4096)]);
+        assert_eq!(
+            check_transaction(&small, &rv32_caps(Some(1020), None)),
+            Err(TxInvalidDetail::Rv32CodeTooLarge {
+                index: 0,
+                code_bytes: 1024,
+                max_bytes: 1020,
+            })
+        );
+        assert_eq!(
+            check_transaction(&small, &rv32_caps(None, Some(4095))),
+            Err(TxInvalidDetail::Rv32MemoryTooLarge {
+                index: 0,
+                memory_bytes: 4096,
+                max_bytes: 4095,
+            })
+        );
+    }
+
+    #[test]
+    fn a_blob_without_an_artifact_header_is_left_to_the_executor() {
+        // Not a v5 artifact: the executor rejects it as unverifiable, and this
+        // pre-check has no header to read a declared size from.
+        let blob = rv32(DEFAULT_MAX_CODE_BYTES + 1024, 0x5a);
+        assert_eq!(rv32_declared_sizes(&blob), None);
+
+        let tx = transaction_with(vec![blob]);
+        assert_eq!(
+            check_transaction(&tx, &rv32_caps(Some(16), Some(16))),
+            Ok(())
         );
     }
 

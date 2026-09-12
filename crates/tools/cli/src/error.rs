@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::error::TxInvalidDetail;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use thiserror::Error;
@@ -411,6 +412,22 @@ pub enum CliError {
         /// Why the supplied value was rejected.
         message: String,
     },
+    #[error("invalid `[package.metadata.groundhog] {key}` in package `{package}`: {message}")]
+    PackageMetadataInvalid {
+        /// The package whose manifest carries the value.
+        package: String,
+        /// The key under `[package.metadata.groundhog]`.
+        key: &'static str,
+        /// Why the value was rejected.
+        message: String,
+    },
+    /// The RPC endpoint's pre-submission check refused the transaction with a
+    /// structured reason, before it reached the chain.
+    #[error("transaction rejected before submission: {detail}")]
+    TransactionRejectedBeforeSubmission {
+        /// The bound the transaction breaks.
+        detail: TxInvalidDetail,
+    },
     #[error("{0}")]
     Other(String),
 }
@@ -536,6 +553,10 @@ impl CliError {
             Self::ChainArchiveInsideDataDir(_) => "chain_archive_inside_data_dir",
             Self::ChainArchiveIo(_) => "chain_archive_io",
             Self::InvalidArgument { .. } => "invalid_argument",
+            Self::PackageMetadataInvalid { .. } => "package_metadata_invalid",
+            Self::TransactionRejectedBeforeSubmission { .. } => {
+                "transaction_rejected_before_submission"
+            }
             Self::Other(_) => "other",
         }
     }
@@ -829,6 +850,35 @@ impl CliError {
             Self::InvalidArgument { argument, .. } => Some(Cow::Owned(format!(
                 "correct the {argument} and rerun; `--help` shows the expected format"
             ))),
+            Self::PackageMetadataInvalid { key, .. } => Some(Cow::Owned(format!(
+                "set `{key}` under `[package.metadata.groundhog]` in the package's Cargo.toml \
+                 to a positive byte count: an integer, or a string such as \"128K\" or \
+                 \"0x20000\""
+            ))),
+            Self::TransactionRejectedBeforeSubmission { detail } => {
+                Some(Cow::Borrowed(match detail {
+                    TxInvalidDetail::Rv32CodeTooLarge { .. } => {
+                        "the artifact's code section is larger than the target chain's \
+                         `max_rv32_code_bytes`; reduce code size — common causes are \
+                         formatted panics pulling in `core::fmt` and large generic \
+                         instantiations — or deploy to a chain configured for it"
+                    }
+                    TxInvalidDetail::Rv32MemoryTooLarge { .. } => {
+                        "the artifact declares more guest data memory than the target \
+                         chain's `max_rv32_memory_bytes`; lower \
+                         `[package.metadata.groundhog] initial_memory_bytes` and rebuild, \
+                         or deploy to a chain configured for it"
+                    }
+                    TxInvalidDetail::ContractTooLarge { .. } => {
+                        "the artifact is larger than the target chain's per-contract size \
+                         cap; reduce the artifact size or deploy to a chain configured for it"
+                    }
+                    _ => {
+                        "the transaction breaks a bound the chain enforces before execution; \
+                         correct the attached contracts and resubmit"
+                    }
+                }))
+            }
             // The version-skew message states the fix for its direction.
             Self::RawSpecFormat(_)
             | Self::Docs(_)
@@ -891,17 +941,13 @@ impl CliError {
                  Linux host targets",
             )),
             Self::Rv32LowerFailed(error) => Some(Cow::Borrowed(match error {
-                groundhog_rv32_lower::LowerError::CodeTooLarge { .. } => {
-                    "the contract's code section exceeds the current artifact \
-                     format's code-size cap; reduce code size — common causes \
-                     are formatted panics pulling in `core::fmt` and large \
-                     generic instantiations"
-                }
                 groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
-                    "static data plus the reserved stack exceed the VM's data \
-                     memory; reduce static data, or pass a smaller \
-                     `groundhog build --stack-size` to shrink the stack \
-                     reserve below the data sections"
+                    "static data plus the reserved stack exceed the guest data \
+                     memory the contract declares; reduce static data, pass a \
+                     smaller `groundhog build --stack-size` to shrink the stack \
+                     reserve, or raise `[package.metadata.groundhog] \
+                     initial_memory_bytes` if the target chain's \
+                     `max_rv32_memory_bytes` admits more"
                 }
                 groundhog_rv32_lower::LowerError::Verify(_) => {
                     "this is a bug — please report this lower→verify \
@@ -1179,6 +1225,18 @@ impl CliError {
                 "argument": argument,
                 "message": message,
             })),
+            Self::PackageMetadataInvalid {
+                package,
+                key,
+                message,
+            } => Some(json!({
+                "package": package,
+                "key": key,
+                "message": message,
+            })),
+            Self::TransactionRejectedBeforeSubmission { detail } => {
+                serde_json::to_value(detail).ok()
+            }
             _ => None,
         }
     }
@@ -1194,22 +1252,72 @@ mod tests {
     }
 
     #[test]
-    fn rv32_lower_code_too_large_hints_at_code_size_reduction() {
-        let error = CliError::Rv32LowerFailed(LowerError::CodeTooLarge {
-            size: 82472,
-            max: 65536,
-        });
-        assert!(hint(&error).contains("reduce code size"));
-    }
-
-    #[test]
-    fn rv32_lower_data_too_large_hints_at_stack_size() {
+    fn rv32_lower_data_too_large_hints_at_stack_size_and_memory_size() {
         let error = CliError::Rv32LowerFailed(LowerError::DataTooLarge {
             section: ".bss".to_string(),
             end: 70168,
             max: 65536,
         });
-        assert!(hint(&error).contains("--stack-size"));
+        let hint = hint(&error);
+        assert!(hint.contains("--stack-size"));
+        assert!(hint.contains("initial_memory_bytes"));
+    }
+
+    #[test]
+    fn pre_submission_rejections_hint_at_the_violated_bound() {
+        let code = CliError::TransactionRejectedBeforeSubmission {
+            detail: TxInvalidDetail::Rv32CodeTooLarge {
+                index: 0,
+                code_bytes: 70_000,
+                max_bytes: 65_536,
+            },
+        };
+        assert!(hint(&code).contains("reduce code size"));
+        assert_eq!(code.code(), "transaction_rejected_before_submission");
+        assert_eq!(
+            code.details_json().expect("details expected")["reason"],
+            "rv32CodeTooLarge"
+        );
+
+        let memory = CliError::TransactionRejectedBeforeSubmission {
+            detail: TxInvalidDetail::Rv32MemoryTooLarge {
+                index: 0,
+                memory_bytes: 131_072,
+                max_bytes: 65_536,
+            },
+        };
+        assert!(hint(&memory).contains("initial_memory_bytes"));
+
+        let count = CliError::TransactionRejectedBeforeSubmission {
+            detail: TxInvalidDetail::TooManyContracts {
+                attached: 5,
+                max: 4,
+            },
+        };
+        assert!(hint(&count).contains("resubmit"));
+        assert!(
+            count
+                .to_string()
+                .contains("transaction attaches 5 contracts; chain permits 4")
+        );
+    }
+
+    #[test]
+    fn package_metadata_invalid_names_the_key_and_package() {
+        let error = CliError::PackageMetadataInvalid {
+            package: "my-counter".to_string(),
+            key: "initial_memory_bytes",
+            message: "0 is not a positive byte count".to_string(),
+        };
+        assert_eq!(error.code(), "package_metadata_invalid");
+        assert!(error.to_string().contains(
+            "`[package.metadata.groundhog] initial_memory_bytes` in package `my-counter`"
+        ));
+        assert!(hint(&error).contains("128K"));
+        assert_eq!(
+            error.details_json().expect("details expected")["key"],
+            "initial_memory_bytes"
+        );
     }
 
     #[test]
@@ -1237,8 +1345,9 @@ mod tests {
 
     #[test]
     fn rv32_lower_failed_details_json_keeps_the_message_field() {
-        let inner = LowerError::CodeTooLarge {
-            size: 65540,
+        let inner = LowerError::DataTooLarge {
+            section: ".data".to_string(),
+            end: 65540,
             max: 65536,
         };
         let message = inner.to_string();

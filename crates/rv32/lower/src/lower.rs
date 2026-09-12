@@ -10,7 +10,9 @@ use std::collections::HashSet;
 
 use crate::elf::{self, Section};
 use crate::error::{LowerError, Result, invalid};
-use groundhog_rv32_artifact::{MAX_CODE_BYTES, MAX_MEMORY_BYTES, build_artifact, verify_artifact};
+use groundhog_rv32_artifact::{
+    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, build_artifact, verify_artifact,
+};
 
 /// Allocatable sections an rv32 contract image may contain. Anything else with
 /// the ALLOC flag is rejected.
@@ -87,23 +89,82 @@ pub struct Lowered {
     /// Total guest data address space, in bytes.
     pub memory_bytes: usize,
     /// Non-fatal findings about the input, for the caller to surface. Today:
-    /// duplicate ids in the interface table.
+    /// duplicate ids in the interface table, and a code section past the
+    /// protocol-default code limit.
     pub warnings: Vec<String>,
 }
 
-/// Parse, validate, and lower an rv32im contract ELF into a v5 artifact.
+/// What a lowering is told about the guest beyond what the ELF says.
+///
+/// The lowerer does not know which chain an artifact is for, so it enforces
+/// no chain bound: code size is whatever the ELF carries (a warning past the
+/// protocol default), and the data address space is the contract's own
+/// choice, stamped as given. Whether a chain admits the result is checked
+/// where the contract is attached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LowerOptions {
+    /// Guest data address space stamped into the artifact, in bytes; every
+    /// data section must end within it. Defaults to the protocol's 64 KiB. A
+    /// contract only uses a larger value once its linker script provides a
+    /// matching `__memory_size`.
+    pub memory_bytes: usize,
+}
+
+impl Default for LowerOptions {
+    fn default() -> Self {
+        Self {
+            memory_bytes: DEFAULT_MEMORY_BYTES,
+        }
+    }
+}
+
+/// Parse, validate, and lower an rv32im contract ELF into a v5 artifact with
+/// the protocol-default data address space.
 pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
+    lower_with(elf_bytes, &LowerOptions::default())
+}
+
+/// [`lower`] with an explicit data address space.
+pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
+    if options.memory_bytes == 0 {
+        return Err(invalid("memory_bytes must be nonzero"));
+    }
+    if u32::try_from(options.memory_bytes).is_err() {
+        return Err(invalid(format!(
+            "memory_bytes {} exceeds the artifact's 32-bit field",
+            options.memory_bytes
+        )));
+    }
     let sections = elf::parse_elf(elf_bytes)?;
-    let (code, initial_memory, initial_memory_start) = validate_sections(elf_bytes, &sections)?;
-    let warnings = check_interface_table(elf_bytes, &sections)?;
-    let artifact = build_artifact(&code, &initial_memory, initial_memory_start)?;
+    let (code, initial_memory, initial_memory_start) =
+        validate_sections(elf_bytes, &sections, options)?;
+    let mut warnings = check_interface_table(elf_bytes, &sections)?;
+    // Not a refusal: the lowerer does not know the target chain, and a chain
+    // configured above the protocol default admits this code. The warning
+    // is what an offline build can say; the deploying chain has the last word.
+    if code.len() > DEFAULT_MAX_CODE_BYTES {
+        warnings.push(format!(
+            ".text is {} bytes, {} over the {DEFAULT_MAX_CODE_BYTES}-byte code limit a chain \
+             enforces unless its configuration raises max_rv32_code_bytes; only a chain \
+             admitting at least {} bytes of code accepts this artifact",
+            code.len(),
+            code.len() - DEFAULT_MAX_CODE_BYTES,
+            code.len()
+        ));
+    }
+    let artifact = build_artifact(
+        &code,
+        &initial_memory,
+        initial_memory_start,
+        options.memory_bytes,
+    )?;
     verify_artifact(&artifact)?;
     Ok(Lowered {
         artifact,
         code,
         initial_memory,
         initial_memory_start,
-        memory_bytes: MAX_MEMORY_BYTES,
+        memory_bytes: options.memory_bytes,
         warnings,
     })
 }
@@ -185,7 +246,11 @@ fn unique_text(sections: &[Section]) -> Result<&Section> {
 /// `start` is the data address it is staged at (the runtime zero-fills the
 /// rest of the address space).
 #[allow(clippy::too_many_lines)]
-fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<u8>, usize)> {
+fn validate_sections(
+    data: &[u8],
+    sections: &[Section],
+    options: &LowerOptions,
+) -> Result<(Vec<u8>, Vec<u8>, usize)> {
     let text = unique_text(sections)?;
     if !text.is_exec() || !text.is_alloc() {
         return Err(invalid(".text must be alloc+exec"));
@@ -202,12 +267,6 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
     if !text.size.is_multiple_of(4) {
         return Err(invalid(".text size must be four-byte aligned"));
     }
-    if text.size as usize > MAX_CODE_BYTES {
-        return Err(LowerError::CodeTooLarge {
-            size: text.size as usize,
-            max: MAX_CODE_BYTES,
-        });
-    }
     let text_off = text.offset as usize;
     let text_size = text.size as usize;
     if text_off + text_size > data.len() {
@@ -221,7 +280,10 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
             && section.size > 0
     });
 
-    let mut memory = vec![0u8; MAX_MEMORY_BYTES];
+    // (guest address, file offset, size) of every section with file bytes to
+    // stage, and the highest address any of them reaches.
+    let mut placements: Vec<(usize, usize, usize)> = Vec::new();
+    let mut extent = 0usize;
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
         if (section.sh_type == elf::SHT_REL || section.sh_type == elf::SHT_RELA)
@@ -282,11 +344,11 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
             }
         }
         data_ranges.push((section.name.clone(), sec_start, sec_end));
-        if sec_end as usize > MAX_MEMORY_BYTES {
+        if sec_end as usize > options.memory_bytes {
             return Err(LowerError::DataTooLarge {
                 section: section.name.clone(),
                 end: sec_end as usize,
-                max: MAX_MEMORY_BYTES,
+                max: options.memory_bytes,
             });
         }
         if section.is_nobits() {
@@ -301,6 +363,15 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
             )));
         }
         let addr = section.addr as usize;
+        extent = extent.max(addr + size);
+        placements.push((addr, off, size));
+    }
+
+    // Stage only as far as the ELF places data, not the whole declared address
+    // space: `memory_bytes` is the caller's and can be far larger than any
+    // image, and the per-section check above already bounds `extent` by it.
+    let mut memory = vec![0u8; extent];
+    for (addr, off, size) in placements {
         memory[addr..addr + size].copy_from_slice(&data[off..off + size]);
     }
 

@@ -412,7 +412,9 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `x-data-schema`; never hand-author the shape in the spec.
 - `sendRawTransaction` pre-checks (expiry against the tip, attached-contract
   count and per-contract size from the tip's network config, duplicate
-  attachments) mirror what hogd's executor rejects before running a
+  attachments, and each attached RV32 artifact's declared guest memory and
+  code size against the config's `max_rv32_memory_bytes` and
+  `max_rv32_code_bytes`) mirror what hogd's executor rejects before running a
   transaction. The bound logic lives in `groundhog-tx-validation`;
   `json-rpc-server` applies it from one cached db-tip reading
   (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
@@ -424,9 +426,17 @@ groundhog-bench --url http://127.0.0.1:9546 \
   current config admits. The checks are advisory, not a trust
   boundary: a missing reading never blocks submission. A bound is enforced
   only with a value the protocol defines: the one the tip's config states,
-  or a constant the protocol fixes for the unstated case (today only
-  `kDefaultMaxContractSizeBytes`). Never copy hogd's own fallbacks for
+  or a constant the protocol fixes for the unstated case (today
+  `kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`, and
+  `kDefaultMaxRv32MemoryBytes`). Never copy hogd's own fallbacks for
   parameters the protocol leaves unstated.
+- `groundhog build` enforces no chain bound: it is offline and does not know
+  the target chain. The lowerer stamps the guest data memory the package's
+  `[package.metadata.groundhog] initial_memory_bytes` declares (the protocol
+  default 64 KiB otherwise), warns when the code section is over the
+  protocol-default code limit, and leaves admission to the deploying chain,
+  whose `sendRawTransaction` pre-check names the violated bound. Do not add
+  build-time flags that gate on a chain's limits.
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 

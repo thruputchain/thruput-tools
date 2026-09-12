@@ -249,7 +249,7 @@ shape is a tagged object modeled in `json-rpc-types`:
 
 | Error | `data` type | Discriminator |
 |-------|-------------|---------------|
-| `TxInvalid` (`-32000`) | `TxInvalidDetail` | `reason`: `tooManyContracts`, `contractTooLarge`, `duplicateContract` |
+| `TxInvalid` (`-32000`) | `TxInvalidDetail` | `reason`: `tooManyContracts`, `contractTooLarge`, `duplicateContract`, `rv32MemoryTooLarge`, `rv32CodeTooLarge` |
 
 Example rejection from the `sendRawTransaction` pre-checks:
 
@@ -264,8 +264,13 @@ Example rejection from the `sendRawTransaction` pre-checks:
 The pre-checks mirror the executor's deterministic pre-execution gate
 (`SystemCallHandler::perform_initial_validation` in hogd): attached-contract
 count against the `maxNewContractsPerTx` parameter of the tip's network
-config, each RV32 blob against its `maxContractSizeBytes` parameter, and no
-contract attached twice. The bound logic is the `groundhog-tx-validation` crate. The
+config, each RV32 blob against its `maxContractSizeBytes` parameter, no
+contract attached twice, and each RV32 artifact header's declared guest
+memory and code size against `maxRv32MemoryBytes` and `maxRv32CodeBytes`
+(what the executor's attachment verification enforces; memory is checked
+before code, as hogd's artifact parser orders them). A blob without a
+readable v5 header is left to the executor. The bound logic is the
+`groundhog-tx-validation` crate. The
 network config arrives with every `schedgateway_get_tip` reply (the same
 one that serves `chainTip`); the shared server flattens it into
 `NetworkConfigParams` once per fetch and keeps a single cached db-tip
@@ -276,7 +281,10 @@ server. A parameter the config does not state is `None` and its check is
 skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
-parameter ran under. hogd's own fallbacks are never copied. A bound
+parameter ran under, and `maxRv32MemoryBytes` and `maxRv32CodeBytes` fall
+back to `kDefaultMaxRv32MemoryBytes` and `kDefaultMaxRv32CodeBytes` (64 KiB
+each, from the protocol's `hog_exec_constants.x`). hogd's own fallbacks are
+never copied. A bound
 violation found against a cached reading is re-checked against a freshly
 fetched tip before it is returned, so a reading that lags a config-upgrade
 block never rejects what the current config admits. A stale reading
