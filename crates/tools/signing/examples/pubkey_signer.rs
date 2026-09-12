@@ -1,4 +1,4 @@
-//! JSON-lines signer for local demos using direct pubkey authentication.
+//! JSON-lines signer for local demos using the native pubkey-account wallet.
 //!
 //! Uses the public deterministic dev-1 key. Each request supplies address,
 //! entrypoint, calldata, networkHash, gasLimit, expiryHeight, and nonce.
@@ -7,6 +7,7 @@
 use std::error::Error;
 use std::io::{self, BufRead, Write};
 
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_DEV_ACCOUNT_SEED, LocalSigner, PubkeyAccount,
     SignTransactionParams, Signer, build_call_transaction, derive_dev_account_signer,
@@ -15,6 +16,7 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, NetworkHash, SHA256Hash};
 use serde_json::{Value, json};
+use xdr_common::BytesM;
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -36,14 +38,29 @@ fn fixed<const N: usize>(value: &Value, field: &str) -> Result<[u8; N], Box<dyn 
 fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
     let account = PubkeyAccount::new(signer.public_key(), 0);
     let network = NetworkHash::new(SHA256Hash::new(fixed(value, "networkHash")?));
+    let gas_limit = value["gasLimit"]
+        .as_u64()
+        .filter(|gas| *gas > 0)
+        .ok_or_else(|| invalid("gasLimit must be positive"))?;
+    // Pubkey authentication requires the root address to be the derived account.
+    // Its native DefaultWallet.execute precompile forwards this one WalletCall.
+    let calls = vec![(
+        ContractAddress::from(fixed::<32>(value, "address")?),
+        ContractEntrypointID::from(fixed::<8>(value, "entrypoint")?),
+        gas_limit,
+        BytesM(bytes(value, "calldata")?),
+    )];
+    let execute_id = contract_entrypoint_id(
+        Some("DefaultWallet"),
+        "0.1.0",
+        &NormalizedMethodSignature::new("execute"),
+    );
+    let execute_bytes: [u8; 8] = execute_id.as_ref()[..8].try_into()?;
     let transaction = build_call_transaction(BuildCallTransaction {
-        invoked_address: ContractAddress::from(fixed::<32>(value, "address")?),
-        entrypoint: ContractEntrypointID::from(fixed::<8>(value, "entrypoint")?),
-        calldata: bytes(value, "calldata")?,
-        gas_limit: value["gasLimit"]
-            .as_u64()
-            .filter(|gas| *gas > 0)
-            .ok_or_else(|| invalid("gasLimit must be positive"))?,
+        invoked_address: account.address()?,
+        entrypoint: ContractEntrypointID::from(execute_bytes),
+        calldata: xdrs::cxs::encode(&calls)?,
+        gas_limit,
         block_expiry_height: value["expiryHeight"]
             .as_i64()
             .filter(|height| *height >= 0)
@@ -70,7 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .map_err(|error| -> Box<dyn Error> { error.into() })
             .and_then(|value| sign(&value, &signer));
         let response = match result {
-            Ok(signed) => json!({ "signedTx": signed }),
+            Ok(encoded) => json!({ "signedTx": encoded }),
             Err(error) => json!({ "error": error.to_string() }),
         };
         writeln!(output, "{response}")?;
