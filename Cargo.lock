@@ -1876,6 +1876,7 @@ dependencies = [
  "groundhog-tx-validation",
  "groundhog-xdr",
  "hex",
+ "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "xdr-common",

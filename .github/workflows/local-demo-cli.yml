@@ -22,7 +22,9 @@ jobs:
         with:
           cache: rust
       - name: Build release CLI
-        run: cargo build --release --locked -p groundhog-cli
+        run: |
+          cargo build --release --locked -p groundhog-cli
+          cargo build --release --locked -p groundhog-signing --example pubkey_signer
       - name: Package executable and runtime libraries
         run: |
           python3 - <<'PY'
@@ -31,22 +33,27 @@ jobs:
           root = Path('local-demo-cli')
           (root / 'bin').mkdir(parents=True)
           (root / 'lib').mkdir()
-          binary = Path('target/release/groundhog')
-          shutil.copy2(binary, root / 'bin/groundhog.real')
-          linked = subprocess.check_output(['ldd', str(binary)], text=True)
-          assert 'not found' not in linked, linked
+          binaries = {'groundhog': Path('target/release/groundhog'),
+                      'pubkey-signer': Path('target/release/examples/pubkey_signer')}
+          libraries = set()
+          for name, binary in binaries.items():
+              shutil.copy2(binary, root / 'bin' / (name + '.real'))
+              linked = subprocess.check_output(['ldd', str(binary)], text=True)
+              assert 'not found' not in linked, linked
+              libraries.update(re.findall(r'(/[^\s()]+)', linked))
           loaders = []
-          for library in set(re.findall(r'(/[^\s()]+)', linked)):
+          for library in libraries:
               path = Path(library)
               shutil.copy2(path, root / 'lib' / path.name)
               if path.name.startswith('ld-linux'):
                   loaders.append(path.name)
           assert len(loaders) == 1, loaders
-          wrapper = root / 'bin/groundhog'
-          wrapper.write_text('#!/bin/sh\nset -eu\nbundle_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\n'
-              + 'exec "$bundle_dir/lib/' + loaders[0]
-              + '" --library-path "$bundle_dir/lib" "$bundle_dir/bin/groundhog.real" "$@"\n')
-          wrapper.chmod(0o755)
+          for name in binaries:
+              wrapper = root / 'bin' / name
+              wrapper.write_text('#!/bin/sh\nset -eu\nbundle_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\n'
+                  + 'exec "$bundle_dir/lib/' + loaders[0]
+                  + '" --library-path "$bundle_dir/lib" "$bundle_dir/bin/' + name + '.real" "$@"\n')
+              wrapper.chmod(0o755)
           manifest = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                       'sha256': {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
                                  for p in sorted(root.rglob('*')) if p.is_file()}}
