@@ -382,7 +382,7 @@ patches = {
     "groundhog-syscall": "groundhog-syscall",
     "hogexec-internal": "hogexec-internal",
 }
-lines.extend(["", '[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]'])
+lines.extend(["", '[patch."sparse+https://crates.thruput.network/api/v1/crates/"]'])
 for package, directory in patches.items():
     path = protocol_path / directory
     if not path.is_dir():

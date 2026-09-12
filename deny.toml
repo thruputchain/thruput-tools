@@ -6,5 +6,5 @@ unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = [
     "https://github.com/rust-lang/crates.io-index",
-    "sparse+https://groundhog.dev/crates/api/v1/crates/",
+    "sparse+https://crates.thruput.network/api/v1/crates/",
 ]

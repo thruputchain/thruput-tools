@@ -25,7 +25,7 @@ installs on first use.
 From the private Groundhog registry:
 
 ```bash
-export CARGO_REGISTRIES_GROUNDHOG_INDEX="sparse+https://groundhog.dev/crates/api/v1/crates/"
+export CARGO_REGISTRIES_GROUNDHOG_INDEX="sparse+https://crates.thruput.network/api/v1/crates/"
 cargo install groundhog-cli --registry groundhog --locked
 groundhog --version
 ```
