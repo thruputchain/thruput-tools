@@ -12,7 +12,7 @@ pub mod indices;
 pub mod local;
 pub mod signer;
 
-pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR, PubkeyAccount};
+pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 pub use build::{
     BuildCallTransaction, BuildDeployTransaction, BuildDevWalletDoActionTransaction,
     DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT, WalletCreateProofV2,
@@ -72,7 +72,7 @@ mod tests {
         let signer = test_signer();
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
 
-        let address = account.address().expect("bug: address should derive");
+        let address = account.address();
 
         assert_eq!(
             hex::encode(address.as_ref()),
@@ -85,14 +85,7 @@ mod tests {
         let signer = test_signer();
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
         let tx = build_call_transaction(BuildCallTransaction {
-            // Keep the historical wire fixture independent of address derivation.
-            invoked_address: ContractAddress::from(
-                <[u8; 32]>::try_from(
-                    hex::decode("bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7")
-                        .expect("valid historical address hex"),
-                )
-                .expect("valid historical address hex"),
-            ),
+            invoked_address: account.address(),
             entrypoint: ContractEntrypointID::from([0u8; 8]),
             calldata: vec![],
             gas_limit: 1_000_000,
@@ -116,12 +109,12 @@ mod tests {
 
         assert_eq!(
             hex::encode(tx_hash.as_ref()),
-            "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3"
+            "847d86e85273a697f265224e249d9fe417634e0f8d02452d2e616fc6b885408f"
         );
         assert_eq!(decoded_signed_tx, signed_tx);
         assert_eq!(
             hex::encode(signed_tx_xdr),
-            "bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7000000000000000000000000000f42400000000000000000000f4240000000000000000100000000000000010000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000000000000000000001000000000000000057ca99d72f2f70aa272dc0053c44cbcfe01c2f9411ea13e10cf293cdf1b5c6cef17713c46502c7608512af519afe6a31736e2f4efa3eb6572b4de5df1cf5660f"
+            "8b1568c894aeb3a704ec0dcd27fe18a4d40193ffa187edadc181b1660286b066000000000000000000000000000f42400000000000000000000f4240000000000000000100000000000000010000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a0000000000000000000000010000000000000000ae806c98773715b9c7cf95d3cf60f53f89469140d4382eab35d17bbb755f8cfb0c6f677584482db6256f5cd1728e27e430c106f862c8e11b6a4a6c3bec7c6306"
         );
     }
 
@@ -131,7 +124,7 @@ mod tests {
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
         let build = || {
             build_call_transaction(BuildCallTransaction {
-                invoked_address: account.address().expect("bug: address should derive"),
+                invoked_address: account.address(),
                 entrypoint: ContractEntrypointID::from([0u8; 8]),
                 calldata: vec![],
                 gas_limit: 1_000_000,
