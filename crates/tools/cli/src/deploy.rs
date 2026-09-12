@@ -632,20 +632,34 @@ fn warn_if_stale(
     let Ok(artifact_mtime) = std::fs::metadata(&artifact.path).and_then(|m| m.modified()) else {
         return;
     };
-    let src_dir = package_root.join("src");
-    if !src_dir.is_dir() {
-        return;
-    }
-    if newest_source_mtime(&src_dir).is_some_and(|t| t > artifact_mtime) {
+    if newest_input_mtime(package_root).is_some_and(|t| t > artifact_mtime) {
         print.warn(stale_artifact_warning(artifact.kind, package_name));
     }
 }
 
 fn stale_artifact_warning(kind: ArtifactKind, package_name: &str) -> String {
     format!(
-        "source files are newer than the {} artifact — run `groundhog build -p {package_name}` to avoid deploying stale code",
+        "source files or Cargo.toml are newer than the {} artifact — run `groundhog build -p {package_name}` to avoid deploying stale code",
         kind.as_str()
     )
+}
+
+/// When the package's build inputs last changed: its `src/` tree and its
+/// manifest. The manifest counts because `[package.metadata.groundhog]`
+/// changes the artifact (its guest memory) without touching a source file.
+/// `None` when the package has no `src/` directory to speak for.
+fn newest_input_mtime(package_root: &Path) -> Option<std::time::SystemTime> {
+    let src_dir = package_root.join("src");
+    if !src_dir.is_dir() {
+        return None;
+    }
+    let manifest = std::fs::metadata(package_root.join("Cargo.toml"))
+        .and_then(|m| m.modified())
+        .ok();
+    newest_source_mtime(&src_dir)
+        .into_iter()
+        .chain(manifest)
+        .max()
 }
 
 fn newest_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
@@ -697,8 +711,8 @@ mod tests {
 
     use super::{
         DeployAddressSource, PreparedDeploy, command_error_for_deploy_receipt,
-        deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, resolve_deployed_address,
-        stale_artifact_warning,
+        deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, newest_input_mtime,
+        resolve_deployed_address, stale_artifact_warning,
     };
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
     use groundhog_json_rpc_types::{
@@ -731,6 +745,44 @@ mod tests {
 
         assert!(warning.contains("groundhog build -p demo-contract"));
         assert!(!warning.contains("--target"));
+    }
+
+    #[test]
+    fn manifest_counts_as_a_build_input_for_staleness() {
+        use std::time::{Duration, SystemTime};
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let source = root.join("src/lib.rs");
+        let manifest = root.join("Cargo.toml");
+        std::fs::write(&source, "").unwrap();
+        std::fs::write(&manifest, "[package]\n").unwrap();
+
+        let older = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let newer = older + Duration::from_secs(60);
+        std::fs::File::open(&source)
+            .unwrap()
+            .set_modified(older)
+            .unwrap();
+        std::fs::File::open(&manifest)
+            .unwrap()
+            .set_modified(newer)
+            .unwrap();
+
+        // A manifest edit alone (say `initial_memory_bytes`) makes the
+        // artifact stale, even with every source file untouched.
+        assert_eq!(newest_input_mtime(root), Some(newer));
+
+        std::fs::File::open(&manifest)
+            .unwrap()
+            .set_modified(older - Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(newest_input_mtime(root), Some(older));
+
+        // No `src/` means nothing to compare against.
+        std::fs::remove_dir_all(root.join("src")).unwrap();
+        assert_eq!(newest_input_mtime(root), None);
     }
 
     #[test]

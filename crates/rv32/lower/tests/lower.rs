@@ -1148,6 +1148,33 @@ fn a_large_memory_size_stages_only_the_placed_data() {
     assert_eq!(lowered.initial_memory_start, default.initial_memory_start);
 }
 
+#[test]
+fn a_high_data_section_stages_only_its_own_span() {
+    use groundhog_rv32_lower::{LowerOptions, lower_with};
+    // A few bytes placed near the top of a 3 GiB address space must stage
+    // neither the gigabytes below them nor the space above; the image is the
+    // nonzero span at its own address.
+    let addr = (3u32 << 30) - 0x1000;
+    let mut spec = happy_spec();
+    spec.extras.push(ExtraSection::progbits(
+        ".rodata",
+        SHF_ALLOC,
+        addr,
+        vec![0, 7, 0, 9, 0],
+    ));
+    let lowered = lower_with(
+        &assemble(spec),
+        &LowerOptions {
+            memory_bytes: 3 << 30,
+        },
+    )
+    .expect("lowers with a high data section");
+    assert_eq!(lowered.initial_memory, [7, 0, 9]);
+    assert_eq!(lowered.initial_memory_start, addr as usize + 1);
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 3);
+    verify_artifact(&lowered.artifact).expect("artifact self-verifies");
+}
+
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn rejects_a_memory_size_past_the_header_field() {

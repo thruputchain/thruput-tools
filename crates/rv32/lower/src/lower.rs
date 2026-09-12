@@ -281,8 +281,9 @@ fn validate_sections(
     });
 
     // (guest address, file offset, size) of every section with file bytes to
-    // stage, and the highest address any of them reaches.
+    // stage, and the address range they span together.
     let mut placements: Vec<(usize, usize, usize)> = Vec::new();
+    let mut lowest = usize::MAX;
     let mut extent = 0usize;
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
@@ -362,17 +363,23 @@ fn validate_sections(
                 section.name
             )));
         }
+        if size == 0 {
+            continue;
+        }
         let addr = section.addr as usize;
+        lowest = lowest.min(addr);
         extent = extent.max(addr + size);
         placements.push((addr, off, size));
     }
 
-    // Stage only as far as the ELF places data, not the whole declared address
-    // space: `memory_bytes` is the caller's and can be far larger than any
-    // image, and the per-section check above already bounds `extent` by it.
-    let mut memory = vec![0u8; extent];
+    // Stage only the span the ELF places data in, not the address space
+    // around it: `memory_bytes` is the caller's and can be far larger than any
+    // image, and a section may sit high inside it. The per-section check
+    // above already bounds `extent` by `memory_bytes`.
+    let base = if placements.is_empty() { 0 } else { lowest };
+    let mut memory = vec![0u8; extent - base];
     for (addr, off, size) in placements {
-        memory[addr..addr + size].copy_from_slice(&data[off..off + size]);
+        memory[addr - base..addr - base + size].copy_from_slice(&data[off..off + size]);
     }
 
     let code = data[text_off..text_off + text_size].to_vec();
@@ -382,7 +389,7 @@ fn validate_sections(
         memory.iter().position(|&b| b != 0),
         memory.iter().rposition(|&b| b != 0),
     ) {
-        (Some(low), Some(high)) => (memory[low..=high].to_vec(), low),
+        (Some(low), Some(high)) => (memory[low..=high].to_vec(), base + low),
         _ => (Vec::new(), 0),
     };
     Ok((code, initial_memory, start))
