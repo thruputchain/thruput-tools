@@ -1,0 +1,130 @@
+{
+  "component": "hog-devnode",
+  "schemaVersion": 1,
+  "defaultVersion": "0.1.27-rc.4",
+  "versions": {
+    "0.1.27-rc.4": {
+      "source": {
+        "ref": "v0.1.27-rc.4",
+        "repository": "groundhogchain/hogd"
+      },
+      "targets": {
+        "aarch64-apple-darwin": {
+          "archive": "hog-devnode_0.1.27-rc.4_aarch64-apple-darwin.tar.gz",
+          "compatibility": {
+            "minimumVersion": "26.0",
+            "os": "macos"
+          },
+          "files": [
+            {
+              "kind": "artifact",
+              "path": "contracts/dev_wallet.rv32a"
+            },
+            {
+              "kind": "artifact",
+              "path": "contracts/genesis_root.rv32a"
+            },
+            {
+              "kind": "executable",
+              "path": "hog-devnode"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libc++.1.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libc++abi.1.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libcrypto.3.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libjemalloc.2.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/liblz4.1.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libsnappy.1.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libssl.3.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libunwind.1.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libz.1.dylib"
+            },
+            {
+              "kind": "runtimeLibrary",
+              "path": "lib/libzstd.1.dylib"
+            }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.27-rc.4/hog-devnode_0.1.27-rc.4_aarch64-apple-darwin.tar.gz",
+          "sha256": "6b62b8233591e3f54fefb4383b4aa31c1b8172636d56e9c2c214fecb6744f146",
+          "size": 10362465
+        },
+        "aarch64-unknown-linux-gnu": {
+          "archive": "hog-devnode_0.1.27-rc.4_aarch64-unknown-linux-gnu.tar.gz",
+          "compatibility": {
+            "libc": "glibc",
+            "minimumVersion": "2.38"
+          },
+          "files": [
+            {
+              "kind": "artifact",
+              "path": "contracts/dev_wallet.rv32a"
+            },
+            {
+              "kind": "artifact",
+              "path": "contracts/genesis_root.rv32a"
+            },
+            {
+              "kind": "executable",
+              "path": "hog-devnode"
+            }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.27-rc.4/hog-devnode_0.1.27-rc.4_aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "37adc18ab8fe31ceb8222c45b2006ae9974ca3584da49e9b6d71513fc4d0f7e1",
+          "size": 8719976
+        },
+        "x86_64-unknown-linux-gnu": {
+          "archive": "hog-devnode_0.1.27-rc.4_x86_64-unknown-linux-gnu.tar.gz",
+          "compatibility": {
+            "libc": "glibc",
+            "minimumVersion": "2.38"
+          },
+          "files": [
+            {
+              "kind": "artifact",
+              "path": "contracts/dev_wallet.rv32a"
+            },
+            {
+              "kind": "artifact",
+              "path": "contracts/genesis_root.rv32a"
+            },
+            {
+              "kind": "executable",
+              "path": "hog-devnode"
+            }
+          ],
+          "layoutVersion": 1,
+          "objectKey": "hog-devnode/0.1.27-rc.4/hog-devnode_0.1.27-rc.4_x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "2abce546ab2b48eae7b49ecf4ae3dfc76be3c781d21a95fc6682e7d93b7e953a",
+          "size": 9525453
+        }
+      }
+    }
+  }
+}

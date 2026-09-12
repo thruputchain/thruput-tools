@@ -138,6 +138,10 @@ pub struct LocalNodeOptions {
     pub hogd_dev_binary: Option<PathBuf>,
     /// Contract artifact directories passed to hog-devnode in search order.
     pub contract_artifact_directories: Vec<PathBuf>,
+    /// Exact managed hog-devnode version requested for this invocation.
+    pub hogd_dev_version: Option<String>,
+    /// Forbid managed network acquisition while retaining local fallback sources.
+    pub offline: bool,
     /// Directory where hog-devnode persists recoverable node state.
     pub data_dir: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
@@ -257,6 +261,21 @@ impl StartedLocalNode {
 
 /// Start a reusable local node without taking over the terminal.
 pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalNode, CliError> {
+    let options = resolve_local_node_options(options, None).await?;
+    start_resolved_local_node(options).await
+}
+
+pub(crate) async fn start_local_node_with_print(
+    options: LocalNodeOptions,
+    print: &Print,
+) -> Result<StartedLocalNode, CliError> {
+    let options = resolve_local_node_options(options, Some(print)).await?;
+    start_resolved_local_node(options).await
+}
+
+async fn start_resolved_local_node(
+    options: LocalNodeOptions,
+) -> Result<StartedLocalNode, CliError> {
     use groundhog_node_supervisor::NodeSupervisorHandle;
 
     let config = local_node_config(options)?;
@@ -286,11 +305,19 @@ async fn run_hogd_dev(
 
     let shutdown_signal = prepare_stop_signal()
         .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
+    tokio::pin!(shutdown_signal);
+    let options = tokio::select! {
+        result = resolve_local_node_options(options, Some(print)) => result?,
+        result = &mut shutdown_signal => {
+            result.map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
+            return Ok(());
+        }
+    };
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
     if !print.is_json() {
         print.status("Starting Groundhog local node");
     }
-    let started = start_local_node(options).await?;
+    let started = start_resolved_local_node(options).await?;
     let local_runtime_state_path = match write_started_local_runtime_state(
         &started,
         runtime_artifacts_dir.as_deref(),
@@ -492,6 +519,138 @@ fn local_runtime_state(
         runtime_manifest: started.readiness().manifest_path.clone()?,
         runtime_artifacts_dir: runtime_artifacts_dir.map(Path::to_path_buf),
     })
+}
+
+/// Discover the binary available to a default node invocation without acquiring artifacts.
+pub(crate) fn find_local_node_binary() -> Result<Option<PathBuf>, CliError> {
+    use groundhog_node_supervisor::{
+        HogdDevConfig, resolve_hogd_dev_binary_before_path, resolve_hogd_dev_binary_on_path,
+    };
+    use groundhog_toolchain::{Catalog, HostTarget, Installer};
+
+    if let Some(binary) = resolve_hogd_dev_binary_before_path(&HogdDevConfig::default())
+        .map_err(|error| map_node_supervisor_error(&error))?
+    {
+        return Ok(Some(binary));
+    }
+    let catalog = Catalog::embedded()?;
+    let configured = crate::config::load_toolchain_version()?;
+    let version = catalog.resolve_version(configured.as_deref())?;
+    let target = match HostTarget::current() {
+        Ok(target) => target,
+        Err(error) if configured.is_some() => return Err(error.into()),
+        Err(_) => return Ok(resolve_hogd_dev_binary_on_path()),
+    };
+    let installer = Installer::new(crate::config::cache_dir()?);
+    if let Some(installation) = installer.find(&catalog, version, target)? {
+        return Ok(Some(installation.binary_path()));
+    }
+    Ok(if configured.is_none() {
+        resolve_hogd_dev_binary_on_path()
+    } else {
+        None
+    })
+}
+
+async fn resolve_local_node_options(
+    mut options: LocalNodeOptions,
+    print: Option<&Print>,
+) -> Result<LocalNodeOptions, CliError> {
+    use groundhog_node_supervisor::{
+        HogdDevConfig, resolve_hogd_dev_binary_before_path, resolve_hogd_dev_binary_on_path,
+    };
+    use groundhog_toolchain::{Catalog, HostTarget, HttpSource, Installer};
+
+    let hogd = options
+        .hogd_dev_binary
+        .clone()
+        .map_or_else(HogdDevConfig::default, |binary| {
+            HogdDevConfig::default().with_binary_path(binary)
+        });
+    if options.hogd_dev_version.is_none()
+        && let Some(binary) = resolve_hogd_dev_binary_before_path(&hogd)
+            .map_err(|error| map_node_supervisor_error(&error))?
+    {
+        options.hogd_dev_binary = Some(binary);
+        return Ok(options);
+    }
+
+    let catalog = Catalog::embedded()?;
+    let configured = crate::config::load_toolchain_version()?;
+    let explicitly_requested = options.hogd_dev_version.is_some() || configured.is_some();
+    let version = catalog
+        .resolve_version(
+            options
+                .hogd_dev_version
+                .as_deref()
+                .or(configured.as_deref()),
+        )?
+        .to_string();
+    let target = match HostTarget::current() {
+        Ok(target) => target,
+        Err(error) => {
+            if !explicitly_requested && let Some(binary) = resolve_hogd_dev_binary_on_path() {
+                options.hogd_dev_binary = Some(binary);
+                return Ok(options);
+            }
+            return Err(error.into());
+        }
+    };
+
+    let cache_root = crate::config::cache_dir()?;
+    let cache_installer = Installer::new(&cache_root);
+    if let Some(installation) = cache_installer.find(&catalog, &version, target)? {
+        options.hogd_dev_binary = Some(installation.binary_path());
+        return Ok(options);
+    }
+
+    let mut acquisition_error = None;
+    if options.offline {
+        if explicitly_requested {
+            return Err(CliError::ToolchainOfflineMissing {
+                version,
+                target: target.triple().to_string(),
+            });
+        }
+    } else {
+        if let Some(print) = print {
+            print.status(format_args!(
+                "Installing hog-devnode {version} for {target}"
+            ));
+        }
+        match HttpSource::new(crate::toolchain_cmd::artifact_base_url()) {
+            Ok(source) => {
+                let installer = Installer::new(&cache_root);
+                match installer.install(&catalog, &version, target, &source).await {
+                    Ok(installation) => {
+                        options.hogd_dev_binary = Some(installation.binary_path());
+                        return Ok(options);
+                    }
+                    Err(error) if explicitly_requested => return Err(error.into()),
+                    Err(error) => acquisition_error = Some(CliError::from(error)),
+                }
+            }
+            Err(error) if explicitly_requested => return Err(error.into()),
+            Err(error) => acquisition_error = Some(CliError::from(error)),
+        }
+    }
+
+    if let Some(binary) = resolve_hogd_dev_binary_on_path() {
+        options.hogd_dev_binary = Some(binary);
+        return Ok(options);
+    }
+    if options.offline {
+        return Err(CliError::ToolchainOfflineMissing {
+            version,
+            target: target.triple().to_string(),
+        });
+    }
+    if let Some(error) = acquisition_error {
+        return Err(error);
+    }
+    Err(map_node_supervisor_error(
+        &groundhog_node_supervisor::NodeSupervisorError::HogdDevNotFound,
+    ))
 }
 
 fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBuf> {
@@ -990,6 +1149,8 @@ mod tests {
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
             contract_artifact_directories: vec![PathBuf::from("/tmp/contracts")],
+            hogd_dev_version: None,
+            offline: false,
             data_dir: Some(PathBuf::from("/tmp/hog-devnode-data")),
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),

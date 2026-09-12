@@ -35,6 +35,7 @@ pub use groundhog_tx_validation::{ConfigParamName, UnknownConfigParamName};
 pub use hogd_dev::{
     DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HogdDevEndpoints, HogdDevProcess,
     HogdDevReadiness, build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
+    resolve_hogd_dev_binary_before_path, resolve_hogd_dev_binary_on_path,
 };
 pub use process::{ChildProcessSpec, ChildSupervisor, SupervisedChild};
 pub use server::{BackendPlanes, NodeSupervisorHandle, PlaneStatus, SupervisorStop};

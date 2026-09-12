@@ -713,12 +713,27 @@ fn append_network_config_overrides(
 
 /// Resolve the devnode binary path using the v1 lookup order.
 pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSupervisorError> {
+    if let Some(binary) = resolve_hogd_dev_binary_before_path(config)? {
+        return Ok(binary);
+    }
+
+    resolve_hogd_dev_binary_on_path().ok_or(NodeSupervisorError::HogdDevNotFound)
+}
+
+/// Resolve configured, environment, or sibling binaries without consulting `PATH`.
+///
+/// Node-start orchestration uses this boundary to insert managed-toolchain acquisition
+/// ahead of the final `PATH` lookup. This function performs no downloads or filesystem
+/// mutations.
+pub fn resolve_hogd_dev_binary_before_path(
+    config: &HogdDevConfig,
+) -> Result<Option<PathBuf>, NodeSupervisorError> {
     if let Some(binary_path) = &config.binary_path {
-        return validate_configured_binary(binary_path);
+        return validate_configured_binary(binary_path).map(Some);
     }
 
     if let Some(env_path) = env::var_os(DEVNODE_BINARY_ENV) {
-        return validate_configured_binary(Path::new(&env_path));
+        return validate_configured_binary(Path::new(&env_path)).map(Some);
     }
 
     let current_exe =
@@ -727,23 +742,28 @@ pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSu
         for binary in [DEFAULT_HOGD_DEV_BINARY, LEGACY_HOGD_DEV_BINARY] {
             let sibling = parent.join(binary);
             if is_executable_file(&sibling) {
-                return Ok(sibling);
+                return Ok(Some(sibling));
             }
         }
     }
 
+    Ok(None)
+}
+
+/// Resolve the canonical or legacy devnode binary from `PATH` only.
+pub fn resolve_hogd_dev_binary_on_path() -> Option<PathBuf> {
     if let Some(path) = env::var_os("PATH") {
         for dir in env::split_paths(&path) {
             for binary in [DEFAULT_HOGD_DEV_BINARY, LEGACY_HOGD_DEV_BINARY] {
                 let candidate = dir.join(binary);
                 if is_executable_file(&candidate) {
-                    return Ok(candidate);
+                    return Some(candidate);
                 }
             }
         }
     }
 
-    Err(NodeSupervisorError::HogdDevNotFound)
+    None
 }
 
 /// Parse one hog-devnode readiness line.
@@ -1787,8 +1807,9 @@ mod tests {
         DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
         PERSISTENT_PID_FILE_NAME, RuntimeManifestChainState, build_hogd_dev_spec,
         build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
-        prepare_persistent_data_dir, resolve_hogd_dev_binary, validate_dev_accounts,
-        validate_runtime_identity, write_bootstrap_manifest,
+        prepare_persistent_data_dir, resolve_hogd_dev_binary, resolve_hogd_dev_binary_before_path,
+        resolve_hogd_dev_binary_on_path, validate_dev_accounts, validate_runtime_identity,
+        write_bootstrap_manifest,
     };
     use crate::{
         ConfigParamName, HogdDevConfig, NodeSupervisorError,
@@ -3377,6 +3398,22 @@ mod tests {
                 .expect("bug: PATH binary should resolve"),
             path
         );
+    }
+
+    #[test]
+    #[serial]
+    fn pre_path_resolution_leaves_path_for_managed_orchestration() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
+        let _new_env_guard = EnvGuard::remove(DEVNODE_BINARY_ENV);
+        let _path_guard = EnvGuard::set("PATH", tmp.path());
+
+        assert_eq!(
+            resolve_hogd_dev_binary_before_path(&HogdDevConfig::default())
+                .expect("bug: local resolution should succeed"),
+            None
+        );
+        assert_eq!(resolve_hogd_dev_binary_on_path(), Some(path));
     }
 
     #[test]

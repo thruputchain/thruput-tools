@@ -47,6 +47,10 @@ pub struct IntegrationTestOptions {
     /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
     /// environment variable.
     pub hogd_protocol: Option<String>,
+    /// Exact managed hog-devnode version requested for the ephemeral node.
+    pub hog_devnode_version: Option<String>,
+    /// Forbid managed network acquisition for the ephemeral node.
+    pub offline: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
     /// running the ephemeral integration node.
     pub verbose: bool,
@@ -264,13 +268,16 @@ fn run_integration_with_dev_node(
         build.artifact.kind
     ));
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let started = rt.block_on(crate::node::start_local_node(
+    let started = rt.block_on(crate::node::start_local_node_with_print(
         crate::node::LocalNodeOptions {
             port: 0,
             pid_file: crate::node::LocalNodePidFile::Disabled,
             hogd_protocol,
+            hogd_dev_version: integration.hog_devnode_version.clone(),
+            offline: integration.offline,
             ..crate::node::LocalNodeOptions::default()
         },
+        print,
     ))?;
 
     let rpc_url = started.rpc_url();

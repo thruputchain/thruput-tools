@@ -428,6 +428,18 @@ pub enum CliError {
         /// The bound the transaction breaks.
         detail: TxInvalidDetail,
     },
+    #[error("toolchain catalog error: {0}")]
+    ToolchainCatalog(#[from] groundhog_toolchain::CatalogError),
+    #[error("toolchain installation error: {0}")]
+    ToolchainInstall(#[from] groundhog_toolchain::InstallError),
+    #[error("toolchain source error: {0}")]
+    ToolchainSource(#[from] groundhog_toolchain::SourceError),
+    #[error(
+        "hog-devnode {version} for {target} is not installed and offline mode forbids downloading it"
+    )]
+    ToolchainOfflineMissing { version: String, target: String },
+    #[error("hog-devnode {version} for {target} is not installed")]
+    ToolchainNotInstalled { version: String, target: String },
     #[error("{0}")]
     Other(String),
 }
@@ -557,6 +569,11 @@ impl CliError {
             Self::TransactionRejectedBeforeSubmission { .. } => {
                 "transaction_rejected_before_submission"
             }
+            Self::ToolchainCatalog(_) => "toolchain_catalog_error",
+            Self::ToolchainInstall(_) => "toolchain_install_error",
+            Self::ToolchainSource(_) => "toolchain_source_error",
+            Self::ToolchainOfflineMissing { .. } => "toolchain_offline_missing",
+            Self::ToolchainNotInstalled { .. } => "toolchain_not_installed",
             Self::Other(_) => "other",
         }
     }
@@ -879,6 +896,19 @@ impl CliError {
                     }
                 }))
             }
+            Self::ToolchainCatalog(_) => Some(Cow::Borrowed(
+                "use a hog-devnode version and target present in this groundhog release's embedded catalog",
+            )),
+            Self::ToolchainInstall(_) | Self::ToolchainSource(_) => Some(Cow::Borrowed(
+                "check the artifact source and cache permissions, then retry `groundhog toolchain install`",
+            )),
+            Self::ToolchainOfflineMissing { .. } => Some(Cow::Borrowed(
+                "rerun `groundhog toolchain install` without offline mode, or set GROUNDHOG_DEVNODE_BINARY to a local build",
+            )),
+            Self::ToolchainNotInstalled { version, .. } => Some(Cow::Owned(format!(
+                "run `groundhog toolchain install {}` first",
+                render_shell_arg(version),
+            ))),
             // The version-skew message states the fix for its direction.
             Self::RawSpecFormat(_)
             | Self::Docs(_)
@@ -1044,6 +1074,11 @@ impl CliError {
             Self::ConfigValueInvalid { field, message } => Some(json!({
                 "field": field,
                 "message": message,
+            })),
+            Self::ToolchainOfflineMissing { version, target }
+            | Self::ToolchainNotInstalled { version, target } => Some(json!({
+                "version": version,
+                "target": target,
             })),
             Self::ProfileNotFoundInScope { profile, scope }
             | Self::ProfileAlreadyExists { profile, scope } => Some(json!({

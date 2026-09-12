@@ -25,6 +25,12 @@ pub struct LocalRuntimeState {
     pub runtime_artifacts_dir: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct ToolchainConfig {
+    #[serde(default)]
+    hog_devnode_version: Option<String>,
+}
+
 /// Internal representation of `config.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct GlobalConfigFile {
@@ -35,6 +41,8 @@ pub(crate) struct GlobalConfigFile {
     pub(crate) profile: BTreeMap<String, ProjectProfile>,
     #[serde(default)]
     pub(crate) local_runtime_state: Option<LocalRuntimeState>,
+    #[serde(default)]
+    toolchain: ToolchainConfig,
 }
 
 fn transact_config_file(
@@ -112,6 +120,28 @@ pub fn clear_default_key() -> Result<(), CliError> {
         Ok(())
     })?;
     Ok(())
+}
+
+/// Save the exact globally selected managed `hog-devnode` version.
+pub fn save_toolchain_version(version: &str) -> Result<bool, CliError> {
+    transact_config_file(|document, _| {
+        let toolchain = root_table(document, "toolchain", "toolchain must be a table")?
+            .as_table_like_mut()
+            .ok_or_else(|| CliError::Other("toolchain must be a table".into()))?;
+        insert_preserving_decor(toolchain, "hog_devnode_version", value(version));
+        Ok(())
+    })
+}
+
+/// Load the globally selected managed `hog-devnode` version.
+pub fn load_toolchain_version() -> Result<Option<String>, CliError> {
+    Ok(
+        load_global_field::<ToolchainConfig>("toolchain")?.and_then(|config| {
+            config
+                .hog_devnode_version
+                .filter(|version| !version.trim().is_empty())
+        }),
+    )
 }
 
 /// Initialize global profile defaults without overwriting existing user config.

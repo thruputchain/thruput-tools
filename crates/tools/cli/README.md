@@ -466,6 +466,52 @@ line is resolved from the invocation directory and wins over
 `GROUNDHOG_RUNTIME_MANIFEST`; the environment override still wins over
 `groundhog.toml` profile settings.
 
+### `groundhog toolchain`
+
+Manage the `hog-devnode` bundle used by local node startup. The bundle contains
+`hog-devnode`, `contracts/dev_wallet.rv32a`, `contracts/genesis_root.rv32a`, and
+its platform runtime libraries. This manages devnode bundles, not Rust or the
+CLI executable itself.
+
+```bash
+groundhog toolchain list
+groundhog toolchain install                 # prefetch the selected/default bundle
+groundhog toolchain use <exact-version>     # select a catalog version, without downloading
+groundhog toolchain which                   # print the installed executable path
+groundhog toolchain clean <exact-version>   # remove its cached bundle
+groundhog --offline node                    # use local binaries/cache only
+```
+
+Each CLI embeds a reviewed catalog and one exact default. Only catalog-listed
+versions can be installed or selected; upgrading the CLI supplies new catalog
+entries. `list` reports availability in this catalog, not remote releases.
+`clean` also accepts retired versions absent from the current catalog. A stale
+saved selection remains visible in `list` and can be replaced with `use`.
+`clean` leaves the selection intact; a later online startup can install it again.
+
+Without an explicit version, startup checks the explicit binary option,
+`GROUNDHOG_DEVNODE_BINARY`, and sibling binaries before the managed cache; it
+acquires the selected/default bundle when missing. With no saved selection,
+PATH is the final fallback if acquisition is unavailable. A saved selection
+never silently falls back to a different PATH version. An invocation with
+`--hog-devnode-version <exact-version>` selects that managed version ahead of
+environment/sibling binaries and fails if it cannot resolve it. It conflicts
+with `--hog-devnode-binary`.
+
+`--offline` and `GROUNDHOG_OFFLINE=1` disable **managed bundle downloads**. They
+do not disable RPC or Cargo traffic from other commands. `status`, `list`,
+`which`, `use`, and `clean` never download. A mirror can be selected with
+`GROUNDHOG_TOOLCHAIN_BASE_URL`; the embedded sizes and SHA-256 digests remain
+authoritative. Downloads are verified before constrained extraction and atomic
+installation under `~/.cache/groundhog/toolchain/hog-devnode/` (or the XDG cache
+root). Cache reuse checks completion metadata and required files; it does not
+rehash installed contents. Installs and cleanup share a per-version/target lock.
+
+All toolchain commands support `--json` with `data.schemaVersion`. `path` is
+the executable path, and `active` means the managed selection (explicit local
+binary overrides can still take precedence). Cleanup of a retired version
+omits `sha256` because the current catalog has no trusted digest for it.
+
 ### `groundhog node`
 
 Start the local development node backed by a supervised

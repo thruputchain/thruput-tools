@@ -1,0 +1,314 @@
+use std::path::PathBuf;
+
+use groundhog_toolchain::{
+    Catalog, DEFAULT_PUBLIC_ARTIFACT_BASE_URL, HostTarget, HttpSource, Installer,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{cache_dir, load_toolchain_version, save_toolchain_version};
+use crate::result::CommandResult;
+use crate::{CliError, Print};
+
+pub const TOOLCHAIN_JSON_SCHEMA_VERSION: u32 = 1;
+pub const TOOLCHAIN_BASE_URL_ENV: &str = "GROUNDHOG_TOOLCHAIN_BASE_URL";
+
+/// Origin represented by one toolchain command result.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolchainSourceKind {
+    Catalog,
+    PublicArtifact,
+    ManagedCache,
+}
+
+/// Stable JSON row describing one exact managed bundle.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolchainEntry {
+    pub version: String,
+    pub target: String,
+    pub source_kind: ToolchainSourceKind,
+    pub path: PathBuf,
+    pub sha256: String,
+    pub active: bool,
+    pub installed: bool,
+}
+
+/// Stable JSON data for `groundhog toolchain list`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolchainListReport {
+    pub schema_version: u32,
+    pub default_version: String,
+    pub selected_version: String,
+    pub target: String,
+    pub toolchains: Vec<ToolchainEntry>,
+}
+
+/// Stable JSON data for a toolchain state-changing or lookup command.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolchainActionReport {
+    pub schema_version: u32,
+    pub version: String,
+    pub target: String,
+    pub source_kind: ToolchainSourceKind,
+    pub path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    pub active: bool,
+    pub installed: bool,
+    pub changed: bool,
+}
+
+pub fn install(
+    requested: Option<&str>,
+    offline: bool,
+    command: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let context = Context::load(requested)?;
+    context.catalog.artifact(&context.version, context.target)?;
+    let installer = Installer::new(cache_dir()?);
+    if offline {
+        let installation = installer.find(&context.catalog, &context.version, context.target)?;
+        let Some(installation) = installation else {
+            return Err(CliError::ToolchainOfflineMissing {
+                version: context.version,
+                target: context.target.triple().to_string(),
+            });
+        };
+        return emit_action(
+            command,
+            print,
+            context.report(
+                installation.binary_path(),
+                ToolchainSourceKind::ManagedCache,
+                true,
+                false,
+            )?,
+        );
+    }
+
+    let source = HttpSource::new(artifact_base_url())?;
+    print.status(format_args!(
+        "Installing hog-devnode {} for {}",
+        context.version, context.target
+    ));
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let installation = runtime.block_on(installer.install(
+        &context.catalog,
+        &context.version,
+        context.target,
+        &source,
+    ))?;
+    let source_kind = if installation.installed_now() {
+        ToolchainSourceKind::PublicArtifact
+    } else {
+        ToolchainSourceKind::ManagedCache
+    };
+    let report = context.report(
+        installation.binary_path(),
+        source_kind,
+        true,
+        installation.installed_now(),
+    )?;
+    emit_action(command, print, report)
+}
+
+pub fn list(command: &'static str, print: &Print) -> Result<(), CliError> {
+    let context = Context::load(None)?;
+    let installer = Installer::new(cache_dir()?);
+    let mut toolchains = Vec::new();
+    for (version, artifact) in context.catalog.artifacts_for_target(context.target) {
+        let is_installed = installer
+            .find(&context.catalog, version, context.target)?
+            .is_some();
+        toolchains.push(ToolchainEntry {
+            version: version.to_string(),
+            target: context.target.triple().to_string(),
+            source_kind: if is_installed {
+                ToolchainSourceKind::ManagedCache
+            } else {
+                ToolchainSourceKind::Catalog
+            },
+            path: installer
+                .installation_path(version, context.target)
+                .join("hog-devnode"),
+            sha256: artifact.sha256().to_string(),
+            active: version == context.active_version,
+            installed: is_installed,
+        });
+    }
+    let report = ToolchainListReport {
+        schema_version: TOOLCHAIN_JSON_SCHEMA_VERSION,
+        default_version: context.catalog.default_version().to_string(),
+        selected_version: context.active_version,
+        target: context.target.triple().to_string(),
+        toolchains,
+    };
+    if print.is_json() {
+        print.json(&CommandResult::new(command, report))
+    } else {
+        if !report.toolchains.iter().any(|entry| entry.active) {
+            print.warn(format_args!("Selected hog-devnode {} is absent from this catalog; run `groundhog toolchain use {}` to select its default", report.selected_version, report.default_version));
+        }
+        for entry in &report.toolchains {
+            let active = if entry.active { " (active)" } else { "" };
+            let state = if entry.installed {
+                "installed"
+            } else {
+                "available"
+            };
+            print.data_line(format_args!("{}{} — {state}", entry.version, active))?;
+        }
+        Ok(())
+    }
+}
+
+pub fn use_version(version: &str, command: &'static str, print: &Print) -> Result<(), CliError> {
+    let mut context = Context::load(Some(version))?;
+    context.catalog.artifact(&context.version, context.target)?;
+    let installer = Installer::new(cache_dir()?);
+    let is_installed = installer
+        .find(&context.catalog, &context.version, context.target)?
+        .is_some();
+    let changed = save_toolchain_version(&context.version)?;
+    context.active_version.clone_from(&context.version);
+    let report = context.report(
+        installer
+            .installation_path(&context.version, context.target)
+            .join("hog-devnode"),
+        if is_installed {
+            ToolchainSourceKind::ManagedCache
+        } else {
+            ToolchainSourceKind::Catalog
+        },
+        is_installed,
+        changed,
+    )?;
+    emit_action(command, print, report)
+}
+
+pub fn which(command: &'static str, print: &Print) -> Result<(), CliError> {
+    let context = Context::load(None)?;
+    context.catalog.artifact(&context.version, context.target)?;
+    let installer = Installer::new(cache_dir()?);
+    let installation = installer
+        .find(&context.catalog, &context.version, context.target)?
+        .ok_or_else(|| CliError::ToolchainNotInstalled {
+            version: context.version.clone(),
+            target: context.target.triple().to_string(),
+        })?;
+    let report = context.report(
+        installation.binary_path(),
+        ToolchainSourceKind::ManagedCache,
+        true,
+        false,
+    )?;
+    if print.is_json() {
+        print.json(&CommandResult::new(command, report))
+    } else {
+        print.data_line(report.path.display())
+    }
+}
+
+pub fn clean(
+    requested: Option<&str>,
+    command: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let context = Context::load(requested)?;
+    let installer = Installer::new(cache_dir()?);
+    let path = installer.installation_path(&context.version, context.target);
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let changed = runtime.block_on(installer.clean(&context.version, context.target))?;
+    let report = ToolchainActionReport {
+        schema_version: TOOLCHAIN_JSON_SCHEMA_VERSION,
+        sha256: context
+            .catalog
+            .artifact(&context.version, context.target)
+            .ok()
+            .map(|a| a.sha256().to_string()),
+        active: context.version == context.active_version,
+        version: context.version,
+        target: context.target.triple().to_string(),
+        source_kind: ToolchainSourceKind::ManagedCache,
+        path: path.join("hog-devnode"),
+        installed: false,
+        changed,
+    };
+    emit_action(command, print, report)
+}
+
+struct Context {
+    catalog: Catalog,
+    version: String,
+    active_version: String,
+    target: HostTarget,
+}
+
+impl Context {
+    fn load(requested: Option<&str>) -> Result<Self, CliError> {
+        let catalog = Catalog::embedded()?;
+        let configured = load_toolchain_version()?;
+        let active_version = configured.unwrap_or_else(|| catalog.default_version().to_string());
+        let version = requested.unwrap_or(&active_version).to_string();
+        let target = HostTarget::current()?;
+        Ok(Self {
+            catalog,
+            version,
+            active_version,
+            target,
+        })
+    }
+
+    fn report(
+        &self,
+        path: PathBuf,
+        source_kind: ToolchainSourceKind,
+        installed: bool,
+        changed: bool,
+    ) -> Result<ToolchainActionReport, CliError> {
+        let artifact = self.catalog.artifact(&self.version, self.target)?;
+        Ok(ToolchainActionReport {
+            schema_version: TOOLCHAIN_JSON_SCHEMA_VERSION,
+            version: self.version.clone(),
+            target: self.target.triple().to_string(),
+            source_kind,
+            path,
+            sha256: Some(artifact.sha256().to_string()),
+            active: self.version == self.active_version,
+            installed,
+            changed,
+        })
+    }
+}
+
+fn emit_action(
+    command: &'static str,
+    print: &Print,
+    report: ToolchainActionReport,
+) -> Result<(), CliError> {
+    if print.is_json() {
+        print.json(&CommandResult::new(command, report))
+    } else {
+        print.summary_card(
+            "hog-devnode toolchain",
+            &[
+                ("Version".to_string(), report.version),
+                ("Target".to_string(), report.target),
+                ("Path".to_string(), report.path.display().to_string()),
+            ],
+        );
+        Ok(())
+    }
+}
+
+pub(crate) fn artifact_base_url() -> String {
+    std::env::var(TOOLCHAIN_BASE_URL_ENV)
+        .unwrap_or_else(|_| DEFAULT_PUBLIC_ARTIFACT_BASE_URL.to_string())
+}

@@ -19,6 +19,7 @@ struct Cli {
 }
 
 #[derive(Parser)]
+#[allow(clippy::struct_excessive_bools)]
 struct GlobalArgs {
     /// Suppress status messages
     #[arg(long, short, global = true)]
@@ -29,6 +30,9 @@ struct GlobalArgs {
     /// Print each cargo command to stderr before running it
     #[arg(long, global = true)]
     show_cargo_commands: bool,
+    /// Forbid managed toolchain downloads; use locally available binaries
+    #[arg(long, global = true)]
+    offline: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -135,6 +139,11 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Install and manage verified hog-devnode bundles
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
                       riscv32im-unknown-none-elf via cargo, then lower the ELF \
@@ -221,6 +230,9 @@ enum Command {
         /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
         #[arg(long = "hogd-protocol", requires = "integration")]
         hogd_protocol: Option<String>,
+        /// Use one exact managed hog-devnode version for the integration node
+        #[arg(long, requires = "integration")]
+        hog_devnode_version: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -395,7 +407,7 @@ enum Command {
     #[command(
         long_about = "Start a local development node \
                       backed by a supervised hog-devnode process.",
-        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {
         /// Host/interface for the public JSON-RPC listener
@@ -419,6 +431,9 @@ enum Command {
         /// Contract artifact directory passed to hog-devnode; may be repeated
         #[arg(long = "contract-artifacts-dir", value_name = "DIR")]
         contract_artifact_directories: Vec<PathBuf>,
+        /// Use one exact managed hog-devnode version for this invocation
+        #[arg(long, conflicts_with = "hogd_dev_binary")]
+        hog_devnode_version: Option<String>,
         /// Directory for persistent hog-devnode state; omit for an ephemeral node
         #[arg(long, value_name = "DIR")]
         data_dir: Option<PathBuf>,
@@ -662,6 +677,29 @@ enum ConfigCommand {
         #[arg(long)]
         project: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ToolchainCommand {
+    /// Install an exact catalog version for this host
+    Install {
+        /// Exact hog-devnode version; defaults to the active selection
+        version: Option<String>,
+    },
+    /// List catalog versions and local installation state
+    List,
+    /// Select an exact catalog version globally
+    Use {
+        /// Exact hog-devnode version
+        version: String,
+    },
+    /// Remove one version for this host under the installation lock
+    Clean {
+        /// Exact hog-devnode version; defaults to the active selection
+        version: Option<String>,
+    },
+    /// Print the active installed hog-devnode path without downloading
+    Which,
 }
 
 #[derive(Subcommand)]
@@ -929,6 +967,18 @@ impl ConfigCommand {
     }
 }
 
+impl ToolchainCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Install { .. } => "toolchain.install",
+            Self::List => "toolchain.list",
+            Self::Use { .. } => "toolchain.use",
+            Self::Clean { .. } => "toolchain.clean",
+            Self::Which => "toolchain.which",
+        }
+    }
+}
+
 impl Command {
     /// Canonical command name for JSON envelopes.
     ///
@@ -952,6 +1002,7 @@ impl Command {
             Self::Docs { .. } => "docs",
             Self::Chain { command } => command.command_name(),
             Self::Config { command } => command.command_name(),
+            Self::Toolchain { command } => command.command_name(),
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
@@ -1049,6 +1100,8 @@ fn main() {
     };
     let print = Print::new(cli.global.quiet, cli.global.json)
         .with_command_trace(cli.global.show_cargo_commands);
+    let offline =
+        cli.global.offline || std::env::var("GROUNDHOG_OFFLINE").is_ok_and(|value| value == "1");
     let cmd_name = cli.command.command_name();
 
     let result = match cli.command {
@@ -1142,6 +1195,19 @@ fn main() {
                     &cwd, &profile, global, project, cmd_name, &print,
                 ),
             }),
+        Command::Toolchain { command } => match command {
+            ToolchainCommand::Install { version } => {
+                groundhog_cli::toolchain_cmd::install(version.as_deref(), offline, cmd_name, &print)
+            }
+            ToolchainCommand::List => groundhog_cli::toolchain_cmd::list(cmd_name, &print),
+            ToolchainCommand::Use { version } => {
+                groundhog_cli::toolchain_cmd::use_version(&version, cmd_name, &print)
+            }
+            ToolchainCommand::Clean { version } => {
+                groundhog_cli::toolchain_cmd::clean(version.as_deref(), cmd_name, &print)
+            }
+            ToolchainCommand::Which => groundhog_cli::toolchain_cmd::which(cmd_name, &print),
+        },
         Command::Build {
             package,
             bindings,
@@ -1179,6 +1245,7 @@ fn main() {
             integration,
             verbose,
             hogd_protocol,
+            hog_devnode_version,
             profile,
             artifacts,
             cargo_args,
@@ -1207,6 +1274,8 @@ fn main() {
                         &options,
                         &groundhog_cli::test_cmd::IntegrationTestOptions {
                             hogd_protocol,
+                            hog_devnode_version,
+                            offline,
                             verbose,
                         },
                         &cargo_args,
@@ -1403,6 +1472,7 @@ fn main() {
             dev_account_hog,
             hogd_dev_binary,
             contract_artifact_directories,
+            hog_devnode_version,
             data_dir,
             hogd_protocol,
             startup_timeout_secs,
@@ -1418,6 +1488,8 @@ fn main() {
             options.port = port;
             options.hogd_dev_binary = hogd_dev_binary;
             options.contract_artifact_directories = contract_artifact_directories;
+            options.hogd_dev_version = hog_devnode_version;
+            options.offline = offline;
             options.data_dir = data_dir;
             options.hogd_protocol = hogd_protocol;
             options.startup_timeout = startup_timeout_secs.map(std::time::Duration::from_secs);
