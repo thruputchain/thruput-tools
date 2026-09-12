@@ -415,6 +415,9 @@ pub struct HogdDevConfig {
     ///
     /// When unset, hog-devnode uses its built-in default capacity.
     pub ramdb_bytes: Option<u64>,
+    /// Genesis execution parameter overrides forwarded to hog-devnode.
+    /// The child rejects unknown names and values outside its build ceilings.
+    pub network_config_overrides: std::collections::BTreeMap<String, u32>,
     /// PID file used to detect and clean up orphaned hogd-dev children.
     pub pid_file: Option<PathBuf>,
 }
@@ -433,12 +436,23 @@ impl Default for HogdDevConfig {
             dev_account_seed: DEFAULT_HOGD_DEV_ACCOUNT_SEED.to_string(),
             dev_account_tokens: DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
             ramdb_bytes: None,
+            network_config_overrides: std::collections::BTreeMap::new(),
             pid_file: None,
         }
     }
 }
 
 impl HogdDevConfig {
+    /// Return a copy with genesis network parameter overrides.
+    #[must_use]
+    pub fn with_network_config_overrides(
+        mut self,
+        overrides: std::collections::BTreeMap<String, u32>,
+    ) -> Self {
+        self.network_config_overrides = overrides;
+        self
+    }
+
     /// Return a copy with an explicit hogd-dev binary path.
     #[must_use]
     pub fn with_binary_path(mut self, binary_path: impl Into<PathBuf>) -> Self {

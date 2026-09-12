@@ -277,6 +277,10 @@ enum Command {
         /// Resolve, encode, and sign the transaction without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Gas budget for the transaction and its inner contract invocation
+        #[arg(long, default_value_t = groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+              value_parser = clap::value_parser!(u64).range(1..))]
+        gas_limit: u64,
         /// Saved wallet to call from
         #[arg(long)]
         wallet: Option<String>,
@@ -440,6 +444,11 @@ enum Command {
         /// suffix such as 2G); omit for the devnode default
         #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
         ramdb_bytes: Option<u64>,
+        /// Override a genesis network parameter (repeatable; decimal, hex, or K/M/G values).
+        /// Existing data directories must use the same overrides they were created with.
+        #[arg(long = "network-config", value_name = "NAME=VALUE",
+              value_parser = groundhog_cli::node::parse_network_config_override)]
+        network_config: Vec<(String, u32)>,
     },
     /// Dump or restore persistent local-chain state
     Chain {
@@ -1254,6 +1263,7 @@ fn main() {
             args,
             package,
             dry_run,
+            gas_limit,
             wallet,
             profile,
             target_args,
@@ -1272,6 +1282,7 @@ fn main() {
                     &args,
                     package.as_deref(),
                     dry_run,
+                    gas_limit,
                     confirmation.force,
                     wallet.as_deref(),
                     &artifacts,
@@ -1399,6 +1410,7 @@ fn main() {
             rpc_max_connections,
             rpc_batch_concurrency,
             ramdb_bytes,
+            network_config,
         } => {
             let mut options = groundhog_cli::node::LocalNodeOptions::default();
             options.host = Some(host);
@@ -1415,6 +1427,7 @@ fn main() {
             options.rpc_max_connections = rpc_max_connections;
             options.rpc_batch_concurrency = rpc_batch_concurrency;
             options.ramdb_bytes = ramdb_bytes;
+            options.network_config_overrides = network_config;
             options.bundle_identity = Some(bundle_identity.clone());
             groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
         }
@@ -1964,6 +1977,64 @@ mod tests {
             ),
             _ => panic!("expected node command"),
         }
+    }
+
+    #[test]
+    fn call_gas_limit_accepts_override_and_preserves_default() {
+        for (extra, expected) in [
+            (vec![], groundhog_signing::DEFAULT_TX_GAS_LIMIT),
+            (vec!["--gas-limit", "200000000"], 200_000_000),
+        ] {
+            let mut args = vec!["groundhog", "call", "counter", "increment"];
+            args.extend(extra);
+            match Cli::parse_from(args).command {
+                Command::Call { gas_limit, .. } => assert_eq!(gas_limit, expected),
+                _ => panic!("expected call command"),
+            }
+        }
+        assert!(
+            Cli::try_parse_from([
+                "groundhog",
+                "call",
+                "counter",
+                "increment",
+                "--gas-limit",
+                "0"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn node_network_config_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "groundhog",
+            "node",
+            "--network-config",
+            "max_rv32_memory_bytes=16M",
+            "--network-config",
+            "max_bytestring_len=32K",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Node { network_config, .. } => assert_eq!(
+                network_config,
+                [
+                    ("max_rv32_memory_bytes".into(), 16_777_216),
+                    ("max_bytestring_len".into(), 32_768),
+                ]
+            ),
+            _ => panic!("expected node"),
+        }
+        assert!(
+            Cli::try_parse_from([
+                "groundhog",
+                "node",
+                "--network-config",
+                "max_rv32_memory_bytes=4G",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

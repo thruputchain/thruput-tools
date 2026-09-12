@@ -106,6 +106,28 @@ For CLI commands that sign or simulate as `dev-N`, use a profile with
 `network = "local"` while `groundhog node` is running, or set
 `GROUNDHOG_RUNTIME_MANIFEST` explicitly for scripts outside the project tree.
 
+## Local network limits
+
+Override local genesis parameters with repeatable `--network-config NAME=VALUE`:
+
+```bash
+groundhog node \
+  --network-config max_rv32_code_bytes=1M \
+  --network-config max_rv32_memory_bytes=16M \
+  --network-config max_contract_size_bytes=1M \
+  --network-config max_bytestring_len=32K
+```
+
+Values accept decimal, hexadecimal, and binary K/M/G suffixes (1M = 1,048,576).
+Overrides require a `hog-devnode` build with the matching flag. Unknown parameter
+names, duplicate names, and values beyond the node's compiled ceilings are
+rejected. These settings affect genesis; when using `--data-dir`, supply the
+same overrides on every restart or choose a fresh directory.
+
+`groundhog call --gas-limit 200000000` sets the total transaction gas budget
+and the requested inner invocation budget; the inner call remains bounded by
+the transaction's remaining gas. The default is still 10,000,000.
+
 ## Using cargo directly
 
 Scaffolded projects build for the host with plain `cargo`: the `sdk`
@@ -697,3 +719,4 @@ This is a root-only, exclusive mode rather than a global flag; invoke it exactly
 as shown. The command prints the complete Groundhog skill as Markdown without
 network access or filesystem changes. An agent can read it directly, or the
 user can save and install it using the agent's normal skill workflow.
+

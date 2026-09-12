@@ -612,6 +612,12 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
         .stderr_piped();
 
     spec = append_contract_artifact_directories(spec, &config.contract_artifact_directories);
+    for (name, value) in &config.network_config_overrides {
+        spec = spec.args([
+            OsString::from("--network-config"),
+            OsString::from(format!("{name}={value}")),
+        ]);
+    }
 
     if let Some(data_dir) = &config.data_dir {
         spec = spec.args([
@@ -653,6 +659,12 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
         .stderr_piped();
 
     spec = append_contract_artifact_directories(spec, &config.contract_artifact_directories);
+    for (name, value) in &config.network_config_overrides {
+        spec = spec.args([
+            OsString::from("--network-config"),
+            OsString::from(format!("{name}={value}")),
+        ]);
+    }
 
     if let Some(log_level) = config.log_level {
         spec = spec.args([
@@ -1816,6 +1828,37 @@ mod tests {
             spec.program_envs(),
             &[(OsString::from(HOGD_LOG_FORMAT_ENV), OsString::from("json"))]
         );
+    }
+
+    #[test]
+    fn network_config_overrides_are_forwarded_in_both_launch_paths() {
+        let config = HogdDevConfig::default().with_network_config_overrides(
+            [
+                ("max_rv32_memory_bytes".into(), 16_777_216),
+                ("max_bytestring_len".into(), 32_768),
+            ]
+            .into(),
+        );
+        let specs = [
+            build_hogd_dev_spec_with_bootstrap_manifest(
+                "/tmp/hog-devnode",
+                &config,
+                "/tmp/bootstrap.json",
+            ),
+            build_hogd_dev_spec("/tmp/hog-devnode", &config),
+        ];
+        for spec in specs {
+            let forwarded: Vec<_> = spec
+                .program_args()
+                .windows(2)
+                .filter(|pair| pair[0] == "--network-config")
+                .map(|pair| pair[1].to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(
+                forwarded,
+                ["max_bytestring_len=32768", "max_rv32_memory_bytes=16777216"]
+            );
+        }
     }
 
     #[test]

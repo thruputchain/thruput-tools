@@ -7807,6 +7807,8 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             "--json",
             "call",
             "--dry-run",
+            "--gas-limit",
+            "200000000",
             "--wallet",
             "trading",
             &contract,
@@ -7852,6 +7854,15 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             .starts_with("0x")
     );
     let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
+    assert_eq!(signed_tx.tx.invocation.gas_limit, 200_000_000);
+    let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
+    let (_, _, target_gas, _): (
+        groundhog_xdr::types::ContractAddress,
+        groundhog_xdr::contract::ContractEntrypointID,
+        u64,
+        Vec<u8>,
+    ) = xdrs::txs::decode(&inner).unwrap();
+    assert_eq!(target_gas, 200_000_000);
     assert_eq!(
         format!(
             "0x{}",
