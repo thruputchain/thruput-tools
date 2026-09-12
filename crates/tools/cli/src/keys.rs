@@ -288,7 +288,7 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         signing_key.verifying_key_bytes()
     };
 
-    let address = derive_pubkey_account_address(public_key)?;
+    let address = derive_pubkey_account_address(public_key);
     let default_key = crate::config::load_default_key()?;
 
     Ok(KeyInfo {
@@ -371,13 +371,12 @@ fn key_path(name: &str) -> Result<PathBuf, CliError> {
     Ok(crate::config::keys_dir()?.join(format!("{name}.json")))
 }
 
-fn derive_pubkey_account_address(public_key: [u8; 32]) -> Result<[u8; 32], CliError> {
-    let address = PubkeyAccount::from_public_key_bytes(public_key, DEFAULT_PUBKEY_ACCOUNT_NONCE)
-        .address()
-        .map_err(|error| signing_error(&error))?;
+fn derive_pubkey_account_address(public_key: [u8; 32]) -> [u8; 32] {
+    let address =
+        PubkeyAccount::from_public_key_bytes(public_key, DEFAULT_PUBKEY_ACCOUNT_NONCE).address();
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(address.as_ref());
-    Ok(bytes)
+    bytes
 }
 
 fn parse_hex_32(input: &str) -> Result<[u8; 32], CliError> {

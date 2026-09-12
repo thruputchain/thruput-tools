@@ -273,7 +273,7 @@ async fn invalid_signature_returns_transaction_rejection() {
     let signer = LocalSigner::from_secret_key([0x42; 32]);
     let account = PubkeyAccount::new(signer.public_key(), 0);
     let tx = build_call_transaction(BuildCallTransaction {
-        invoked_address: account.address().unwrap(),
+        invoked_address: account.address(),
         entrypoint: ContractEntrypointID::from([0; 8]),
         calldata: vec![],
         gas_limit: 1_000_000,
