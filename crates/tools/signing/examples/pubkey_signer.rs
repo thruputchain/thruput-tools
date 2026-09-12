@@ -44,11 +44,12 @@ fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
         .ok_or_else(|| invalid("gasLimit must be positive"))?;
     // Pubkey authentication requires the root address to be the derived account.
     // Its native DefaultWallet.execute precompile forwards this one WalletCall.
+    let calldata: BytesM = BytesM(bytes(value, "calldata")?);
     let calls = vec![(
         ContractAddress::from(fixed::<32>(value, "address")?),
         ContractEntrypointID::from(fixed::<8>(value, "entrypoint")?),
         gas_limit,
-        BytesM(bytes(value, "calldata")?),
+        calldata,
     )];
     let execute_id = contract_entrypoint_id(
         Some("DefaultWallet"),
