@@ -478,3 +478,12 @@ pin. The Rust bundle test checks the same pin/content contract and cache recover
 The full documentation set can evolve independently of CLI releases; changing
 what a CLI ships is an explicit selection. A guide version in the manifest does
 not assert that every SDK example or deployed Devnet matches that version.
+
+## AMD server gateway artifact
+
+Linux releases additionally publish
+`hog-gateway-v<VERSION>-x86_64-unknown-linux-gnu-znver5.tar.gz`, covered by the
+release `SHA256SUMS`. This gateway is compiled with `target-cpu=znver5` for
+qualified AMD Zen 5 servers (for example EC2 C8a/M8a). Packaging must select it
+explicitly and validate it on a Zen 5 host before deployment. Portable gateway,
+CLI, faucet, simulator, and macOS artifacts keep their existing CPU targets.
