@@ -3,6 +3,7 @@
 //! Uses the public deterministic dev-1 key. Each request supplies address,
 //! entrypoint, calldata, networkHash, gasLimit, expiryHeight, and nonce.
 //! Output is {"signedTx":"0x..."} or {"error":"..."}; no RPC submission.
+//! The first output line announces {"accountAddress":"0x..."} for funding.
 
 use std::error::Error;
 use std::io::{self, BufRead, Write};
@@ -82,6 +83,10 @@ fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     let signer = derive_dev_account_signer(DEFAULT_DEV_ACCOUNT_SEED, 1);
     let mut output = io::BufWriter::new(io::stdout().lock());
+    let account = PubkeyAccount::new(signer.public_key(), 0);
+    let address = format!("0x{}", hex::encode(account.address()?.as_ref()));
+    writeln!(output, "{}", json!({ "accountAddress": address }))?;
+    output.flush()?;
     for line in io::stdin().lock().lines() {
         let line = line?;
         let result = serde_json::from_str::<Value>(&line)
