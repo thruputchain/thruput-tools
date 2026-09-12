@@ -137,7 +137,7 @@ pub fn lower_with(elf_bytes: &[u8], options: &LowerOptions) -> Result<Lowered> {
     }
     let sections = elf::parse_elf(elf_bytes)?;
     let (code, initial_memory, initial_memory_start) =
-        validate_sections(elf_bytes, &sections, options)?;
+        validate_sections(elf_bytes, &sections, *options)?;
     let mut warnings = check_interface_table(elf_bytes, &sections)?;
     // Not a refusal: the lowerer does not know the target chain, and a chain
     // configured above the protocol default admits this code. The warning
@@ -249,7 +249,7 @@ fn unique_text(sections: &[Section]) -> Result<&Section> {
 fn validate_sections(
     data: &[u8],
     sections: &[Section],
-    options: &LowerOptions,
+    options: LowerOptions,
 ) -> Result<(Vec<u8>, Vec<u8>, usize)> {
     let text = unique_text(sections)?;
     if !text.is_exec() || !text.is_alloc() {
