@@ -11,8 +11,8 @@ use super::read::{load_global_field, validate_http_url};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
-const DEVNET_RPC_URL: &str = "http://44.236.180.135:8545";
-const DEVNET_FAUCET_URL: &str = "http://44.236.180.135:8085";
+const DEVNET_RPC_URL: &str = "https://rpc.thruput.network";
+const DEVNET_FAUCET_URL: &str = "https://faucet.thruput.network";
 const HOG_CONTRACT_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
 

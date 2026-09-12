@@ -92,11 +92,11 @@ fn init_configures_profiles_and_succeeds() {
     assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
     assert_eq!(
         devnet.rpc_url.as_deref(),
-        Some("http://44.236.180.135:8545")
+        Some("https://rpc.thruput.network")
     );
     assert_eq!(
         devnet.faucet_url.as_deref(),
-        Some("http://44.236.180.135:8085")
+        Some("https://faucet.thruput.network")
     );
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),

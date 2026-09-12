@@ -45,6 +45,24 @@ projects both require access to the private Groundhog Cargo registry. Follow
 the invite instructions to authenticate Cargo first. This constraint will
 relax when the SDK ships publicly.
 
+### Hosted Devnet
+
+Run `groundhog init` to create the Devnet profile, then select it with
+`--profile devnet`. New profiles use `https://rpc.thruput.network` and
+`https://faucet.thruput.network`.
+
+Existing profiles keep their saved URLs when you upgrade or rerun init. Update
+an existing global Devnet profile explicitly:
+
+```bash
+groundhog config set rpc-url https://rpc.thruput.network --profile devnet --global
+groundhog config set faucet-url https://faucet.thruput.network --profile devnet --global
+```
+
+If the project sets either URL in `groundhog.toml`, update that override with
+`--project` instead of `--global`. Explicit `--rpc-url` arguments also take
+precedence over the saved profile.
+
 ### Local Dev Path
 
 The CLI supervises `hog-devnode`, serves the public JSON-RPC surface, and runs
