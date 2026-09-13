@@ -1,9 +1,8 @@
 //! `groundhog init` — interactive first-run wizard.
 //!
-//! Walks a new user through environment setup, key generation,
-//! mock-executor download credential storage, and optional project scaffolding. When
-//! everything is already configured, prints a short summary and
-//! exits. `init --json` delegates to `status --json`.
+//! Walks a new user through environment setup, key generation, and optional
+//! project scaffolding. When everything is already configured, prints a short
+//! summary and exits. `init --json` delegates to `status --json`.
 
 use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
