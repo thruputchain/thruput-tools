@@ -1,6 +1,7 @@
 //! hog-devnode process adapter.
 
 use std::{
+    collections::BTreeMap,
     env,
     ffi::OsString,
     fs::{self, File},
@@ -21,6 +22,7 @@ use groundhog_json_rpc_types::{
     },
 };
 use groundhog_signing::LocalSigner;
+use groundhog_tx_validation::ConfigParamName;
 use serde::{Deserialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -612,6 +614,7 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
         .stderr_piped();
 
     spec = append_contract_artifact_directories(spec, &config.contract_artifact_directories);
+    spec = append_network_config_overrides(spec, &config.network_config_overrides);
 
     if let Some(data_dir) = &config.data_dir {
         spec = spec.args([
@@ -653,6 +656,7 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
         .stderr_piped();
 
     spec = append_contract_artifact_directories(spec, &config.contract_artifact_directories);
+    spec = append_network_config_overrides(spec, &config.network_config_overrides);
 
     if let Some(log_level) = config.log_level {
         spec = spec.args([
@@ -689,6 +693,19 @@ fn append_contract_artifact_directories(
         spec = spec.args([
             OsString::from("--contract-artifacts-dir"),
             directory.as_os_str().to_owned(),
+        ]);
+    }
+    spec
+}
+
+fn append_network_config_overrides(
+    mut spec: ChildProcessSpec,
+    overrides: &BTreeMap<ConfigParamName, u32>,
+) -> ChildProcessSpec {
+    for (name, value) in overrides {
+        spec = spec.args([
+            OsString::from("--network-config"),
+            OsString::from(format!("{name}={value}")),
         ]);
     }
     spec
@@ -1774,7 +1791,7 @@ mod tests {
         validate_runtime_identity, write_bootstrap_manifest,
     };
     use crate::{
-        HogdDevConfig, NodeSupervisorError,
+        ConfigParamName, HogdDevConfig, NodeSupervisorError,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
@@ -1816,6 +1833,38 @@ mod tests {
             spec.program_envs(),
             &[(OsString::from(HOGD_LOG_FORMAT_ENV), OsString::from("json"))]
         );
+    }
+
+    #[test]
+    fn network_config_overrides_are_forwarded_in_both_launch_paths() {
+        let config = HogdDevConfig::default().with_network_config_overrides(
+            [
+                (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
+                (ConfigParamName::MaxBytestringLen, 32_768),
+            ]
+            .into(),
+        );
+        let specs = [
+            build_hogd_dev_spec_with_bootstrap_manifest(
+                "/tmp/hog-devnode",
+                &config,
+                "/tmp/bootstrap.json",
+            ),
+            build_hogd_dev_spec("/tmp/hog-devnode", &config),
+        ];
+        for spec in specs {
+            let forwarded: Vec<_> = spec
+                .program_args()
+                .windows(2)
+                .filter(|pair| pair[0] == "--network-config")
+                .map(|pair| pair[1].to_string_lossy().into_owned())
+                .collect();
+            // Protocol id order, since that is how `ConfigParamName` sorts.
+            assert_eq!(
+                forwarded,
+                ["max_bytestring_len=32768", "max_rv32_memory_bytes=16777216"]
+            );
+        }
     }
 
     #[test]

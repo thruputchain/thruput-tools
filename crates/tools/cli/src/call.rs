@@ -5,7 +5,7 @@ use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
+    BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
@@ -82,6 +82,7 @@ pub fn run(
     args: &[String],
     package: Option<&str>,
     dry_run: bool,
+    gas_limit: u64,
     force: bool,
     wallet: Option<&str>,
     artifacts: &ArtifactOptions,
@@ -96,7 +97,7 @@ pub fn run(
         print.require_confirmation_available(force, "call a contract")?;
     }
     let plan = prepare_call_plan(
-        contract, method, args, package, artifacts, wallet, profile, overrides,
+        contract, method, args, package, artifacts, wallet, profile, overrides, gas_limit,
     )?;
     if !dry_run {
         print.detail("contract", &plan.contract_address_hex);
@@ -354,10 +355,11 @@ fn prepare_call_plan(
     wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
+    gas_limit: u64,
 ) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     prepare_call_plan_with_runtime(
-        contract, method, args, package, artifacts, wallet, profile, overrides, &rt,
+        contract, method, args, package, artifacts, wallet, profile, overrides, gas_limit, &rt,
     )
 }
 
@@ -371,6 +373,7 @@ fn prepare_call_plan_with_runtime(
     wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
+    gas_limit: u64,
     rt: &tokio::runtime::Runtime,
 ) -> Result<CallPlan, CliError> {
     let cwd = std::env::current_dir()?;
@@ -409,8 +412,8 @@ fn prepare_call_plan_with_runtime(
         target_address: contract_address,
         target_entrypoint: resolved.entrypoint,
         target_calldata: calldata.as_slice(),
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+        gas_limit,
+        target_gas_limit: gas_limit,
         block_expiry_height,
         nonce: nonce_from_timestamp(),
     })

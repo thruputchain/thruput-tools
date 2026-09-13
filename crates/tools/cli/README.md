@@ -106,6 +106,31 @@ For CLI commands that sign or simulate as `dev-N`, use a profile with
 `network = "local"` while `groundhog node` is running, or set
 `GROUNDHOG_RUNTIME_MANIFEST` explicitly for scripts outside the project tree.
 
+## Local network limits
+
+Override local genesis parameters with repeatable `--network-config NAME=VALUE`:
+
+```bash
+groundhog node \
+  --network-config max_rv32_code_bytes=1M \
+  --network-config max_rv32_memory_bytes=16M \
+  --network-config max_contract_size_bytes=1M \
+  --network-config max_bytestring_len=32K
+```
+
+Values accept decimal, hexadecimal, and binary K/M/G suffixes (1M = 1,048,576).
+The CLI rejects a name no chain parameter carries and a name given twice, and
+names the ones it knows; hog-devnode rejects a value past the ceilings its
+build was compiled with, so overrides need a `hog-devnode` build carrying the
+matching flag. These settings affect genesis; when using `--data-dir`, supply
+the same overrides on every restart or choose a fresh directory.
+
+## Contract call gas
+
+`groundhog call --gas-limit 200000000` sets the total transaction gas budget
+and the requested inner invocation budget; the inner call remains bounded by
+the transaction's remaining gas. The default is still 10,000,000.
+
 ## Using cargo directly
 
 Scaffolded projects build for the host with plain `cargo`: the `sdk`

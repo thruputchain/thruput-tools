@@ -3,6 +3,7 @@
 use crate::{CliError, Print};
 
 use crate::result::CommandResult;
+use groundhog_node_supervisor::ConfigParamName;
 use serde_json::json;
 use std::future::Future;
 use std::io::{self, Write};
@@ -107,6 +108,24 @@ pub fn run_with_options(
     rt.block_on(async { run_hogd_dev(options, cmd, print).await })
 }
 
+/// Parse one `NAME=VALUE` genesis parameter override.
+///
+/// The name must be one this build knows, so a typo fails here rather than
+/// after hog-devnode has started. The value is a byte size, and whether it is
+/// one hog-devnode's build accepts stays hog-devnode's call.
+pub fn parse_network_config_override(value: &str) -> Result<(ConfigParamName, u32), String> {
+    let (name, amount) = value
+        .split_once('=')
+        .ok_or_else(|| "expected NAME=VALUE, for example max_rv32_memory_bytes=16M".to_string())?;
+    let name = name
+        .parse::<ConfigParamName>()
+        .map_err(|error| error.to_string())?;
+    let amount = crate::byte_size::parse_byte_size(amount)?;
+    let amount =
+        u32::try_from(amount).map_err(|_| format!("{name} must fit an unsigned 32-bit integer"))?;
+    Ok((name, amount))
+}
+
 /// Startup options for a local hog-devnode-backed node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -141,6 +160,9 @@ pub struct LocalNodeOptions {
     pub rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
     /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
     pub ramdb_bytes: Option<u64>,
+    /// Genesis parameter values to use in place of the ones stock genesis
+    /// states. Whether hog-devnode's build accepts a value is its own call.
+    pub network_config_overrides: Vec<(ConfigParamName, u32)>,
     /// Validated release identity supplied by an embedding client process.
     /// When absent, the `groundhog` client identity is discovered while building the config.
     pub bundle_identity: Option<groundhog_bundle_identity::BundleIdentity>,
@@ -651,6 +673,16 @@ fn local_node_config(
         Some(ramdb_bytes) => hogd.with_ramdb_bytes(ramdb_bytes),
         None => hogd,
     };
+    let mut network_config_overrides = std::collections::BTreeMap::new();
+    for (name, value) in options.network_config_overrides {
+        if network_config_overrides.insert(name, value).is_some() {
+            return Err(CliError::ConfigValueInvalid {
+                field: "network-config".into(),
+                message: format!("parameter {name} was specified more than once"),
+            });
+        }
+    }
+    let hogd = hogd.with_network_config_overrides(network_config_overrides);
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(rpc_listen_address(options.host, options.port))
         .with_hogd_dev(hogd)
@@ -893,7 +925,7 @@ mod tests {
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
-        BackendPlanes, NodeSupervisorError, PlaneStatus, parse_readiness_line,
+        BackendPlanes, ConfigParamName, NodeSupervisorError, PlaneStatus, parse_readiness_line,
     };
     use sha2::{Digest, Sha256};
     use std::{
@@ -903,6 +935,48 @@ mod tests {
         time::Duration,
     };
     use tempfile::TempDir;
+
+    #[test]
+    fn network_config_override_parsing_and_duplicate_rejection() {
+        use super::parse_network_config_override;
+        assert_eq!(
+            parse_network_config_override("max_rv32_memory_bytes=16M"),
+            Ok((ConfigParamName::MaxRv32MemoryBytes, 16_777_216))
+        );
+        assert_eq!(
+            parse_network_config_override("max_bytestring_len=0x8000"),
+            Ok((ConfigParamName::MaxBytestringLen, 32_768))
+        );
+        // An unknown name, a missing or malformed value, and a value past
+        // u32 all fail before hog-devnode is started.
+        for invalid in [
+            "",
+            "no-value",
+            "=16",
+            "max_rv32_memmory_bytes=2",
+            "max_bytestring_len=",
+            "max_bytestring_len=-1",
+            "max_bytestring_len=4G",
+        ] {
+            assert!(parse_network_config_override(invalid).is_err(), "{invalid}");
+        }
+        assert!(
+            parse_network_config_override("max_rv32_memmory_bytes=2")
+                .unwrap_err()
+                .contains("max_rv32_memory_bytes")
+        );
+
+        let error = local_node_config(LocalNodeOptions {
+            network_config_overrides: vec![
+                (ConfigParamName::MaxBytestringLen, 1),
+                (ConfigParamName::MaxBytestringLen, 2),
+            ],
+            ..LocalNodeOptions::default()
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("specified more than once"));
+    }
 
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
@@ -927,6 +1001,7 @@ mod tests {
             rpc_max_connections: Some(512),
             rpc_batch_concurrency: Some(17.try_into().unwrap()),
             ramdb_bytes: Some(2_147_483_648),
+            network_config_overrides: vec![(ConfigParamName::MaxRv32MemoryBytes, 16_777_216)],
             bundle_identity: Some(supplied_identity.clone()),
         })
         .expect("bug: local node config should build");
@@ -952,6 +1027,13 @@ mod tests {
         assert_eq!(config.hogd_dev.dev_account_count, 3);
         assert_eq!(config.hogd_dev.dev_account_tokens, 12_345_678);
         assert_eq!(config.hogd_dev.ramdb_bytes, Some(2_147_483_648));
+        assert_eq!(
+            config
+                .hogd_dev
+                .network_config_overrides
+                .get(&ConfigParamName::MaxRv32MemoryBytes),
+            Some(&16_777_216)
+        );
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
         assert_eq!(
             config.hogd_dev.shutdown_grace,
