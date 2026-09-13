@@ -9,7 +9,7 @@ pub mod format;
 
 pub use error::{ArtifactError, Result};
 pub use format::{
-    FORMAT_FINGERPRINT, FORMAT_VERSION, HEADER_BYTES, INSTRUCTION_BYTES, MAGIC, MAX_CODE_BYTES,
-    MAX_MEMORY_BYTES, build_artifact, compute_format_fingerprint, sha256, sha256_hex,
-    verify_artifact,
+    DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, FORMAT_FINGERPRINT,
+    FORMAT_VERSION, HEADER_BYTES, INSTRUCTION_BYTES, MAGIC, build_artifact,
+    compute_format_fingerprint, declared_sizes, sha256, sha256_hex, verify_artifact,
 };

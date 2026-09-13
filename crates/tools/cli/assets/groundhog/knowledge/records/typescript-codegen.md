@@ -13,6 +13,19 @@ bootstrap_order = 40
 spec produced by the Rust contract is the canonical interface for generated
 bindings.
 
+The build is offline and checks the artifact against no chain. It reports the
+code and guest data memory sizes, and warns when the code section is over the
+protocol-default 64 KiB. Whether a chain admits the artifact is decided at
+deploy: the RPC endpoint rejects a transaction whose artifact exceeds the
+chain's `max_rv32_code_bytes` or `max_rv32_memory_bytes` before submitting
+it, and `groundhog deploy` reports the violated bound. Guest data memory
+defaults to 64 KiB. A contract that needs more sets `initial_memory_bytes`
+under `[package.metadata.groundhog]` in its `Cargo.toml` (an integer, or a
+string such as `"128K"`); `groundhog build` and `groundhog test` both read
+it, size the linker layout from it, and stamp it into the artifact. Do not
+raise it for a chain that has not raised `max_rv32_memory_bytes`.
+`--stack-size` still adjusts the stack reserve per build.
+
 Generate a TypeScript binding as part of the build:
 
 ```console

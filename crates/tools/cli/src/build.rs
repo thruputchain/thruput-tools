@@ -30,6 +30,11 @@ pub struct BuildResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bindings_ts: Option<PathBuf>,
     pub size_bytes: u64,
+    /// Bytes in the artifact's code section.
+    pub code_bytes: usize,
+    /// Guest data address space the artifact declares (`memory_bytes` in its
+    /// header).
+    pub memory_bytes: usize,
     pub target: ArtifactKind,
     pub profile: crate::config::ResolvedProfile,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -71,6 +76,8 @@ pub fn run(
             "specXdr": result.spec_xdr,
             "bindingsTs": result.bindings_ts,
             "sizeBytes": result.size_bytes,
+            "codeBytes": result.code_bytes,
+            "memoryBytes": result.memory_bytes,
             "profile": result.profile,
             "cargoStdout": result.cargo_stdout,
             "cargoStderr": result.cargo_stderr,
@@ -99,8 +106,9 @@ fn ensure_no_env_rustflags() -> Result<(), CliError> {
 /// `K`/`M`/`G` suffixed size such as `32K`.
 ///
 /// The value becomes the guest's `__stack_size` linker symbol, so it carries
-/// the SDK linker-script contract: a positive multiple of 16 below the 64 KiB
-/// data address space.
+/// the SDK linker-script contract: a positive multiple of 16. That it leaves
+/// room below the guest data address space is checked once that space is
+/// known, since the package's manifest can enlarge it.
 pub fn parse_stack_size(value: &str) -> Result<u32, String> {
     let parsed = crate::byte_size::parse_byte_size(value)?;
     if parsed == 0 || !parsed.is_multiple_of(16) {
@@ -109,13 +117,127 @@ pub fn parse_stack_size(value: &str) -> Result<u32, String> {
         ));
     }
     u32::try_from(parsed)
-        .ok()
-        .filter(|size| (*size as usize) < groundhog_rv32_artifact::MAX_MEMORY_BYTES)
-        .ok_or_else(|| {
-            format!(
-                "stack size {parsed} must be below the {} data address space",
-                groundhog_rv32_artifact::MAX_MEMORY_BYTES
-            )
+        .map_err(|_| format!("stack size {parsed} does not fit a 32-bit address space"))
+}
+
+/// The `[package.metadata.groundhog]` key that sizes a contract's guest data
+/// memory.
+pub const INITIAL_MEMORY_BYTES_KEY: &str = "initial_memory_bytes";
+
+/// A byte count as `[package.metadata.groundhog]` may spell it: an integer,
+/// or a string in the notation `--stack-size` takes (`"128K"`, `"0x20000"`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ByteSizeValue {
+    /// A plain TOML integer.
+    Integer(i64),
+    /// A string with an optional `0x` prefix or `K`/`M`/`G` suffix.
+    Text(String),
+}
+
+/// Parse `[package.metadata.groundhog] initial_memory_bytes`: the guest data
+/// address space a contract declares, a positive byte count that fits the
+/// artifact header's 32-bit `memory_bytes` field.
+pub fn parse_initial_memory_bytes(value: &ByteSizeValue) -> Result<u32, String> {
+    let bytes = match value {
+        ByteSizeValue::Integer(bytes) => {
+            u64::try_from(*bytes).map_err(|_| format!("{bytes} is not a positive byte count"))?
+        }
+        ByteSizeValue::Text(text) => crate::byte_size::parse_byte_size(text)?,
+    };
+    if bytes == 0 {
+        return Err("0 is not a positive byte count".to_string());
+    }
+    u32::try_from(bytes)
+        .map_err(|_| format!("{bytes} does not fit the artifact's 32-bit memory_bytes field"))
+}
+
+/// The guest data-memory layout a build links and stamps.
+///
+/// The stack reserve comes from `--stack-size` and defaults to the SDK linker
+/// script's. The data address space comes from the package's
+/// `[package.metadata.groundhog] initial_memory_bytes` and defaults to the
+/// protocol's 64 KiB. It lives in the manifest rather than on the command
+/// line because it is a property of the contract: it changes the artifact,
+/// and `groundhog build`, `groundhog test`, and the build behind a deploy
+/// must all see the same value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GuestLayout {
+    /// The `__stack_size` linker symbol; `None` keeps the linker script's.
+    stack_size: Option<u32>,
+    /// The `__memory_size` linker symbol and the artifact's `memory_bytes`;
+    /// `None` keeps the protocol default.
+    initial_memory_bytes: Option<u32>,
+}
+
+impl GuestLayout {
+    /// The data address space stamped into the artifact, in bytes.
+    fn memory_bytes(self) -> usize {
+        self.initial_memory_bytes
+            .map_or(groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES, |bytes| {
+                bytes as usize
+            })
+    }
+
+    /// Whether the build has to go through `cargo rustc` to pass a `--defsym`.
+    fn needs_defsym(self) -> bool {
+        self.stack_size.is_some() || self.initial_memory_bytes.is_some()
+    }
+
+    /// The `-C link-arg=--defsym=...` values the layout adds to the final
+    /// rustc invocation. `__memory_size` takes effect only with an SDK linker
+    /// script that `PROVIDE`s it; an older script fixes 64 KiB and ignores the
+    /// request, while the artifact header carries the configured size either
+    /// way.
+    fn defsym_flags(self) -> Vec<String> {
+        let mut flags = Vec::new();
+        if let Some(size) = self.stack_size {
+            flags.push(format!("link-arg=--defsym=__stack_size={size}"));
+        }
+        if let Some(size) = self.initial_memory_bytes {
+            flags.push(format!("link-arg=--defsym=__memory_size={size}"));
+        }
+        flags
+    }
+
+    /// The stack reserve has to leave room for data below the address space.
+    fn validate(self) -> Result<(), CliError> {
+        if let Some(stack) = self.stack_size
+            && stack as usize >= self.memory_bytes()
+        {
+            return Err(CliError::InvalidArgument {
+                argument: "--stack-size".to_string(),
+                message: format!(
+                    "stack size {stack} must be below the {}-byte guest data memory",
+                    self.memory_bytes()
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The guest data address space `pkg_name`'s manifest declares, if any.
+fn package_initial_memory_bytes(
+    metadata: &CargoMetadata,
+    pkg_name: &str,
+) -> Result<Option<u32>, CliError> {
+    let value = metadata
+        .packages
+        .iter()
+        .find(|package| package.name == pkg_name)
+        .and_then(|package| package.metadata.as_ref())
+        .and_then(|table| table.groundhog.as_ref())
+        .and_then(|groundhog| groundhog.initial_memory_bytes.as_ref());
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    parse_initial_memory_bytes(value)
+        .map(Some)
+        .map_err(|message| CliError::PackageMetadataInvalid {
+            package: pkg_name.to_string(),
+            key: INITIAL_MEMORY_BYTES_KEY,
+            message,
         })
 }
 
@@ -137,6 +259,14 @@ fn stack_size_defsym_ignored(
 /// `stack_size` overrides the guest's `__stack_size` linker symbol via a
 /// `--defsym` on the final link (requires an SDK with the stack-first linker
 /// script; older scripts ignore the symbol, which is reported as a warning).
+/// The guest data address space comes from the package's
+/// `[package.metadata.groundhog] initial_memory_bytes`, so every build of the
+/// package, including the one under `groundhog test`, stamps the same size.
+///
+/// No chain bound is checked here: the build is offline and does not know
+/// where the artifact will be deployed. It reports the code and memory sizes,
+/// the lowerer warns past the protocol-default code limit, and the deploying
+/// chain's RPC endpoint rejects an artifact its configuration does not admit.
 #[allow(clippy::too_many_lines)]
 pub fn build_rv32_project(
     package: Option<&str>,
@@ -153,6 +283,11 @@ pub fn build_rv32_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
+    let layout = GuestLayout {
+        stack_size,
+        initial_memory_bytes: package_initial_memory_bytes(&metadata, pkg_name)?,
+    };
+    layout.validate()?;
     check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
     let package_root = metadata
         .packages
@@ -170,11 +305,18 @@ pub fn build_rv32_project(
     )?;
     let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 
+    if let Some(bytes) = layout.initial_memory_bytes {
+        print.status(format_args!(
+            "Sizing guest data memory at {bytes} bytes ([package.metadata.groundhog] \
+             {INITIAL_MEMORY_BYTES_KEY})"
+        ));
+    }
     print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
-    // `--stack-size` switches to `cargo rustc`: its trailing flags append to
-    // the final rustc invocation, which is the only way to add a one-off
-    // `--defsym` on top of the project's own .cargo/config.toml rustflags.
+    // `--stack-size` and `initial_memory_bytes` switch to `cargo rustc`: its
+    // trailing flags append to the final rustc invocation, which is the only
+    // way to add a one-off `--defsym` on top of the project's own
+    // .cargo/config.toml rustflags.
     // (`RUSTFLAGS` would replace that whole target rustflags list, losing the
     // linker script; `--config` joins rather than replaces, which is why the
     // contract.toml overlay below is safe but cannot carry rustflags.)
@@ -182,7 +324,7 @@ pub fn build_rv32_project(
     cmd.current_dir(&metadata.workspace_root)
         .arg("--config")
         .arg(&contract_toml)
-        .arg(if stack_size.is_some() {
+        .arg(if layout.needs_defsym() {
             "rustc"
         } else {
             "build"
@@ -203,10 +345,11 @@ pub fn build_rv32_project(
     for arg in cargo_args {
         cmd.arg(arg);
     }
-    if let Some(size) = stack_size {
-        cmd.arg("--")
-            .arg("-C")
-            .arg(format!("link-arg=--defsym=__stack_size={size}"));
+    if layout.needs_defsym() {
+        cmd.arg("--");
+        for flag in layout.defsym_flags() {
+            cmd.arg("-C").arg(flag);
+        }
     }
 
     let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
@@ -225,7 +368,15 @@ pub fn build_rv32_project(
 
     print.status("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
-    let lowered = groundhog_rv32_lower::lower(&elf_bytes)?;
+    let lowered = groundhog_rv32_lower::lower_with(
+        &elf_bytes,
+        &groundhog_rv32_lower::LowerOptions {
+            memory_bytes: layout.memory_bytes(),
+        },
+    )?;
+    for warning in &lowered.warnings {
+        print.warn(warning);
+    }
     if let Some(size) = stack_size
         && stack_size_defsym_ignored(
             lowered.initial_memory_start,
@@ -250,7 +401,7 @@ pub fn build_rv32_project(
             memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
-            build_flags: Some(rv32_build_flags(pkg_name, cargo_args, stack_size)),
+            build_flags: Some(rv32_build_flags(pkg_name, cargo_args, layout)),
         });
     fs::write(&rv32, &lowered.artifact)?;
     if let Err(error) = fs::write(&lower_metadata, lower_metadata_doc) {
@@ -282,7 +433,12 @@ pub fn build_rv32_project(
     };
 
     let size = fs::metadata(&rv32)?.len();
-    print.status(format_args!("Built {} ({size} bytes)", rv32.display()));
+    print.status(format_args!(
+        "Built {} ({size} bytes; code {} bytes, guest data memory {} bytes)",
+        rv32.display(),
+        lowered.code.len(),
+        lowered.memory_bytes
+    ));
 
     Ok(BuildResult {
         project_name: pkg_name.to_string(),
@@ -296,6 +452,8 @@ pub fn build_rv32_project(
         spec_xdr,
         bindings_ts,
         size_bytes: size,
+        code_bytes: lowered.code.len(),
+        memory_bytes: lowered.memory_bytes,
         target: ArtifactKind::Rv32,
         profile,
         cargo_stdout,
@@ -315,12 +473,12 @@ const RV32_ENTRYPOINTS_FEATURE: &str = "entrypoints";
 /// recorded command reproduces the artifact without embedding the absolute
 /// path of the machine that built it. It cannot be omitted: the overlay
 /// carries `build-std`, which changes codegen.
-fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], stack_size: Option<u32>) -> String {
+fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], layout: GuestLayout) -> String {
     let mut flags = vec![
         "cargo".to_string(),
         "--config".to_string(),
         CONTRACT_TOML_RELATIVE_PATH.to_string(),
-        if stack_size.is_some() {
+        if layout.needs_defsym() {
             "rustc"
         } else {
             "build"
@@ -338,10 +496,12 @@ fn rv32_build_flags(pkg_name: &str, cargo_args: &[String], stack_size: Option<u3
         crate::scaffold::to_snake(pkg_name),
     ];
     flags.extend(cargo_args.iter().cloned());
-    if let Some(size) = stack_size {
+    if layout.needs_defsym() {
         flags.push("--".to_string());
-        flags.push("-C".to_string());
-        flags.push(format!("link-arg=--defsym=__stack_size={size}"));
+        for flag in layout.defsym_flags() {
+            flags.push("-C".to_string());
+            flags.push(flag);
+        }
     }
     flags.join(" ")
 }
@@ -368,6 +528,27 @@ pub struct MetadataPackage {
     /// inheritance already applied.
     pub version: String,
     pub manifest_path: PathBuf,
+    /// The package's `[package.metadata]` table; `None` when it has none.
+    #[serde(default)]
+    pub metadata: Option<PackageMetadata>,
+}
+
+/// A package's `[package.metadata]` table, as far as the CLI reads it.
+#[derive(Debug, serde::Deserialize)]
+pub struct PackageMetadata {
+    /// The `[package.metadata.groundhog]` table.
+    pub groundhog: Option<GroundhogPackageMetadata>,
+}
+
+/// The `[package.metadata.groundhog]` keys the CLI reads.
+#[derive(Debug, serde::Deserialize)]
+pub struct GroundhogPackageMetadata {
+    /// Declared by `groundhog-contract-spec`: the raw spec wire format it
+    /// emits.
+    pub raw_spec_format: Option<u32>,
+    /// Declared by a contract: the guest data address space it wants
+    /// ([`INITIAL_MEMORY_BYTES_KEY`]).
+    pub initial_memory_bytes: Option<ByteSizeValue>,
 }
 
 /// Resolve which package to build.
@@ -459,17 +640,7 @@ struct DependencyPackage {
     id: String,
     name: String,
     /// `null` for a package with no `[package.metadata]` table.
-    metadata: Option<DependencyPackageMetadata>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct DependencyPackageMetadata {
-    groundhog: Option<GroundhogPackageMetadata>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct GroundhogPackageMetadata {
-    raw_spec_format: Option<u32>,
+    metadata: Option<PackageMetadata>,
 }
 
 impl DependencyPackage {
@@ -851,8 +1022,9 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Rv32ConfigCheck, classify_rv32_config_probe, member_leftover_cargo_config,
-        parse_stack_size, rv32_linker_script, stack_size_defsym_ignored,
+        ByteSizeValue, CliError, GuestLayout, Rv32ConfigCheck, classify_rv32_config_probe,
+        member_leftover_cargo_config, parse_initial_memory_bytes, parse_stack_size,
+        rv32_linker_script, stack_size_defsym_ignored,
     };
     use tempfile::TempDir;
 
@@ -971,6 +1143,7 @@ mod tests {
         assert_eq!(parse_stack_size("0x6000"), Ok(24576));
         assert_eq!(parse_stack_size("16"), Ok(16));
         assert_eq!(parse_stack_size("65520"), Ok(65520)); // last multiple of 16 below 64K
+        assert_eq!(parse_stack_size("64K"), Ok(65536));
         assert_eq!(parse_stack_size("32K"), Ok(32768));
         assert_eq!(parse_stack_size("24k"), Ok(24576));
         assert_eq!(parse_stack_size("32KiB"), Ok(32768));
@@ -979,14 +1152,114 @@ mod tests {
     #[test]
     fn parse_stack_size_rejects_invalid_values() {
         for bad in [
-            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16", "64K", "1M",
-            "1G", "2.5K",
+            "0", "0x0", "24", "0x6008", "", "abc", "0x", "-16", "2.5K", "5G",
         ] {
             assert!(
                 parse_stack_size(bad).is_err(),
                 "expected {bad:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn stack_size_is_bounded_by_the_guest_memory_not_the_parser() {
+        // A stack the size of the whole default address space parses; whether
+        // it fits is decided against the memory the package declares.
+        for at_or_over in ["65536", "0x10000", "64K", "1M"] {
+            let stack = parse_stack_size(at_or_over).expect("parses");
+            let under_default = GuestLayout {
+                stack_size: Some(stack),
+                initial_memory_bytes: None,
+            };
+            assert!(
+                matches!(
+                    under_default.validate(),
+                    Err(CliError::InvalidArgument { .. })
+                ),
+                "{at_or_over} vs 64K"
+            );
+            let under_raised = GuestLayout {
+                stack_size: Some(stack),
+                initial_memory_bytes: Some(2 * 1024 * 1024),
+            };
+            assert!(under_raised.validate().is_ok(), "{at_or_over} vs 2M");
+        }
+        let last_fit = GuestLayout {
+            stack_size: Some(0xFFF0),
+            initial_memory_bytes: None,
+        };
+        assert!(last_fit.validate().is_ok());
+    }
+
+    #[test]
+    fn parse_initial_memory_bytes_accepts_integers_and_byte_size_strings() {
+        assert_eq!(
+            parse_initial_memory_bytes(&ByteSizeValue::Integer(131_072)),
+            Ok(131_072)
+        );
+        assert_eq!(
+            parse_initial_memory_bytes(&ByteSizeValue::Text("128K".into())),
+            Ok(131_072)
+        );
+        assert_eq!(
+            parse_initial_memory_bytes(&ByteSizeValue::Text("0x20000".into())),
+            Ok(131_072)
+        );
+        assert_eq!(
+            parse_initial_memory_bytes(&ByteSizeValue::Text("1M".into())),
+            Ok(1_048_576)
+        );
+        for bad in [
+            ByteSizeValue::Integer(0),
+            ByteSizeValue::Integer(-16),
+            ByteSizeValue::Integer(1 << 32),
+            ByteSizeValue::Text("0".into()),
+            ByteSizeValue::Text("5G".into()),
+            ByteSizeValue::Text("abc".into()),
+        ] {
+            assert!(parse_initial_memory_bytes(&bad).is_err(), "input {bad:?}");
+        }
+    }
+
+    #[test]
+    fn guest_layout_defaults_to_the_protocol_memory_and_no_defsym() {
+        let layout = GuestLayout::default();
+        assert_eq!(
+            layout.memory_bytes(),
+            groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES
+        );
+        assert!(!layout.needs_defsym());
+        assert!(layout.defsym_flags().is_empty());
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn guest_layout_passes_both_symbols_on_the_same_link() {
+        let layout = GuestLayout {
+            stack_size: Some(0x6000),
+            initial_memory_bytes: Some(0x20000),
+        };
+        assert_eq!(layout.memory_bytes(), 0x20000);
+        assert!(layout.needs_defsym());
+        assert_eq!(
+            layout.defsym_flags(),
+            vec![
+                "link-arg=--defsym=__stack_size=24576".to_string(),
+                "link-arg=--defsym=__memory_size=131072".to_string(),
+            ]
+        );
+        assert!(layout.validate().is_ok());
+
+        // Memory alone still needs the `cargo rustc` path.
+        let memory_only = GuestLayout {
+            stack_size: None,
+            initial_memory_bytes: Some(0x20000),
+        };
+        assert!(memory_only.needs_defsym());
+        assert_eq!(
+            memory_only.defsym_flags(),
+            vec!["link-arg=--defsym=__memory_size=131072".to_string()]
+        );
     }
 
     #[test]

@@ -307,7 +307,13 @@ fn assert_error_data_schemas_are_wired(errors: &serde_json::Map<String, serde_js
         .collect();
     assert_eq!(
         reasons,
-        ["tooManyContracts", "contractTooLarge", "duplicateContract"],
+        [
+            "tooManyContracts",
+            "contractTooLarge",
+            "duplicateContract",
+            "rv32MemoryTooLarge",
+            "rv32CodeTooLarge",
+        ],
         "TxInvalid data variants should be discriminated by camelCase reason tags"
     );
     assert!(
