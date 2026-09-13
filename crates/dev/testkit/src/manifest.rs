@@ -44,7 +44,7 @@ impl AccountSource {
     pub(crate) fn accounts(&self) -> Result<Vec<DevAccount>> {
         match self {
             Self::Manifest(manifest) => derive_manifest_accounts(manifest),
-            Self::Offline { count } => derive_offline_accounts(*count),
+            Self::Offline { count } => Ok(derive_offline_accounts(*count)),
         }
     }
 }
@@ -111,19 +111,17 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount
         .collect()
 }
 
-fn derive_offline_accounts(count: usize) -> Result<Vec<DevAccount>> {
+fn derive_offline_accounts(count: usize) -> Vec<DevAccount> {
     (0..count)
         .map(|index| {
             let signer = derive_default_dev_account_signer(index);
             let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
-            let wallet_address = account.address().map_err(TestkitError::signing)?;
-            let index = u32::try_from(index).unwrap_or(u32::MAX);
-            Ok(DevAccount {
-                index,
+            DevAccount {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                wallet_address: account.address(),
                 signer,
-                wallet_address,
                 network_hash: None,
-            })
+            }
         })
         .collect()
 }

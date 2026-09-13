@@ -142,9 +142,8 @@ fn generated_key_address_matches_shared_signing_crate() {
     let public_key_bytes = hex::decode(public_key_hex).unwrap();
     let public_key: [u8; 32] = public_key_bytes.try_into().unwrap();
 
-    let expected = PubkeyAccount::from_public_key_bytes(public_key, DEFAULT_PUBKEY_ACCOUNT_NONCE)
-        .address()
-        .unwrap();
+    let expected =
+        PubkeyAccount::from_public_key_bytes(public_key, DEFAULT_PUBKEY_ACCOUNT_NONCE).address();
     let keys = groundhog_cli::keys::load_key_summaries().unwrap();
 
     assert_eq!(keys.len(), 1);

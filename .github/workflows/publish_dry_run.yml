@@ -27,6 +27,7 @@ env:
     groundhog-rv32-artifact
     groundhog-rv32-lower
     groundhog-cli
+    groundhog-testkit
 
 jobs:
   publish:

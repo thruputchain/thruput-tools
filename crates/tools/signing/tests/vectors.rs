@@ -1,11 +1,11 @@
 //! Known-answer vectors for address derivation, signing, and
 //! transaction hashing.
 //!
-//! The address and hash constants below were generated from the
-//! current implementation; they pin today's behavior against
-//! regression, not an externally-published test vector. A change that
-//! breaks one of these alters on-chain identity or wire hashes, so
-//! treat it as a consensus-affecting bug, not a test update.
+//! The address constants are computed from the CXS preimage hogd specifies,
+//! so they check this crate against the node rather than against itself. The
+//! hash constants pin today's encoding against regression. A change that
+//! breaks any of them alters on-chain identity or wire hashes, so treat it as
+//! a consensus-affecting bug, not a test update.
 
 use ed25519_dalek::{Verifier, VerifyingKey};
 use groundhog_signing::{
@@ -31,22 +31,20 @@ fn test_network_hash() -> NetworkHash {
 fn address_derivation_known_answers_at_two_nonces() {
     let signer = test_signer();
 
-    let address_nonce0 = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
-        .address()
-        .expect("bug: nonce-0 address should derive");
-    let address_nonce1 = PubkeyAccount::new(signer.public_key(), 1)
-        .address()
-        .expect("bug: nonce-1 address should derive");
+    let address_nonce0 =
+        PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE).address();
+    let address_nonce1 = PubkeyAccount::new(signer.public_key(), 1).address();
 
-    // Generated from the current implementation; pins address
-    // derivation (preimage encoding, tag XOR) against regression.
+    // SHA256 of the literal CXS prefix 00 0d "PubkeyAccount", followed by
+    // 00, the 32-byte public key, and the single-byte nonce (0 or 1).
+    // This is the derivation used by hogd/crypto/domain_separators.h.
     assert_eq!(
         hex::encode(address_nonce0.as_ref()),
-        "a240483ed9311b2394e4afc167e046fdbc83b3710ad9664287d50f083c27f677"
+        "aea3c931b977bf8ef933cc134e372d0efbf4bac0e576cc117d52108c80ea3d78"
     );
     assert_eq!(
         hex::encode(address_nonce1.as_ref()),
-        "1c61a02f7defe74a7f5eb781fd73203ededfaa2b848aeccd9fbc59689669e6b2"
+        "564859b1c9b7afe948a57854d8c6b45425ca1225a2170799a5a03ecfd139daef"
     );
     assert_ne!(address_nonce0, address_nonce1);
 }
@@ -90,7 +88,7 @@ fn transaction_hash_vector_matches_the_server_side_hash() {
     let signer = test_signer();
     let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
     let tx = build_call_transaction(BuildCallTransaction {
-        invoked_address: account.address().expect("bug: address should derive"),
+        invoked_address: account.address(),
         entrypoint: ContractEntrypointID::from(*b"getvalue"),
         calldata: vec![0x01, 0x02],
         gas_limit: 500_000,
@@ -105,7 +103,7 @@ fn transaction_hash_vector_matches_the_server_side_hash() {
     // inner-transaction hash preimage.
     assert_eq!(
         hex::encode(tx_hash.as_ref()),
-        "020639a7fc64b4275b97250ecf08cc6bd8c67f8739a46ce88bdfa8795a93acc6"
+        "6887280975556ab9649f0565a13afb9587a39208972d14632bcf6c30bffebf6f"
     );
 
     // Cross-check against the gateway-side hash: the hash the server
