@@ -44,3 +44,11 @@ pub fn keys_dir() -> Result<PathBuf, CliError> {
 pub(super) fn config_file_path() -> Result<PathBuf, CliError> {
     Ok(config_dir()?.join("config.toml"))
 }
+
+/// Resolve the user's cargo config path.
+pub(crate) fn cargo_config_path() -> Result<PathBuf, CliError> {
+    let cargo_home = std::env::var("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| home_dir().map(|h| h.join(".cargo")))?;
+    Ok(cargo_home.join("config.toml"))
+}

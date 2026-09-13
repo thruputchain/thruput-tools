@@ -14,12 +14,12 @@ fn line_column(contents: &str, offset: usize) -> (usize, usize) {
     (line, current_line.chars().count() + 1)
 }
 
+pub(crate) use dirs::cargo_config_path;
+
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
 pub use global::{
-    ExecutorCredentials, LocalRuntimeState, clear_default_key,
-    clear_local_runtime_state_if_matches, initialize_global_profiles, load_default_key,
-    load_executor_credentials, save_default_key, save_executor_credentials,
-    save_local_runtime_state,
+    LocalRuntimeState, clear_default_key, clear_local_runtime_state_if_matches,
+    initialize_global_profiles, load_default_key, save_default_key, save_local_runtime_state,
 };
 pub use mutate::{
     CONFIG_MUTATION_JSON_SCHEMA_VERSION, CONFIG_NEW_JSON_SCHEMA_VERSION,

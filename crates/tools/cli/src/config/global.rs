@@ -16,14 +16,6 @@ const DEVNET_FAUCET_URL: &str = "https://faucet.thruput.network";
 const HOG_CONTRACT_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
 
-/// Credentials used to download the mock-executor FFI.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ExecutorCredentials {
-    #[serde(default)]
-    pub username: String,
-    pub password: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalRuntimeState {
     pub node_id: String,
@@ -36,7 +28,6 @@ pub struct LocalRuntimeState {
 /// Internal representation of `config.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct GlobalConfigFile {
-    executor: Option<ExecutorCredentials>,
     default_key: Option<String>,
     #[serde(default)]
     pub(crate) default_profile: Option<String>,
@@ -98,27 +89,6 @@ fn child_table<'a>(
         return Err(CliError::Other(error.into()));
     }
     Ok(child)
-}
-
-/// Save mock-executor FFI download credentials to `config.toml`.
-pub fn save_executor_credentials(creds: &ExecutorCredentials) -> Result<(), CliError> {
-    transact_config_file(|document, _| {
-        let executor = root_table(document, "executor", "executor must be a table")?
-            .as_table_like_mut()
-            .ok_or_else(|| CliError::Other("executor must be a table".into()))?;
-        insert_preserving_decor(executor, "username", value(creds.username.as_str()));
-        insert_preserving_decor(executor, "password", value(creds.password.as_str()));
-        Ok(())
-    })?;
-    Ok(())
-}
-
-/// Load mock-executor FFI download credentials from `config.toml`.
-///
-/// Returns `Ok(None)` if no credentials are stored
-/// or the file does not exist.
-pub fn load_executor_credentials() -> Result<Option<ExecutorCredentials>, CliError> {
-    load_global_field("executor")
 }
 
 /// Save the default key name to `config.toml`.

@@ -95,7 +95,6 @@ struct TestCommandContext<'a> {
     test_target: &'a str,
     features: &'a str,
     env: &'a [(OsString, OsString)],
-    env_remove: &'a [OsString],
     artifacts: &'a ArtifactOptions,
     cargo_args: &'a [String],
     print: &'a Print,
@@ -372,14 +371,12 @@ fn run_integration_against_node(
         "Running RPC integration tests against {contract_address}..."
     ));
 
-    let mut env = integration_test_environment(
+    let env = integration_test_environment(
         rpc_url,
         &contract_address,
         runtime_manifest.as_deref(),
         default_key,
     );
-    let credential_environment = crate::auth::executor_credential_environment()?;
-    env.extend(credential_environment.set.iter().cloned());
     let filter = SelectedFilter {
         name: options.match_test.as_deref(),
         exact: false,
@@ -390,7 +387,6 @@ fn run_integration_against_node(
         test_target: INTEGRATION_TEST_TARGET,
         features: build.test_features,
         env: &env,
-        env_remove: &credential_environment.remove,
         artifacts,
         cargo_args,
         print,
@@ -660,9 +656,7 @@ fn run_once_with_options(
     }
     print_test_status(options, rerun_filters.len(), print);
 
-    let mut env = local_test_environment(&build.target_directory);
-    let credential_environment = crate::auth::executor_credential_environment()?;
-    env.extend(credential_environment.set.iter().cloned());
+    let env = local_test_environment(&build.target_directory);
 
     let filters = selected_filters(options, &rerun_filters);
     let context = TestCommandContext {
@@ -671,7 +665,6 @@ fn run_once_with_options(
         test_target: RV32_TEST_TARGET,
         features: "dev",
         env: &env,
-        env_remove: &credential_environment.remove,
         artifacts,
         cargo_args,
         print,
@@ -1022,7 +1015,7 @@ fn run_test_commands(
             context.features,
         );
         context.artifacts.apply_to_command(&mut cargo_cmd);
-        apply_test_environment(&mut cargo_cmd, context.env, context.env_remove);
+        apply_test_environment(&mut cargo_cmd, context.env);
         apply_harness_options(&mut cargo_cmd, options, *filter);
         for arg in context.cargo_args {
             cargo_cmd.arg(arg);
@@ -1337,14 +1330,7 @@ fn test_command(root: &Path, project_name: &str, test_target: &str, features: &s
     cargo_cmd
 }
 
-fn apply_test_environment(
-    cargo_cmd: &mut Command,
-    env: &[(OsString, OsString)],
-    env_remove: &[OsString],
-) {
-    for key in env_remove {
-        cargo_cmd.env_remove(key);
-    }
+fn apply_test_environment(cargo_cmd: &mut Command, env: &[(OsString, OsString)]) {
     for (key, value) in env {
         cargo_cmd.env(key, value);
     }
@@ -1964,7 +1950,7 @@ mod tests {
             "dev-4",
         );
 
-        apply_test_environment(&mut command, &env, &[]);
+        apply_test_environment(&mut command, &env);
 
         let applied: Vec<_> = command
             .get_envs()
@@ -1987,20 +1973,6 @@ mod tests {
             "GROUNDHOG_RUNTIME_MANIFEST".into(),
             "/tmp/runtime-manifest.json".into()
         )));
-    }
-
-    #[test]
-    fn apply_environment_removes_inherited_values() {
-        let mut command = Command::new("cargo");
-        command.env("HOGD_FFI_USER", "stale-user");
-
-        apply_test_environment(&mut command, &[], &[OsString::from("HOGD_FFI_USER")]);
-
-        assert!(
-            command
-                .get_envs()
-                .any(|(key, value)| { key == "HOGD_FFI_USER" && value.is_none() })
-        );
     }
 
     #[test]

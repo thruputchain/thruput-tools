@@ -57,64 +57,11 @@ fn cache_dir_respects_xdg_env() {
 
 #[test]
 #[serial]
-fn roundtrip_executor_credentials() {
-    let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
-    fs::write(
-        global_config_path(&tmp),
-        "# retained\nplugin = true\n\n[executor]\npassword = \"old\" # password comment\nplugin_token = \"keep\"\n",
-    )
-    .unwrap();
-
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "alice".into(),
-        password: "secret".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
-
-    let loaded = groundhog_cli::config::load_executor_credentials()
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded.username, "alice");
-    assert_eq!(loaded.password, "secret");
-    let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
-    assert!(contents.contains("# retained"));
-    assert!(contents.contains("plugin = true"));
-    assert!(contents.contains("plugin_token = \"keep\""));
-    assert!(contents.contains("# password comment"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
-}
-
-#[test]
-#[serial]
-fn executor_credentials_default_to_sdk_username() {
-    let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
-    fs::write(
-        global_config_path(&tmp),
-        "[executor]\npassword = \"secret\"\n",
-    )
-    .unwrap();
-
-    let loaded = groundhog_cli::config::load_executor_credentials()
-        .unwrap()
-        .unwrap();
-    assert!(loaded.username.is_empty());
-    assert_eq!(loaded.password, "secret");
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
-}
-
-#[test]
-#[serial]
 fn load_returns_none_when_no_config() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("nonexistent")) };
 
-    let loaded = groundhog_cli::config::load_executor_credentials().unwrap();
+    let loaded = groundhog_cli::config::load_default_key().unwrap();
     assert!(loaded.is_none());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -771,11 +718,7 @@ default_key = "dev-0"
 fn save_local_runtime_state_keeps_global_config_private() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "alice".into(),
-        password: "secret".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+    groundhog_cli::config::save_default_key("alice").unwrap();
     fs::create_dir_all(tmp.path().join("manifests")).unwrap();
     let manifest = tmp.path().join("manifests/runtime-manifest.json");
     fs::write(&manifest, "{}").unwrap();
@@ -1571,14 +1514,9 @@ fn concurrent_global_writers_preserve_independent_updates() {
         key_started.send(()).unwrap();
         groundhog_cli::config::save_default_key("alice")
     });
-    let credentials_writer = std::thread::spawn(move || {
+    let profiles_writer = std::thread::spawn(move || {
         started_tx.send(()).unwrap();
-        groundhog_cli::config::save_executor_credentials(
-            &groundhog_cli::config::ExecutorCredentials {
-                username: "user".into(),
-                password: "secret".into(),
-            },
-        )
+        groundhog_cli::config::initialize_global_profiles()
     });
 
     started_rx.recv().unwrap();
@@ -1586,7 +1524,7 @@ fn concurrent_global_writers_preserve_independent_updates() {
     std::thread::sleep(std::time::Duration::from_millis(100));
     drop(lock);
     key_writer.join().unwrap().unwrap();
-    credentials_writer.join().unwrap().unwrap();
+    profiles_writer.join().unwrap().unwrap();
 
     assert_eq!(
         groundhog_cli::config::load_default_key()
@@ -1595,11 +1533,11 @@ fn concurrent_global_writers_preserve_independent_updates() {
         Some("alice")
     );
     assert_eq!(
-        groundhog_cli::config::load_executor_credentials()
+        groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet"))
             .unwrap()
-            .unwrap()
-            .password,
-        "secret"
+            .rpc_url
+            .as_deref(),
+        Some("https://rpc.thruput.network")
     );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -2537,13 +2475,9 @@ network = "preview"
 
     let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
     let key = groundhog_cli::config::load_default_key().unwrap();
-    let credentials = groundhog_cli::config::load_executor_credentials()
-        .unwrap()
-        .unwrap();
 
     assert_eq!(profile.name, "valid");
     assert_eq!(key.as_deref(), Some("alice"));
-    assert_eq!(credentials.username, "sdk");
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
@@ -2663,5 +2597,27 @@ fn invalid_profile_reason_identifies_layer_without_duplicate_wrapping() {
     );
     assert!(message.contains("project config"));
     assert!(message.contains(project_path.to_string_lossy().as_ref()));
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn unrelated_global_writes_preserve_ignored_legacy_executor_table() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let legacy =
+        "[executor]\npassword = 42 # legacy value is not interpreted\nplugin_token = \"keep\"\n";
+    fs::write(global_config_path(&tmp), legacy).unwrap();
+    groundhog_cli::config::initialize_global_profiles().unwrap();
+    groundhog_cli::config::save_default_key("alice").unwrap();
+    let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
+    assert!(contents.contains(legacy));
+    assert_eq!(
+        groundhog_cli::config::load_default_key()
+            .unwrap()
+            .as_deref(),
+        Some("alice")
+    );
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

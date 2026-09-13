@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{CliError, Print};
 
-const INIT_STEPS: usize = 5;
+const INIT_STEPS: usize = 4;
 const DEFAULT_LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
 
 const RESET: &str = "\x1b[0m";
@@ -29,13 +29,12 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     let report = crate::checks::collect_report(project_start, None)?;
     let has_project = report.project.config_path.is_some();
     let usable_default_key = usable_default_key_for_init(&report);
-    let has_credentials = report.credentials.executor_credentials;
 
     crate::config::initialize_global_profiles()?;
     let mut ui = InitUi::new(print);
     ui.render_intro();
 
-    if report.environment.cargo && usable_default_key.is_some() && has_credentials {
+    if report.environment.cargo && usable_default_key.is_some() {
         report_ready(project_start, usable_default_key, &mut ui)?;
         return Ok(());
     }
@@ -54,9 +53,6 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
 
     ui.begin_step(InitStep::SigningKey);
     handle_key_step(&report, usable_default_key, &mut ui)?;
-
-    ui.begin_step(InitStep::ExecutorCredentials);
-    handle_credentials_step(&report, &mut ui)?;
 
     ui.begin_step(InitStep::Project);
     let project_context = handle_scaffold_step(has_project, project_start, &report, &mut ui)?;
@@ -150,30 +146,6 @@ fn usable_default_key_for_init(
         .find(|key| key.name == global_default)
 }
 
-fn handle_credentials_step(
-    report: &crate::checks::StatusReport,
-    ui: &mut InitUi<'_>,
-) -> Result<(), CliError> {
-    if report.credentials.executor_credentials {
-        ui.success("Mock-executor download credentials available");
-        ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
-    } else {
-        ui.note("Mock-executor download credentials are not configured");
-        if !ui.print.is_quiet()
-            && ui
-                .print
-                .ask("Configure mock-executor download credentials now?", true)?
-        {
-            crate::auth::configure_executor_credentials_from_init(ui.print)?;
-            ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
-        } else {
-            ui.finish_step(InitStep::ExecutorCredentials, StepState::Skipped);
-        }
-    }
-
-    Ok(())
-}
-
 fn handle_scaffold_step(
     has_project: bool,
     project_start: &Path,
@@ -241,7 +213,6 @@ enum InitStep {
     Environment,
     Profiles,
     SigningKey,
-    ExecutorCredentials,
     Project,
 }
 
@@ -250,7 +221,6 @@ impl InitStep {
         Self::Environment,
         Self::Profiles,
         Self::SigningKey,
-        Self::ExecutorCredentials,
         Self::Project,
     ];
 
@@ -259,8 +229,7 @@ impl InitStep {
             Self::Environment => 0,
             Self::Profiles => 1,
             Self::SigningKey => 2,
-            Self::ExecutorCredentials => 3,
-            Self::Project => 4,
+            Self::Project => 3,
         }
     }
 
@@ -269,7 +238,6 @@ impl InitStep {
             Self::Environment => "Environment",
             Self::Profiles => "Profiles",
             Self::SigningKey => "Signing key",
-            Self::ExecutorCredentials => "Mock-executor download credentials",
             Self::Project => "Project",
         }
     }

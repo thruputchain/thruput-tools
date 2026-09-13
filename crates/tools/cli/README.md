@@ -157,8 +157,8 @@ the target rustflags.
 ### `groundhog init`
 
 Interactive first-run setup wizard. Checks your toolchain,
-generates a signing key, stores mock-executor download credentials,
-and optionally scaffolds a starter project. Re-running when already
+generates a signing key, configures profiles, and optionally scaffolds a starter
+project. Re-running when already
 configured is a no-op.
 
 ```bash
@@ -170,10 +170,10 @@ groundhog init --json   # delegates to `groundhog status --json`
 
 Non-interactive diagnostic. Reports the active project Rust toolchain,
 `rust-src`, and RV32 target; resolves and probes `hog-devnode`; locates and
-validates its `dev_wallet.rv32a`; and checks keys, mock-executor download
-authentication, and project config. Authentication is available when
-`HOGD_FFI_PASSWORD` is set or credentials are stored in the global Groundhog
-config. Exits 0 when there are no warning-level findings, 1 when warnings exist.
+validates its `dev_wallet.rv32a`; and checks keys and project config.
+Exits 0 when there are no warning-level findings, 1 when warnings exist.
+The status JSON payload uses schema version 2; the obsolete executor
+credentials field has been removed.
 
 ```bash
 groundhog status              # human-readable report
@@ -181,21 +181,6 @@ groundhog status --json       # structured output for scripts
 groundhog status --quiet      # exit code only (for CI)
 groundhog status --profile p  # check a specific profile
 ```
-
-Environment variables take precedence over the equivalent global config:
-
-```toml
-[executor]
-username = "marmot"
-password = "..."
-```
-
-The username is optional. Omit it to use the SDK default.
-
-To rotate these credentials, edit the values in
-`~/.config/groundhog/config.toml` (or the corresponding
-`$XDG_CONFIG_HOME` path). To remove them, delete the `[executor]`
-table. `groundhog init` only fills in missing credentials.
 
 ### `groundhog new <name>`
 
@@ -231,11 +216,9 @@ same profile, toolchain, and target directory. Run `groundhog build -p
 
 Run contract tests against the test executor. During early access, follow the
 invite instructions to authenticate Cargo with the private Groundhog registry
-before building generated projects. The SDK downloads the mock-executor FFI using
-`HOGD_FFI_PASSWORD` and optional `HOGD_FFI_USER`. When those are absent,
-`groundhog test` injects credentials stored by `groundhog init` or written to the
-global Groundhog config. Environment variables take precedence. Tests target the
-host platform so they run natively.
+before building generated projects. The SDK downloads checksum-verified
+mock-executor FFI artifacts from public storage without download credentials.
+Tests target the host platform so they run natively.
 
 ```bash
 groundhog test                              # run all tests

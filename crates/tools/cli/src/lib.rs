@@ -4,7 +4,6 @@ pub mod abort_json;
 pub(crate) mod account_resolution;
 pub mod airdrop;
 pub mod artifacts;
-pub mod auth;
 pub mod balance;
 pub mod build;
 pub mod byte_size;

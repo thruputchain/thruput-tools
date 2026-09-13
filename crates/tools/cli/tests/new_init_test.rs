@@ -56,13 +56,7 @@ fn init_configures_profiles_and_succeeds() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    // Pre-store credentials and a key so the wizard does not
-    // prompt for credential setup or key generation.
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "test".into(),
-        password: "pass".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+    // Pre-store a key so the wizard does not prompt for key generation.
     groundhog_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet())
         .unwrap();
 
@@ -187,7 +181,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
 
 #[test]
 #[serial]
-fn init_accepts_credentials_from_global_config() {
+fn init_preserves_ignored_legacy_executor_config() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
@@ -196,20 +190,17 @@ fn init_accepts_credentials_from_global_config() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    // Pre-populate executor credentials.
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "test".into(),
-        password: "pass".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+    let legacy = "[executor]\nusername = \"legacy\"\npassword = \"private-password\"\n";
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(tmp.path().join("groundhog/config.toml"), legacy).unwrap();
 
     groundhog_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet())
         .unwrap();
 
     groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
 
-    let loaded = groundhog_cli::config::load_executor_credentials().unwrap();
-    assert!(loaded.is_some());
+    let contents = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
+    assert!(contents.contains(legacy));
 
     unsafe {
         env::remove_var("CARGO_HOME");
@@ -230,11 +221,8 @@ fn quiet_init_without_credentials_generates_default_key_only() {
 
     groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
 
-    assert!(
-        groundhog_cli::config::load_executor_credentials()
-            .unwrap()
-            .is_none()
-    );
+    let contents = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
+    assert!(!contents.contains("[executor]"));
     let keys = groundhog_cli::keys::load_key_summaries().unwrap();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].name, "default");
@@ -264,12 +252,6 @@ fn init_uses_global_default_when_project_key_is_dangling() {
         env::set_var("CARGO_HOME", &cargo_home);
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
-
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "test".into(),
-        password: "pass".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 

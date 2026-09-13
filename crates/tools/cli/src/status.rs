@@ -1,6 +1,6 @@
 //! `groundhog status` — non-interactive diagnostic.
 //!
-//! Reports the RV32 toolchain, local devnode, keys, credentials,
+//! Reports the RV32 toolchain, local devnode, keys,
 //! and project context.
 //! Never modifies state. Exits 0 when clean, 1 when findings
 //! exist. `--json` emits a single structured object; `--quiet`
@@ -14,7 +14,7 @@ use crate::checks::{self, FindingLevel};
 use crate::{CliError, Print};
 
 /// Schema version of the `status --json` data payload.
-pub const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
+pub const STATUS_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Run the `status` diagnostic command.
 pub fn run(
@@ -34,7 +34,6 @@ pub fn run(
                 "schemaVersion": STATUS_JSON_SCHEMA_VERSION,
                 "environment": &report.environment,
                 "keys": &report.keys,
-                "credentials": &report.credentials,
                 "project": {
                     "configPath":
                         report.project.config_path,
@@ -126,7 +125,6 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
         ),
         ("Keys".into(), keys_label(report)),
         ("Default Key".into(), default_key_label(report)),
-        ("Mock Executor Auth".into(), credentials_label(report)),
         ("Project".into(), project_label(report)),
     ];
 
@@ -218,16 +216,6 @@ fn default_key_label(report: &checks::StatusReport) -> String {
             format!("{name} ({source})")
         }
         None => "none selected".into(),
-    }
-}
-
-fn credentials_label(report: &checks::StatusReport) -> String {
-    match report.credentials.source {
-        Some(crate::auth::ExecutorCredentialSource::Environment) => {
-            "available (environment)".into()
-        }
-        Some(crate::auth::ExecutorCredentialSource::Config) => "available (config)".into(),
-        None => "not configured".into(),
     }
 }
 
