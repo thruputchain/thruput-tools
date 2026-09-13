@@ -119,8 +119,10 @@ groundhog test
 
 Use `cargo test` for fast native tests. Use `groundhog test` for the generated
 RV32 artifact. They exercise different paths and neither substitutes for the
-other. Use `groundhog test --integration` for RPC tests against an ephemeral
-local node.
+other. The scaffolded SDK downloads its test executor from public storage; no
+FFI download credentials are required. Cargo registry authentication follows
+the early-access setup instructions. Use `groundhog test --integration` for
+RPC tests against an ephemeral local node.
 
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.

@@ -33,13 +33,14 @@ const STUB_TEST_RV32: &str = include_str!("../templates/stub/test_rv32.rs.tmpl")
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
 /// against the real registry, so an unpublished or incompatible pin fails
 /// there (and stays red until the pinned SDK is published).
-pub const SCAFFOLD_SDK_VERSION: &str = "0.32.0";
+pub const SCAFFOLD_SDK_VERSION: &str = "0.34.2";
 
 /// `groundhog-json-rpc-client` version pinned into scaffolded projects.
 ///
-/// Must already be published to the Groundhog registry. The pin is a caret
-/// requirement, so scaffolds pick up newer compatible releases on their own.
-pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.13.0";
+/// Published before the matching CLI in the release workflow. Release PR CI
+/// tests the checked-out client until publication. The caret requirement lets
+/// scaffolds pick up newer compatible releases.
+pub const SCAFFOLD_JSON_RPC_CLIENT_VERSION: &str = "0.16.1";
 
 /// Toolchain channel pinned into scaffolded projects' `rust-toolchain.toml`.
 ///

@@ -37,11 +37,6 @@ fn status_succeeds_when_fully_configured() {
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "test".into(),
-        password: "pass".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
     groundhog_cli::config::initialize_global_profiles().unwrap();
 
     let result = groundhog_cli::status::run(tmp.path(), None, "status", &quiet());
@@ -229,11 +224,6 @@ counter = "{project_counter}"
 
     write_groundhog_registry_config(&cargo_home);
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "test".into(),
-        password: "pass".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
 
     let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
     assert_eq!(report.project.profile_name.as_deref(), Some("local"));

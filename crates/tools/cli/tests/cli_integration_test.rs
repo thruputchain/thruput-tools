@@ -2351,7 +2351,7 @@ fn init_json_delegates_to_status() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "status");
     assert_eq!(stdout["data"]["environment"]["cargo"], true);
-    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], false);
+    assert!(stdout["data"].get("credentials").is_none());
     assert!(!stdout["warnings"].as_array().unwrap().is_empty());
 }
 
@@ -2383,11 +2383,11 @@ fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Setup"));
     assert!(stderr.contains("Set up your local development environment."));
-    assert!(stderr.contains("[1/5] Environment"));
-    assert!(stderr.contains("[2/5] Profiles"));
-    assert!(stderr.contains("[3/5] Signing key"));
-    assert!(stderr.contains("[4/5] Mock-executor download credentials"));
-    assert!(stderr.contains("[5/5] Project"));
+    assert!(stderr.contains("[1/4] Environment"));
+    assert!(stderr.contains("[2/4] Profiles"));
+    assert!(stderr.contains("[3/4] Signing key"));
+    assert!(!stderr.contains("download credentials"));
+    assert!(stderr.contains("[4/4] Project"));
     assert!(stderr.contains("Setup Complete"));
     assert!(stderr.contains("Config:"));
     assert!(stderr.contains("Profile:"));
@@ -2411,7 +2411,7 @@ fn interactive_init_points_to_created_project() {
         .env_remove("HOGD_FFI_PASSWORD");
     let (child, mut terminal) = spawn_with_terminal(command);
     let output_reader = terminal_output_reader(&terminal);
-    terminal.write_all(b"y\nn\ny\ndemo-contract\n").unwrap();
+    terminal.write_all(b"y\ny\ndemo-contract\n").unwrap();
     let output = child.wait_with_output().unwrap();
     let terminal_output = output_reader
         .join()
@@ -2503,11 +2503,7 @@ fn status_json_outputs_structured_payload() {
     assert!(stdout["data"]["environment"]["devWalletArtifact"]["valid"].is_boolean());
     assert!(stdout["data"]["environment"].get("wasm_target").is_none());
     assert!(stdout["data"]["environment"].get("wasm_opt").is_none());
-    assert!(
-        !stdout["data"]["credentials"]["executorCredentials"]
-            .as_bool()
-            .unwrap()
-    );
+    assert!(stdout["data"].get("credentials").is_none());
     assert!(!stdout["warnings"].as_array().unwrap().is_empty());
 }
 
@@ -2650,11 +2646,6 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
         &groundhog_cli::Print::quiet(),
     )
     .unwrap();
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "test".into(),
-        password: "pass".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
     groundhog_cli::config::initialize_global_profiles().unwrap();
 
     let output = groundhog()
@@ -2701,11 +2692,11 @@ fn status_human_output_shows_sections() {
     assert!(!stderr.contains("wasm-opt:"));
     assert!(stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
-    assert!(stderr.contains("Mock Executor Auth: not configured"));
+    assert!(!stderr.contains("Mock Executor Auth"));
 }
 
 #[test]
-fn status_json_detects_mock_executor_auth_from_environment() {
+fn status_json_ignores_legacy_ffi_environment() {
     let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .arg("--json")
@@ -2717,8 +2708,8 @@ fn status_json_detects_mock_executor_auth_from_environment() {
         .unwrap();
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], true);
-    assert_eq!(stdout["data"]["credentials"]["source"], "environment");
+    assert!(stdout["data"].get("credentials").is_none());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("secret"));
     assert!(
         stdout["warnings"]
             .as_array()
@@ -2729,7 +2720,7 @@ fn status_json_detects_mock_executor_auth_from_environment() {
 }
 
 #[test]
-fn status_json_detects_mock_executor_auth_from_config() {
+fn status_json_ignores_legacy_ffi_config() {
     let tmp = TempDir::new().unwrap();
     let config_dir = tmp.path().join("groundhog");
     std::fs::create_dir(&config_dir).unwrap();
@@ -2749,33 +2740,8 @@ fn status_json_detects_mock_executor_auth_from_config() {
         .unwrap();
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], true);
-    assert_eq!(stdout["data"]["credentials"]["source"], "config");
-}
-
-#[test]
-fn status_json_rejects_empty_mock_executor_user() {
-    let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .arg("--json")
-        .arg("status")
-        .env("CARGO_HOME", tmp.path().join("cargo-home"))
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .env("HOGD_FFI_USER", "")
-        .env("HOGD_FFI_PASSWORD", "secret")
-        .output()
-        .unwrap();
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["credentials"]["executorCredentials"], false);
-    assert!(stdout["data"]["credentials"].get("source").is_none());
-    assert!(
-        stdout["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning["code"] == "no_credentials")
-    );
+    assert!(stdout["data"].get("credentials").is_none());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("secret"));
 }
 
 #[test]
@@ -3513,10 +3479,13 @@ fn test_json_failed_run_emits_report_on_stdout() {
 
 #[cfg(unix)]
 #[test]
-fn test_rv32_harness_receives_resolved_cargo_target_dir() {
+fn test_rv32_harness_receives_target_dir_without_legacy_ffi_credentials() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("legacy-config");
+    let legacy = "default_profile = \"default\"\n\n[profile.default]\n\n[executor]\nusername = \"private-user\"\npassword = \"private-password\"\n";
+    write_global_config(&config_home, legacy);
     std::fs::write(
         tmp.path().join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -3528,9 +3497,8 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
     std::fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
     let target_dir = tmp.path().join("configured-target");
-    let raw_elf = target_dir
-        .join("riscv32im-unknown-none-elf/release")
-        .join("demo_contract");
+    let raw_dir = target_dir.join("riscv32im-unknown-none-elf/release");
+    let raw_elf = raw_dir.join("demo_contract");
     let elf_fixture = tmp.path().join("fixture.elf");
     std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = serde_json::json!({
@@ -3561,6 +3529,10 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
                 "  exit 0\n",
                 "fi\n",
                 "if [ \"$1\" = \"test\" ]; then\n",
+                "  if [ -n \"${{HOGD_FFI_PASSWORD+x}}${{HOGD_FFI_USER+x}}\" ]; then\n",
+                "    printf 'obsolete FFI credentials reached test child\\n' >&2\n",
+                "    exit 43\n",
+                "  fi\n",
                 "  if [ \"$CARGO_TARGET_DIR\" != '{}' ]; then\n",
                 "    printf 'unexpected CARGO_TARGET_DIR: %s\\n' \"$CARGO_TARGET_DIR\" >&2\n",
                 "    exit 42\n",
@@ -3574,24 +3546,20 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
                 "exit 1\n",
             ),
             metadata_json,
-            raw_elf
-                .parent()
-                .expect("bug: raw elf parent should exist")
-                .display(),
+            raw_dir.display(),
             elf_fixture.display(),
             raw_elf.display(),
             target_dir.display(),
         ),
     )
     .unwrap();
-    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&cargo, perms).unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let output = groundhog()
         .args(["--json", "test", "-p", "demo-contract"])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
 
@@ -3602,6 +3570,11 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        legacy
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-password"));
     assert_eq!(stdout["data"]["mode"], "rv32");
     assert_eq!(
         stdout["data"]["artifact"]["path"].as_str().unwrap(),

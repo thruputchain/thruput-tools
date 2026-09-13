@@ -103,15 +103,6 @@ pub struct KeyStatus {
     pub global_default_key: Option<String>,
 }
 
-/// Mock-executor FFI download credential availability.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialStatus {
-    pub executor_credentials: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<crate::auth::ExecutorCredentialSource>,
-}
-
 /// Project-level context for the current working directory.
 #[derive(Debug, Default, Serialize)]
 pub struct ProjectContext {
@@ -144,7 +135,6 @@ pub struct ProjectContext {
 pub struct StatusReport {
     pub environment: EnvironmentStatus,
     pub keys: KeyStatus,
-    pub credentials: CredentialStatus,
     pub project: ProjectContext,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<Finding>,
@@ -186,7 +176,7 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
     let (rust_toolchain, rv32_target) = detect_rust_environment(project_start);
     let devnode = check_devnode();
     let dev_wallet_artifact = check_dev_wallet_artifact(&devnode);
-    let cargo_config_path = crate::auth::cargo_config_path()?;
+    let cargo_config_path = crate::config::cargo_config_path()?;
 
     let registry_configured = match std::fs::read_to_string(&cargo_config_path) {
         Ok(contents) => contents.contains("[registries.groundhog]"),
@@ -210,15 +200,6 @@ pub fn check_keys() -> Result<KeyStatus, CliError> {
     Ok(KeyStatus {
         keys: crate::keys::load_key_summaries()?,
         global_default_key: crate::config::load_default_key()?,
-    })
-}
-
-/// Check whether mock-executor FFI download credentials are available.
-pub fn check_credentials() -> Result<CredentialStatus, CliError> {
-    let source = crate::auth::executor_credential_source()?;
-    Ok(CredentialStatus {
-        executor_credentials: source.is_some(),
-        source,
     })
 }
 
@@ -428,7 +409,6 @@ pub fn collect_report(
 ) -> Result<StatusReport, CliError> {
     let environment = check_environment(project_start)?;
     let keys = check_keys()?;
-    let credentials = check_credentials()?;
     let project = check_project(project_start, explicit_profile)?;
     let mut findings = Vec::new();
 
@@ -444,22 +424,9 @@ pub fn collect_report(
         &mut findings,
     );
 
-    if !credentials.executor_credentials {
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "no_credentials",
-            message: "mock-executor FFI download credentials not found".into(),
-            hint: Some(Cow::Borrowed(
-                "set HOGD_FFI_PASSWORD with HOGD_FFI_USER unset or \
-                 nonempty, or run `groundhog init` to store download credentials",
-            )),
-        });
-    }
-
     Ok(StatusReport {
         environment,
         keys,
-        credentials,
         project,
         findings,
         effective_default_key,
@@ -1485,10 +1452,6 @@ mod tests {
                 keys: Vec::new(),
                 global_default_key: None,
             },
-            credentials: CredentialStatus {
-                executor_credentials: true,
-                source: Some(crate::auth::ExecutorCredentialSource::Config),
-            },
             project: ProjectContext::default(),
             findings: Vec::new(),
             effective_default_key: None,
@@ -1764,24 +1727,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn check_credentials_false_when_none_stored() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            std::env::remove_var("HOGD_FFI_PASSWORD");
-        }
-
-        let status = check_credentials().unwrap();
-        assert!(!status.executor_credentials);
-        assert!(status.source.is_none());
-
-        unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
-    }
-
-    #[test]
-    #[serial]
     fn check_project_reports_no_active_profile_when_no_config() {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
@@ -1944,7 +1889,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn collect_report_warns_on_missing_credentials() {
+    fn collect_report_does_not_require_ffi_credentials() {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
@@ -1953,13 +1898,12 @@ mod tests {
         }
 
         let report = collect_report(tmp.path(), None).unwrap();
-        assert!(!report.credentials.executor_credentials);
         assert!(report.has_warnings());
         assert!(
             report
                 .findings
                 .iter()
-                .any(|finding| finding.code == "no_credentials")
+                .all(|finding| finding.code != "no_credentials")
         );
         assert!(
             report
@@ -2012,10 +1956,6 @@ mod tests {
             keys: KeyStatus {
                 keys: Vec::new(),
                 global_default_key: None,
-            },
-            credentials: CredentialStatus {
-                executor_credentials: true,
-                source: Some(crate::auth::ExecutorCredentialSource::Config),
             },
             project: ProjectContext::default(),
             findings: vec![Finding {

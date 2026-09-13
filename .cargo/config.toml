@@ -3,35 +3,3 @@ index = "sparse+https://crates.thruput.network/api/v1/crates/"
 
 [source.groundhog]
 registry = "sparse+https://crates.thruput.network/api/v1/crates/"
-
-# Migrated crate archives retain legacy registry URLs in their manifests.
-# Keep vendored dependency identities on the canonical registry until those
-# upstream crates are republished and our dependency pins are updated.
-[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]
-groundhog-access-control-if = { version = "=0.1.27", registry = "groundhog" }
-groundhog-contract-spec = { version = "=0.34.0", registry = "groundhog" }
-groundhog-contract-util = { version = "=0.34.0", registry = "groundhog" }
-groundhog-erc20-if = { version = "=0.1.27", registry = "groundhog" }
-groundhog-erc20-pausable-if = { version = "=0.1.27", registry = "groundhog" }
-groundhog-erc20-permit-if = { version = "=0.1.27", registry = "groundhog" }
-groundhog-event = { version = "=0.34.0", registry = "groundhog" }
-groundhog-macros = { version = "=0.34.0", registry = "groundhog" }
-groundhog-rv32-runtime = { version = "=0.34.0", registry = "groundhog" }
-groundhog-serde_arrays = { version = "=0.2.0", registry = "groundhog" }
-groundhog-signed-op-if = { version = "=0.1.27", registry = "groundhog" }
-groundhog-spec = { version = "=0.35.0", registry = "groundhog" }
-groundhog-syscall = { version = "=0.35.0", registry = "groundhog" }
-groundhog-trace = { version = "=0.35.0", registry = "groundhog" }
-groundhog-u256 = { version = "=0.34.0", registry = "groundhog" }
-groundhog-xdr = { version = "=0.35.0", registry = "groundhog" }
-groundhog-xdr-macros = { version = "=0.35.0", registry = "groundhog" }
-groundhog_coordinator = { version = "=0.35.0", registry = "groundhog" }
-groundhog_scheduler = { version = "=0.35.0", registry = "groundhog" }
-groundhog_scp = { version = "=0.35.0", registry = "groundhog" }
-hogexec-internal = { version = "=0.35.0", registry = "groundhog" }
-rpc_api = { version = "=0.1.0", registry = "groundhog" }
-sdk = { version = "=0.34.0", registry = "groundhog" }
-xdr-common = { version = "=0.8.4", registry = "groundhog" }
-xdr-derive = { version = "=0.8.4", registry = "groundhog" }
-xdr-repr = { version = "=0.8.4", registry = "groundhog" }
-xdrs = { version = "=0.8.4", registry = "groundhog" }
