@@ -1870,14 +1870,12 @@ dependencies = [
 name = "groundhog-signing"
 version = "0.16.1"
 dependencies = [
- "groundhog-contract-util",
  "ed25519-dalek",
  "groundhog-domain-separator",
  "groundhog-json-rpc-server",
  "groundhog-tx-validation",
  "groundhog-xdr",
  "hex",
- "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "xdr-common",
