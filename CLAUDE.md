@@ -67,6 +67,9 @@ Workspace crates are grouped by boundary:
   agent knowledge records, the embedded skill, and normalized bundle metadata.
 - **cli** — `groundhog` binary. Build/test/deploy/call/local-node workflow.
   Keep logic in the library crate; `main.rs` should be dispatch only.
+- **toolchain** — embedded trusted devnode catalog, bounded acquisition and
+  extraction, and versioned cache management. Cache lookup remains local and
+  non-mutating; only explicit acquisition receives an HTTP source.
 - **signing** — off-chain transaction signing and construction. Signer trait,
   local Ed25519 signer, canonical address derivation, tx builders for deploy
   and call, XDR encoding.

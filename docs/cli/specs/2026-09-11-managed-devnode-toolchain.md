@@ -1,6 +1,6 @@
 # Managed devnode toolchain: implementation and qualification
 
-GH-232 continues on `mm/gh-232-toolchain`, based on `9ff3c9b`.
+GH-232 continues on `mm/gh-232-toolchain`, rebased onto `6d38333` (RPC 0.17.0).
 The August implementation is preserved on
 `gh-232-managed-devnode-toolchain-port` at `572be4f`.
 
@@ -47,13 +47,14 @@ version as a safe path component and cannot turn it into an arbitrary path.
 
 ## Trusted catalog provenance
 
-The candidate catalog uses public hog-devnode `0.1.27-rc.4`.
+Platform bundle 0.1.27 pins public hog-devnode `0.1.27-rc.7`; the CLI uses
+that exact component version, not the platform version.
 Its manifest was retrieved from authenticated packaging workflow artifact
-`public-hog-devnode-v0.1.27-rc.4`, run `34167428166`, artifact `10034650254`.
+`public-hog-devnode-v0.1.27-rc.7`, run `34737642408`, artifact `10311661280`.
 The run succeeded at packaging commit
-`b73a88da945469ed3c72b03e5f70176dc48bb686`.
+`8680a36d313c704d7cfaf5f8f408c129e3b43977`.
 The authenticated manifest and public HTTPS manifest have identical SHA-256:
-`0c95c0a6d3e4256a68b297492b7bdb1b6217fcf1bedcaf98df5ea8db7029bc07`.
+`5e71d0df7e65e0858d1e5e92ad0a19a1c8d6d3aa65b609f00ae6a0b87cab0673`.
 
 The catalog copies each target's archive, objectKey, size, sha256, layoutVersion,
 files, and compatibility fields, plus source repository/ref, into catalog
@@ -62,29 +63,13 @@ it is not the same schema as the embedded catalog. The signed macOS derivative
 has different bytes from the original hogd archive, so its packaging output is
 the trust handoff. All three public target archives passed the real installer.
 
-## Unresolved release blocker
+## Release qualification
 
-**This candidate is not ready to merge or publish.** The catalog version is a
-verified acquisition candidate, not a qualified default for current main.
-Fresh-cache startup without overrides fails with:
-
-```
-hog-devnode runtime manifest is missing endpoints.schedulerGateway
-```
-
-The bundle's hogd tag pins protocol `236f9821a6244aff27ec0fa014a98ea4ad4c0326`;
-current groundhog-xdr 0.35.0 advertises `hogp/63c9284d8d5727e`.
-Do not suppress manifest/protocol validation or downgrade current dependencies
-to make this bundle start. Publish a matching hogd bundle through the existing
-packaging flow, import its authenticated catalog fragment, and run the gates.
-
-A concrete producer source candidate is hogd `b10b8cc2bd4bf4bacb3ff97ec13673b92ace2559`
-(live main verified during this work). Its committed protocol gitlink is exactly
-`63c9284d8d5727e8355b0b3d01e5e40f15478a89`, and
-`hogd/devnode/runtime_manifest.cc` emits `schedulerGateway`. This establishes
-source alignment only; it still needs normal build/release qualification.
-Use an isolated checkout with exact submodules: the existing local hogd working
-checkout has submodule changes and must not be used as evidence for that commit.
+The rc.7 bundle resolves the earlier missing `schedulerGateway` manifest
+endpoint. Its protocol matches current main. The real managed startup smoke
+now passes on macOS, native Linux ARM64, and emulated Linux x86_64 without
+a binary or protocol override, including RPC,
+clean shutdown, offline persistent restart, and local status discovery.
 
 The pre-publication workflow now runs, before creating a tag or publishing:
 
@@ -97,8 +82,8 @@ The pre-publication workflow now runs, before creating a tag or publishing:
 The smoke clears binary/protocol/mirror overrides, copies the CLI away from
 sibling binaries, isolates XDG directories, and cleans all processes in its
 owned session on failure. Startup qualification must pass before release.
-Linux runtime qualification still needs supported Linux hosts; downloading all
-three targets on macOS verifies bytes/layout, not Linux execution.
+Linux qualification used Ubuntu 26.04 for native ARM64 and emulated x86_64.
+The x86_64 result verifies execution under emulation, not native host behavior.
 
 ## Validation commands
 
@@ -111,22 +96,22 @@ scripts/smoke-managed-toolchain.sh
 cargo run -p groundhog-agent-knowledge -- check
 ```
 
-When the registry migration blocked online dependency fetches, tests and clippy
-used command-only source replacement pointing to the existing groundhog.dev
-cache with Cargo `--offline`. Repository registry configuration and locked
-package versions/checksums were preserved. A stale inherited token was then
-identified: the environment token returned 403, while the saved registry token
-returned 200. No credentials were written or rotated by this work.
-
 ## Current verification result
 
-- Workspace tests, workspace Clippy with all targets and warnings denied,
-  formatting, and knowledge-bundle validation passed.
+- The catalog pin test first failed against rc.4, then passed with the exact
+  authenticated rc.7 manifest records. Independent catalog review found no
+  mismatched target metadata or trust-boundary changes.
 - All three public bundles passed the real installer in an empty cache.
-- Fresh-cache macOS startup failed at the runtime-manifest boundary shown above;
-  offline restart and real RPC qualification remain unverified.
-- Removing the stale environment token for the command only allowed a complete
-  locked fetch and workspace build against crates.thruput.network to pass.
-- Independent slice reviews and a fresh whole-change review completed. Findings
-  were addressed, including smoke descendant cleanup and deriving the tested
-  executable from Cargo build output instead of assuming a target directory.
+- Fresh-cache macOS startup, chainTip RPC, clean shutdown, offline recovery,
+  and non-mutating managed status passed without overrides.
+- Native Linux ARM64 and emulated x86_64 managed startup and offline recovery
+  passed on Ubuntu 26.04, along with all ten CLI toolchain integration tests
+  on each target.
+- Workspace tests, warning-free build, all-target Clippy, formatting, and agent
+  knowledge checks passed. Final independent whole-change review found no
+  actionable issues.
+- The macOS local-DX smoke passed using the installed managed binary: scaffold,
+  build, deploy/call/view/storage, transfers/history/events, saved-wallet
+  creation and funding, and dump/restore with state recovery and further calls.
+  Cargo used an isolated configuration with one registry alias to avoid a
+  duplicate alias in the developer configuration; no protocol override was used.
