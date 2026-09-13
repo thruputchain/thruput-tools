@@ -23,7 +23,7 @@ const STUB_IMPL: &str = include_str!("../templates/stub/implementation.rs.tmpl")
 const STUB_TEST: &str = include_str!("../templates/stub/test.rs.tmpl");
 const STUB_TEST_RV32: &str = include_str!("../templates/stub/test_rv32.rs.tmpl");
 
-/// SDK version pinned into scaffolded projects.
+/// SDK version exact-pinned into both scaffold target dependencies.
 ///
 /// Generated projects resolve outside this workspace, so this must be a
 /// version published to the Groundhog registry, and one whose raw spec
