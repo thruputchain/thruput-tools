@@ -18,12 +18,12 @@ env:
     groundhog-json-rpc-api
     groundhog-open-rpc-spec
     groundhog-x23-transport
+    groundhog-rv32-artifact
     groundhog-tx-validation
     groundhog-json-rpc-server
     groundhog-json-rpc-client
     groundhog-signing
     groundhog-node-supervisor
-    groundhog-rv32-artifact
     groundhog-rv32-lower
     groundhog-cli
     groundhog-testkit
