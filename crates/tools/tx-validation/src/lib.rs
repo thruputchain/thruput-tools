@@ -183,6 +183,134 @@ impl NetworkConfigParams {
     }
 }
 
+/// The name a chain execution parameter carries outside its XDR encoding.
+///
+/// The protocol encodes each parameter as a `ConfigParam` union arm; every
+/// surface that has to *say* which parameter it means spells the arm's field
+/// name instead. hog-devnode's `--network-config NAME=VALUE` flag keys its
+/// genesis overrides by these names and records them under the same names in
+/// a data directory's bootstrap metadata. This enum is the one place the
+/// Rust side spells them, so a parameter cannot reach hog-devnode under a
+/// name no parameter has.
+///
+/// Naming a parameter says nothing about which values it admits; that stays
+/// hog-devnode's call, against the ceilings its build was compiled with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum ConfigParamName {
+    /// [`NetworkConfigParams::max_sha256_buffers`].
+    MaxSha256Buffers,
+    /// [`NetworkConfigParams::max_cross_invoke_depth`].
+    MaxCrossInvokeDepth,
+    /// [`NetworkConfigParams::max_new_contracts_per_tx`].
+    MaxNewContractsPerTx,
+    /// [`NetworkConfigParams::max_bytestring_len`].
+    MaxBytestringLen,
+    /// [`NetworkConfigParams::max_contract_size_bytes`].
+    MaxContractSizeBytes,
+    /// [`NetworkConfigParams::max_savepoint_depth`].
+    MaxSavepointDepth,
+    /// [`NetworkConfigParams::max_sha256_buffer_bytes`].
+    MaxSha256BufferBytes,
+    /// [`NetworkConfigParams::max_auth_token_depth`].
+    MaxAuthTokenDepth,
+    /// [`NetworkConfigParams::max_rv32_code_bytes`].
+    MaxRv32CodeBytes,
+    /// [`NetworkConfigParams::max_rv32_memory_bytes`].
+    MaxRv32MemoryBytes,
+}
+
+impl ConfigParamName {
+    /// Every parameter this build names, in protocol id order.
+    pub const ALL: &[Self] = &[
+        Self::MaxSha256Buffers,
+        Self::MaxCrossInvokeDepth,
+        Self::MaxNewContractsPerTx,
+        Self::MaxBytestringLen,
+        Self::MaxContractSizeBytes,
+        Self::MaxSavepointDepth,
+        Self::MaxSha256BufferBytes,
+        Self::MaxAuthTokenDepth,
+        Self::MaxRv32CodeBytes,
+        Self::MaxRv32MemoryBytes,
+    ];
+
+    /// The protocol's field name for this parameter.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MaxSha256Buffers => "max_sha256_buffers",
+            Self::MaxCrossInvokeDepth => "max_cross_invoke_depth",
+            Self::MaxNewContractsPerTx => "max_new_contracts_per_tx",
+            Self::MaxBytestringLen => "max_bytestring_len",
+            Self::MaxContractSizeBytes => "max_contract_size_bytes",
+            Self::MaxSavepointDepth => "max_savepoint_depth",
+            Self::MaxSha256BufferBytes => "max_sha256_buffer_bytes",
+            Self::MaxAuthTokenDepth => "max_auth_token_depth",
+            Self::MaxRv32CodeBytes => "max_rv32_code_bytes",
+            Self::MaxRv32MemoryBytes => "max_rv32_memory_bytes",
+        }
+    }
+
+    /// The value `params` states for this parameter, `None` when unstated.
+    ///
+    /// This is the binding between a name and the field it reads, so a
+    /// parameter added to one has to be added to the other.
+    pub fn stated_in(self, params: &NetworkConfigParams) -> Option<u32> {
+        match self {
+            Self::MaxSha256Buffers => params.max_sha256_buffers,
+            Self::MaxCrossInvokeDepth => params.max_cross_invoke_depth,
+            Self::MaxNewContractsPerTx => params.max_new_contracts_per_tx,
+            Self::MaxBytestringLen => params.max_bytestring_len,
+            Self::MaxContractSizeBytes => params.max_contract_size_bytes,
+            Self::MaxSavepointDepth => params.max_savepoint_depth,
+            Self::MaxSha256BufferBytes => params.max_sha256_buffer_bytes,
+            Self::MaxAuthTokenDepth => params.max_auth_token_depth,
+            Self::MaxRv32CodeBytes => params.max_rv32_code_bytes,
+            Self::MaxRv32MemoryBytes => params.max_rv32_memory_bytes,
+        }
+    }
+
+    /// The names this build knows, comma-separated, for diagnostics.
+    pub fn known_names() -> String {
+        Self::ALL
+            .iter()
+            .map(|param| param.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl std::fmt::Display for ConfigParamName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ConfigParamName {
+    type Err = UnknownConfigParamName;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|param| param.as_str() == name)
+            .ok_or_else(|| UnknownConfigParamName {
+                name: name.to_string(),
+            })
+    }
+}
+
+/// A name that does not belong to any parameter this build knows.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "unknown network parameter {name:?}; this build knows {}",
+    ConfigParamName::known_names()
+)]
+pub struct UnknownConfigParamName {
+    /// The name as it was written.
+    pub name: String,
+}
+
 /// A network config whose version this build cannot interpret.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unsupported network config version: {config}")]
@@ -334,6 +462,89 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
                 params: VecM(params),
             },
         }
+    }
+
+    /// The `ConfigParam` that states `value` for `name`.
+    ///
+    /// Exhaustive on purpose: a parameter added to [`ConfigParamName`] does
+    /// not compile here until it is given its union arm, and the test below
+    /// then fails until `from_network_config` lands it on its field.
+    fn stated(name: ConfigParamName, value: u32) -> ConfigParam {
+        match name {
+            ConfigParamName::MaxSha256Buffers => ConfigParam::kConfigParamMaxSHA256Buffers {
+                max_sha256_buffers: value,
+            },
+            ConfigParamName::MaxCrossInvokeDepth => ConfigParam::kConfigParamMaxCrossInvokeDepth {
+                max_cross_invoke_depth: value,
+            },
+            ConfigParamName::MaxNewContractsPerTx => {
+                ConfigParam::kConfigParamMaxNewContractsPerTx {
+                    max_new_contracts_per_tx: value,
+                }
+            }
+            ConfigParamName::MaxBytestringLen => ConfigParam::kConfigParamMaxBytestringLen {
+                max_bytestring_len: value,
+            },
+            ConfigParamName::MaxContractSizeBytes => {
+                ConfigParam::kConfigParamMaxContractSizeBytes {
+                    max_contract_size_bytes: value,
+                }
+            }
+            ConfigParamName::MaxSavepointDepth => ConfigParam::kConfigParamMaxSavepointDepth {
+                max_savepoint_depth: value,
+            },
+            ConfigParamName::MaxSha256BufferBytes => {
+                ConfigParam::kConfigParamMaxSHA256BufferBytes {
+                    max_sha256_buffer_bytes: value,
+                }
+            }
+            ConfigParamName::MaxAuthTokenDepth => ConfigParam::kConfigParamMaxAuthTokenDepth {
+                max_auth_token_depth: value,
+            },
+            ConfigParamName::MaxRv32CodeBytes => ConfigParam::kConfigParamMaxRv32CodeBytes {
+                max_rv32_code_bytes: value,
+            },
+            ConfigParamName::MaxRv32MemoryBytes => ConfigParam::kConfigParamMaxRv32MemoryBytes {
+                max_rv32_memory_bytes: value,
+            },
+        }
+    }
+
+    #[test]
+    fn every_named_parameter_flattens_onto_the_field_it_names() {
+        for (index, name) in ConfigParamName::ALL.iter().copied().enumerate() {
+            let value = 1_000 + index as u32;
+
+            let params = NetworkConfigParams::from_network_config(&network_config(vec![stated(
+                name, value,
+            )]))
+            .unwrap();
+
+            assert_eq!(name.stated_in(&params), Some(value), "{name}");
+            for other in ConfigParamName::ALL.iter().copied() {
+                if other != name {
+                    assert_eq!(other.stated_in(&params), None, "{name} also stated {other}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn names_round_trip_and_an_unknown_one_lists_the_known_names() {
+        for name in ConfigParamName::ALL.iter().copied() {
+            assert_eq!(name.as_str().parse::<ConfigParamName>(), Ok(name));
+            assert_eq!(name.to_string(), name.as_str());
+        }
+
+        let error = "max_rv32_memmory_bytes"
+            .parse::<ConfigParamName>()
+            .unwrap_err();
+
+        assert_eq!(error.name, "max_rv32_memmory_bytes");
+        assert!(
+            error.to_string().contains("max_rv32_memory_bytes"),
+            "{error}"
+        );
     }
 
     fn max_contracts(max_new_contracts_per_tx: u32) -> NetworkConfigParams {

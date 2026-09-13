@@ -10,9 +10,9 @@ use std::io::{self, BufRead, Write};
 
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_signing::{
-    BuildCallTransaction, DEFAULT_DEV_ACCOUNT_SEED, LocalSigner, PubkeyAccount,
-    SignTransactionParams, Signer, build_call_transaction, derive_dev_account_signer,
-    sign_and_encode_transaction_hex,
+    BuildCallTransaction, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner,
+    PubkeyAccount, SignTransactionParams, Signer, build_call_transaction,
+    derive_dev_account_signer, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, NetworkHash, SHA256Hash};
@@ -36,8 +36,25 @@ fn fixed<const N: usize>(value: &Value, field: &str) -> Result<[u8; N], Box<dyn 
         .map_err(|_| invalid("wrong fixed-width hex length").into())
 }
 
+/// The pubkey account this signer signs for.
+fn pubkey_account(signer: &LocalSigner) -> PubkeyAccount {
+    PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
+}
+
+/// `DefaultWallet.execute`, the entrypoint a pubkey account's root address
+/// answers on. Pinned to the wallet version hogd's precompile ships.
+fn default_wallet_execute() -> Result<ContractEntrypointID, Box<dyn Error>> {
+    let id = contract_entrypoint_id(
+        Some("DefaultWallet"),
+        "0.1.0",
+        &NormalizedMethodSignature::new("execute"),
+    );
+    let truncated: [u8; 8] = id.as_ref()[..8].try_into()?;
+    Ok(ContractEntrypointID::from(truncated))
+}
+
 fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
-    let account = PubkeyAccount::new(signer.public_key(), 0);
+    let account = pubkey_account(signer);
     let network = NetworkHash::new(SHA256Hash::new(fixed(value, "networkHash")?));
     let gas_limit = value["gasLimit"]
         .as_u64()
@@ -52,15 +69,9 @@ fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
         gas_limit,
         calldata,
     )];
-    let execute_id = contract_entrypoint_id(
-        Some("DefaultWallet"),
-        "0.1.0",
-        &NormalizedMethodSignature::new("execute"),
-    );
-    let execute_bytes: [u8; 8] = execute_id.as_ref()[..8].try_into()?;
     let transaction = build_call_transaction(BuildCallTransaction {
         invoked_address: account.address(),
-        entrypoint: ContractEntrypointID::from(execute_bytes),
+        entrypoint: default_wallet_execute()?,
         calldata: xdrs::cxs::encode(&calls)?,
         gas_limit,
         block_expiry_height: value["expiryHeight"]
@@ -83,8 +94,10 @@ fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
 fn main() -> Result<(), Box<dyn Error>> {
     let signer = derive_dev_account_signer(DEFAULT_DEV_ACCOUNT_SEED, 1);
     let mut output = io::BufWriter::new(io::stdout().lock());
-    let account = PubkeyAccount::new(signer.public_key(), 0);
-    let address = format!("0x{}", hex::encode(account.address().as_ref()));
+    let address = format!(
+        "0x{}",
+        hex::encode(pubkey_account(&signer).address().as_ref())
+    );
     writeln!(output, "{}", json!({ "accountAddress": address }))?;
     output.flush()?;
     for line in io::stdin().lock().lines() {

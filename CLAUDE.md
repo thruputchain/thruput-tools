@@ -74,6 +74,9 @@ Workspace crates are grouped by boundary:
   before running a transaction. `NetworkConfigParams` flattens a db tip's
   network config into per-parameter fields (`None` when unstated);
   `check_transaction` reports violations as `TxInvalidDetail`.
+  `ConfigParamName` is the one Rust-side spelling of the parameter names
+  hog-devnode's `--network-config` flag and its data-dir metadata key by;
+  `groundhog node` parses the flag into it rather than passing a free string.
 - **rv32-artifact** — Rust source of truth for the Groundhog RV32 artifact
   format: constants, offsets, fingerprint, writer, and validator.
 - **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The

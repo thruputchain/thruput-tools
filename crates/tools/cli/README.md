@@ -119,10 +119,13 @@ groundhog node \
 ```
 
 Values accept decimal, hexadecimal, and binary K/M/G suffixes (1M = 1,048,576).
-Overrides require a `hog-devnode` build with the matching flag. Unknown parameter
-names, duplicate names, and values beyond the node's compiled ceilings are
-rejected. These settings affect genesis; when using `--data-dir`, supply the
-same overrides on every restart or choose a fresh directory.
+The CLI rejects a name no chain parameter carries and a name given twice, and
+names the ones it knows; hog-devnode rejects a value past the ceilings its
+build was compiled with, so overrides need a `hog-devnode` build carrying the
+matching flag. These settings affect genesis; when using `--data-dir`, supply
+the same overrides on every restart or choose a fresh directory.
+
+## Contract call gas
 
 `groundhog call --gas-limit 200000000` sets the total transaction gas budget
 and the requested inner invocation budget; the inner call remains bounded by

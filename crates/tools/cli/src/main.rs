@@ -449,7 +449,7 @@ enum Command {
         /// Existing data directories must use the same overrides they were created with.
         #[arg(long = "network-config", value_name = "NAME=VALUE",
               value_parser = groundhog_cli::node::parse_network_config_override)]
-        network_config: Vec<(String, u32)>,
+        network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     },
     /// Dump or restore persistent local-chain state
     Chain {
@@ -1648,6 +1648,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use groundhog_node_supervisor::ConfigParamName;
 
     #[test]
     fn config_get_flags_and_command_name_parse() {
@@ -2021,21 +2022,19 @@ mod tests {
             Command::Node { network_config, .. } => assert_eq!(
                 network_config,
                 [
-                    ("max_rv32_memory_bytes".into(), 16_777_216),
-                    ("max_bytestring_len".into(), 32_768),
+                    (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
+                    (ConfigParamName::MaxBytestringLen, 32_768),
                 ]
             ),
             _ => panic!("expected node"),
         }
-        assert!(
-            Cli::try_parse_from([
-                "groundhog",
-                "node",
-                "--network-config",
-                "max_rv32_memory_bytes=4G",
-            ])
-            .is_err()
-        );
+        // Past u32, and a name no parameter carries.
+        for invalid in ["max_rv32_memory_bytes=4G", "max_rv32_memmory_bytes=16M"] {
+            assert!(
+                Cli::try_parse_from(["groundhog", "node", "--network-config", invalid]).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

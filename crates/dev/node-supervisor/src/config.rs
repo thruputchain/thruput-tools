@@ -1,6 +1,7 @@
 //! Configuration for the node supervisor.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -14,6 +15,7 @@ use groundhog_json_rpc_types::bootstrap_manifest::{
 use groundhog_signing::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
 };
+use groundhog_tx_validation::ConfigParamName;
 
 /// Default JSON-RPC listen address for `groundhog node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
@@ -415,9 +417,10 @@ pub struct HogdDevConfig {
     ///
     /// When unset, hog-devnode uses its built-in default capacity.
     pub ramdb_bytes: Option<u64>,
-    /// Genesis execution parameter overrides forwarded to hog-devnode.
-    /// The child rejects unknown names and values outside its build ceilings.
-    pub network_config_overrides: std::collections::BTreeMap<String, u32>,
+    /// Genesis execution parameter values forwarded to hog-devnode in place
+    /// of the ones stock genesis states. The child still rejects a value
+    /// outside the ceilings its build was compiled with.
+    pub network_config_overrides: BTreeMap<ConfigParamName, u32>,
     /// PID file used to detect and clean up orphaned hogd-dev children.
     pub pid_file: Option<PathBuf>,
 }
@@ -436,7 +439,7 @@ impl Default for HogdDevConfig {
             dev_account_seed: DEFAULT_HOGD_DEV_ACCOUNT_SEED.to_string(),
             dev_account_tokens: DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
             ramdb_bytes: None,
-            network_config_overrides: std::collections::BTreeMap::new(),
+            network_config_overrides: BTreeMap::new(),
             pid_file: None,
         }
     }
@@ -447,7 +450,7 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_network_config_overrides(
         mut self,
-        overrides: std::collections::BTreeMap<String, u32>,
+        overrides: BTreeMap<ConfigParamName, u32>,
     ) -> Self {
         self.network_config_overrides = overrides;
         self
