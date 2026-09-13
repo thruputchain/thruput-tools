@@ -274,7 +274,8 @@ impl ConfigParamName {
     pub fn known_names() -> String {
         Self::ALL
             .iter()
-            .map(|param| param.as_str())
+            .copied()
+            .map(Self::as_str)
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -512,9 +513,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn every_named_parameter_flattens_onto_the_field_it_names() {
-        for (index, name) in ConfigParamName::ALL.iter().copied().enumerate() {
-            let value = 1_000 + index as u32;
-
+        for (name, value) in ConfigParamName::ALL.iter().copied().zip(1_000u32..) {
             let params = NetworkConfigParams::from_network_config(&network_config(vec![stated(
                 name, value,
             )]))

@@ -1791,7 +1791,7 @@ mod tests {
         validate_runtime_identity, write_bootstrap_manifest,
     };
     use crate::{
-        HogdDevConfig, NodeSupervisorError,
+        ConfigParamName, HogdDevConfig, NodeSupervisorError,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
