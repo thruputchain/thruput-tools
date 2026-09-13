@@ -1,15 +1,10 @@
 //! Pubkey-account helpers.
 
-use crate::SigningError;
 use groundhog_xdr::auth_claim::{AuthClaim, PubkeyAccountPreimage};
 use groundhog_xdr::types::{ContractAddress, PublicKey};
 
 /// Default nonce used for the first pubkey-account derived from a key.
 pub const DEFAULT_PUBKEY_ACCOUNT_NONCE: u64 = 0;
-
-/// Legacy tag retained for source compatibility. Current addresses use the
-/// shared `PubkeyAccount` domain separator, not this tag.
-pub const PUBKEY_ACCOUNT_TAG_STR: &str = "PUBKEY_ACCOUNT_TAG";
 
 /// A pubkey-backed account with the nonce used in address derivation.
 #[derive(Clone, Debug)]
@@ -52,9 +47,11 @@ impl PubkeyAccount {
     }
 
     /// Derives the canonical contract address for this pubkey account.
-    pub fn address(&self) -> Result<ContractAddress, SigningError> {
-        Ok(groundhog_domain_separator::sha2::pubkey_account_address(
-            &self.preimage(),
-        ))
+    ///
+    /// This is `SHA256(DomainSeparator("PubkeyAccount") || preimage)` over the
+    /// CXS encodings of both, matching what hogd's auth verifier derives. Every
+    /// `PublicKey` variant encodes, so derivation cannot fail.
+    pub fn address(&self) -> ContractAddress {
+        groundhog_domain_separator::sha2::pubkey_account_address(&self.preimage())
     }
 }

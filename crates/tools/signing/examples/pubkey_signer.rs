@@ -59,7 +59,7 @@ fn sign(value: &Value, signer: &LocalSigner) -> Result<String, Box<dyn Error>> {
     );
     let execute_bytes: [u8; 8] = execute_id.as_ref()[..8].try_into()?;
     let transaction = build_call_transaction(BuildCallTransaction {
-        invoked_address: account.address()?,
+        invoked_address: account.address(),
         entrypoint: ContractEntrypointID::from(execute_bytes),
         calldata: xdrs::cxs::encode(&calls)?,
         gas_limit,
@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let signer = derive_dev_account_signer(DEFAULT_DEV_ACCOUNT_SEED, 1);
     let mut output = io::BufWriter::new(io::stdout().lock());
     let account = PubkeyAccount::new(signer.public_key(), 0);
-    let address = format!("0x{}", hex::encode(account.address()?.as_ref()));
+    let address = format!("0x{}", hex::encode(account.address().as_ref()));
     writeln!(output, "{}", json!({ "accountAddress": address }))?;
     output.flush()?;
     for line in io::stdin().lock().lines() {

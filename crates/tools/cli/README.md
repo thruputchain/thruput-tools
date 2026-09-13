@@ -719,4 +719,3 @@ This is a root-only, exclusive mode rather than a global flag; invoke it exactly
 as shown. The command prints the complete Groundhog skill as Markdown without
 network access or filesystem changes. An agent can read it directly, or the
 user can save and install it using the agent's normal skill workflow.
-

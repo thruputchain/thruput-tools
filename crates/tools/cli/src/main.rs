@@ -148,8 +148,9 @@ enum Command {
         #[arg(long)]
         bindings: Vec<String>,
         /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
-        /// multiple of 16, below 64K). RV32 only; sets the SDK linker
-        /// script's `__stack_size`.
+        /// multiple of 16, below the guest data memory). RV32 only; sets the
+        /// SDK linker script's `__stack_size`. The data memory itself is the
+        /// package's `[package.metadata.groundhog] initial_memory_bytes`.
         #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
         stack_size: Option<u32>,
         /// Config profile to use

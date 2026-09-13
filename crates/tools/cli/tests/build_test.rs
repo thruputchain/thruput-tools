@@ -47,11 +47,13 @@ fn resolve_package_with_explicit_name() {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+                metadata: None,
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
+                metadata: None,
             },
         ],
     };
@@ -69,6 +71,7 @@ fn resolve_package_explicit_name_not_found() {
             name: "alpha".into(),
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+            metadata: None,
         }],
     };
     let err = groundhog_cli::build::resolve_package(&meta, Some("nope"), &PathBuf::from("/ws"))
@@ -86,11 +89,13 @@ fn resolve_package_from_member_dir() {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+                metadata: None,
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
+                metadata: None,
             },
         ],
     };
@@ -109,11 +114,13 @@ fn resolve_package_from_workspace_root_errors() {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+                metadata: None,
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
+                metadata: None,
             },
         ],
     };
@@ -131,6 +138,7 @@ fn resolve_package_standalone_project() {
             name: "my-contract".into(),
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
+            metadata: None,
         }],
     };
     let name =
@@ -147,6 +155,7 @@ fn resolve_package_standalone_from_root() {
             name: "my-contract".into(),
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
+            metadata: None,
         }],
     };
     let name = groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj")).unwrap();
@@ -669,6 +678,167 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
         "cargo --config .cargo/contract.toml rustc --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
     );
 }
+
+/// A single-package project whose `cargo metadata` reports `metadata_table`
+/// as the package's `[package.metadata]`, with a fake cargo that logs its
+/// arguments and drops the fixture ELF where the build expects it.
+struct GuestMemoryProject {
+    project_root: PathBuf,
+    target_dir: PathBuf,
+    cargo_args_log: PathBuf,
+    fake_bin: PathBuf,
+}
+
+fn guest_memory_project(tmp: &TempDir, metadata_table: &str) -> GuestMemoryProject {
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_contract_toml(&project_root);
+
+    let target_dir = project_root.join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract_rv32");
+    let cargo_args_log = project_root.join("cargo-args.log");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}},"metadata":{metadata_table}}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            cargo_args_log.display(),
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    GuestMemoryProject {
+        project_root,
+        target_dir,
+        cargo_args_log,
+        fake_bin,
+    }
+}
+
+#[test]
+#[serial]
+fn build_rv32_project_sizes_guest_memory_from_package_metadata() {
+    let tmp = TempDir::new().unwrap();
+    let project = guest_memory_project(&tmp, r#"{"groundhog":{"initial_memory_bytes":"128K"}}"#);
+
+    let _cwd = CurrentDirGuard::enter(&project.project_root);
+    let _path = PathGuard::set(project.fake_bin.as_os_str());
+
+    let result = groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        Some(0x6000),
+        &[],
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: rv32 build with initial_memory_bytes should succeed");
+
+    // The manifest's size rides the same `cargo rustc` trailing flags as the
+    // stack size, so one link sees both symbols.
+    let cargo_args = fs::read_to_string(&project.cargo_args_log).unwrap();
+    assert!(
+        cargo_args.contains(
+            "--locked -- -C link-arg=--defsym=__stack_size=24576 \
+             -C link-arg=--defsym=__memory_size=131072"
+        ),
+        "cargo args: {cargo_args}"
+    );
+
+    // The lowering stamps the declared address space into the artifact header
+    // and reports it, whatever the linker script did with the symbol.
+    assert_eq!(result.memory_bytes, 0x20000);
+    let processed_metadata = project
+        .target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32.json");
+    let metadata: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
+    assert_eq!(metadata["memory_bytes"], 0x20000);
+    assert_eq!(metadata["code_bytes"], result.code_bytes);
+    assert_eq!(
+        metadata["build_flags"],
+        "cargo --config .cargo/contract.toml rustc --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576 -C link-arg=--defsym=__memory_size=131072"
+    );
+    let artifact = fs::read(
+        project
+            .target_dir
+            .join("groundhog")
+            .join("demo_contract_rv32.rv32a"),
+    )
+    .expect("bug: artifact should be written");
+    assert_eq!(
+        u32::from_le_bytes(artifact[48..52].try_into().unwrap()),
+        0x20000,
+        "memory_bytes header field"
+    );
+}
+
+#[test]
+#[serial]
+fn build_rejects_an_unreadable_initial_memory_bytes_before_compiling() {
+    let tmp = TempDir::new().unwrap();
+    let project = guest_memory_project(&tmp, r#"{"groundhog":{"initial_memory_bytes":"12X"}}"#);
+
+    let _cwd = CurrentDirGuard::enter(&project.project_root);
+    let _path = PathGuard::set(project.fake_bin.as_os_str());
+
+    let error = groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &[],
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect_err("bug: an unreadable initial_memory_bytes must refuse the build");
+
+    assert_eq!(error.code(), "package_metadata_invalid");
+    assert!(
+        error.to_string().contains("initial_memory_bytes"),
+        "error: {error}"
+    );
+    // Refused before cargo compiled anything.
+    assert!(!project.cargo_args_log.exists());
+}
+
 #[test]
 fn build_rejects_env_rustflags_before_running_cargo() {
     let tmp = TempDir::new().unwrap();

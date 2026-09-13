@@ -130,6 +130,74 @@
                 "firstIndex"
               ],
               "type": "object"
+            },
+            {
+              "description": "One attached RV32 artifact declares more guest data memory than the chain admits.",
+              "properties": {
+                "index": {
+                  "description": "Zero-based position in `contractsToDeploy`.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxBytes": {
+                  "description": "Guest memory cap in force at the chain tip.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "memoryBytes": {
+                  "description": "`memory_bytes` from the artifact header.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "const": "rv32MemoryTooLarge",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "index",
+                "memoryBytes",
+                "maxBytes"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "One attached RV32 artifact's code section exceeds the chain's code limit.",
+              "properties": {
+                "codeBytes": {
+                  "description": "`code_size` from the artifact header.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "index": {
+                  "description": "Zero-based position in `contractsToDeploy`.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxBytes": {
+                  "description": "Code cap in force at the chain tip.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "const": "rv32CodeTooLarge",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "index",
+                "codeBytes",
+                "maxBytes"
+              ],
+              "type": "object"
             }
           ],
           "title": "TxInvalidDetail"
@@ -1369,7 +1437,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.1.0"
+    "version": "5.2.0"
   },
   "methods": [
     {
@@ -1412,7 +1480,7 @@
           "$ref": "#/components/schemas/TxHash"
         }
       },
-      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
+      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available. Transactions that break an executor pre-execution bound (too many attached contracts for the chain config, an oversized contract, an RV32 artifact declaring more guest memory or code than the chain admits, or a duplicate attachment) are rejected with `TxInvalid` carrying a `TxInvalidDetail` in the error `data`.",
       "tags": [
         {
           "name": "Core API"
