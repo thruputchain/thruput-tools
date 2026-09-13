@@ -39,7 +39,6 @@ env:
   CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://crates.thruput.network/api/v1/crates/
-  HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
 
 jobs:
   publish-docs:
