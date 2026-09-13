@@ -129,11 +129,11 @@ fn assert_counter_manifest(cargo: &str) {
     // `sdk` is declared once per target: plain on the guest, with `std` on
     // the host so `cargo build` / `cargo check` work without `dev`.
     assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "{}", registry = "groundhog" }}"#,
+        r#"sdk = {{ version = "={}", registry = "groundhog" }}"#,
         groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(&format!(
-        r#"sdk = {{ version = "{}", registry = "groundhog", features = ["std"] }}"#,
+        r#"sdk = {{ version = "={}", registry = "groundhog", features = ["std"] }}"#,
         groundhog_cli::scaffold::SCAFFOLD_SDK_VERSION
     )));
     assert!(cargo.contains(r#"[target.'cfg(target_arch = "riscv32")'.dependencies]"#));
