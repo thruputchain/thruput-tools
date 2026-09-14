@@ -3,6 +3,7 @@ use crate::terminal::terminal_safe;
 use serde::Serialize;
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -11,6 +12,18 @@ const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
 const YELLOW: &str = "\x1b[33m";
+
+/// Widest summary card, in terminal columns, that value wrapping aims for.
+const CARD_MAX_WIDTH: usize = 100;
+
+/// Narrowest value column values are wrapped into.
+const CARD_MIN_VALUE_WIDTH: usize = 18;
+
+/// Trails a value line that continues on the next line of a summary card.
+const CARD_WRAP_MARKER: char = '↵';
+
+/// Columns a continued value line is indented past the value column.
+const CARD_CONTINUATION_INDENT: usize = 2;
 
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
@@ -372,34 +385,134 @@ fn wizard_answer(answer: &str, default_yes: bool, received_input: bool) -> bool 
 }
 
 fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
+    for line in summary_card_lines(title, items) {
+        eprintln!("{line}");
+    }
+}
+
+/// Build the styled lines of a summary card.
+///
+/// Values wider than the remaining column budget are wrapped so the card stays
+/// within [`CARD_MAX_WIDTH`] columns, with each continued line marked by
+/// [`CARD_WRAP_MARKER`]. The title and labels are never wrapped, so a card whose
+/// label column alone exceeds the budget still renders wider than it.
+fn summary_card_lines(title: &str, items: &[(String, String)]) -> Vec<String> {
+    let title_width = display_width(title);
     let label_width = items
         .iter()
-        .map(|(label, _)| label.chars().count())
+        .map(|(label, _)| display_width(label))
         .max()
         .unwrap_or(0)
         .max(10)
-        .max(title.chars().count());
+        .max(title_width);
+    // Borders, padding, and the label's colon take 6 columns of every row.
+    let value_budget = CARD_MAX_WIDTH
+        .saturating_sub(label_width + 6)
+        .max(CARD_MIN_VALUE_WIDTH);
     let value_width = items
         .iter()
-        .map(|(_, value)| value.chars().count())
+        .map(|(_, value)| display_width(value))
         .max()
         .unwrap_or(0)
-        .max(18);
-    let inner_width = (label_width + value_width + 4).max(title.chars().count() + 2);
-    let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
+        .max(CARD_MIN_VALUE_WIDTH)
+        .min(value_budget);
+    let continued_width = value_width.saturating_sub(CARD_CONTINUATION_INDENT);
+    let inner_width = (label_width + value_width + 4).max(title_width + 2);
+    let top_fill = inner_width.saturating_sub(title_width + 2);
+    let continuation_label = line_fill(' ', label_width + 1);
 
-    eprintln!(
+    let mut lines = vec![format!(
         "{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{}╮{RESET}",
         line_fill('─', top_fill)
-    );
+    )];
     for (label, value) in items {
-        let label_padding = line_fill(' ', label_width.saturating_sub(label.chars().count()));
-        let value_padding = line_fill(' ', value_width.saturating_sub(value.chars().count()));
-        eprintln!(
-            "{GREEN}│{RESET} {DIM}{label}:{RESET}{label_padding} {value}{value_padding} {GREEN}│{RESET}"
-        );
+        let label_padding = line_fill(' ', label_width.saturating_sub(display_width(label)));
+        let segments = wrap_value(value, value_width, continued_width);
+        let last = segments.len().saturating_sub(1);
+        for (index, segment) in segments.iter().enumerate() {
+            let cell = value_cell(segment, value_width, index > 0, index < last);
+            if index == 0 {
+                lines.push(format!(
+                    "{GREEN}│{RESET} {DIM}{label}:{RESET}{label_padding} {cell} {GREEN}│{RESET}"
+                ));
+            } else {
+                lines.push(format!(
+                    "{GREEN}│{RESET} {continuation_label} {cell} {GREEN}│{RESET}"
+                ));
+            }
+        }
     }
-    eprintln!("{GREEN}╰{}╯{RESET}", line_fill('─', inner_width));
+    lines.push(format!("{GREEN}╰{}╯{RESET}", line_fill('─', inner_width)));
+    lines
+}
+
+/// Columns a string occupies in a terminal.
+///
+/// Wide characters such as CJK ideographs count as two columns and combining
+/// marks as none, so card rows line up on the rendered glyphs rather than on
+/// the number of `char`s behind them.
+fn display_width(value: &str) -> usize {
+    UnicodeWidthStr::width(value)
+}
+
+/// Render one value segment padded to the full width of the value column.
+///
+/// A segment that resumes an earlier line is indented; one that more of the
+/// value follows is marked as wrapped.
+fn value_cell(segment: &str, width: usize, resumed: bool, more_follows: bool) -> String {
+    let indent = if resumed { CARD_CONTINUATION_INDENT } else { 0 };
+    let marker = if more_follows {
+        format!("{GREEN}{CARD_WRAP_MARKER}{RESET}")
+    } else {
+        String::new()
+    };
+    let used = indent + display_width(segment) + usize::from(more_follows);
+    format!(
+        "{}{segment}{marker}{}",
+        line_fill(' ', indent),
+        line_fill(' ', width.saturating_sub(used))
+    )
+}
+
+/// Split a value into segments that fit the value column.
+///
+/// The first segment fits `first_width` columns and later ones `continued_width`,
+/// each leaving room for the wrap marker when more of the value follows. Breaks
+/// fall wherever the width runs out; values such as filesystem paths have no
+/// reliable break points.
+fn wrap_value(value: &str, first_width: usize, continued_width: usize) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut rest = value;
+    let mut budget = first_width;
+    loop {
+        if display_width(rest) <= budget {
+            segments.push(rest.to_string());
+            return segments;
+        }
+        let (head, tail) = rest.split_at(prefix_within(rest, budget.saturating_sub(1).max(1)));
+        segments.push(head.to_string());
+        rest = tail;
+        budget = continued_width;
+    }
+}
+
+/// Byte length of the longest prefix of `text` that fits `budget` columns.
+///
+/// Zero-width characters travel with the character they combine with, so a
+/// break never separates a base character from its accents. A leading character
+/// wider than the whole budget is still taken, so wrapping always advances.
+fn prefix_within(text: &str, budget: usize) -> usize {
+    let mut width = 0;
+    let mut end = 0;
+    for (index, character) in text.char_indices() {
+        let character_width = character.width().unwrap_or(0);
+        if end > 0 && width + character_width > budget {
+            break;
+        }
+        width += character_width;
+        end = index + character.len_utf8();
+    }
+    end
 }
 
 fn line_fill(ch: char, count: usize) -> String {
@@ -470,11 +583,37 @@ fn render_command(command: &std::process::Command) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Print, confirmation_answer, render_command, terminal_allows_ansi, terminals_allow_prompt,
-        wizard_answer,
+        CARD_CONTINUATION_INDENT, CARD_MAX_WIDTH, CARD_WRAP_MARKER, GREEN, Print, RESET,
+        confirmation_answer, display_width, render_command, summary_card_lines,
+        terminal_allows_ansi, terminals_allow_prompt, wizard_answer, wrap_value,
     };
     use std::ffi::OsStr;
     use std::process::Command;
+
+    /// A styled line with its ANSI codes removed, as the terminal renders it.
+    fn plain(line: &str) -> String {
+        let mut characters = line.chars();
+        let mut visible = String::new();
+        while let Some(character) = characters.next() {
+            if character == '\u{1b}' {
+                for escape in characters.by_ref() {
+                    if escape == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                visible.push(character);
+            }
+        }
+        visible
+    }
+
+    /// Terminal column `needle` starts at on a styled line.
+    fn column_of(line: &str, needle: char) -> Option<usize> {
+        let line = plain(line);
+        let index = line.find(needle)?;
+        Some(display_width(&line[..index]))
+    }
 
     #[test]
     fn renders_program_and_args() {
@@ -488,6 +627,139 @@ mod tests {
         let mut cmd = Command::new("cargo");
         cmd.current_dir("/ws").arg("metadata");
         assert_eq!(render_command(&cmd), "(cd /ws && cargo metadata)");
+    }
+
+    #[test]
+    fn summary_card_stays_within_the_maximum_width() {
+        let items = vec![
+            (
+                "Toolchain Cache".to_string(),
+                "/home/example/.cache/groundhog/toolchains/hog-devnode/0.17.1/bin/hog-devnode"
+                    .to_string(),
+            ),
+            ("Network".to_string(), "local".to_string()),
+        ];
+
+        let widths = summary_card_lines("Groundhog Status", &items)
+            .iter()
+            .map(|line| display_width(&plain(line)))
+            .collect::<Vec<_>>();
+
+        assert!(widths.iter().all(|width| *width <= CARD_MAX_WIDTH));
+        assert!(
+            widths.windows(2).all(|pair| pair[0] == pair[1]),
+            "{widths:?}"
+        );
+    }
+
+    #[test]
+    fn summary_card_indents_wrapped_values_under_a_blank_label() {
+        let items = vec![("Binary".to_string(), "x".repeat(200))];
+
+        let lines = summary_card_lines("Node", &items);
+
+        let rows = &lines[1..lines.len() - 1];
+        assert!(rows.len() > 2);
+        let value_column = column_of(&rows[0], 'x');
+        assert!(rows[1..].iter().all(|row| !plain(row).contains(':')));
+        for row in &rows[1..] {
+            assert_eq!(
+                column_of(row, 'x'),
+                value_column.map(|column| column + CARD_CONTINUATION_INDENT)
+            );
+        }
+        assert!(
+            rows[..rows.len() - 1]
+                .iter()
+                .all(|row| row.contains(CARD_WRAP_MARKER))
+        );
+        assert!(!rows[rows.len() - 1].contains(CARD_WRAP_MARKER));
+    }
+
+    #[test]
+    fn summary_card_colors_the_wrap_marker() {
+        let items = vec![("Binary".to_string(), "x".repeat(120))];
+
+        let lines = summary_card_lines("Node", &items);
+
+        assert!(lines[1].contains(&format!("{GREEN}{CARD_WRAP_MARKER}{RESET}")));
+    }
+
+    #[test]
+    fn summary_card_aligns_wide_and_combining_characters_by_column() {
+        let items = vec![
+            (
+                "プロジェクト".to_string(),
+                "/home/例/ワークスペース/".repeat(6),
+            ),
+            ("Note".to_string(), "e\u{301}".repeat(90)),
+            ("Plain".to_string(), "local".to_string()),
+        ];
+
+        let lines = summary_card_lines("状態", &items);
+
+        let widths = lines
+            .iter()
+            .map(|line| display_width(&plain(line)))
+            .collect::<Vec<_>>();
+        assert!(widths.iter().all(|width| *width <= CARD_MAX_WIDTH));
+        assert!(
+            widths.windows(2).all(|pair| pair[0] == pair[1]),
+            "{widths:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_value_measures_segments_in_columns_not_characters() {
+        // Each ideograph is two columns wide, so only four fit in nine columns
+        // once the wrap marker reserves one.
+        let segments = wrap_value(&"漢".repeat(8), 9, 9);
+
+        assert_eq!(
+            segments,
+            vec!["漢漢漢漢".to_string(), "漢漢漢漢".to_string()]
+        );
+        assert!(segments.iter().all(|segment| display_width(segment) <= 8));
+    }
+
+    #[test]
+    fn wrap_value_keeps_combining_marks_with_their_base_character() {
+        // Accents add no columns, so ten accented letters fit a ten-column line.
+        let accented = "e\u{301}".repeat(10);
+
+        assert_eq!(wrap_value(&accented, 10, 8), vec![accented.clone()]);
+
+        let segments = wrap_value(&"a\u{308}".repeat(12), 10, 8);
+
+        assert!(
+            segments
+                .iter()
+                .all(|segment| !segment.starts_with('\u{308}'))
+        );
+        assert_eq!(segments.concat(), "a\u{308}".repeat(12));
+    }
+
+    #[test]
+    fn wrap_value_reserves_room_for_the_marker_on_continued_segments() {
+        assert_eq!(wrap_value("short", 10, 8), vec!["short".to_string()]);
+        assert_eq!(
+            wrap_value("exactly-10", 10, 8),
+            vec!["exactly-10".to_string()]
+        );
+        assert_eq!(
+            wrap_value("abcdefghijklmn", 5, 4),
+            vec![
+                "abcd".to_string(),
+                "efg".to_string(),
+                "hij".to_string(),
+                "klmn".to_string(),
+            ]
+        );
+        assert!(
+            wrap_value("\u{e9}".repeat(40).as_str(), 12, 10)
+                .iter()
+                .all(|segment| segment.chars().count() <= 11)
+        );
     }
 
     #[test]

@@ -135,6 +135,7 @@ time = { version = "0.3", features = ["formatting"] }
 # --- CLI / Config ---
 clap = { version = "4", features = ["derive", "string"] }
 toml = "0.8"
+unicode-width = "0.2"
 
 # --- Crypto ---
 sha2 = "0.10"
