@@ -512,7 +512,8 @@ minimum before using cached or downloaded bundles. An incompatible implicit defa
 fall back to PATH; an explicit or saved managed version reports an error.
 Installs and cleanup share a per-version/target lock. Running managed nodes hold
 shared usage locks; `clean` reports a busy bundle until its nodes stop or
-installation finishes.
+installation finishes. Dropping a node handle or cancelling startup/shutdown
+keeps the lease with process cleanup until termination is observed.
 
 All toolchain commands support `--json` with `data.schemaVersion`. `path` is
 the executable path, and `active` means the managed selection (explicit local

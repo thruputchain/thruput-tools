@@ -184,7 +184,8 @@ extern "C" fn handle_sigterm(_: i32) {
 
 fn main() {
     match env::var(MODE_ENV).as_deref() {
-        Ok("ready") => run_ready(),
+        Ok("ready" | "ready-delayed-shutdown") => run_ready(),
+        Ok("delayed-shutdown") => run_delayed_shutdown(),
         Ok("dead-scheduler") => run_dead_scheduler(),
         Ok("scheduler-get-tip-error") => run_ready_with_scheduler(FakeSchedulerMode::GetTipError),
         Ok("dead-scheduler-gateway") => run_dead_scheduler_gateway(),
@@ -239,6 +240,7 @@ fn main() {
         Ok("spawn-helper-ignore-term") => run_with_helper(),
         Ok("spawn-helper-then-exit") => run_with_helper_then_exit(),
         Ok("helper-ignore-term") => run_ignore_term_loop(),
+        Ok("helper-ready-ignore-term") => run_ready_ignore_term_helper(),
         Ok("ignore-term") => run_ignore_term(),
         Ok("exit-before-ready") => process::exit(9),
         Ok("timeout") => {
@@ -298,6 +300,23 @@ fn run_ready_then_exit() {
     process::exit(0);
 }
 
+fn run_ready_ignore_term_helper() {
+    ignore_sigterm();
+    println!("ready");
+    io::stdout().flush().expect("bug: helper readiness flush");
+    run_ignore_term_loop();
+}
+
+fn run_delayed_shutdown() {
+    install_sigterm_handler();
+    println!("ready");
+    io::stdout().flush().expect("bug: fixture readiness flush");
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(300));
+}
+
 fn run_ready() {
     run_ready_with_scheduler(FakeSchedulerMode::Normal);
 }
@@ -317,6 +336,9 @@ fn run_ready_with_scheduler(mode: FakeSchedulerMode) {
     }
 
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
+    if env::var(MODE_ENV).as_deref() == Ok("ready-delayed-shutdown") {
+        thread::sleep(Duration::from_millis(300));
+    }
     write_graceful_shutdown_file_if_requested();
 }
 
@@ -363,10 +385,18 @@ fn run_with_helper() {
     let current_exe = env::current_exe().expect("bug: fake child binary path should resolve");
     // The parent intentionally exits without waiting so the supervisor test can
     // prove process-group SIGKILL reaches descendants after leader exit.
-    let _helper = Command::new(current_exe)
-        .env(MODE_ENV, "helper-ignore-term")
+    let mut helper = Command::new(current_exe)
+        .env(MODE_ENV, "helper-ready-ignore-term")
+        .stdout(process::Stdio::piped())
         .spawn()
         .expect("bug: helper process should spawn");
+    let mut ready = String::new();
+    io::BufRead::read_line(
+        &mut io::BufReader::new(helper.stdout.take().expect("bug: helper stdout is piped")),
+        &mut ready,
+    )
+    .expect("bug: helper readiness read");
+    assert_eq!(ready, "ready\n");
 
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     println!(

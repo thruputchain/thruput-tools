@@ -194,8 +194,6 @@ pub struct StartedLocalNode {
     readiness: groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
     data_dir: Option<PathBuf>,
-    // Keep managed artifacts available through supervisor shutdown.
-    _toolchain_lease: Option<groundhog_toolchain::InstallationLease>,
 }
 
 impl StartedLocalNode {
@@ -283,9 +281,12 @@ async fn start_resolved_local_node(
 
     let config = local_node_config(options)?;
     let data_dir = config.hogd_dev.data_dir.clone();
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .map_err(|e| map_node_supervisor_error(&e))?;
+    let handle = NodeSupervisorHandle::start_with_lifetime_guard(
+        config,
+        lease.map(|lease| Box::new(lease) as Box<dyn Send + Sync>),
+    )
+    .await
+    .map_err(|e| map_node_supervisor_error(&e))?;
     let rpc_addr = handle.rpc_addr();
     let readiness = handle.hogd_readiness().clone();
     let backend_planes = handle.backend_planes();
@@ -296,7 +297,6 @@ async fn start_resolved_local_node(
         readiness,
         backend_planes,
         data_dir,
-        _toolchain_lease: lease,
     })
 }
 
@@ -1825,3 +1825,7 @@ mod tests {
         assert!(payload["backend"].get("limitations").is_none());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "node_lifecycle_tests.rs"]
+mod lifecycle_tests;

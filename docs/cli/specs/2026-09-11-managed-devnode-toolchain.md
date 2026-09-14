@@ -21,8 +21,10 @@ Offline applies to managed acquisition, not to RPC or Cargo traffic. Downloads
 verify size and SHA-256 before bounded allowlisted extraction. Installation and
 cleanup share a per-version/target lock. Installation and lease waits are
 cancellable; cleanup fails promptly while a node or installer holds the lock.
-Managed node startup retains a shared lease through shutdown, including artifact
-use after startup. Concurrent nodes share leases. A staged bundle is renamed
+Managed startup transfers its shared lease to the supervised child before
+readiness waits. Cancelled startup or shutdown and plain handle drop retain the
+lease in a synchronous reaper thread until the child and its process group exit,
+independently of the caller's Tokio runtime. Concurrent nodes share leases. A staged bundle is renamed
 only after completion metadata is durable. The local cache is trusted;
 reuse checks completion metadata and file presence, not installed-file hashes.
 
@@ -134,3 +136,10 @@ shared-lease cleanup tests, and the concurrent installer reuse regression.
 Updated managed smokes on macOS and both Linux targets verified busy cleanup
 while running and successful cleanup after shutdown. Older-host rejection is
 covered by probe fixtures, not execution on a real below-minimum host.
+
+Drop/cancellation qualification passed on macOS, native Linux ARM64, and emulated
+Linux x86_64: delayed plain drop, destroyed caller runtime, cancelled shutdown,
+and surviving descendants retain the process guard. A CLI test with a real
+managed lease also proves cancelled startup remains busy after runtime teardown,
+then permits cleanup after the child exits. The managed runtime smoke and full
+workspace checks passed after these changes.

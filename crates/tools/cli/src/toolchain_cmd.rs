@@ -72,6 +72,9 @@ pub struct ToolchainActionReport {
     pub changed: bool,
 }
 
+/// Ensure the requested, saved, or default managed bundle is installed and report it.
+/// Checks host compatibility before cache reuse or acquisition. Offline mode only
+/// accepts a complete cached bundle; installation does not change the saved selection.
 pub fn install(
     requested: Option<&str>,
     offline: bool,
@@ -131,6 +134,9 @@ pub fn install(
     emit_action(command, print, report)
 }
 
+/// Report catalog entries and cached availability for this host target without mutation.
+/// Does not download or require runtime compatibility, and reports a stale saved
+/// selection even when that version is absent from the embedded catalog.
 pub fn list(command: &'static str, print: &Print) -> Result<(), CliError> {
     let context = Context::load(None)?;
     let installer = Installer::new(cache_dir()?);
@@ -181,6 +187,8 @@ pub fn list(command: &'static str, print: &Print) -> Result<(), CliError> {
     }
 }
 
+/// Persist an exact catalog version as the managed selection and report its cache state.
+/// Requires host compatibility but does not download; replaces stale selections.
 pub fn use_version(version: &str, command: &'static str, print: &Print) -> Result<(), CliError> {
     let mut context = Context::load(Some(version))?;
     context
@@ -208,6 +216,8 @@ pub fn use_version(version: &str, command: &'static str, print: &Print) -> Resul
     emit_action(command, print, report)
 }
 
+/// Report the selected managed executable, failing if incompatible or not installed.
+/// This read-only lookup neither downloads nor falls back to explicit binaries or PATH.
 pub fn which(command: &'static str, print: &Print) -> Result<(), CliError> {
     let context = Context::load(None)?;
     context
@@ -234,6 +244,9 @@ pub fn which(command: &'static str, print: &Print) -> Result<(), CliError> {
     }
 }
 
+/// Remove the requested, saved, or default cached bundle without changing the selection.
+/// Accepts retired versions and does not check runtime compatibility or download.
+/// Fails promptly with a busy error while a node or installer holds the bundle lock.
 pub fn clean(
     requested: Option<&str>,
     command: &'static str,

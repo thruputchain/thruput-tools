@@ -232,8 +232,15 @@ impl HogdDevProcess {
     /// Start hog-devnode using the configured binary lookup.
     #[tracing::instrument(skip_all, fields(listen_host = %config.listen_host))]
     pub async fn start(config: &HogdDevConfig) -> Result<Self, NodeSupervisorError> {
+        Self::start_with_lifetime_guard(config, None).await
+    }
+
+    pub(crate) async fn start_with_lifetime_guard(
+        config: &HogdDevConfig,
+        lifetime_guard: Option<Box<dyn Send + Sync>>,
+    ) -> Result<Self, NodeSupervisorError> {
         let binary = resolve_hogd_dev_binary(config)?;
-        Self::start_with_binary(config, binary).await
+        Self::start_with_binary_and_guard(config, binary, lifetime_guard).await
     }
 
     /// Start hog-devnode from an already-resolved binary path.
@@ -242,19 +249,28 @@ impl HogdDevProcess {
         config: &HogdDevConfig,
         binary: impl AsRef<Path>,
     ) -> Result<Self, NodeSupervisorError> {
+        Self::start_with_binary_and_guard(config, binary, None).await
+    }
+
+    async fn start_with_binary_and_guard(
+        config: &HogdDevConfig,
+        binary: impl AsRef<Path>,
+        lifetime_guard: Option<Box<dyn Send + Sync>>,
+    ) -> Result<Self, NodeSupervisorError> {
         let bootstrap_manifest = write_bootstrap_manifest(config)?;
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
             binary.as_ref(),
             config,
             bootstrap_manifest.path(),
         );
-        Self::start_with_spec(config, spec, Some(bootstrap_manifest)).await
+        Self::start_with_spec(config, spec, Some(bootstrap_manifest), lifetime_guard).await
     }
 
     async fn start_with_spec(
         config: &HogdDevConfig,
         spec: ChildProcessSpec,
         bootstrap_manifest: Option<BootstrapManifestFile>,
+        lifetime_guard: Option<Box<dyn Send + Sync>>,
     ) -> Result<Self, NodeSupervisorError> {
         prepare_persistent_data_dir(config)?;
         let persistent_pid_file = config
@@ -288,7 +304,10 @@ impl HogdDevProcess {
             pid_guards.push(guard);
         }
 
-        let mut child = ChildSupervisor::new(spec).spawn()?;
+        let mut child =
+            ChildSupervisor::new(spec).spawn_with_lifetime_guard(lifetime_guard.map(
+                |resource| crate::process::LifetimeGuard::new(resource, config.shutdown_grace),
+            ))?;
         let program = child.program().to_string();
         if !pid_guards.is_empty() {
             let pid = child.id().ok_or_else(|| NodeSupervisorError::Status {
@@ -1904,7 +1923,7 @@ mod tests {
             let flag_index = args
                 .iter()
                 .position(|arg| arg == "--ramdb-bytes")
-                .expect("--ramdb-bytes forwarded");
+                .expect("bug: --ramdb-bytes forwarded");
             assert_eq!(args[flag_index + 1], OsString::from("2147483648"));
         }
     }
@@ -3172,6 +3191,74 @@ mod tests {
         );
     }
 
+    struct LifetimeDropNotice(std::sync::mpsc::Sender<()>);
+
+    impl Drop for LifetimeDropNotice {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    async fn start_guarded_fake(mode: &str) -> (HogdDevProcess, std::sync::mpsc::Receiver<()>) {
+        let config = HogdDevConfig::default()
+            .with_startup_timeout(Duration::from_secs(2))
+            .with_shutdown_grace(Duration::from_millis(500));
+        let bootstrap = write_bootstrap_manifest(&config).expect("bug: fixture manifest");
+        let spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            fake_hogd_dev_binary(),
+            &config,
+            bootstrap.path(),
+        )
+        .env(FAKE_HOGD_DEV_MODE_ENV, mode);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let process = HogdDevProcess::start_with_spec(
+            &config,
+            spec,
+            Some(bootstrap),
+            Some(Box::new(LifetimeDropNotice(tx))),
+        )
+        .await
+        .expect("bug: fixture starts");
+        (process, rx)
+    }
+
+    #[tokio::test]
+    async fn lifetime_guard_survives_cancelled_shutdown_and_drop() {
+        let (mut process, rx) = start_guarded_fake("ready-delayed-shutdown").await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), process.stop())
+                .await
+                .is_err()
+        );
+        drop(process);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("bug: guard released after delayed shutdown");
+    }
+
+    #[tokio::test]
+    async fn lifetime_guard_survives_leader_exit_until_descendants_terminate() {
+        let (process, rx) = start_guarded_fake("spawn-helper-ignore-term").await;
+        let group = process
+            .child
+            .process_group_id()
+            .expect("bug: fixture group");
+        drop(process);
+        // The leader honors SIGTERM immediately, while its helper needs the
+        // reaper's SIGKILL escalation after the configured 500ms grace period.
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_millis(150)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(process_group_exists(group));
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("bug: guard released after descendant exit");
+        assert!(!process_group_exists(group));
+    }
+
     async fn start_fake_hogd_dev(
         config: &HogdDevConfig,
         mode: &str,
@@ -3184,7 +3271,7 @@ mod tests {
             bootstrap_manifest.path(),
         )
         .env(FAKE_HOGD_DEV_MODE_ENV, mode);
-        HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest)).await
+        HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest), None).await
     }
 
     async fn start_fake_hogd_dev_with_env(
@@ -3202,7 +3289,7 @@ mod tests {
         )
         .env(FAKE_HOGD_DEV_MODE_ENV, mode)
         .env(key, value);
-        HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest)).await
+        HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest), None).await
     }
 
     async fn assert_process_group_exits(process_group: i32) {

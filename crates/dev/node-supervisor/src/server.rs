@@ -153,6 +153,17 @@ impl NodeSupervisorHandle {
     /// process behind.
     #[tracing::instrument(skip_all, fields(rpc_listen = %config.rpc_listen_address))]
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
+        Self::start_with_lifetime_guard(config, None).await
+    }
+
+    /// Start a node while retaining a caller-owned resource until the child and
+    /// its process group have exited, even if startup or shutdown is cancelled.
+    /// Dropping the handle initiates shutdown; a reaper independent of the caller's
+    /// Tokio runtime holds the resource until termination is observed.
+    pub async fn start_with_lifetime_guard(
+        config: NodeSupervisorConfig,
+        lifetime_guard: Option<Box<dyn Send + Sync>>,
+    ) -> Result<Self, NodeSupervisorError> {
         if let Some(identity) = &config.bundle_identity {
             tracing::info!(
                 component_version = identity.build_version().crate_version(),
@@ -167,7 +178,8 @@ impl NodeSupervisorHandle {
             .local_airdrop
             .validate()
             .map_err(|reason| NodeSupervisorError::InvalidLocalAirdropConfig { reason })?;
-        let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
+        let mut hogd =
+            HogdDevProcess::start_with_lifetime_guard(&config.hogd_dev, lifetime_guard).await?;
 
         // Text, not the wire array: this is checked against the runtime
         // manifest's `protocol` JSON field and carried in error messages.
