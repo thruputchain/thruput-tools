@@ -515,8 +515,8 @@ shared usage locks; `clean` reports a busy bundle until its nodes stop or
 installation finishes. The child inherits the lease descriptor, so CLI exit or
 SIGKILL does not permit cleanup while that child or its inheriting descendants
 still hold the descriptor. Status reports a selected but uninstalled version
-without downloading it. Interrupted acquisition exits nonzero and emits a failure
-record in JSON mode.
+without downloading it. Interrupting managed acquisition during `node` or
+`test --integration` startup exits nonzero and emits a failure record in JSON mode.
 
 All toolchain commands support `--json` with `data.schemaVersion`. `path` is
 the executable path, and `active` means the managed selection (explicit local

@@ -3564,10 +3564,37 @@ fn test_integration_rejects_watch() {
 #[cfg(unix)]
 #[test]
 fn test_integration_default_rv32_build_reaches_local_node_startup() {
-    use std::os::unix::fs::PermissionsExt;
-
     let hogd_dev = fake_hogd_dev_binary();
     let tmp = TempDir::new().unwrap();
+    let (fake_bin, metadata_json) = prepare_integration_startup_fixture(&tmp);
+
+    let output = groundhog()
+        .args(["--json", "test", "--integration", "-p", "demo-contract"])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
+        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        tmp.path()
+            .join("target/groundhog/demo_contract.rv32a")
+            .is_file(),
+        "integration should lower an RV32 artifact before node startup by default",
+    );
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
+}
+
+#[cfg(unix)]
+fn prepare_integration_startup_fixture(tmp: &TempDir) -> (std::path::PathBuf, String) {
+    use std::os::unix::fs::PermissionsExt;
     std::fs::write(
         tmp.path().join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -3628,28 +3655,112 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&cargo, perms).unwrap();
 
-    let output = groundhog()
-        .args(["--json", "test", "--integration", "-p", "demo-contract"])
-        .current_dir(tmp.path())
-        .env("PATH", &fake_bin)
-        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
-        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
-        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
-        .output()
-        .unwrap();
+    (fake_bin, metadata_json)
+}
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        tmp.path()
-            .join("target/groundhog/demo_contract.rv32a")
-            .is_file(),
-        "integration should lower an RV32 artifact before node startup by default",
-    );
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "test");
-    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
+#[cfg(unix)]
+#[test]
+fn integration_managed_startup_cancellation_reports_test_schema() {
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        let tmp = TempDir::new().unwrap();
+        let (fake_bin, metadata_json) = prepare_integration_startup_fixture(&tmp);
+        let cache = TempDir::new().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+        let child = groundhog()
+            .args([
+                "--json",
+                "test",
+                "--integration",
+                "-p",
+                "demo-contract",
+                "--hog-devnode-version",
+            ])
+            .arg(catalog.default_version())
+            .current_dir(tmp.path())
+            .env("PATH", &fake_bin)
+            .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .env("GROUNDHOG_TOOLCHAIN_BASE_URL", origin)
+            .env("XDG_CACHE_HOME", cache.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = ChildGuard::new(child);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let _connection = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Some(status) = child.child_mut().try_wait().unwrap() {
+                        let output = child.into_inner().wait_with_output().unwrap();
+                        panic!(
+                            "CLI exited {status} before acquisition: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "CLI did not reach artifact source"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        // SAFETY: send the requested signal only to the child created by this test.
+        assert_eq!(
+            unsafe { libc::kill(child.child().id().try_into().unwrap(), signal) },
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.child_mut().try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "integration acquisition did not cancel"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let output = child.into_inner().wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["command"], "test");
+        assert_eq!(
+            payload["error"]["code"],
+            "integration_node_startup_interrupted"
+        );
+        let report: groundhog_cli::test_json::TestReport =
+            serde_json::from_value(payload["data"].clone()).unwrap();
+        assert_eq!(
+            report.schema_version,
+            groundhog_cli::test_json::TEST_JSON_SCHEMA_VERSION
+        );
+        assert_eq!(report.mode, groundhog_cli::test_json::TestMode::Integration);
+        assert!(!report.success);
+        assert!(report.runs.is_empty());
+        assert!(report.integration.is_none());
+        assert!(report.artifact.path.is_file());
+        let installer = groundhog_toolchain::Installer::new(cache.path().join("groundhog"));
+        assert!(
+            installer
+                .find(
+                    &catalog,
+                    catalog.default_version(),
+                    groundhog_toolchain::HostTarget::current().unwrap()
+                )
+                .unwrap()
+                .is_none()
+        );
+    }
 }
 
 #[cfg(unix)]

@@ -147,20 +147,19 @@ pub enum CatalogError {
     },
 
     /// The configured artifact base URL is malformed.
-    #[error("invalid artifact base URL {url:?}: {source}")]
+    #[error("invalid artifact base URL: {source}")]
     InvalidBaseUrl {
-        url: String,
         #[source]
         source: url::ParseError,
     },
 
     /// The configured artifact base URL is not an HTTP(S) source.
-    #[error("artifact base URL {url:?} must use http or https")]
-    UnsupportedBaseUrlScheme { url: String },
+    #[error("artifact base URL must use http or https")]
+    UnsupportedBaseUrlScheme,
 
     /// The configured artifact base URL includes state that must not affect object resolution.
-    #[error("artifact base URL {url:?} must not contain credentials, a query, or a fragment")]
-    StatefulBaseUrl { url: String },
+    #[error("artifact base URL must not contain credentials, a query, or a fragment")]
+    StatefulBaseUrl,
 }
 
 /// Result type for managed toolchain catalog operations.

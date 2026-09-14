@@ -237,33 +237,24 @@ impl Artifact {
 
     /// Resolve this catalog object's URL beneath an HTTP(S) artifact base URL.
     pub fn public_url(&self, base_url: &str) -> Result<Url> {
-        let mut base = Url::parse(base_url).map_err(|source| CatalogError::InvalidBaseUrl {
-            url: base_url.to_string(),
-            source,
-        })?;
+        let mut base =
+            Url::parse(base_url).map_err(|source| CatalogError::InvalidBaseUrl { source })?;
         if !matches!(base.scheme(), "http" | "https") {
-            return Err(CatalogError::UnsupportedBaseUrlScheme {
-                url: base_url.to_string(),
-            });
+            return Err(CatalogError::UnsupportedBaseUrlScheme);
         }
         if !base.username().is_empty()
             || base.password().is_some()
             || base.query().is_some()
             || base.fragment().is_some()
         {
-            return Err(CatalogError::StatefulBaseUrl {
-                url: base_url.to_string(),
-            });
+            return Err(CatalogError::StatefulBaseUrl);
         }
         if !base.path().ends_with('/') {
             let path = format!("{}/", base.path());
             base.set_path(&path);
         }
         base.join(&self.object_key)
-            .map_err(|source| CatalogError::InvalidBaseUrl {
-                url: base_url.to_string(),
-                source,
-            })
+            .map_err(|source| CatalogError::InvalidBaseUrl { source })
     }
 }
 

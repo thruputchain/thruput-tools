@@ -368,6 +368,10 @@ impl PendingInstallation {
         remove_installation(&self.final_path)?;
         fs::rename(staging.path(), &self.final_path)
             .map_err(|source| io_error("commit installation", &self.final_path, source))?;
+        // Persist the renamed directory entry before reporting a committed installation.
+        File::open(&self.version_dir)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|source| io_error("sync installation directory", &self.version_dir, source))?;
         Ok(Installation {
             version: self.version,
             target: self.target,

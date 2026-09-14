@@ -28,7 +28,7 @@ the lease even after CLI process exit or SIGKILL. The executable and any
 descendants using bundle files must preserve that inherited descriptor.
 Concurrent nodes share leases.
 A staged bundle is renamed
-only after completion metadata is durable. The local cache is trusted;
+only after completion metadata is durable, then its parent directory is synced. The local cache is trusted;
 reuse checks completion metadata and file presence, not installed-file hashes.
 
 The source belongs to acquisition, not to cache lookup. `Installer` has no
@@ -123,8 +123,8 @@ cargo run -p groundhog-agent-knowledge -- check
 - Fresh-cache macOS startup, chainTip RPC, clean shutdown, offline recovery,
   and non-mutating managed status passed without overrides.
 - Native Linux ARM64 and emulated x86_64 managed startup and offline recovery
-  passed on Ubuntu 26.04, along with all thirteen CLI toolchain integration
-  tests and four selection/interruption tests on each target.
+  passed on Ubuntu 26.04, along with CLI toolchain and selection/interruption
+  tests on each target.
 - Workspace tests, warning-free build, all-target Clippy, formatting, and agent
   knowledge checks passed. Final independent whole-change review found no
   actionable issues.
@@ -152,7 +152,9 @@ was killed.
   managed intent; implicit cache I/O failures may fall back to PATH. Saved or
   explicitly requested managed versions still fail closed.
 - Incomplete non-directory targets are repairable. Installer errors preserve
-  catalog/source classification, and interruption produces a failed JSON record.
+  catalog/source classification. Node and integration-test startup interruptions
+  produce failed JSON records; integration startup restores previous signal
+  handlers before running Cargo. Rejected base URLs never appear in diagnostics.
 - CLI downloads use the validated proxy client. The publication gate asserts one
   successful all-target test and verifies Python3 on the release runner.
 - Hashing/extraction/fsync run in owned blocking work with cooperative cancellation.

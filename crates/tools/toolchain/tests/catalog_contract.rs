@@ -156,15 +156,15 @@ fn public_url_rejects_stateful_or_non_http_sources() {
 
     assert!(matches!(
         artifact.public_url("file:///tmp/artifacts"),
-        Err(CatalogError::UnsupportedBaseUrlScheme { .. })
+        Err(CatalogError::UnsupportedBaseUrlScheme)
     ));
     assert!(matches!(
         artifact.public_url("https://example.test/artifacts?version=wrong"),
-        Err(CatalogError::StatefulBaseUrl { .. })
+        Err(CatalogError::StatefulBaseUrl)
     ));
     assert!(matches!(
         artifact.public_url("https://user:secret@example.test"),
-        Err(CatalogError::StatefulBaseUrl { .. })
+        Err(CatalogError::StatefulBaseUrl)
     ));
 }
 

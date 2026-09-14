@@ -323,3 +323,49 @@ fn toolchain_clean_accepts_safe_retired_version_names() {
     assert_eq!(json["data"]["version"], "v0.1.27-rc.7");
     assert_eq!(json["data"]["changed"], false);
 }
+
+#[test]
+fn toolchain_url_errors_never_expose_supplied_values() {
+    for source in [
+        "https://review-user:review-secret@example.invalid",
+        "https://example.invalid/?token=review-secret",
+        "https://example.invalid/#review-secret",
+        "ftp://review-user:review-secret@example.invalid",
+        "https://review-user:review-secret@[broken",
+    ] {
+        for json in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut command = groundhog(&root.path().join("config"), &root.path().join("cache"));
+            if json {
+                command.arg("--json");
+            }
+            for key in [
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "all_proxy",
+            ] {
+                command.env_remove(key);
+            }
+            let output = command
+                .args(["toolchain", "install"])
+                .env("GROUNDHOG_TOOLCHAIN_BASE_URL", source)
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(stderr.contains("artifact base URL"), "{stderr}");
+            for sensitive in ["review-user", "review-secret", "example.invalid", "broken"] {
+                assert!(!stderr.contains(sensitive), "{stderr}");
+                assert!(!stdout.contains(sensitive), "{stdout}");
+            }
+            if json {
+                let report: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+                assert_eq!(report["ok"], false);
+            }
+        }
+    }
+}
