@@ -963,6 +963,73 @@ mod tests {
         ));
     }
 
+    // Explicit qualification: cargo test -p groundhog-faucet retained_capacity_load -- --ignored --nocapture
+    #[test]
+    #[ignore = "qualifies policy scans at hosted retention occupancy"]
+    fn retained_capacity_load() {
+        let store = InMemoryFaucetPolicyStore::new();
+        let now = SystemTime::UNIX_EPOCH + Duration::from_hours(12);
+        // Populate the previous 12 hours at 10k/hour with real-sized identities.
+        for index in 0..120_000 {
+            let mut attempt = airdrop_attempt(&format!("{index:064x}"));
+            attempt.key.network_id = "ab".repeat(32);
+            attempt.key.genesis_hash = "cd".repeat(32);
+            attempt.key.recipient = format!("0x{index:064x}");
+            attempt.status = AirdropAttemptStatus::Succeeded;
+            attempt.tx_hash = Some(format!("0x{index:064x}"));
+            attempt.expires_at = Some(now + Duration::from_hours(12));
+            store.put_airdrop_attempt(attempt).unwrap();
+        }
+        let started = std::time::Instant::now();
+        for index in 0..1_000 {
+            let at = now + Duration::from_secs(index * 3600 / 10_000);
+            let attempt = airdrop_attempt(&format!("new-{index:064x}"));
+            let checks = [
+                QuotaCheck {
+                    key: QuotaKey::AirdropClient(ClientIdentity::Unknown),
+                    max: 10_000,
+                    window: Duration::from_hours(1),
+                },
+                QuotaCheck {
+                    key: QuotaKey::AirdropRecipient(attempt.key.recipient.clone()),
+                    max: 1,
+                    window: Duration::from_mins(1),
+                },
+            ];
+            store.expire(at).unwrap();
+            assert!(matches!(
+                store
+                    .admit_airdrop_attempt(attempt.clone(), 200_000, 1, &checks, at)
+                    .unwrap(),
+                AdmitAirdropAttemptResult::Inserted
+            ));
+            assert!(matches!(
+                store
+                    .admit_airdrop_attempt(attempt, 200_000, 1, &checks, at)
+                    .unwrap(),
+                AdmitAirdropAttemptResult::Existing(_)
+            ));
+        }
+        eprintln!(
+            "1000 admissions plus retries at 120k retained records: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(store.lock().unwrap().airdrop_attempts.len(), 121_000);
+        store.expire(now + Duration::from_hours(12)).unwrap();
+        // Terminal records expire; unresolved records survive, even beyond retention.
+        assert_eq!(store.lock().unwrap().airdrop_attempts.len(), 1_000);
+        assert!(store.lock().unwrap().quota_events.is_empty());
+        // Restart remains explicitly in-memory: no persistence is added by capacity sizing.
+        drop(store);
+        assert!(
+            InMemoryFaucetPolicyStore::new()
+                .lock()
+                .unwrap()
+                .airdrop_attempts
+                .is_empty()
+        );
+    }
+
     #[test]
     fn airdrop_attempt_capacity_fails_closed_for_unresolved_transaction() {
         let store = InMemoryFaucetPolicyStore::new();

@@ -43,3 +43,7 @@ variable = "GROUNDHOG_FAUCET_SECRET_KEY"
 [wallet_create]
 create_wallet_entrypoint = "0x6372656174655761"
 wallet_artifact_path = "contracts/dev_wallet.rv32a"
+
+[policy.airdrop]
+# Global retained idempotency records; see README Policy State for sizing.
+max_retained_attempts = 10000

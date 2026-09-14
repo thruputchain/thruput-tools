@@ -102,6 +102,14 @@ Private-preview policy state is in memory. Restarting the faucet clears quota
 counters and idempotency records. The current deployment model assumes one
 faucet instance.
 
+`[policy.airdrop].max_retained_attempts` bounds airdrop records globally (default
+10,000; supported range 1–1,000,000). Terminal records remain for at least 12 hours, or the recipient
+cooldown if longer. Size this bound for aggregate traffic across all clients
+over that retention period, plus unresolved attempts; it does not replenish
+each time an hourly quota resets. For example, 10,000 accepted attempts/hour
+needs at least 120,000 terminal records plus headroom. Increasing the bound
+increases memory use and policy-store scan costs; storage is allocated on demand.
+
 Accepted transactions remain pending until the backend reports a receipt or a
 definitive invalid status. Submission calls that return without a definitive
 acceptance result are also retained as ambiguous rather than resubmitted. Both

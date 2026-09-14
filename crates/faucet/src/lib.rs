@@ -772,6 +772,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_retained_capacity_rejects_new_keys_but_serves_retries() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let mut config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_config.airdrop.max_retained_attempts = 1;
+        assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
+        let mut second = airdrop_body();
+        second["recipient"] = serde_json::json!(format!("0x{}", "12".repeat(32)));
+        let response = airdrop_request_with_body(&config, second.clone()).await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "airdrop_capacity_exceeded");
+        assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        config.policy_config.airdrop.max_retained_attempts = 2;
+        assert_eq!(
+            airdrop_request_with_body(&config, second).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(airdrop.calls(), 2);
+    }
+
+    #[tokio::test]
     async fn concurrent_same_key_airdrops_submit_once_with_zero_cooldown() {
         let airdrop = Arc::new(MockAirdropSubmitter::success());
         let mut config = test_config_with_submitters(
