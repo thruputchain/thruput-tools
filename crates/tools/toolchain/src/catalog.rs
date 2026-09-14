@@ -183,6 +183,15 @@ impl Catalog {
 }
 
 impl Artifact {
+    /// Check the local runtime against this bundle's catalog minimum before local use.
+    ///
+    /// Cache lookup and cross-target installation deliberately do not perform this check.
+    /// Consumers that run a managed bundle must call it before accepting cached files or
+    /// acquiring a bundle. Failure to determine the runtime version fails closed.
+    pub fn validate_current_host(&self, target: HostTarget) -> Result<()> {
+        crate::compatibility::validate_current_host(target, &self.compatibility.minimum_version)
+    }
+
     /// Return the archive filename published for this artifact.
     pub fn archive(&self) -> &str {
         &self.archive
@@ -363,12 +372,7 @@ fn validate_compatibility(
     target: HostTarget,
     compatibility: &Compatibility,
 ) -> Result<()> {
-    if compatibility.minimum_version.is_empty()
-        || !compatibility
-            .minimum_version
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || byte == b'.')
-    {
+    if crate::compatibility::version_components(&compatibility.minimum_version).is_none() {
         return Err(invalid_compatibility(
             version,
             target,

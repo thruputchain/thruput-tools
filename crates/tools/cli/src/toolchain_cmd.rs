@@ -29,9 +29,13 @@ pub struct ToolchainEntry {
     pub version: String,
     pub target: String,
     pub source_kind: ToolchainSourceKind,
+    /// Executable path beneath the configured cache, including when not installed.
     pub path: PathBuf,
+    /// SHA-256 of the published archive, not the extracted executable.
     pub sha256: String,
+    /// Matches the persisted selection, or the catalog default when none is saved.
     pub active: bool,
+    /// A complete installation was present when this report was produced.
     pub installed: bool,
 }
 
@@ -41,6 +45,7 @@ pub struct ToolchainEntry {
 pub struct ToolchainListReport {
     pub schema_version: u32,
     pub default_version: String,
+    /// Saved selection (possibly absent from this catalog), or the default when unset.
     pub selected_version: String,
     pub target: String,
     pub toolchains: Vec<ToolchainEntry>,
@@ -54,11 +59,16 @@ pub struct ToolchainActionReport {
     pub version: String,
     pub target: String,
     pub source_kind: ToolchainSourceKind,
+    /// Executable path beneath the configured cache, including when not installed.
     pub path: PathBuf,
+    /// Published archive digest; omitted when cleaning a version absent from the catalog.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// Matches the persisted selection, or the catalog default when none is saved.
     pub active: bool,
+    /// A complete installation was present when this report was produced.
     pub installed: bool,
+    /// This command installed or removed a bundle, or changed the saved selection.
     pub changed: bool,
 }
 
@@ -69,7 +79,10 @@ pub fn install(
     print: &Print,
 ) -> Result<(), CliError> {
     let context = Context::load(requested)?;
-    context.catalog.artifact(&context.version, context.target)?;
+    context
+        .catalog
+        .artifact(&context.version, context.target)?
+        .validate_current_host(context.target)?;
     let installer = Installer::new(cache_dir()?);
     if offline {
         let installation = installer.find(&context.catalog, &context.version, context.target)?;
@@ -170,7 +183,10 @@ pub fn list(command: &'static str, print: &Print) -> Result<(), CliError> {
 
 pub fn use_version(version: &str, command: &'static str, print: &Print) -> Result<(), CliError> {
     let mut context = Context::load(Some(version))?;
-    context.catalog.artifact(&context.version, context.target)?;
+    context
+        .catalog
+        .artifact(&context.version, context.target)?
+        .validate_current_host(context.target)?;
     let installer = Installer::new(cache_dir()?);
     let is_installed = installer
         .find(&context.catalog, &context.version, context.target)?
@@ -194,7 +210,10 @@ pub fn use_version(version: &str, command: &'static str, print: &Print) -> Resul
 
 pub fn which(command: &'static str, print: &Print) -> Result<(), CliError> {
     let context = Context::load(None)?;
-    context.catalog.artifact(&context.version, context.target)?;
+    context
+        .catalog
+        .artifact(&context.version, context.target)?
+        .validate_current_host(context.target)?;
     let installer = Installer::new(cache_dir()?);
     let installation = installer
         .find(&context.catalog, &context.version, context.target)?
@@ -223,9 +242,7 @@ pub fn clean(
     let context = Context::load(requested)?;
     let installer = Installer::new(cache_dir()?);
     let path = installer.installation_path(&context.version, context.target);
-    let runtime =
-        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    let changed = runtime.block_on(installer.clean(&context.version, context.target))?;
+    let changed = installer.clean(&context.version, context.target)?;
     let report = ToolchainActionReport {
         schema_version: TOOLCHAIN_JSON_SCHEMA_VERSION,
         sha256: context

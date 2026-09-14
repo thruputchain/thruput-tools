@@ -125,7 +125,11 @@ try:
                 assert 'result' in rpc and 'error' not in rpc, rpc
                 if offline:
                     assert data['chain_state'] == 'recovered', data
-                print(f'Passed {phase} and chainTip RPC', flush=True)
+                cleanup = command('--json', 'toolchain', 'clean')
+                assert cleanup.returncode != 0, 'cleanup removed a running node bundle'
+                assert 'busy' in cleanup.stderr.lower() or 'busy' in cleanup.stdout.lower(), cleanup
+                check_status()
+                print(f'Passed {phase}, chainTip RPC, and cleanup refusal while running', flush=True)
             finally:
                 if process.poll() is None:
                     process.send_signal(signal.SIGTERM)
@@ -143,7 +147,10 @@ try:
         check_status()
     result = command('toolchain', 'which')
     assert result.returncode == 0 and Path(result.stdout.strip()).is_file(), result
-    print('Passed managed discovery, clean stop, and non-mutating status', flush=True)
+    result = command('--json', 'toolchain', 'clean')
+    assert result.returncode == 0, result
+    assert json.loads(result.stdout)['data']['changed'], result
+    print('Passed managed discovery, clean stop, non-mutating status, and cleanup after shutdown', flush=True)
 finally:
     stop_session()
     shutil.rmtree(root)

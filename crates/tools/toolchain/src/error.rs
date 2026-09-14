@@ -46,6 +46,32 @@ pub enum CatalogError {
     #[error("managed hog-devnode is unsupported on {os}/{arch}")]
     UnsupportedHost { os: String, arch: String },
 
+    /// The bundle target differs from the current compilation target.
+    #[error("managed hog-devnode target {target} cannot run on {host}")]
+    HostTargetMismatch { target: String, host: String },
+
+    /// The local runtime is older than the trusted bundle's minimum.
+    #[error(
+        "managed hog-devnode for {target} requires {runtime} >= {minimum}; found {found}; upgrade the host or use a compatible local build with --hog-devnode-binary"
+    )]
+    IncompatibleRuntime {
+        target: String,
+        runtime: &'static str,
+        minimum: String,
+        found: String,
+    },
+
+    /// The local runtime could not be identified reliably; managed use fails closed.
+    #[error(
+        "cannot verify {runtime} >= {minimum} for managed hog-devnode on {target}: {reason}; check the system runtime or use a compatible local build with --hog-devnode-binary"
+    )]
+    RuntimeProbeFailed {
+        target: String,
+        runtime: &'static str,
+        minimum: String,
+        reason: String,
+    },
+
     /// A target triple is outside the supported managed target matrix.
     #[error("managed hog-devnode target {target:?} is unsupported")]
     UnsupportedTarget { target: String },

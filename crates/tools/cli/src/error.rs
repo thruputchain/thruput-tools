@@ -896,6 +896,17 @@ impl CliError {
                     }
                 }))
             }
+            Self::ToolchainCatalog(
+                groundhog_toolchain::CatalogError::IncompatibleRuntime { .. }
+                | groundhog_toolchain::CatalogError::RuntimeProbeFailed { .. },
+            ) => Some(Cow::Borrowed(
+                "upgrade the host runtime, or set GROUNDHOG_DEVNODE_BINARY to a compatible local build",
+            )),
+            Self::ToolchainInstall(groundhog_toolchain::InstallError::Busy { .. }) => {
+                Some(Cow::Borrowed(
+                    "stop nodes using this toolchain or wait for installation to finish, then retry clean",
+                ))
+            }
             Self::ToolchainCatalog(_) => Some(Cow::Borrowed(
                 "use a hog-devnode version and target present in this groundhog release's embedded catalog",
             )),

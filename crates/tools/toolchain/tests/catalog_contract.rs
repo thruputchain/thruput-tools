@@ -167,3 +167,33 @@ fn public_url_rejects_stateful_or_non_http_sources() {
         Err(CatalogError::StatefulBaseUrl { .. })
     ));
 }
+
+#[test]
+fn catalog_rejects_malformed_runtime_minimums() {
+    for minimum in ["", ".", "26.", "2..38", "2.x", "18446744073709551616"] {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
+        value["versions"]["0.1.27-rc.7"]["targets"]["x86_64-unknown-linux-gnu"]["compatibility"]
+            ["minimumVersion"] = minimum.into();
+        assert!(matches!(
+            Catalog::parse(&serde_json::to_vec(&value).unwrap()),
+            Err(CatalogError::InvalidCompatibility { .. })
+        ));
+    }
+}
+
+#[test]
+fn artifact_enforces_its_catalog_runtime_minimum_on_the_current_host() {
+    let target = HostTarget::current().unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
+    value["versions"]["0.1.27-rc.7"]["targets"][target.triple()]["compatibility"]["minimumVersion"] =
+        "999999.0".into();
+    let catalog = Catalog::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        catalog
+            .artifact(catalog.default_version(), target)
+            .unwrap()
+            .validate_current_host(target),
+        Err(CatalogError::IncompatibleRuntime { .. })
+    ));
+}

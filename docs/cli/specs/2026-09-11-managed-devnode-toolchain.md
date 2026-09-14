@@ -19,7 +19,10 @@ flags conflict. Status discovers the same local sources without acquisition.
 
 Offline applies to managed acquisition, not to RPC or Cargo traffic. Downloads
 verify size and SHA-256 before bounded allowlisted extraction. Installation and
-cleanup share a cancellable per-version/target lock. A staged bundle is renamed
+cleanup share a per-version/target lock. Installation and lease waits are
+cancellable; cleanup fails promptly while a node or installer holds the lock.
+Managed node startup retains a shared lease through shutdown, including artifact
+use after startup. Concurrent nodes share leases. A staged bundle is renamed
 only after completion metadata is durable. The local cache is trusted;
 reuse checks completion metadata and file presence, not installed-file hashes.
 
@@ -33,6 +36,13 @@ through clean even after the version leaves the catalog. Cleanup validates the
 version as a safe path component and cannot turn it into an arbitrary path.
 `which` and JSON `path` identify the executable, not the bundle directory.
 
+Managed selection checks the actual host glibc/macOS version against the catalog
+minimum before accepting either cached or downloaded bytes. Probe failure is
+an incompatibility error, not permission to proceed. Only implicit default
+selection may fall back to PATH; explicit or saved selections fail clearly.
+Explicit binary, environment, and sibling paths continue bypassing acquisition.
+`list` and `clean` remain available regardless of runtime compatibility.
+
 ## Critical review changes
 
 - Fixed stale saved selection blocking `use <new-version>` recovery.
@@ -42,6 +52,9 @@ version as a safe path component and cannot turn it into an arbitrary path.
 - Narrowed offline wording to the implemented network boundary.
 - Allowed lock-aware removal of retired versions and fixed which output.
 - Required the current genesis artifact alongside the wallet artifact.
+- Enforced catalog runtime minimums before managed selection.
+- Protected bundles with shared node-lifetime leases and refused busy cleanup.
+- Kept concurrent installers able to reuse bundles already leased by nodes.
 - Added publication gates using the actual installer for all targets, avoiding
   a second archive parser, and real startup/RPC/offline-restart qualification.
 
@@ -115,3 +128,9 @@ cargo run -p groundhog-agent-knowledge -- check
   creation and funding, and dump/restore with state recovery and further calls.
   Cargo used an isolated configuration with one registry alias to avoid a
   duplicate alias in the developer configuration; no protocol override was used.
+
+The reviewer fixes additionally passed runtime-version/probe-failure fixtures,
+shared-lease cleanup tests, and the concurrent installer reuse regression.
+Updated managed smokes on macOS and both Linux targets verified busy cleanup
+while running and successful cleanup after shutdown. Older-host rejection is
+covered by probe fixtures, not execution on a real below-minimum host.

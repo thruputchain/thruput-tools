@@ -126,7 +126,7 @@ fn cancelled_lock_wait_does_not_block_runtime_shutdown() {
             assert!(
                 tokio::time::timeout(
                     Duration::from_millis(100),
-                    installer.clean("0.1.13", HostTarget::LinuxX86_64)
+                    installer.lease(&catalog_for(b"fixture"), "0.1.13", HostTarget::LinuxX86_64)
                 )
                 .await
                 .is_err()
@@ -145,23 +145,18 @@ fn cancelled_lock_wait_does_not_block_runtime_shutdown() {
     );
 }
 
-#[tokio::test]
-async fn clean_removes_a_version_no_longer_in_the_catalog() {
+#[test]
+fn clean_removes_a_version_no_longer_in_the_catalog() {
     let cache = tempfile::tempdir().unwrap();
     let installer = Installer::new(cache.path());
     let retired = installer.installation_path("0.0.1", HostTarget::LinuxX86_64);
     std::fs::create_dir_all(&retired).unwrap();
     std::fs::write(retired.join("hog-devnode"), b"old").unwrap();
-    assert!(
-        installer
-            .clean("0.0.1", HostTarget::LinuxX86_64)
-            .await
-            .unwrap()
-    );
+    assert!(installer.clean("0.0.1", HostTarget::LinuxX86_64).unwrap());
     assert!(!retired.exists());
     for version in [".", "..", "../escape", "/absolute", ""] {
         assert!(matches!(
-            installer.clean(version, HostTarget::LinuxX86_64).await,
+            installer.clean(version, HostTarget::LinuxX86_64),
             Err(InstallError::Catalog(
                 groundhog_toolchain::CatalogError::InvalidVersion { .. }
             ))
@@ -340,7 +335,6 @@ async fn clean_removes_a_complete_installation_and_is_idempotent() {
     assert!(
         installer
             .clean("0.1.13", HostTarget::LinuxX86_64)
-            .await
             .expect("bug: clean should succeed")
     );
     assert!(
@@ -352,7 +346,6 @@ async fn clean_removes_a_complete_installation_and_is_idempotent() {
     assert!(
         !installer
             .clean("0.1.13", HostTarget::LinuxX86_64)
-            .await
             .expect("bug: repeated clean should succeed")
     );
 }
@@ -714,4 +707,120 @@ async fn public_catalog_installs_all_targets() {
         }
         assert!(installation.path().join(".ok").is_file());
     }
+}
+
+#[tokio::test]
+async fn leases_share_a_bundle_and_prevent_cleanup_until_last_user_stops() {
+    let archive = regular_archive(&[
+        ("contracts/dev_wallet.rv32a", b"wallet"),
+        ("contracts/genesis_root.rv32a", b"genesis"),
+        ("hog-devnode", b"binary"),
+    ]);
+    let catalog = catalog_for(&archive);
+    let source = MemorySource::new(archive);
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(cache.path());
+    let target = HostTarget::LinuxX86_64;
+    assert!(
+        installer
+            .lease(&catalog, "0.1.13", target)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    installer
+        .install(&catalog, "0.1.13", target, &source)
+        .await
+        .unwrap();
+    let first = installer
+        .lease(&catalog, "0.1.13", target)
+        .await
+        .unwrap()
+        .unwrap();
+    let second = installer
+        .lease(&catalog, "0.1.13", target)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        installer.clean("0.1.13", target),
+        Err(InstallError::Busy { .. })
+    ));
+    // Prefetch/reuse must not wait for running nodes or download a second copy.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        installer.install(&catalog, "0.1.13", target, &source),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    drop(first);
+    assert!(matches!(
+        installer.clean("0.1.13", target),
+        Err(InstallError::Busy { .. })
+    ));
+    assert_eq!(std::fs::read(second.binary_path()).unwrap(), b"binary");
+    drop(second);
+    assert!(installer.clean("0.1.13", target).unwrap());
+    assert!(
+        installer
+            .lease(&catalog, "0.1.13", target)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn waiting_installer_reuses_a_bundle_even_when_a_node_takes_a_lease() {
+    use fs2::FileExt;
+    use std::fs::OpenOptions;
+    use std::time::Duration;
+
+    let archive = regular_archive(&[
+        ("contracts/dev_wallet.rv32a", b"wallet"),
+        ("contracts/genesis_root.rv32a", b"genesis"),
+        ("hog-devnode", b"binary"),
+    ]);
+    let catalog = catalog_for(&archive);
+    let source = MemorySource::new(archive);
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(cache.path());
+    let seed = Installer::new(cache.path().join("seed"));
+    let target = HostTarget::LinuxX86_64;
+    let completed = seed
+        .install(&catalog, "0.1.13", target, &source)
+        .await
+        .unwrap();
+    let locks = cache.path().join("toolchain/hog-devnode/.locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(locks.join("0.1.13-x86_64-unknown-linux-gnu.lock"))
+        .unwrap();
+    FileExt::lock_shared(&lock).unwrap();
+    let install = installer.install(&catalog, "0.1.13", target, &source);
+    tokio::pin!(install);
+    // Poll through the missing-cache check into exclusive lock contention.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut install)
+            .await
+            .is_err()
+    );
+    let destination = installer.installation_path("0.1.13", target);
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    // Model another installer committing, followed immediately by a node's shared lease.
+    // Keeping this shared lock held proves the waiter no longer requires exclusive access.
+    std::fs::rename(completed.path(), &destination).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(1), &mut install)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!result.installed_now());
+    assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    FileExt::unlock(&lock).unwrap();
 }

@@ -37,6 +37,11 @@ pub enum InstallError {
         #[source]
         source: io::Error,
     },
+    /// Cleanup cannot remove a bundle being installed or used by a node.
+    #[error(
+        "toolchain {version}/{target} is busy; stop nodes using it or wait for installation before cleaning"
+    )]
+    Busy { version: String, target: HostTarget },
     /// The downloaded file length differs from the embedded catalog.
     #[error("archive size mismatch: expected {expected} bytes, observed {observed}")]
     SizeMismatch { expected: u64, observed: u64 },
@@ -119,6 +124,21 @@ impl Installation {
     }
 }
 
+/// A cached bundle protected from cleanup until this guard is dropped.
+/// Hold it until the node has stopped using the executable and contract artifacts.
+#[derive(Debug)]
+pub struct InstallationLease {
+    installation: Installation,
+    _lock: InstallLock,
+}
+
+impl InstallationLease {
+    /// Return the executable protected by this lease.
+    pub fn binary_path(&self) -> PathBuf {
+        self.installation.binary_path()
+    }
+}
+
 /// Installs catalog-authorized bundles beneath one Groundhog cache root.
 #[derive(Debug)]
 pub struct Installer {
@@ -159,11 +179,48 @@ impl Installer {
         }))
     }
 
+    /// Resolve a complete bundle under a shared usage lock.
+    /// Unlike `find`, this may create lock state. Multiple nodes may share a bundle;
+    /// cleanup refuses it until every lease is dropped. Missing bundles return `None`.
+    pub async fn lease(
+        &self,
+        catalog: &Catalog,
+        version: &str,
+        target: HostTarget,
+    ) -> Result<Option<InstallationLease>, InstallError> {
+        let version = catalog.resolve_version(Some(version))?;
+        let lock = acquire_shared_lock(self.lock_path(version, target)).await?;
+        Ok(self
+            .find(catalog, version, target)?
+            .map(|installation| InstallationLease {
+                installation,
+                _lock: lock,
+            }))
+    }
+
     /// Remove one version and target while holding the same lock used by installation.
     /// Retired versions may be cleaned even when they are absent from the current catalog.
-    pub async fn clean(&self, version: &str, target: HostTarget) -> Result<bool, InstallError> {
+    /// Returns `Busy` immediately while an installation or node holds the lock.
+    pub fn clean(&self, version: &str, target: HostTarget) -> Result<bool, InstallError> {
         crate::catalog::validate_version_name(version)?;
-        let _lock = acquire_lock(self.lock_path(version, target)).await?;
+        let file = open_lock(&self.lock_path(version, target))?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                return Err(InstallError::Busy {
+                    version: version.to_string(),
+                    target,
+                });
+            }
+            Err(source) => {
+                return Err(io_error(
+                    "acquire cleanup lock",
+                    &self.lock_path(version, target),
+                    source,
+                ));
+            }
+        }
+        let _lock = InstallLock { file };
         remove_installation(&self.installation_path(version, target))
     }
 
@@ -179,7 +236,24 @@ impl Installer {
         let artifact = catalog.artifact(version, target)?;
         let version_dir = self.toolchain_root().join(version);
         create_dir_all(&version_dir)?;
-        let lock = acquire_lock(self.lock_path(version, target)).await?;
+        // A concurrent installer may finish and acquire a node lease before us.
+        // Recheck completion under a shared lock between exclusive-lock attempts.
+        let lock_path = self.lock_path(version, target);
+        let lock = loop {
+            if let Some(lease) = self.lease(catalog, version, target).await? {
+                return Ok(lease.installation.clone());
+            }
+            let file = open_lock(&lock_path)?;
+            match FileExt::try_lock_exclusive(&file) {
+                Ok(()) => break InstallLock { file },
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(source) => {
+                    return Err(io_error("acquire installation lock", &lock_path, source));
+                }
+            }
+        };
         let final_path = self.installation_path(version, target);
 
         if installation_is_complete(&final_path, version, target, artifact)? {
@@ -242,6 +316,7 @@ struct Completion {
     layout_version: u32,
 }
 
+#[derive(Debug)]
 struct InstallLock {
     file: File,
 }
@@ -252,11 +327,11 @@ impl Drop for InstallLock {
     }
 }
 
-async fn acquire_lock(path: PathBuf) -> Result<InstallLock, InstallError> {
+fn open_lock(path: &Path) -> Result<File, InstallError> {
     let parent = path.parent().ok_or_else(|| {
         io_error(
             "resolve installation lock parent",
-            &path,
+            path,
             io::Error::new(io::ErrorKind::InvalidInput, "lock path has no parent"),
         )
     })?;
@@ -266,10 +341,15 @@ async fn acquire_lock(path: PathBuf) -> Result<InstallLock, InstallError> {
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&path)
-        .map_err(|source| io_error("open installation lock", &path, source))?;
+        .open(path)
+        .map_err(|source| io_error("open installation lock", path, source))?;
+    Ok(file)
+}
+
+async fn acquire_shared_lock(path: PathBuf) -> Result<InstallLock, InstallError> {
+    let file = open_lock(&path)?;
     loop {
-        match FileExt::try_lock_exclusive(&file) {
+        match FileExt::try_lock_shared(&file) {
             Ok(()) => return Ok(InstallLock { file }),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;

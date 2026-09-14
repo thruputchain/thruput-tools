@@ -505,7 +505,14 @@ do not disable RPC or Cargo traffic from other commands. `status`, `list`,
 authoritative. Downloads are verified before constrained extraction and atomic
 installation under `~/.cache/groundhog/toolchain/hog-devnode/` (or the XDG cache
 root). Cache reuse checks completion metadata and required files; it does not
-rehash installed contents. Installs and cleanup share a per-version/target lock.
+rehash installed contents.
+
+Managed selection checks the host glibc/macOS version against the catalog
+minimum before using cached or downloaded bundles. An incompatible implicit default may
+fall back to PATH; an explicit or saved managed version reports an error.
+Installs and cleanup share a per-version/target lock. Running managed nodes hold
+shared usage locks; `clean` reports a busy bundle until its nodes stop or
+installation finishes.
 
 All toolchain commands support `--json` with `data.schemaVersion`. `path` is
 the executable path, and `active` means the managed selection (explicit local
