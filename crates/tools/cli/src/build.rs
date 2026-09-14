@@ -592,6 +592,7 @@ pub fn cargo_metadata_with_artifacts(
     let mut command = Command::new("cargo");
     command
         .arg("metadata")
+        .arg("--color=never")
         .arg("--format-version")
         .arg("1")
         .arg("--no-deps");
