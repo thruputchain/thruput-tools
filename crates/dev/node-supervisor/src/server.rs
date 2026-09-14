@@ -153,6 +153,17 @@ impl NodeSupervisorHandle {
     /// process behind.
     #[tracing::instrument(skip_all, fields(rpc_listen = %config.rpc_listen_address))]
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
+        Self::start_with_inherited_file(config, None).await
+    }
+
+    /// Start a node with one inherited file descriptor, such as a locked bundle
+    /// lease. The child and its descendants retain the open file description
+    /// independently of this handle and process, including after SIGKILL.
+    /// The executable must preserve inherited descriptors for this guarantee.
+    pub async fn start_with_inherited_file(
+        config: NodeSupervisorConfig,
+        inherited_file: Option<std::fs::File>,
+    ) -> Result<Self, NodeSupervisorError> {
         if let Some(identity) = &config.bundle_identity {
             tracing::info!(
                 component_version = identity.build_version().crate_version(),
@@ -167,7 +178,8 @@ impl NodeSupervisorHandle {
             .local_airdrop
             .validate()
             .map_err(|reason| NodeSupervisorError::InvalidLocalAirdropConfig { reason })?;
-        let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
+        let mut hogd =
+            HogdDevProcess::start_with_inherited_file(&config.hogd_dev, inherited_file).await?;
 
         // Text, not the wire array: this is checked against the runtime
         // manifest's `protocol` JSON field and carried in error messages.

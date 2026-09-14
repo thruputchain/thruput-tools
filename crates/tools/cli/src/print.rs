@@ -153,6 +153,18 @@ impl Print {
         }
     }
 
+    /// Write one human-readable data row to stdout.
+    ///
+    /// Data remains visible under `--quiet`; JSON commands should use [`Self::json`].
+    pub fn data_line(&self, value: impl std::fmt::Display) -> Result<(), CliError> {
+        if self.json {
+            return Ok(());
+        }
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "{value}")?;
+        Ok(())
+    }
+
     /// Styled success message for human output.
     pub fn success(&self, msg: impl std::fmt::Display) {
         if self.is_human_tty() {

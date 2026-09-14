@@ -1,6 +1,7 @@
 //! Minimal one-child process supervision.
 
 use std::ffi::{OsStr, OsString};
+use std::fs::File;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 
@@ -187,10 +188,22 @@ impl ChildSupervisor {
     /// Spawn the configured child process.
     #[tracing::instrument(skip_all, fields(program = %self.spec.program_label()))]
     pub fn spawn(&self) -> Result<SupervisedChild, NodeSupervisorError> {
+        self.spawn_with_inherited_file(None)
+    }
+
+    pub(crate) fn spawn_with_inherited_file(
+        &self,
+        inherited_file: Option<File>,
+    ) -> Result<SupervisedChild, NodeSupervisorError> {
         let program = self.spec.program_label();
-        let child = self
-            .spec
-            .command()
+        let mut command = self.spec.command();
+        if let Some(file) = inherited_file {
+            inherit_file(&mut command, file).map_err(|source| NodeSupervisorError::Spawn {
+                program: program.clone(),
+                source,
+            })?;
+        }
+        let child = command
             .spawn()
             .map_err(|source| NodeSupervisorError::Spawn {
                 program: program.clone(),
@@ -206,6 +219,46 @@ impl ChildSupervisor {
             process_group,
         })
     }
+}
+
+#[cfg(unix)]
+fn inherit_file(command: &mut Command, file: File) -> std::io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    // A caller may have closed standard input/output before opening the file.
+    // Move inheritance above stdio so Command's pipe/null setup cannot replace it.
+    // SAFETY: file is live; fcntl returns a new descriptor owned below.
+    let fd = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if fd == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: fd is a fresh successful duplication and is owned exactly once.
+    let inherited = unsafe { File::from_raw_fd(fd) };
+    drop(file);
+
+    // SAFETY: pre_exec runs after fork. The closure calls only async-signal-safe
+    // fcntl and constructs an OS error without allocating. Owning the file keeps
+    // its descriptor valid until spawn completes. Only the child's descriptor
+    // loses CLOEXEC; unrelated commands in this process cannot inherit it.
+    unsafe {
+        command.pre_exec(move || {
+            let fd = inherited.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags == -1 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn inherit_file(_command: &mut Command, _file: File) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "inherited installation leases require Unix file descriptors",
+    ))
 }
 
 #[cfg(unix)]

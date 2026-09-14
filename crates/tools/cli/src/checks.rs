@@ -880,9 +880,16 @@ fn rust_target_status(installed: &str, target: &str) -> RustTargetStatus {
 }
 
 fn check_devnode() -> DevnodeStatus {
-    let config = groundhog_node_supervisor::HogdDevConfig::default();
-    let path = match groundhog_node_supervisor::resolve_hogd_dev_binary(&config) {
-        Ok(path) => path,
+    let path = match crate::node::find_local_node_binary() {
+        Ok(crate::node::LocalNodeDiscovery::Local(path)) => path,
+        Ok(crate::node::LocalNodeDiscovery::Selected { version, reason }) => {
+            return DevnodeStatus {
+                reachable: false,
+                path: None,
+                version: Some(version),
+                error: Some(reason),
+            };
+        }
         Err(error) => {
             return DevnodeStatus {
                 reachable: false,

@@ -138,6 +138,10 @@ pub struct LocalNodeOptions {
     pub hogd_dev_binary: Option<PathBuf>,
     /// Contract artifact directories passed to hog-devnode in search order.
     pub contract_artifact_directories: Vec<PathBuf>,
+    /// Exact managed hog-devnode version requested for this invocation.
+    pub hogd_dev_version: Option<String>,
+    /// Forbid managed network acquisition while retaining local fallback sources.
+    pub offline: bool,
     /// Directory where hog-devnode persists recoverable node state.
     pub data_dir: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
@@ -257,13 +261,32 @@ impl StartedLocalNode {
 
 /// Start a reusable local node without taking over the terminal.
 pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalNode, CliError> {
+    let (options, lease) = resolve_local_node_options(options, None).await?;
+    start_resolved_local_node(options, lease).await
+}
+
+pub(crate) async fn start_local_node_with_print(
+    options: LocalNodeOptions,
+    print: &Print,
+) -> Result<StartedLocalNode, CliError> {
+    let (options, lease) = resolve_local_node_options(options, Some(print)).await?;
+    start_resolved_local_node(options, lease).await
+}
+
+async fn start_resolved_local_node(
+    options: LocalNodeOptions,
+    lease: Option<groundhog_toolchain::InstallationLease>,
+) -> Result<StartedLocalNode, CliError> {
     use groundhog_node_supervisor::NodeSupervisorHandle;
 
     let config = local_node_config(options)?;
     let data_dir = config.hogd_dev.data_dir.clone();
-    let handle = NodeSupervisorHandle::start(config)
-        .await
-        .map_err(|e| map_node_supervisor_error(&e))?;
+    let handle = NodeSupervisorHandle::start_with_inherited_file(
+        config,
+        lease.map(groundhog_toolchain::InstallationLease::into_lock_file),
+    )
+    .await
+    .map_err(|e| map_node_supervisor_error(&e))?;
     let rpc_addr = handle.rpc_addr();
     let readiness = handle.hogd_readiness().clone();
     let backend_planes = handle.backend_planes();
@@ -277,6 +300,26 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
     })
 }
 
+fn report_acquisition_interrupted(cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    if print.is_json() {
+        print.json(&CommandResult::failure_with_error(
+            cmd,
+            json!({
+                "schemaVersion": NODE_STARTUP_SCHEMA_VERSION,
+                "started": false
+            }),
+            crate::result::CommandError::new(
+                "node_acquisition_interrupted",
+                "local node acquisition interrupted before startup",
+                json!({}),
+            ),
+        ))?;
+    } else {
+        print.status("Local node acquisition interrupted before startup");
+    }
+    Err(CliError::CommandReportedFailure)
+}
+
 async fn run_hogd_dev(
     options: LocalNodeOptions,
     cmd: &'static str,
@@ -286,11 +329,19 @@ async fn run_hogd_dev(
 
     let shutdown_signal = prepare_stop_signal()
         .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
+    tokio::pin!(shutdown_signal);
+    let (options, lease) = tokio::select! {
+        result = resolve_local_node_options(options, Some(print)) => result?,
+        result = &mut shutdown_signal => {
+            result.map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
+            return report_acquisition_interrupted(cmd, print);
+        }
+    };
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
     if !print.is_json() {
         print.status("Starting Groundhog local node");
     }
-    let started = start_local_node(options).await?;
+    let started = start_resolved_local_node(options, lease).await?;
     let local_runtime_state_path = match write_started_local_runtime_state(
         &started,
         runtime_artifacts_dir.as_deref(),
@@ -492,6 +543,240 @@ fn local_runtime_state(
         runtime_manifest: started.readiness().manifest_path.clone()?,
         runtime_artifacts_dir: runtime_artifacts_dir.map(Path::to_path_buf),
     })
+}
+
+/// A read-only observation of the default node selection.
+pub(crate) enum LocalNodeDiscovery {
+    Local(PathBuf),
+    /// Managed selection is retained even when it cannot currently be executed.
+    Selected {
+        version: String,
+        reason: String,
+    },
+}
+
+enum DevnodeSelection {
+    Local(PathBuf),
+    Managed {
+        catalog: groundhog_toolchain::Catalog,
+        version: String,
+        explicit: bool,
+    },
+}
+
+/// Plan selection without acquiring, locking, or downloading an installation.
+fn resolve_devnode_selection(options: &LocalNodeOptions) -> Result<DevnodeSelection, CliError> {
+    use groundhog_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary_before_path};
+    let hogd = options
+        .hogd_dev_binary
+        .clone()
+        .map_or_else(HogdDevConfig::default, |binary| {
+            HogdDevConfig::default().with_binary_path(binary)
+        });
+    if options.hogd_dev_version.is_none()
+        && let Some(binary) = resolve_hogd_dev_binary_before_path(&hogd)
+            .map_err(|error| map_node_supervisor_error(&error))?
+    {
+        return Ok(DevnodeSelection::Local(binary));
+    }
+    let catalog = groundhog_toolchain::Catalog::embedded()?;
+    let configured = crate::config::load_toolchain_version()?;
+    let requested = options
+        .hogd_dev_version
+        .as_deref()
+        .or(configured.as_deref());
+    // Keep stale saved selections visible to inspection instead of discarding intent.
+    let version = match requested {
+        Some(version) => version.to_owned(),
+        None => catalog.resolve_version(None)?.to_owned(),
+    };
+    Ok(DevnodeSelection::Managed {
+        catalog,
+        version,
+        explicit: requested.is_some(),
+    })
+}
+
+fn managed_target(
+    catalog: &groundhog_toolchain::Catalog,
+    version: &str,
+) -> Result<groundhog_toolchain::HostTarget, CliError> {
+    catalog.resolve_version(Some(version))?;
+    let target = groundhog_toolchain::HostTarget::current()?;
+    catalog
+        .artifact(version, target)?
+        .validate_current_host(target)?;
+    Ok(target)
+}
+
+/// Inspect default selection without creating cache directories or downloading artifacts.
+pub(crate) fn find_local_node_binary() -> Result<LocalNodeDiscovery, CliError> {
+    use groundhog_node_supervisor::resolve_hogd_dev_binary_on_path;
+    let selection = resolve_devnode_selection(&LocalNodeOptions::default())?;
+    let (catalog, version, explicit) = match selection {
+        DevnodeSelection::Local(path) => return Ok(LocalNodeDiscovery::Local(path)),
+        DevnodeSelection::Managed {
+            catalog,
+            version,
+            explicit,
+        } => (catalog, version, explicit),
+    };
+    let installed = managed_target(&catalog, &version).and_then(|target| {
+        groundhog_toolchain::Installer::new(crate::config::cache_dir()?)
+            .find(&catalog, &version, target)
+            .map_err(CliError::from)
+    });
+    if let Ok(Some(installation)) = &installed {
+        return Ok(LocalNodeDiscovery::Local(installation.binary_path()));
+    }
+    if !explicit && let Some(path) = resolve_hogd_dev_binary_on_path() {
+        return Ok(LocalNodeDiscovery::Local(path));
+    }
+    let reason = match installed {
+        Ok(None) => format!(
+            "hog-devnode {version} is selected, not installed; node startup will install it unless offline"
+        ),
+        Err(error) => format!("hog-devnode {version} is selected but unavailable: {error}"),
+        Ok(Some(_)) => unreachable!(),
+    };
+    Ok(LocalNodeDiscovery::Selected { version, reason })
+}
+
+async fn resolve_local_node_options(
+    mut options: LocalNodeOptions,
+    print: Option<&Print>,
+) -> Result<
+    (
+        LocalNodeOptions,
+        Option<groundhog_toolchain::InstallationLease>,
+    ),
+    CliError,
+> {
+    use groundhog_node_supervisor::resolve_hogd_dev_binary_on_path;
+    // Host probes and read-only filesystem discovery must not block signal handling.
+    let planning_options = options.clone();
+    let (selection, target) = tokio::task::spawn_blocking(move || {
+        let selection = resolve_devnode_selection(&planning_options)?;
+        let target = match &selection {
+            DevnodeSelection::Managed {
+                catalog, version, ..
+            } => Some(managed_target(catalog, version)),
+            DevnodeSelection::Local(_) => None,
+        };
+        Ok::<_, CliError>((selection, target))
+    })
+    .await
+    .map_err(|error| CliError::NodeSupervisor(format!("node selection task failed: {error}")))??;
+    match selection {
+        DevnodeSelection::Local(binary) => {
+            options.hogd_dev_binary = Some(binary);
+            Ok((options, None))
+        }
+        DevnodeSelection::Managed {
+            catalog,
+            version,
+            explicit,
+        } => {
+            let target = match target.expect("bug: managed selection has a target result") {
+                Ok(target) => target,
+                Err(error) => {
+                    if !explicit && let Some(binary) = resolve_hogd_dev_binary_on_path() {
+                        options.hogd_dev_binary = Some(binary);
+                        return Ok((options, None));
+                    }
+                    return Err(error);
+                }
+            };
+            acquire_managed_node_options(options, catalog, version, target, explicit, print).await
+        }
+    }
+}
+
+async fn acquire_managed_node_options(
+    mut options: LocalNodeOptions,
+    catalog: groundhog_toolchain::Catalog,
+    version: String,
+    target: groundhog_toolchain::HostTarget,
+    explicitly_requested: bool,
+    print: Option<&Print>,
+) -> Result<
+    (
+        LocalNodeOptions,
+        Option<groundhog_toolchain::InstallationLease>,
+    ),
+    CliError,
+> {
+    use groundhog_node_supervisor::resolve_hogd_dev_binary_on_path;
+    use groundhog_toolchain::Installer;
+
+    let cache_root = crate::config::cache_dir()?;
+    let cache_installer = Installer::new(&cache_root);
+    loop {
+        match cache_installer.lease(&catalog, &version, target).await {
+            Ok(Some(lease)) => {
+                options.hogd_dev_binary = Some(lease.binary_path());
+                return Ok((options, Some(lease)));
+            }
+            Err(error @ groundhog_toolchain::InstallError::Io { .. }) if !explicitly_requested => {
+                if let Some(binary) = resolve_hogd_dev_binary_on_path() {
+                    options.hogd_dev_binary = Some(binary);
+                    return Ok((options, None));
+                }
+                return Err(error.into());
+            }
+            Err(error) => return Err(error.into()),
+            Ok(None) => {}
+        }
+
+        let mut acquisition_error = None;
+        if options.offline {
+            if explicitly_requested {
+                return Err(CliError::ToolchainOfflineMissing {
+                    version,
+                    target: target.triple().to_string(),
+                });
+            }
+        } else {
+            if let Some(print) = print {
+                print.status(format_args!(
+                    "Installing hog-devnode {version} for {target}"
+                ));
+            }
+            match crate::toolchain_cmd::artifact_source() {
+                Ok(source) => {
+                    let installer = Installer::new(&cache_root);
+                    match installer.install(&catalog, &version, target, &source).await {
+                        Ok(_) => {
+                            // Recheck under a shared lease: cleanup may have won the lock
+                            // after installation completed. Never expose an unprotected path.
+                            continue;
+                        }
+                        Err(error) if explicitly_requested => return Err(error.into()),
+                        Err(error) => acquisition_error = Some(CliError::from(error)),
+                    }
+                }
+                Err(error) if explicitly_requested => return Err(error),
+                Err(error) => acquisition_error = Some(error),
+            }
+        }
+
+        if let Some(binary) = resolve_hogd_dev_binary_on_path() {
+            options.hogd_dev_binary = Some(binary);
+            return Ok((options, None));
+        }
+        if options.offline {
+            return Err(CliError::ToolchainOfflineMissing {
+                version,
+                target: target.triple().to_string(),
+            });
+        }
+        if let Some(error) = acquisition_error {
+            return Err(error);
+        }
+        return Err(map_node_supervisor_error(
+            &groundhog_node_supervisor::NodeSupervisorError::HogdDevNotFound,
+        ));
+    }
 }
 
 fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBuf> {
@@ -990,6 +1275,8 @@ mod tests {
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
             contract_artifact_directories: vec![PathBuf::from("/tmp/contracts")],
+            hogd_dev_version: None,
+            offline: false,
             data_dir: Some(PathBuf::from("/tmp/hog-devnode-data")),
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),
@@ -1603,3 +1890,7 @@ mod tests {
         assert!(payload["backend"].get("limitations").is_none());
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "node_lifecycle_tests.rs"]
+mod lifecycle_tests;

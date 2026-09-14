@@ -25,6 +25,7 @@ env:
     groundhog-signing
     groundhog-node-supervisor
     groundhog-rv32-lower
+    groundhog-toolchain
     groundhog-cli
     groundhog-testkit
 
@@ -62,6 +63,20 @@ jobs:
           repository: groundhogchain/actions
           path: actions
           ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
+
+      # Fail before creating a tag or publishing any crate if the CLI's
+      # committed default is unavailable, malformed, or incompatible.
+      - name: Verify managed toolchain catalog and public bundles
+        shell: bash
+        run: |
+          cargo test --locked -p groundhog-toolchain --test catalog_contract
+          cargo test --locked -p groundhog-toolchain --test install_contract public_catalog_installs_all_targets -- --ignored --exact --color never | tee "$RUNNER_TEMP/public-bundle-tests.log"
+          grep -q '^test result: ok. 1 passed; 0 failed;' "$RUNNER_TEMP/public-bundle-tests.log"
+
+      - name: Verify managed toolchain startup with a fresh cache
+        run: |
+          python3 --version
+          scripts/smoke-managed-toolchain.sh
 
       - name: dry run
         uses: ./actions/cargo-publish-dry-run

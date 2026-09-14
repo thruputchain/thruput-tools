@@ -49,6 +49,7 @@ pub mod test_cmd;
 pub mod test_json;
 pub mod token;
 pub mod token_json;
+pub mod toolchain_cmd;
 pub mod transfer;
 pub mod transfer_json;
 pub mod tx;

@@ -13,6 +13,7 @@ members = [
     "crates/json-rpc/open-rpc-spec",
     "crates/x23/x23-transport",
     "crates/tools/agent-knowledge",
+    "crates/tools/toolchain",
     "crates/tools/cli",
     "crates/tools/signing",
     "crates/tools/tx-validation",
@@ -43,6 +44,10 @@ keywords = ["groundhog"]
 categories = ["development-tools"]
 
 [workspace.dependencies]
+reqwest = "0.12"
+fs2 = "0.4"
+flate2 = "1"
+tar = { version = "0.4.46", default-features = false }
 # --- Workspace crates ---
 # The version must be duplicated here despite workspace.package.version
 # above.  Cargo requires explicit versions for dependencies when
@@ -62,6 +67,8 @@ groundhog-tx-validation = { path = "crates/tools/tx-validation", version = "=0.1
 groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.17.0", registry = "groundhog" }
 groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.17.0", registry = "groundhog" }
 groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.17.0", registry = "groundhog" }
+
+groundhog-toolchain = { path = "crates/tools/toolchain", version = "=0.17.0", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 # These crates define or encode the protocol schema. Keep them exact and update
@@ -110,6 +117,7 @@ hyper = "1"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
 bytes = "1"
 hex = "0.4"
 libc = "0.2"

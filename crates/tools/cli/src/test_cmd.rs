@@ -47,6 +47,10 @@ pub struct IntegrationTestOptions {
     /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
     /// environment variable.
     pub hogd_protocol: Option<String>,
+    /// Exact managed hog-devnode version requested for the ephemeral node.
+    pub hog_devnode_version: Option<String>,
+    /// Forbid managed network acquisition for the ephemeral node.
+    pub offline: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
     /// running the ephemeral integration node.
     pub verbose: bool,
@@ -264,13 +268,46 @@ fn run_integration_with_dev_node(
         build.artifact.kind
     ));
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let started = rt.block_on(crate::node::start_local_node(
-        crate::node::LocalNodeOptions {
-            port: 0,
-            pid_file: crate::node::LocalNodePidFile::Disabled,
-            hogd_protocol,
-            ..crate::node::LocalNodeOptions::default()
-        },
+    let node_options = crate::node::LocalNodeOptions {
+        port: 0,
+        pid_file: crate::node::LocalNodePidFile::Disabled,
+        hogd_protocol,
+        hogd_dev_version: integration.hog_devnode_version.clone(),
+        offline: integration.offline,
+        ..crate::node::LocalNodeOptions::default()
+    };
+    // Restore the original signal actions before synchronous RPC/Cargo work. Tokio
+    // signal registration is process-wide and would otherwise swallow later signals.
+    #[cfg(unix)]
+    let started = {
+        let signals = startup_signals::StartupSignals::capture()?;
+        let startup = rt.block_on(async {
+            tokio::select! {
+                biased;
+                () = signals.cancelled() => Ok(None),
+                result = crate::node::start_local_node_with_print(node_options, print) => result.map(Some),
+            }
+        });
+        let interrupted = signals.finish();
+        if interrupted {
+            if let Ok(Some(started)) = startup
+                && let Err(error) = rt.block_on(started.stop())
+            {
+                print.warn(format_args!(
+                    "local node shutdown failed after startup interruption: {error}"
+                ));
+            }
+            return report_integration_startup_interrupted(&build, cmd, print);
+        }
+        match startup? {
+            Some(started) => started,
+            None => return report_integration_startup_interrupted(&build, cmd, print),
+        }
+    };
+    #[cfg(not(unix))]
+    let started = rt.block_on(crate::node::start_local_node_with_print(
+        node_options,
+        print,
     ))?;
 
     let rpc_url = started.rpc_url();
@@ -297,6 +334,52 @@ fn run_integration_with_dev_node(
 
     handle_integration_outcome(result, stop_result, cmd, print)
 }
+
+#[cfg(unix)]
+fn report_integration_startup_interrupted(
+    build: &IntegrationBuild,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    if print.is_json() {
+        let mut report = build_test_report(
+            &build.project_root,
+            &build.profile,
+            TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
+            &[],
+            false,
+            &failure_cache_path(
+                &build.target_directory,
+                &build.project_name,
+                build.artifact.kind,
+            ),
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            TestMode::Integration,
+            None,
+        );
+        report.success = false;
+        print.json(&CommandResult::failure_with_error(
+            cmd,
+            report,
+            crate::result::CommandError::new(
+                "integration_node_startup_interrupted",
+                "integration node startup interrupted before tests ran",
+                serde_json::json!({}),
+            ),
+        ))?;
+    } else {
+        print.status("Integration node startup interrupted before tests ran");
+    }
+    Err(CliError::CommandReportedFailure)
+}
+
+#[cfg(unix)]
+#[path = "test_startup_signals.rs"]
+mod startup_signals;
 
 fn handle_integration_outcome<T>(
     result: Result<IntegrationRun, CliError>,

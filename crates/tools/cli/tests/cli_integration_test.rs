@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::fd::FromRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
@@ -85,6 +87,8 @@ fn groundhog() -> Command {
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
     command.env_remove("GROUNDHOG_PROFILE");
     command.env_remove("GROUNDHOG_DEVNODE_BINARY");
+    command.env_remove("GROUNDHOG_OFFLINE");
+    command.env_remove("GROUNDHOG_TOOLCHAIN_BASE_URL");
     command.env_remove("HOGD_FFI_USER");
     command.env_remove("HOGD_FFI_PASSWORD");
     command.env("XDG_CONFIG_HOME", config_home);
@@ -281,6 +285,49 @@ fn fake_hogd_dev_binary() -> std::path::PathBuf {
         binary.display(),
     );
     binary
+}
+
+#[cfg(unix)]
+fn install_fake_managed_toolchain(
+    cache_home: &std::path::Path,
+    source_binary: &std::path::Path,
+) -> std::path::PathBuf {
+    let catalog = groundhog_toolchain::Catalog::embedded().expect("bug: catalog should load");
+    let target = groundhog_toolchain::HostTarget::current().expect("bug: host should be managed");
+    let version = catalog.default_version();
+    let artifact = catalog
+        .artifact(version, target)
+        .expect("bug: default host artifact should exist");
+    let root = cache_home
+        .join("groundhog/toolchain/hog-devnode")
+        .join(version)
+        .join(target.triple());
+
+    for file in artifact.files() {
+        let destination = root.join(file.path());
+        std::fs::create_dir_all(destination.parent().expect("bug: file should have parent"))
+            .expect("bug: managed fixture parent should create");
+        if file.path() == "hog-devnode" {
+            std::fs::copy(source_binary, &destination)
+                .expect("bug: fake managed binary should copy");
+        } else {
+            std::fs::write(&destination, b"fixture")
+                .expect("bug: managed fixture file should write");
+        }
+    }
+    std::fs::write(
+        root.join(".ok"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "version": version,
+            "target": target.triple(),
+            "archiveSha256": artifact.sha256(),
+            "layoutVersion": artifact.layout_version(),
+        }))
+        .expect("bug: completion fixture should serialize"),
+    )
+    .expect("bug: completion fixture should write");
+    root.join("hog-devnode")
 }
 
 #[cfg(unix)]
@@ -1941,6 +1988,218 @@ fn assert_local_runtime_state_rpc_url(config_home: &std::path::Path, rpc_url: &s
 
 #[cfg(unix)]
 #[test]
+fn node_explicit_managed_version_uses_cache_before_path_offline() {
+    let fake = fake_hogd_dev_binary();
+    let cache_home = TempDir::new().unwrap();
+    let managed_binary = install_fake_managed_toolchain(cache_home.path(), &fake);
+    assert!(managed_binary.is_file());
+
+    let path_dir = TempDir::new().unwrap();
+    let path_binary = path_dir.path().join("hog-devnode");
+    std::fs::write(&path_binary, "#!/bin/sh\nexit 73\n").unwrap();
+    std::fs::set_permissions(&path_binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let pid_dir = TempDir::new().unwrap();
+    let pid_path = pid_dir.path().join("hogd.pid");
+    let child = groundhog()
+        .arg("--json")
+        .arg("--offline")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hog-devnode-version")
+        .arg(
+            groundhog_toolchain::Catalog::embedded()
+                .unwrap()
+                .default_version(),
+        )
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("PATH", path_dir.path())
+        .env("GROUNDHOG_DEVNODE_BINARY", &path_binary)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("bug: groundhog node should spawn");
+    let mut child = ChildGuard::new(child);
+
+    let stdout = child
+        .child_mut()
+        .stdout
+        .take()
+        .expect("bug: stdout should be piped");
+    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+        .expect("bug: managed startup JSON should be readable");
+    let payload: serde_json::Value =
+        serde_json::from_str(&line).expect("bug: startup line should be JSON");
+    assert_eq!(payload["ok"], true, "startup payload: {payload}");
+
+    let pid = read_pid_file(&pid_path);
+    send_sigint(child.child());
+    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    assert!(status.success(), "groundhog node should stop cleanly");
+    assert!(wait_pid_gone(pid, Duration::from_secs(2)));
+}
+
+#[cfg(unix)]
+#[test]
+fn node_explicit_managed_version_does_not_fall_back_to_path_offline() {
+    let fake = fake_hogd_dev_binary();
+    let cache_home = TempDir::new().unwrap();
+    let path_dir = TempDir::new().unwrap();
+    std::fs::copy(&fake, path_dir.path().join("hog-devnode")).unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("--offline")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hog-devnode-version")
+        .arg(
+            groundhog_toolchain::Catalog::embedded()
+                .unwrap()
+                .default_version(),
+        )
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("PATH", path_dir.path())
+        .output()
+        .expect("bug: groundhog node should run");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let payload: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("bug: node error should be JSON");
+    assert_eq!(payload["command"], "node");
+    assert_eq!(payload["error"]["code"], "toolchain_offline_missing");
+}
+
+#[cfg(unix)]
+#[test]
+fn node_saved_managed_version_does_not_fall_back_to_path_offline() {
+    let config_home = TempDir::new().unwrap();
+    let cache_home = TempDir::new().unwrap();
+    let path_dir = TempDir::new().unwrap();
+    support::write_versioned_devnode(path_dir.path());
+    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    write_global_config(
+        config_home.path(),
+        &format!(
+            "[toolchain]\nhog_devnode_version = {:?}\n",
+            catalog.default_version()
+        ),
+    );
+    let output = groundhog()
+        .args(["--json", "--offline", "node"])
+        .env("XDG_CONFIG_HOME", config_home.path())
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("PATH", path_dir.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(payload["error"]["code"], "toolchain_offline_missing");
+}
+
+#[cfg(unix)]
+#[test]
+fn node_managed_download_stops_on_sigint() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let source = format!("http://{}", listener.local_addr().unwrap());
+    let cache_home = TempDir::new().unwrap();
+    let child = groundhog()
+        .args(["--json", "node", "--hog-devnode-version"])
+        .arg(
+            groundhog_toolchain::Catalog::embedded()
+                .unwrap()
+                .default_version(),
+        )
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("GROUNDHOG_TOOLCHAIN_BASE_URL", source)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let child = ChildGuard::new(child);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let _connection = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "download request never reached source"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("failed to accept download: {error}"),
+        }
+    };
+    send_sigint(child.child());
+    let status = wait_child(child.into_inner(), Duration::from_secs(3));
+    assert!(
+        !status.success(),
+        "cancelled acquisition must report that the node never started"
+    );
+    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    let target = groundhog_toolchain::HostTarget::current().unwrap();
+    let installer = groundhog_toolchain::Installer::new(cache_home.path().join("groundhog"));
+    assert!(
+        installer
+            .find(&catalog, catalog.default_version(), target)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn node_offline_default_falls_back_to_path_after_managed_cache_miss() {
+    let fake = fake_hogd_dev_binary();
+    let cache_home = TempDir::new().unwrap();
+    let path_dir = TempDir::new().unwrap();
+    std::fs::copy(&fake, path_dir.path().join("hog-devnode")).unwrap();
+    let pid_dir = TempDir::new().unwrap();
+    let pid_path = pid_dir.path().join("hogd.pid");
+
+    let child = groundhog()
+        .arg("--json")
+        .arg("--offline")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("PATH", path_dir.path())
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("bug: groundhog node should spawn");
+    let mut child = ChildGuard::new(child);
+
+    let stdout = child
+        .child_mut()
+        .stdout
+        .take()
+        .expect("bug: stdout should be piped");
+    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+        .expect("bug: PATH fallback startup JSON should be readable");
+    let payload: serde_json::Value =
+        serde_json::from_str(&line).expect("bug: startup line should be JSON");
+    assert_eq!(payload["ok"], true, "startup payload: {payload}");
+
+    let pid = read_pid_file(&pid_path);
+    send_sigint(child.child());
+    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    assert!(status.success(), "groundhog node should stop cleanly");
+    assert!(wait_pid_gone(pid, Duration::from_secs(2)));
+}
+
+#[cfg(unix)]
+#[test]
 fn node_human_startup_reports_chain_state() {
     let fake = fake_hogd_dev_binary();
     let temp = TempDir::new().unwrap();
@@ -2609,6 +2868,39 @@ fn status_json_reports_reachable_devnode() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn status_json_discovers_managed_devnode_without_mutation() {
+    let source = TempDir::new().unwrap();
+    let cache_home = TempDir::new().unwrap();
+    let devnode = support::write_versioned_devnode(source.path());
+    let managed = install_fake_managed_toolchain(cache_home.path(), &devnode);
+    let marker = managed.parent().unwrap().join(".ok");
+    let before = std::fs::read(&marker).unwrap();
+    let modified = std::fs::metadata(&marker).unwrap().modified().unwrap();
+    let output = groundhog()
+        .args(["--json", "status"])
+        .env("XDG_CACHE_HOME", cache_home.path())
+        .env("PATH", source.path().join("empty"))
+        .output()
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let devnode = &payload["data"]["environment"]["devnode"];
+    assert_eq!(devnode["reachable"], true, "{payload}");
+    assert_eq!(devnode["path"], managed.display().to_string());
+    assert_eq!(std::fs::read(&marker).unwrap(), before);
+    assert_eq!(
+        std::fs::metadata(&marker).unwrap().modified().unwrap(),
+        modified
+    );
+    assert!(
+        !cache_home
+            .path()
+            .join("groundhog/toolchain/hog-devnode/.locks")
+            .exists()
+    );
+}
+
 #[test]
 fn quiet_status_exits_one_with_no_output_when_missing_state() {
     let tmp = TempDir::new().unwrap();
@@ -3044,6 +3336,7 @@ fn test_help_mentions_target_dir() {
     assert!(stdout.contains("--integration"));
     assert!(!stdout.contains("--target <TARGET>"));
     assert!(!stdout.contains("--differential"));
+    assert!(stdout.contains("--hog-devnode-version"));
     assert!(stdout.contains("-v, --verbose"));
     assert!(stdout.contains("RUST_LOG"));
     assert!(stdout.contains("hog-devnode"));
@@ -3062,6 +3355,7 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--verbose is also honored with --json"));
     assert!(stdout.contains("--hog-devnode-binary"));
     assert!(stdout.contains("--contract-artifacts-dir <DIR>"));
+    assert!(stdout.contains("--hog-devnode-version"));
     assert!(stdout.contains("--data-dir"));
     assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--dev-account-count"));
@@ -3069,6 +3363,8 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("Initial HOG allocated to each dev-1+ user account"));
     assert!(stdout.contains("--hogd-protocol"));
     assert!(stdout.contains("GROUNDHOG_DEVNODE_BINARY"));
+    assert!(stdout.contains("GROUNDHOG_OFFLINE"));
+    assert!(stdout.contains("GROUNDHOG_TOOLCHAIN_BASE_URL"));
     assert!(stdout.contains("RUST_LOG"));
     assert!(stdout.contains("hogd_timestamp_ms"));
     assert!(stdout.contains("hogd_target"));
@@ -3268,10 +3564,37 @@ fn test_integration_rejects_watch() {
 #[cfg(unix)]
 #[test]
 fn test_integration_default_rv32_build_reaches_local_node_startup() {
-    use std::os::unix::fs::PermissionsExt;
-
     let hogd_dev = fake_hogd_dev_binary();
     let tmp = TempDir::new().unwrap();
+    let (fake_bin, metadata_json) = prepare_integration_startup_fixture(&tmp);
+
+    let output = groundhog()
+        .args(["--json", "test", "--integration", "-p", "demo-contract"])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
+        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        tmp.path()
+            .join("target/groundhog/demo_contract.rv32a")
+            .is_file(),
+        "integration should lower an RV32 artifact before node startup by default",
+    );
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
+}
+
+#[cfg(unix)]
+fn prepare_integration_startup_fixture(tmp: &TempDir) -> (std::path::PathBuf, String) {
+    use std::os::unix::fs::PermissionsExt;
     std::fs::write(
         tmp.path().join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -3332,28 +3655,112 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&cargo, perms).unwrap();
 
-    let output = groundhog()
-        .args(["--json", "test", "--integration", "-p", "demo-contract"])
-        .current_dir(tmp.path())
-        .env("PATH", &fake_bin)
-        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
-        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
-        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
-        .output()
-        .unwrap();
+    (fake_bin, metadata_json)
+}
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    assert!(
-        tmp.path()
-            .join("target/groundhog/demo_contract.rv32a")
-            .is_file(),
-        "integration should lower an RV32 artifact before node startup by default",
-    );
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "test");
-    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
+#[cfg(unix)]
+#[test]
+fn integration_managed_startup_cancellation_reports_test_schema() {
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        let tmp = TempDir::new().unwrap();
+        let (fake_bin, metadata_json) = prepare_integration_startup_fixture(&tmp);
+        let cache = TempDir::new().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+        let child = groundhog()
+            .args([
+                "--json",
+                "test",
+                "--integration",
+                "-p",
+                "demo-contract",
+                "--hog-devnode-version",
+            ])
+            .arg(catalog.default_version())
+            .current_dir(tmp.path())
+            .env("PATH", &fake_bin)
+            .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
+            .env_remove("HTTP_PROXY")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("ALL_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .env("GROUNDHOG_TOOLCHAIN_BASE_URL", origin)
+            .env("XDG_CACHE_HOME", cache.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = ChildGuard::new(child);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let _connection = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Some(status) = child.child_mut().try_wait().unwrap() {
+                        let output = child.into_inner().wait_with_output().unwrap();
+                        panic!(
+                            "CLI exited {status} before acquisition: {}",
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "CLI did not reach artifact source"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        };
+        // SAFETY: send the requested signal only to the child created by this test.
+        assert_eq!(
+            unsafe { libc::kill(child.child().id().try_into().unwrap(), signal) },
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.child_mut().try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "integration acquisition did not cancel"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let output = child.into_inner().wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["command"], "test");
+        assert_eq!(
+            payload["error"]["code"],
+            "integration_node_startup_interrupted"
+        );
+        let report: groundhog_cli::test_json::TestReport =
+            serde_json::from_value(payload["data"].clone()).unwrap();
+        assert_eq!(
+            report.schema_version,
+            groundhog_cli::test_json::TEST_JSON_SCHEMA_VERSION
+        );
+        assert_eq!(report.mode, groundhog_cli::test_json::TestMode::Integration);
+        assert!(!report.success);
+        assert!(report.runs.is_empty());
+        assert!(report.integration.is_none());
+        assert!(report.artifact.path.is_file());
+        let installer = groundhog_toolchain::Installer::new(cache.path().join("groundhog"));
+        assert!(
+            installer
+                .find(
+                    &catalog,
+                    catalog.default_version(),
+                    groundhog_toolchain::HostTarget::current().unwrap()
+                )
+                .unwrap()
+                .is_none()
+        );
+    }
 }
 
 #[cfg(unix)]

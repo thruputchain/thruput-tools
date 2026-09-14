@@ -287,6 +287,14 @@ Use the CLI to start the supported local stack:
 groundhog node
 ```
 
+The CLI can acquire a catalog-pinned devnode bundle on startup. Use
+`groundhog toolchain list` to inspect the embedded catalog, `toolchain install`
+to prefetch it, and `toolchain which` to find the installed executable.
+`groundhog --offline node` forbids managed downloads; it does not disable RPC
+or Cargo network traffic in other commands. Keep `GROUNDHOG_DEVNODE_BINARY`
+for a matching local build. Diagnose startup compatibility failures rather
+than adding a protocol override.
+
 Use another terminal for status, build, deploy, call, view, or TypeScript
 application work. Prefer the active local profile and runtime information
 reported by `groundhog status --json` and `groundhog node --json`. Do not copy

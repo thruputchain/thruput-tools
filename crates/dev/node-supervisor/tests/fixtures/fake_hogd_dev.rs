@@ -238,7 +238,7 @@ fn main() {
         Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
         Ok("spawn-helper-then-exit") => run_with_helper_then_exit(),
-        Ok("helper-ignore-term") => run_ignore_term_loop(),
+        Ok("helper-ready-ignore-term") => run_ready_ignore_term_helper(),
         Ok("ignore-term") => run_ignore_term(),
         Ok("exit-before-ready") => process::exit(9),
         Ok("timeout") => {
@@ -296,6 +296,13 @@ fn run_ready_then_exit() {
     let _ = io::stderr().flush();
     thread::sleep(Duration::from_millis(500));
     process::exit(0);
+}
+
+fn run_ready_ignore_term_helper() {
+    ignore_sigterm();
+    println!("ready");
+    io::stdout().flush().expect("bug: helper readiness flush");
+    run_ignore_term_loop();
 }
 
 fn run_ready() {
@@ -360,13 +367,7 @@ fn run_ignore_term() {
 #[allow(clippy::zombie_processes)]
 fn run_with_helper() {
     install_sigterm_handler();
-    let current_exe = env::current_exe().expect("bug: fake child binary path should resolve");
-    // The parent intentionally exits without waiting so the supervisor test can
-    // prove process-group SIGKILL reaches descendants after leader exit.
-    let _helper = Command::new(current_exe)
-        .env(MODE_ENV, "helper-ignore-term")
-        .spawn()
-        .expect("bug: helper process should spawn");
+    let _helper = spawn_ready_helper();
 
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     println!(
@@ -381,11 +382,7 @@ fn run_with_helper() {
 
 #[allow(clippy::zombie_processes)]
 fn run_with_helper_then_exit() {
-    let current_exe = env::current_exe().expect("bug: fake child binary path should resolve");
-    let _helper = Command::new(current_exe)
-        .env(MODE_ENV, "helper-ignore-term")
-        .spawn()
-        .expect("bug: helper process should spawn");
+    let _helper = spawn_ready_helper();
 
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     println!(
@@ -394,6 +391,24 @@ fn run_with_helper_then_exit() {
     );
     let _ = io::stdout().flush();
     thread::sleep(Duration::from_millis(100));
+}
+
+fn spawn_ready_helper() -> process::Child {
+    let current_exe = env::current_exe().expect("bug: fake child binary path should resolve");
+    let mut helper = Command::new(current_exe)
+        .env(MODE_ENV, "helper-ready-ignore-term")
+        .stdout(process::Stdio::piped())
+        .spawn()
+        .expect("bug: helper process should spawn");
+    let mut ready = String::new();
+    io::BufRead::read_line(
+        &mut io::BufReader::new(helper.stdout.take().expect("bug: helper stdout is piped")),
+        &mut ready,
+    )
+    .expect("bug: helper readiness read");
+    assert_eq!(ready, "ready\n");
+
+    helper
 }
 
 fn run_ignore_term_loop() {

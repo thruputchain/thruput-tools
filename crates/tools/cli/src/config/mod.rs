@@ -19,7 +19,8 @@ pub(crate) use dirs::cargo_config_path;
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
 pub use global::{
     LocalRuntimeState, clear_default_key, clear_local_runtime_state_if_matches,
-    initialize_global_profiles, load_default_key, save_default_key, save_local_runtime_state,
+    initialize_global_profiles, load_default_key, load_toolchain_version, save_default_key,
+    save_local_runtime_state, save_toolchain_version,
 };
 pub use mutate::{
     CONFIG_MUTATION_JSON_SCHEMA_VERSION, CONFIG_NEW_JSON_SCHEMA_VERSION,

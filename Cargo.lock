@@ -1469,6 +1469,7 @@ dependencies = [
  "groundhog-rv32-lower",
  "groundhog-signing",
  "groundhog-spec-tool",
+ "groundhog-toolchain",
  "groundhog-xdr",
  "hex",
  "http-body-util",
@@ -1962,6 +1963,25 @@ dependencies = [
  "tracing-subscriber",
  "xdr-common",
  "xdrs",
+]
+
+[[package]]
+name = "groundhog-toolchain"
+version = "0.17.0"
+dependencies = [
+ "async-trait",
+ "flate2",
+ "fs2",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
 ]
 
 [[package]]
