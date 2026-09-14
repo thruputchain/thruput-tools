@@ -33,7 +33,7 @@ deploy_entrypoint = "0xf969542572bd6860"
 do_action_entrypoint = "0xa0fff94c64fbaf3c"
 
 [airdrop]
-raw_amount = "100000000"
+raw_amount = "1000000000"
 wallet_do_action_entrypoint = "0x646f416374696f6e"
 
 [airdrop.secret_key_source]

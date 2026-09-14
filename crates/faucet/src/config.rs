@@ -219,7 +219,7 @@ pub struct AirdropClientOverride {
 impl Default for AirdropPolicyConfig {
     fn default() -> Self {
         Self {
-            recipient_cooldown_secs: 12 * 60 * 60,
+            recipient_cooldown_secs: 60,
             ip_quota_window_secs: 60 * 60,
             ip_quota_max: 10,
             client_overrides: Vec::new(),
@@ -619,6 +619,8 @@ mod tests {
         assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
         assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
         assert_eq!(config.network.wallet_create.prefund_raw_amount, "10000000");
+        assert_eq!(config.network.native_hog.decimals, 7);
+        assert_eq!(config.airdrop.raw_amount, "1000000000");
     }
 
     #[test]
@@ -749,7 +751,7 @@ mod tests {
             .airdrop
             .expect("bug: faucet descriptor should advertise airdrop policy");
         assert_eq!(airdrop.raw_amount, "100000000");
-        assert_eq!(airdrop.recipient_cooldown_seconds, 43_200);
+        assert_eq!(airdrop.recipient_cooldown_seconds, 60);
         assert_eq!(airdrop.client_quota_max, 10);
         assert_eq!(airdrop.client_quota_window_seconds, 3_600);
         assert_eq!(airdrop.max_pending_per_recipient, 1);
@@ -797,7 +799,7 @@ mod tests {
             .expect("bug: policy runtime config should validate");
 
         assert!(!parts.policy.trust_proxy_client_ip_headers);
-        assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 12 * 60 * 60);
+        assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 60);
         assert_eq!(parts.policy.airdrop.ip_quota_max, 10);
         assert_eq!(parts.policy.wallet_create.owner_quota_max, 3);
         assert_eq!(parts.policy.wallet_create.ip_quota_max, 20);
