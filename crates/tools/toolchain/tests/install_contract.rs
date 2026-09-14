@@ -824,3 +824,164 @@ async fn waiting_installer_reuses_a_bundle_even_when_a_node_takes_a_lease() {
     assert_eq!(source.calls.load(Ordering::SeqCst), 1);
     FileExt::unlock(&lock).unwrap();
 }
+
+#[tokio::test]
+async fn install_repairs_non_directory_cache_entries() {
+    let archive = regular_archive(&[
+        ("contracts/dev_wallet.rv32a", b"wallet"),
+        ("contracts/genesis_root.rv32a", b"genesis"),
+        ("hog-devnode", b"binary"),
+    ]);
+    let catalog = catalog_for(&archive);
+    let source = MemorySource::new(archive);
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(cache.path());
+    let target = HostTarget::LinuxX86_64;
+    let path = installer.installation_path("0.1.13", target);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"stray file").unwrap();
+    assert!(
+        installer
+            .find(&catalog, "0.1.13", target)
+            .unwrap()
+            .is_none()
+    );
+    installer
+        .install(&catalog, "0.1.13", target, &source)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(path.join("hog-devnode")).unwrap(), b"binary");
+    installer.clean("0.1.13", target).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(cache.path().join("missing"), &path).unwrap();
+        assert!(
+            installer
+                .find(&catalog, "0.1.13", target)
+                .unwrap()
+                .is_none()
+        );
+        installer
+            .install(&catalog, "0.1.13", target, &source)
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_dir());
+    }
+}
+
+#[test]
+fn cleanup_sweeps_only_its_targets_abandoned_work() {
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(cache.path());
+    let version_dir = cache.path().join("toolchain/hog-devnode/0.1.13");
+    let ours = version_dir.join(".staging-x86_64-unknown-linux-gnu-orphan");
+    let theirs = version_dir.join(".staging-aarch64-unknown-linux-gnu-active");
+    std::fs::create_dir_all(&ours).unwrap();
+    std::fs::create_dir_all(&theirs).unwrap();
+    let download = version_dir.join(".download-x86_64-unknown-linux-gnu-orphan");
+    std::fs::write(&download, b"partial").unwrap();
+    assert!(installer.clean("0.1.13", HostTarget::LinuxX86_64).unwrap());
+    assert!(!ours.exists());
+    assert!(!download.exists());
+    assert!(theirs.is_dir());
+}
+
+#[tokio::test]
+async fn archive_extensions_and_dot_components_are_rejected_explicitly() {
+    for (archive, extension) in [
+        (archive_with_link(EntryType::XHeader), true),
+        (
+            archive_with_patched_first_header("contracts/./dev_wallet.rv32a", None),
+            false,
+        ),
+    ] {
+        let catalog = catalog_for(&archive);
+        let source = MemorySource::new(archive);
+        let cache = tempfile::tempdir().unwrap();
+        let result = Installer::new(cache.path())
+            .install(&catalog, "0.1.13", HostTarget::LinuxX86_64, &source)
+            .await;
+        if extension {
+            assert!(
+                matches!(
+                    result,
+                    Err(InstallError::ArchiveMemberType {
+                        entry_type: b'x',
+                        ..
+                    })
+                ),
+                "{result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(InstallError::UnsafeArchiveMember { .. })),
+                "{result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cancelled_install_does_not_block_the_runtime_or_commit_queued_work() {
+    let archive = regular_archive(&[
+        ("contracts/dev_wallet.rv32a", b"wallet"),
+        ("contracts/genesis_root.rv32a", b"genesis"),
+        ("hog-devnode", b"binary"),
+    ]);
+    let catalog = catalog_for(&archive);
+    let source = MemorySource::new(archive);
+    let cache = tempfile::tempdir().unwrap();
+    let installer = Installer::new(cache.path());
+    let target = HostTarget::LinuxX86_64;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let blocker = tokio::task::spawn_blocking(move || {
+            ready_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        // Saturate the worker pool. A runtime-thread tail would incorrectly finish
+        // before this timer; a queued worker must remain cancellable and uncommitted.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            installer.install(&catalog, "0.1.13", target, &source),
+        )
+        .await;
+        release_tx.send(()).unwrap();
+        blocker.await.unwrap();
+        assert!(
+            result.is_err(),
+            "installation tail ran on the async runtime"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match installer.clean("0.1.13", target) {
+                    Ok(removed) => {
+                        assert!(!removed, "cancelled worker committed or leaked staging");
+                        break;
+                    }
+                    Err(InstallError::Busy { .. }) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    Err(error) => panic!("unexpected cleanup error: {error}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            installer
+                .find(&catalog, "0.1.13", target)
+                .unwrap()
+                .is_none()
+        );
+    });
+}

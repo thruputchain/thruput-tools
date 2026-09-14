@@ -881,13 +881,13 @@ fn rust_target_status(installed: &str, target: &str) -> RustTargetStatus {
 
 fn check_devnode() -> DevnodeStatus {
     let path = match crate::node::find_local_node_binary() {
-        Ok(Some(path)) => path,
-        Ok(None) => {
+        Ok(crate::node::LocalNodeDiscovery::Local(path)) => path,
+        Ok(crate::node::LocalNodeDiscovery::Selected { version, reason }) => {
             return DevnodeStatus {
                 reachable: false,
                 path: None,
-                version: None,
-                error: Some("no local hog-devnode binary is installed".to_string()),
+                version: Some(version),
+                error: Some(reason),
             };
         }
         Err(error) => {

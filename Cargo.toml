@@ -44,6 +44,10 @@ keywords = ["groundhog"]
 categories = ["development-tools"]
 
 [workspace.dependencies]
+reqwest = "0.12"
+fs2 = "0.4"
+flate2 = "1"
+tar = { version = "0.4.46", default-features = false }
 # --- Workspace crates ---
 # The version must be duplicated here despite workspace.package.version
 # above.  Cargo requires explicit versions for dependencies when

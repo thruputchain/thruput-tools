@@ -39,7 +39,7 @@ struct Source {
 }
 
 /// One target-specific archive trusted by the embedded catalog.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Artifact {
     archive: String,
@@ -51,7 +51,7 @@ pub struct Artifact {
     size: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Compatibility {
     #[serde(default)]
@@ -62,7 +62,7 @@ struct Compatibility {
 }
 
 /// A regular file allowed to appear in a managed bundle.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeclaredFile {
     kind: FileKind,
@@ -447,7 +447,7 @@ fn validate_files(version: &str, target: HostTarget, files: &[DeclaredFile]) -> 
     Ok(())
 }
 
-fn is_safe_relative_path(path: &str) -> bool {
+pub(crate) fn is_safe_relative_path(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\\')
         && path

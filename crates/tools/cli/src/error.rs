@@ -428,16 +428,21 @@ pub enum CliError {
         /// The bound the transaction breaks.
         detail: TxInvalidDetail,
     },
+    /// The requested version, target, or host runtime is not supported by the catalog.
     #[error("toolchain catalog error: {0}")]
     ToolchainCatalog(#[from] groundhog_toolchain::CatalogError),
+    /// A verified bundle could not be installed or accessed in the local cache.
     #[error("toolchain installation error: {0}")]
-    ToolchainInstall(#[from] groundhog_toolchain::InstallError),
+    ToolchainInstall(groundhog_toolchain::InstallError),
+    /// The artifact source could not provide the selected bundle.
     #[error("toolchain source error: {0}")]
     ToolchainSource(#[from] groundhog_toolchain::SourceError),
+    /// Offline acquisition cannot satisfy the selected managed bundle.
     #[error(
         "hog-devnode {version} for {target} is not installed and offline mode forbids downloading it"
     )]
     ToolchainOfflineMissing { version: String, target: String },
+    /// A read-only lookup found no complete installation for the selection.
     #[error("hog-devnode {version} for {target} is not installed")]
     ToolchainNotInstalled { version: String, target: String },
     #[error("{0}")]
@@ -1284,6 +1289,16 @@ impl CliError {
                 serde_json::to_value(detail).ok()
             }
             _ => None,
+        }
+    }
+}
+
+impl From<groundhog_toolchain::InstallError> for CliError {
+    fn from(error: groundhog_toolchain::InstallError) -> Self {
+        match error {
+            groundhog_toolchain::InstallError::Catalog(error) => Self::ToolchainCatalog(error),
+            groundhog_toolchain::InstallError::Source(error) => Self::ToolchainSource(error),
+            error => Self::ToolchainInstall(error),
         }
     }
 }

@@ -2140,8 +2140,8 @@ fn node_managed_download_stops_on_sigint() {
     send_sigint(child.child());
     let status = wait_child(child.into_inner(), Duration::from_secs(3));
     assert!(
-        status.success(),
-        "cancelled acquisition should stop cleanly"
+        !status.success(),
+        "cancelled acquisition must report that the node never started"
     );
     let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
     let target = groundhog_toolchain::HostTarget::current().unwrap();

@@ -273,3 +273,53 @@ fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
     assert_eq!(report["data"]["sourceKind"], "managedCache");
     assert_eq!(report["data"]["changed"], false);
 }
+
+#[test]
+fn toolchain_clean_invalid_version_preserves_catalog_error_and_hint() {
+    let root = tempfile::tempdir().expect("bug: tempdir should create");
+    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+        .args(["--json", "toolchain", "clean", "../0.1.27-rc.7"])
+        .output()
+        .expect("bug: groundhog should run");
+    assert!(!output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("bug: error output should be JSON");
+    assert_eq!(json["error"]["code"], "toolchain_catalog_error");
+    assert_eq!(
+        json["error"]["hint"],
+        "use a hog-devnode version and target present in this groundhog release's embedded catalog"
+    );
+}
+
+#[test]
+fn toolchain_install_rejects_invalid_proxy_without_exposing_credentials() {
+    let root = tempfile::tempdir().expect("bug: tempdir should create");
+    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+        .env("HTTPS_PROXY", "ftp://review-user:review-secret@localhost:9")
+        .args(["--json", "toolchain", "install"])
+        .output()
+        .expect("bug: groundhog should run");
+    assert!(!output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("bug: error output should be JSON");
+    assert_eq!(json["error"]["code"], "proxy_configuration_invalid");
+    for bytes in [&output.stdout, &output.stderr] {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!text.contains("review-user"));
+        assert!(!text.contains("review-secret"));
+    }
+}
+
+#[test]
+fn toolchain_clean_accepts_safe_retired_version_names() {
+    let root = tempfile::tempdir().expect("bug: tempdir should create");
+    let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
+        .args(["--json", "toolchain", "clean", "v0.1.27-rc.7"])
+        .output()
+        .expect("bug: groundhog should run");
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("bug: clean output should be JSON");
+    assert_eq!(json["data"]["version"], "v0.1.27-rc.7");
+    assert_eq!(json["data"]["changed"], false);
+}

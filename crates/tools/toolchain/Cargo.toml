@@ -16,14 +16,14 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-flate2 = "1"
-fs2 = "0.4"
+flate2 = { workspace = true }
+fs2 = { workspace = true }
 hex = { workspace = true }
-reqwest = "0.12"
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-tar = { version = "0.4", default-features = false }
+tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

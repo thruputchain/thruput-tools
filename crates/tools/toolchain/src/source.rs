@@ -79,10 +79,18 @@ impl HttpSource {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(SourceError::Client)?;
-        Ok(Self {
+        Ok(Self::with_client(base_url, client))
+    }
+
+    /// Use an application-configured HTTP client for artifact downloads.
+    ///
+    /// Callers should configure connection/request timeouts and disable redirects to preserve
+    /// the bounded, direct-fetch policy of [`Self::new`]. Archive verification remains mandatory.
+    pub fn with_client(base_url: impl Into<String>, client: Client) -> Self {
+        Self {
             base_url: base_url.into(),
             client,
-        })
+        }
     }
 }
 

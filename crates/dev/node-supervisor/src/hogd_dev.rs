@@ -232,15 +232,15 @@ impl HogdDevProcess {
     /// Start hog-devnode using the configured binary lookup.
     #[tracing::instrument(skip_all, fields(listen_host = %config.listen_host))]
     pub async fn start(config: &HogdDevConfig) -> Result<Self, NodeSupervisorError> {
-        Self::start_with_lifetime_guard(config, None).await
+        Self::start_with_inherited_file(config, None).await
     }
 
-    pub(crate) async fn start_with_lifetime_guard(
+    pub(crate) async fn start_with_inherited_file(
         config: &HogdDevConfig,
-        lifetime_guard: Option<Box<dyn Send + Sync>>,
+        inherited_file: Option<std::fs::File>,
     ) -> Result<Self, NodeSupervisorError> {
         let binary = resolve_hogd_dev_binary(config)?;
-        Self::start_with_binary_and_guard(config, binary, lifetime_guard).await
+        Self::start_with_binary_and_file(config, binary, inherited_file).await
     }
 
     /// Start hog-devnode from an already-resolved binary path.
@@ -249,13 +249,13 @@ impl HogdDevProcess {
         config: &HogdDevConfig,
         binary: impl AsRef<Path>,
     ) -> Result<Self, NodeSupervisorError> {
-        Self::start_with_binary_and_guard(config, binary, None).await
+        Self::start_with_binary_and_file(config, binary, None).await
     }
 
-    async fn start_with_binary_and_guard(
+    async fn start_with_binary_and_file(
         config: &HogdDevConfig,
         binary: impl AsRef<Path>,
-        lifetime_guard: Option<Box<dyn Send + Sync>>,
+        inherited_file: Option<std::fs::File>,
     ) -> Result<Self, NodeSupervisorError> {
         let bootstrap_manifest = write_bootstrap_manifest(config)?;
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
@@ -263,14 +263,14 @@ impl HogdDevProcess {
             config,
             bootstrap_manifest.path(),
         );
-        Self::start_with_spec(config, spec, Some(bootstrap_manifest), lifetime_guard).await
+        Self::start_with_spec(config, spec, Some(bootstrap_manifest), inherited_file).await
     }
 
     async fn start_with_spec(
         config: &HogdDevConfig,
         spec: ChildProcessSpec,
         bootstrap_manifest: Option<BootstrapManifestFile>,
-        lifetime_guard: Option<Box<dyn Send + Sync>>,
+        inherited_file: Option<std::fs::File>,
     ) -> Result<Self, NodeSupervisorError> {
         prepare_persistent_data_dir(config)?;
         let persistent_pid_file = config
@@ -304,10 +304,7 @@ impl HogdDevProcess {
             pid_guards.push(guard);
         }
 
-        let mut child =
-            ChildSupervisor::new(spec).spawn_with_lifetime_guard(lifetime_guard.map(
-                |resource| crate::process::LifetimeGuard::new(resource, config.shutdown_grace),
-            ))?;
+        let mut child = ChildSupervisor::new(spec).spawn_with_inherited_file(inherited_file)?;
         let program = child.program().to_string();
         if !pid_guards.is_empty() {
             let pid = child.id().ok_or_else(|| NodeSupervisorError::Status {
@@ -3191,72 +3188,54 @@ mod tests {
         );
     }
 
-    struct LifetimeDropNotice(std::sync::mpsc::Sender<()>);
-
-    impl Drop for LifetimeDropNotice {
-        fn drop(&mut self) {
-            let _ = self.0.send(());
-        }
-    }
-
-    async fn start_guarded_fake(mode: &str) -> (HogdDevProcess, std::sync::mpsc::Receiver<()>) {
+    #[tokio::test]
+    async fn inherited_lease_survives_leader_exit_until_descendant_is_killed() {
+        use std::os::fd::AsRawFd;
+        let root = TempDir::new().unwrap();
+        let lock_path = root.path().join("lease.lock");
+        let inherited = fs::File::create(&lock_path).unwrap();
+        // SAFETY: both flock calls operate on live, independently opened fixture files.
+        assert_eq!(
+            unsafe { libc::flock(inherited.as_raw_fd(), libc::LOCK_SH) },
+            0
+        );
+        let observer = fs::File::open(&lock_path).unwrap();
         let config = HogdDevConfig::default()
             .with_startup_timeout(Duration::from_secs(2))
-            .with_shutdown_grace(Duration::from_millis(500));
-        let bootstrap = write_bootstrap_manifest(&config).expect("bug: fixture manifest");
+            .with_shutdown_grace(Duration::from_millis(150));
+        let bootstrap = write_bootstrap_manifest(&config).unwrap();
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
             fake_hogd_dev_binary(),
             &config,
             bootstrap.path(),
         )
-        .env(FAKE_HOGD_DEV_MODE_ENV, mode);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let process = HogdDevProcess::start_with_spec(
-            &config,
-            spec,
-            Some(bootstrap),
-            Some(Box::new(LifetimeDropNotice(tx))),
-        )
-        .await
-        .expect("bug: fixture starts");
-        (process, rx)
-    }
-
-    #[tokio::test]
-    async fn lifetime_guard_survives_cancelled_shutdown_and_drop() {
-        let (mut process, rx) = start_guarded_fake("ready-delayed-shutdown").await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(30), process.stop())
+        .env(FAKE_HOGD_DEV_MODE_ENV, "spawn-helper-then-exit");
+        let mut process =
+            HogdDevProcess::start_with_spec(&config, spec, Some(bootstrap), Some(inherited))
                 .await
-                .is_err()
+                .unwrap();
+        // Reap the leader without invoking process-group cleanup yet.
+        assert!(process.child.wait().await.unwrap().success());
+        // SAFETY: observer remains open for this test.
+        assert_eq!(
+            unsafe { libc::flock(observer.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            -1
         );
-        drop(process);
-        assert!(matches!(
-            rx.recv_timeout(Duration::from_millis(100)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
-        rx.recv_timeout(Duration::from_secs(3))
-            .expect("bug: guard released after delayed shutdown");
-    }
-
-    #[tokio::test]
-    async fn lifetime_guard_survives_leader_exit_until_descendants_terminate() {
-        let (process, rx) = start_guarded_fake("spawn-helper-ignore-term").await;
-        let group = process
-            .child
-            .process_group_id()
-            .expect("bug: fixture group");
-        drop(process);
-        // The leader honors SIGTERM immediately, while its helper needs the
-        // reaper's SIGKILL escalation after the configured 500ms grace period.
-        assert!(matches!(
-            rx.recv_timeout(Duration::from_millis(150)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
-        assert!(process_group_exists(group));
-        rx.recv_timeout(Duration::from_secs(3))
-            .expect("bug: guard released after descendant exit");
-        assert!(!process_group_exists(group));
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EWOULDBLOCK)
+        );
+        let started = std::time::Instant::now();
+        process.stop().await.unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(150),
+            "helper must survive SIGTERM until the SIGKILL deadline"
+        );
+        // SAFETY: observer remains open, and all inheriting processes have exited.
+        assert_eq!(
+            unsafe { libc::flock(observer.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
     }
 
     async fn start_fake_hogd_dev(

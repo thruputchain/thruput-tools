@@ -10,7 +10,9 @@ use crate::config::{cache_dir, load_toolchain_version, save_toolchain_version};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
+/// Version of the toolchain command JSON payload schema.
 pub const TOOLCHAIN_JSON_SCHEMA_VERSION: u32 = 1;
+/// Override for the public artifact origin; catalog digests remain authoritative.
 pub const TOOLCHAIN_BASE_URL_ENV: &str = "GROUNDHOG_TOOLCHAIN_BASE_URL";
 
 /// Origin represented by one toolchain command result.
@@ -107,7 +109,7 @@ pub fn install(
         );
     }
 
-    let source = HttpSource::new(artifact_base_url())?;
+    let source = artifact_source()?;
     print.status(format_args!(
         "Installing hog-devnode {} for {}",
         context.version, context.target
@@ -341,4 +343,15 @@ fn emit_action(
 pub(crate) fn artifact_base_url() -> String {
     std::env::var(TOOLCHAIN_BASE_URL_ENV)
         .unwrap_or_else(|_| DEFAULT_PUBLIC_ARTIFACT_BASE_URL.to_string())
+}
+
+/// Construct artifact transport with the CLI's shared proxy validation.
+pub(crate) fn artifact_source() -> Result<HttpSource, CliError> {
+    let client = crate::http_client::build_client(
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_mins(5))
+            .redirect(reqwest::redirect::Policy::none()),
+    )?;
+    Ok(HttpSource::with_client(artifact_base_url(), client))
 }

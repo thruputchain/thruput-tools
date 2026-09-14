@@ -1,6 +1,9 @@
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 use crate::{CatalogError, HostTarget, Result};
+
+static HOST_PROBE: OnceLock<std::result::Result<Output, String>> = OnceLock::new();
 
 pub(crate) fn validate_current_host(target: HostTarget, minimum: &str) -> Result<()> {
     let host = HostTarget::current()?;
@@ -10,18 +13,26 @@ pub(crate) fn validate_current_host(target: HostTarget, minimum: &str) -> Result
             host: host.to_string(),
         });
     }
-    let output = if target.is_macos() {
-        // Fixed system paths avoid accepting a version reported by a PATH override.
-        // This variable makes sw_vers report 10.16 on newer macOS versions.
-        Command::new("/usr/bin/sw_vers")
-            .arg("-productVersion")
-            .env_remove("SYSTEM_VERSION_COMPAT")
-            .output()
-    } else {
-        Command::new("/usr/bin/getconf")
-            .arg("GNU_LIBC_VERSION")
-            .output()
-    };
+    // Runtime identity is immutable for this process. Cache probe failures too,
+    // so inspection and execution apply the same fail-closed decision.
+    let output = HOST_PROBE
+        .get_or_init(|| {
+            let output = if target.is_macos() {
+                // Fixed system paths avoid accepting a version reported by a PATH override.
+                // This variable makes sw_vers report 10.16 on newer macOS versions.
+                Command::new("/usr/bin/sw_vers")
+                    .arg("-productVersion")
+                    .env_remove("SYSTEM_VERSION_COMPAT")
+                    .output()
+            } else {
+                Command::new("/usr/bin/getconf")
+                    .arg("GNU_LIBC_VERSION")
+                    .output()
+            };
+            output.map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(std::io::Error::other);
     validate_probe(target, minimum, output)
 }
 

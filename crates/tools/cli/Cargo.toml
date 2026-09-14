@@ -38,13 +38,13 @@ schemars = { workspace = true }
 toml = { workspace = true }
 toml_edit = "0.22"
 which = "7"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { workspace = true, features = ["blocking", "json"] }
 http-body-util = "0.1"
 clap_complete = "4.5.66"
 getrandom = "0.2.17"
-fs2 = "0.4"
-flate2 = "1"
-tar = { version = "0.4.46", default-features = false }
+fs2 = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 base64 = "0.22"

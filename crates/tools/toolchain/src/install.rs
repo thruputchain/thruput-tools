@@ -1,7 +1,11 @@
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use flate2::read::GzDecoder;
 use fs2::FileExt;
@@ -37,6 +41,12 @@ pub enum InstallError {
         #[source]
         source: io::Error,
     },
+    /// The post-download worker could not complete.
+    #[error("managed installation worker failed: {0}")]
+    Worker(#[source] tokio::task::JoinError),
+    /// The caller cancelled post-download installation.
+    #[error("managed installation cancelled")]
+    Cancelled,
     /// Cleanup cannot remove a bundle being installed or used by a node.
     #[error(
         "toolchain {version}/{target} is busy; stop nodes using it or wait for installation before cleaning"
@@ -129,10 +139,16 @@ impl Installation {
 #[derive(Debug)]
 pub struct InstallationLease {
     installation: Installation,
-    _lock: InstallLock,
+    lock: InstallLock,
 }
 
 impl InstallationLease {
+    /// Transfer the locked descriptor to a child process for inheritance across exec.
+    /// The lock remains held until every descriptor for this open file description closes.
+    pub fn into_lock_file(self) -> File {
+        self.lock.file
+    }
+
     /// Return the executable protected by this lease.
     pub fn binary_path(&self) -> PathBuf {
         self.installation.binary_path()
@@ -192,10 +208,7 @@ impl Installer {
         let lock = acquire_shared_lock(self.lock_path(version, target)).await?;
         Ok(self
             .find(catalog, version, target)?
-            .map(|installation| InstallationLease {
-                installation,
-                _lock: lock,
-            }))
+            .map(|installation| InstallationLease { installation, lock }))
     }
 
     /// Remove one version and target while holding the same lock used by installation.
@@ -221,7 +234,10 @@ impl Installer {
             }
         }
         let _lock = InstallLock { file };
-        remove_installation(&self.installation_path(version, target))
+        let removed = remove_installation(&self.installation_path(version, target))?;
+        let staging_removed =
+            remove_abandoned_staging(&self.toolchain_root().join(version), target)?;
+        Ok(removed || staging_removed)
     }
 
     /// Acquire, verify, and atomically install one exact catalog entry.
@@ -265,34 +281,26 @@ impl Installer {
             });
         }
 
-        let download = NamedTempFile::new_in(&version_dir)
+        remove_abandoned_staging(&version_dir, target)?;
+        let download = TempBuilder::new()
+            .prefix(&format!(".download-{}-", target.triple()))
+            .tempfile_in(&version_dir)
             .map_err(|source| io_error("create download temporary file", &version_dir, source))?;
         source.fetch_to(artifact, download.path()).await?;
-        verify_archive(download.path(), artifact)?;
-
-        let staging = TempBuilder::new()
-            .prefix(&format!(".staging-{}-", target.triple()))
-            .tempdir_in(&version_dir)
-            .map_err(|source| {
-                io_error(
-                    "create installation staging directory",
-                    &version_dir,
-                    source,
-                )
-            })?;
-        extract_archive(download.path(), staging.path(), artifact)?;
-        write_completion(staging.path(), version, target, artifact)?;
-        remove_installation(&final_path)?;
-        fs::rename(staging.path(), &final_path)
-            .map_err(|source| io_error("commit installation", &final_path, source))?;
-        drop(lock);
-
-        Ok(Installation {
+        let cancellation = CancelOnDrop::default();
+        let pending = PendingInstallation {
+            download,
+            version_dir,
+            final_path,
             version: version.to_string(),
             target,
-            path: final_path,
-            installed_now: true,
-        })
+            artifact: artifact.clone(),
+            _lock: lock,
+            cancelled: cancellation.0.clone(),
+        };
+        tokio::task::spawn_blocking(move || pending.finish())
+            .await
+            .map_err(InstallError::Worker)?
     }
 
     fn toolchain_root(&self) -> PathBuf {
@@ -303,6 +311,69 @@ impl Installer {
         self.toolchain_root()
             .join(".locks")
             .join(format!("{version}-{}.lock", target.triple()))
+    }
+}
+
+#[derive(Default)]
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+fn check_cancelled(cancelled: &AtomicBool) -> Result<(), InstallError> {
+    if cancelled.load(Ordering::Acquire) {
+        Err(InstallError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+struct PendingInstallation {
+    download: NamedTempFile,
+    version_dir: PathBuf,
+    final_path: PathBuf,
+    version: String,
+    target: HostTarget,
+    artifact: Artifact,
+    _lock: InstallLock,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl PendingInstallation {
+    fn finish(self) -> Result<Installation, InstallError> {
+        check_cancelled(&self.cancelled)?;
+        verify_archive(self.download.path(), &self.artifact, &self.cancelled)?;
+        let staging = TempBuilder::new()
+            .prefix(&format!(".staging-{}-", self.target.triple()))
+            .tempdir_in(&self.version_dir)
+            .map_err(|source| {
+                io_error(
+                    "create installation staging directory",
+                    &self.version_dir,
+                    source,
+                )
+            })?;
+        extract_archive(
+            self.download.path(),
+            staging.path(),
+            &self.artifact,
+            &self.cancelled,
+        )?;
+        check_cancelled(&self.cancelled)?;
+        write_completion(staging.path(), &self.version, self.target, &self.artifact)?;
+        check_cancelled(&self.cancelled)?;
+        remove_installation(&self.final_path)?;
+        fs::rename(staging.path(), &self.final_path)
+            .map_err(|source| io_error("commit installation", &self.final_path, source))?;
+        Ok(Installation {
+            version: self.version,
+            target: self.target,
+            path: self.final_path,
+            installed_now: true,
+        })
     }
 }
 
@@ -321,11 +392,7 @@ struct InstallLock {
     file: File,
 }
 
-impl Drop for InstallLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
-    }
-}
+// Close only: explicit LOCK_UN would also release inherited descriptors' lock.
 
 fn open_lock(path: &Path) -> Result<File, InstallError> {
     let parent = path.parent().ok_or_else(|| {
@@ -359,7 +426,11 @@ async fn acquire_shared_lock(path: PathBuf) -> Result<InstallLock, InstallError>
     }
 }
 
-fn verify_archive(path: &Path, artifact: &Artifact) -> Result<(), InstallError> {
+fn verify_archive(
+    path: &Path,
+    artifact: &Artifact,
+    cancelled: &AtomicBool,
+) -> Result<(), InstallError> {
     let mut file = File::open(path).map_err(|source| io_error("open download", path, source))?;
     let observed_size = file
         .metadata()
@@ -372,7 +443,17 @@ fn verify_archive(path: &Path, artifact: &Artifact) -> Result<(), InstallError> 
         });
     }
     let mut hasher = Sha256::new();
-    io::copy(&mut file, &mut hasher).map_err(|source| io_error("hash download", path, source))?;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        check_cancelled(cancelled)?;
+        let count = file
+            .read(&mut buffer)
+            .map_err(|source| io_error("hash download", path, source))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
     let observed = hex::encode(hasher.finalize());
     if observed != artifact.sha256() {
         return Err(InstallError::ChecksumMismatch {
@@ -387,11 +468,15 @@ fn extract_archive(
     path: &Path,
     destination: &Path,
     artifact: &Artifact,
+    cancelled: &AtomicBool,
 ) -> Result<(), InstallError> {
     let file =
         File::open(path).map_err(|source| io_error("open verified archive", path, source))?;
     let decoder = GzDecoder::new(BufReader::new(file));
     let mut archive = Archive::new(decoder);
+    // Raw iteration deliberately rejects PAX and GNU extension headers. The embedded
+    // catalog authorizes exact regular-file paths; metadata extensions are not part
+    // of layout version 1 and must not bypass member-count/type validation.
     let entries = archive
         .entries()
         .map_err(|source| archive_error(path, source))?
@@ -401,6 +486,7 @@ fn extract_archive(
     let mut expanded = 0u64;
 
     for (index, entry) in entries.enumerate() {
+        check_cancelled(cancelled)?;
         if index >= MAX_ARCHIVE_MEMBERS {
             return Err(InstallError::ArchiveMemberCount {
                 limit: MAX_ARCHIVE_MEMBERS,
@@ -465,7 +551,14 @@ fn extract_archive(
             .ok_or(InstallError::ExpandedSize {
                 limit: MAX_EXPANDED_BYTES,
             })?;
-        write_member(&mut entry, destination, &member_path, declared, size)?;
+        write_member(
+            &mut entry,
+            destination,
+            &member_path,
+            declared,
+            size,
+            cancelled,
+        )?;
     }
     for declared in artifact.files() {
         if !seen_files.contains(declared.path()) {
@@ -492,6 +585,7 @@ fn write_member<R: Read>(
     relative: &Path,
     declared: &DeclaredFile,
     expected: u64,
+    cancelled: &AtomicBool,
 ) -> Result<(), InstallError> {
     let destination = root.join(relative);
     if let Some(parent) = destination.parent() {
@@ -507,8 +601,22 @@ fn write_member<R: Read>(
     let mut output = options
         .open(&destination)
         .map_err(|source| io_error("create extracted file", &destination, source))?;
-    let observed = io::copy(&mut entry.take(expected.saturating_add(1)), &mut output)
-        .map_err(|source| archive_error(&destination, source))?;
+    let mut input = entry.take(expected.saturating_add(1));
+    let mut observed = 0;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        check_cancelled(cancelled)?;
+        let count = input
+            .read(&mut buffer)
+            .map_err(|source| archive_error(&destination, source))?;
+        if count == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..count])
+            .map_err(|source| io_error("write extracted file", &destination, source))?;
+        observed += count as u64;
+    }
     if observed != expected {
         return Err(InstallError::ArchiveMemberLength {
             path: relative.to_path_buf(),
@@ -561,9 +669,29 @@ fn installation_is_complete(
     target: HostTarget,
     artifact: &Artifact,
 ) -> Result<bool, InstallError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(source) => return Err(io_error("inspect installation", path, source)),
+    }
     let bytes = match fs::read(path.join(".ok")) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(false);
+        }
         Err(source) => return Err(io_error("read completion metadata", path, source)),
     };
     let Ok(completion) = serde_json::from_slice::<Completion>(&bytes) else {
@@ -582,7 +710,14 @@ fn installation_is_complete(
     for file in artifact.files() {
         let metadata = match fs::symlink_metadata(path.join(file.path())) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(false);
+            }
             Err(source) => return Err(io_error("inspect installed file", path, source)),
         };
         if !metadata.file_type().is_file() {
@@ -608,11 +743,34 @@ fn remove_installation(path: &Path) -> Result<bool, InstallError> {
     Ok(true)
 }
 
+// Called only with this target's exclusive lock. Target-specific prefixes avoid
+// deleting another target's concurrent download in the same version directory.
+fn remove_abandoned_staging(version_dir: &Path, target: HostTarget) -> Result<bool, InstallError> {
+    let entries = match fs::read_dir(version_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(io_error("inspect abandoned downloads", version_dir, source)),
+    };
+    let download_prefix = format!(".download-{}-", target.triple());
+    let staging_prefix = format!(".staging-{}-", target.triple());
+    let mut removed = false;
+    for entry in entries {
+        let entry =
+            entry.map_err(|source| io_error("inspect abandoned download", version_dir, source))?;
+        let name = entry.file_name();
+        if name.to_str().is_some_and(|name| {
+            name.starts_with(&download_prefix) || name.starts_with(&staging_prefix)
+        }) {
+            removed |= remove_installation(&entry.path())?;
+        }
+    }
+    Ok(removed)
+}
+
 fn safe_member_path(path: &Path) -> bool {
-    !path.as_os_str().is_empty()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
+    path.to_str().is_some_and(|name| {
+        crate::catalog::is_safe_relative_path(name.strip_suffix('/').unwrap_or(name))
+    })
 }
 
 #[cfg(unix)]

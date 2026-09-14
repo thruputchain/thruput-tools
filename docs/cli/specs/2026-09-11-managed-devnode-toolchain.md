@@ -21,10 +21,13 @@ Offline applies to managed acquisition, not to RPC or Cargo traffic. Downloads
 verify size and SHA-256 before bounded allowlisted extraction. Installation and
 cleanup share a per-version/target lock. Installation and lease waits are
 cancellable; cleanup fails promptly while a node or installer holds the lock.
-Managed startup transfers its shared lease to the supervised child before
-readiness waits. Cancelled startup or shutdown and plain handle drop retain the
-lease in a synchronous reaper thread until the child and its process group exit,
-independently of the caller's Tokio runtime. Concurrent nodes share leases. A staged bundle is renamed
+Managed startup gives the child an inherited locked descriptor before exec.
+The parent only closes its descriptor; it never explicitly unlocks the shared
+open file description. The child and inheriting descendants therefore retain
+the lease even after CLI process exit or SIGKILL. The executable and any
+descendants using bundle files must preserve that inherited descriptor.
+Concurrent nodes share leases.
+A staged bundle is renamed
 only after completion metadata is durable. The local cache is trusted;
 reuse checks completion metadata and file presence, not installed-file hashes.
 
@@ -120,8 +123,8 @@ cargo run -p groundhog-agent-knowledge -- check
 - Fresh-cache macOS startup, chainTip RPC, clean shutdown, offline recovery,
   and non-mutating managed status passed without overrides.
 - Native Linux ARM64 and emulated x86_64 managed startup and offline recovery
-  passed on Ubuntu 26.04, along with all ten CLI toolchain integration tests
-  on each target.
+  passed on Ubuntu 26.04, along with all thirteen CLI toolchain integration
+  tests and four selection/interruption tests on each target.
 - Workspace tests, warning-free build, all-target Clippy, formatting, and agent
   knowledge checks passed. Final independent whole-change review found no
   actionable issues.
@@ -137,9 +140,30 @@ Updated managed smokes on macOS and both Linux targets verified busy cleanup
 while running and successful cleanup after shutdown. Older-host rejection is
 covered by probe fixtures, not execution on a real below-minimum host.
 
-Drop/cancellation qualification passed on macOS, native Linux ARM64, and emulated
-Linux x86_64: delayed plain drop, destroyed caller runtime, cancelled shutdown,
-and surviving descendants retain the process guard. A CLI test with a real
-managed lease also proves cancelled startup remains busy after runtime teardown,
-then permits cleanup after the child exits. The managed runtime smoke and full
-workspace checks passed after these changes.
+The current lifecycle uses descriptor inheritance rather than a parent-owned
+cleanup task. Fixture tests cover CLI process exit, CLI SIGKILL, cancelled startup,
+and launcher exit with a surviving inheriting descendant. The real bundle on macOS ARM64 and both Linux architectures retains its lock
+after CLI SIGKILL; none had surviving process descendants after its own leader
+was killed.
+
+## External review decisions
+
+- Node and status share selection planning. Status preserves uninstalled/stale
+  managed intent; implicit cache I/O failures may fall back to PATH. Saved or
+  explicitly requested managed versions still fail closed.
+- Incomplete non-directory targets are repairable. Installer errors preserve
+  catalog/source classification, and interruption produces a failed JSON record.
+- CLI downloads use the validated proxy client. The publication gate asserts one
+  successful all-target test and verifies Python3 on the release runner.
+- Hashing/extraction/fsync run in owned blocking work with cooperative cancellation.
+  Lock retries remain nonblocking and async: uncancellable blocking flock tasks
+  would regress runtime teardown. Host runtime probing is cached and offloaded
+  from async startup.
+- Staging cleanup is target-scoped under its exclusive lock. Raw PAX/GNU extension
+  records remain forbidden for layout 1, with explicit coverage. Catalog and
+  extraction share the exact path-safety predicate.
+- Independent catalog pins remain independent. Deriving the expected digests from
+  the catalog under test would eliminate the trust-handoff regression check.
+- Managed command selection remains separate from executable overrides by design.
+  Stable report fields remain unchanged; cleanup's source describes the cache
+  acted upon, not a claim that the removed bundle is still installed.

@@ -93,8 +93,9 @@ try:
         assert str(root / 'cache') in devnode['path'], devnode
         assert snapshot(root / 'cache' / 'groundhog' / 'toolchain') == before, 'status mutated cache'
 
-    for offline in (False, True):
-        phase = 'offline restart' if offline else 'fresh-cache startup'
+    for attempt, offline in enumerate((False, True, True)):
+        kill_parent = attempt == 2
+        phase = 'parent SIGKILL' if kill_parent else ('offline restart' if offline else 'fresh-cache startup')
         args = [str(binary), '--json'] + (['--offline'] if offline else [])
         args += ['node', '--port', '0', '--data-dir', str(root / 'node')]
         output = root / ('offline.json' if offline else 'online.json')
@@ -129,6 +130,26 @@ try:
                 assert cleanup.returncode != 0, 'cleanup removed a running node bundle'
                 assert 'busy' in cleanup.stderr.lower() or 'busy' in cleanup.stdout.lower(), cleanup
                 check_status()
+                if kill_parent:
+                    rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid='], text=True).splitlines()
+                    leaders = [int(row.split()[0]) for row in rows if int(row.split()[1]) == process.pid]
+                    assert len(leaders) == 1, f'expected one devnode child, got {leaders}'
+                    process.kill()
+                    process.wait(timeout=10)
+                    assert session_processes(), 'parent exit unexpectedly terminated every backend'
+                    cleanup = command('--json', 'toolchain', 'clean')
+                    assert cleanup.returncode != 0, 'parent exit released the live backend bundle lock'
+                    assert 'busy' in cleanup.stderr.lower() or 'busy' in cleanup.stdout.lower(), cleanup
+                    os.kill(leaders[0], signal.SIGKILL)
+                    deadline = time.monotonic() + 5
+                    while leaders[0] in session_processes() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    if session_processes():
+                        cleanup = command('--json', 'toolchain', 'clean')
+                        assert cleanup.returncode != 0, 'devnode leader exit released its descendants bundle lock'
+                        assert 'busy' in cleanup.stderr.lower() or 'busy' in cleanup.stdout.lower(), cleanup
+                    else:
+                        print('Published backend has no surviving descendants after leader exit', flush=True)
                 print(f'Passed {phase}, chainTip RPC, and cleanup refusal while running', flush=True)
             finally:
                 if process.poll() is None:
@@ -143,7 +164,7 @@ try:
                 stop_session()
                 if survivors and process.returncode == 0:
                     raise RuntimeError('CLI exited without stopping its backend processes')
-            assert process.returncode == 0, errors.read_text()
+            assert process.returncode == (-signal.SIGKILL if kill_parent else 0), errors.read_text()
         check_status()
     result = command('toolchain', 'which')
     assert result.returncode == 0 and Path(result.stdout.strip()).is_file(), result
