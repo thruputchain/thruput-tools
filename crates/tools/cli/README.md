@@ -372,6 +372,13 @@ transaction; it does not wait. `tx list` preserves the endpoint's opaque cursor
 and does not fetch receipts. Address history includes root invocations only, so
 incoming wallet-wrapped transfers may not appear in a recipient's history.
 
+A receipt timeout includes the last successfully observed status and inspection
+commands for the submission endpoint. `unknown` is inconclusive: it does not
+identify a discard reason. Inspect the transaction before submitting the operation
+again. Detailed local backend logs require `groundhog node --verbose` at startup;
+output goes to the launching terminal unless redirected. Stopping an ephemeral
+node to change logging discards its chain state.
+
 ### `groundhog deploy`
 
 Deploy a contract to the active profile's RPC URL. Resolves the selected

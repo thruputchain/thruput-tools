@@ -367,8 +367,15 @@ pub enum CliError {
     SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
     #[error("transfer sender and recipient resolve to the same address `{address}`")]
     TransferToSelf { address: String },
-    #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
-    ReceiptTimeout { tx_hash: String, seconds: u64 },
+    #[error(
+        "transaction {tx_hash} submitted but no receipt after {seconds}s; last observed status: {last_status}"
+    )]
+    ReceiptTimeout {
+        tx_hash: String,
+        seconds: u64,
+        last_status: &'static str,
+        rpc_url: String,
+    },
     #[error("transaction {tx_hash} was rejected: {reason}")]
     TransactionInvalid { tx_hash: String, reason: String },
     #[error(
@@ -820,9 +827,13 @@ impl CliError {
             Self::TransferToSelf { .. } => Some(Cow::Borrowed(
                 "select a different recipient or use `--from` to select another source wallet",
             )),
-            Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
-                "check the node logs, then rerun the command once the transaction is committed or rejected",
-            )),
+            Self::ReceiptTimeout {
+                tx_hash, rpc_url, ..
+            } => Some(Cow::Owned(format!(
+                "inspect with `groundhog tx show {} --rpc-url {}` before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).",
+                render_shell_arg(tx_hash),
+                render_shell_arg(rpc_url),
+            ))),
             Self::TransactionInvalid { .. } => Some(Cow::Borrowed(
                 "check the transaction arguments and signing wallet, then submit a new transaction",
             )),

@@ -44,3 +44,10 @@ groundhog codegen ts --help
 Use `--json` for agent-consumed command results. Respect commands that require
 explicit confirmation, and never add a confirmation override unless the user
 has authorized the consequential action.
+
+A receipt timeout does not establish that a transaction failed. Inspect the
+transaction using the command printed in the error before submitting the
+operation again. An `unknown` status does not explain why the transaction is
+absent. For detailed local backend logs, start `groundhog node --verbose`;
+output goes to that terminal unless redirected. Do not restart an ephemeral
+node just to enable logging: stopping it discards its chain state.

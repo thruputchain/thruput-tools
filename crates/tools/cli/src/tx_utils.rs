@@ -210,7 +210,7 @@ pub async fn submit_and_poll(
         groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
     )
     .await
-    .map_err(map_submit_and_poll_error)
+    .map_err(|error| map_submit_and_poll_error(error, rpc_url))
 }
 
 pub fn submit_and_poll_blocking(
@@ -236,7 +236,10 @@ pub fn ensure_tx_success(
     )))
 }
 
-fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollError) -> CliError {
+fn map_submit_and_poll_error(
+    error: groundhog_json_rpc_client::SubmitAndPollError,
+    rpc_url: &str,
+) -> CliError {
     match error {
         groundhog_json_rpc_client::SubmitAndPollError::Connect { rpc_url, source } => {
             CliError::RpcConnect(format!("{rpc_url}: {source}"))
@@ -281,12 +284,24 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 _ => CliError::ReceiptPollingExhausted,
             }
         }
-        groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout { tx_hash, attempts } => {
-            CliError::ReceiptTimeout {
-                tx_hash: format_tx_hash(&tx_hash),
-                seconds: receipt_poll_duration_seconds(attempts),
-            }
-        }
+        groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
+            tx_hash,
+            attempts,
+            last_status,
+        } => CliError::ReceiptTimeout {
+            tx_hash: format_tx_hash(&tx_hash),
+            seconds: receipt_poll_duration_seconds(attempts),
+            last_status: match last_status {
+                Some(TransactionStatus::Unknown) => "unknown",
+                Some(TransactionStatus::Pending) => "pending",
+                Some(TransactionStatus::Committed { .. }) => "committed",
+                Some(TransactionStatus::Invalid { .. }) => "invalid",
+                Some(TransactionStatus::RecentFailure { .. }) => "recentFailure",
+                None => "unavailable",
+                Some(_) => "unrecognized",
+            },
+            rpc_url: rpc_url.to_owned(),
+        },
         _ => CliError::ReceiptPollingExhausted,
     }
 }
@@ -318,6 +333,44 @@ fn receipt_poll_duration_seconds(attempts: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_timeout_preserves_status_and_endpoint_in_safe_guidance() {
+        use groundhog_json_rpc_types::hex::Hex0x;
+        for (status, expected) in [
+            (Some(TransactionStatus::Unknown), "unknown"),
+            (Some(TransactionStatus::Pending), "pending"),
+            (None, "unavailable"),
+        ] {
+            let rpc_url = "https://rpc.example/a'b?x=$(touch /tmp/no)&y=2";
+            let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
+            let error = map_submit_and_poll_error(
+                groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
+                    tx_hash,
+                    attempts: 300,
+                    last_status: status,
+                },
+                rpc_url,
+            );
+            assert_eq!(error.code(), "receipt_timeout");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("last observed status: {expected}"))
+            );
+            let hint = error.hint().unwrap();
+            let endpoint = crate::terminal::render_shell_arg(rpc_url);
+            assert!(hint.contains(&format!(
+                "groundhog tx show {} --rpc-url {endpoint}",
+                format_tx_hash(&tx_hash)
+            )));
+            assert!(hint.contains("sending wallet's HOG balance on the same network"));
+            assert!(hint.contains("before submitting the operation again"));
+            assert!(!hint.contains("rerun"));
+            assert!(hint.contains("node terminal or redirected output"));
+            assert!(!hint.contains('\n'));
+        }
+    }
 
     #[test]
     fn fault_kind_summarizes_with_bundled_causes() {
@@ -399,6 +452,7 @@ mod tests {
                     },
                 },
             },
+            "http://127.0.0.1:8545",
         );
 
         assert_eq!(error.code(), "transaction_recent_failure");
