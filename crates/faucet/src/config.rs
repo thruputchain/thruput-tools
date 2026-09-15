@@ -81,6 +81,9 @@ impl FaucetConfigFile {
         self,
         key_loader: &dyn FaucetSecretKeyLoader,
     ) -> Result<FaucetConfigParts, FaucetConfigError> {
+        if !(1..=1_000_000).contains(&self.policy.airdrop.max_retained_attempts) {
+            return Err(FaucetConfigError::InvalidAirdropRetainedAttempts);
+        }
         validate_airdrop_client_overrides(&self.policy.airdrop.client_overrides)?;
         validate_airdrop_terminal_retention(self.policy.airdrop.recipient_cooldown_secs)?;
         validate_quota_window(
@@ -171,6 +174,7 @@ impl PolicyConfig {
                 ip_quota_max: self.airdrop.ip_quota_max,
                 client_overrides: self.airdrop.client_overrides,
                 max_pending_per_recipient: self.airdrop.max_pending_per_recipient,
+                max_retained_attempts: self.airdrop.max_retained_attempts,
             },
             wallet_create: WalletCreatePolicyRuntimeConfig {
                 owner_quota_window_secs: self.wallet_create.owner_quota_window_secs,
@@ -202,6 +206,8 @@ pub struct AirdropPolicyConfig {
     pub ip_quota_max: u32,
     pub client_overrides: Vec<AirdropClientOverride>,
     pub max_pending_per_recipient: u32,
+    /// Global bound on retained airdrop idempotency records, including unresolved attempts.
+    pub max_retained_attempts: usize,
 }
 
 /// Finite airdrop quota for a client identified by its socket peer IP.
@@ -224,6 +230,7 @@ impl Default for AirdropPolicyConfig {
             ip_quota_max: 10,
             client_overrides: Vec::new(),
             max_pending_per_recipient: 1,
+            max_retained_attempts: 10_000,
         }
     }
 }
@@ -271,6 +278,8 @@ pub struct AirdropPolicyRuntimeConfig {
     pub ip_quota_max: u32,
     pub client_overrides: Vec<AirdropClientOverride>,
     pub max_pending_per_recipient: u32,
+    /// Global bound on retained airdrop idempotency records, including unresolved attempts.
+    pub max_retained_attempts: usize,
 }
 
 /// Runtime wallet-create policy controls.
@@ -288,6 +297,9 @@ pub struct WalletCreatePolicyRuntimeConfig {
 /// Errors returned while validating faucet service config.
 #[derive(Debug, thiserror::Error)]
 pub enum FaucetConfigError {
+    /// Airdrop idempotency storage must use the supported finite capacity.
+    #[error("policy.airdrop.max_retained_attempts must be between 1 and 1000000")]
+    InvalidAirdropRetainedAttempts,
     /// A gateway client quota override used a zero-length window.
     #[error("airdrop client override for {ip} must use a nonzero quota window")]
     ZeroAirdropClientOverrideWindow { ip: IpAddr },
@@ -607,6 +619,33 @@ mod tests {
         validate_quota_window,
     };
 
+    #[tokio::test]
+    async fn retained_attempt_capacity_defaults_and_rejects_invalid_bounds_before_key_loading() {
+        let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
+        assert_eq!(config.policy.airdrop.max_retained_attempts, 10_000);
+        for capacity in [0, 1_000_001, usize::MAX] {
+            config.policy.airdrop.max_retained_attempts = capacity;
+            assert!(matches!(
+                config
+                    .clone()
+                    .into_parts_with_key_loader(&FailIfCalledKeyLoader)
+                    .await,
+                Err(FaucetConfigError::InvalidAirdropRetainedAttempts)
+            ));
+        }
+    }
+
+    #[test]
+    fn retained_attempt_capacity_rejects_negative_and_overflow_values() {
+        for value in ["-1", "18446744073709551616"] {
+            let source = format!(
+                "{}\n[policy.airdrop]\nmax_retained_attempts = {value}",
+                test_config()
+            );
+            assert!(toml::from_str::<FaucetConfigFile>(&source).is_err());
+        }
+    }
+
     struct TestKeyLoader;
 
     struct FailIfCalledKeyLoader;
@@ -818,6 +857,7 @@ mod tests {
             recipient_cooldown_secs = 60
             ip_quota_window_secs = 30
             ip_quota_max = 2
+            max_retained_attempts = 200000
             max_pending_per_recipient = 1
 
             [[policy.airdrop.client_overrides]]
@@ -843,6 +883,7 @@ mod tests {
             .expect("bug: policy runtime config should validate");
 
         assert!(parts.policy.trust_proxy_client_ip_headers);
+        assert_eq!(parts.policy.airdrop.max_retained_attempts, 200_000);
         assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 60);
         assert_eq!(parts.policy.airdrop.client_overrides[0].quota_max, 10_000);
         assert_eq!(

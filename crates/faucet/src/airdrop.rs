@@ -37,7 +37,6 @@ use crate::{
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 const AIRDROP_SUBMIT_AMOUNT_MISMATCH: &str = "airdrop_submit_amount_mismatch";
-const MAX_RETAINED_AIRDROP_ATTEMPTS: usize = 10_000;
 const MAX_CONCURRENT_AIRDROP_EXECUTIONS: usize = 64;
 const AIRDROP_EXECUTION_TIMEOUT: Duration = Duration::from_mins(10);
 
@@ -139,7 +138,7 @@ impl AirdropService {
         ];
         match self.policy_store.admit_airdrop_attempt(
             attempt.clone(),
-            MAX_RETAINED_AIRDROP_ATTEMPTS,
+            self.policy_config.airdrop.max_retained_attempts,
             self.policy_config.airdrop.max_pending_per_recipient,
             &quota_checks,
             now,
