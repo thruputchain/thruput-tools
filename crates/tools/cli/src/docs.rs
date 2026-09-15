@@ -110,6 +110,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let external_snapshot = dir.is_some();
     let bundled;
     let dir = if let Some(dir) = dir {
         dir
@@ -135,7 +136,9 @@ pub fn run(
         print.detail("source", &snapshot.source_revision);
         print.detail("agent guide CLI", &snapshot.agent_guide_cli_version);
         let guide_matches_cli = snapshot.agent_guide_cli_version == env!("CARGO_PKG_VERSION");
-        if !guide_matches_cli {
+        // The bundled snapshot is selected by the CLI release; a differing guide
+        // version is provenance, not an actionable warning for its users.
+        if external_snapshot && !guide_matches_cli {
             print.warn(format_args!(
                 "guide targets CLI {}; installed CLI is {}",
                 snapshot.agent_guide_cli_version,

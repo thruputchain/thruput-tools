@@ -136,6 +136,46 @@ fn docs_serves_static_snapshot_and_stops_on_signal() {
 }
 
 #[test]
+fn docs_warns_about_guide_version_only_for_explicit_snapshots() {
+    let external = snapshot();
+    let cache = tempfile::tempdir().unwrap();
+    for use_external in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        command
+            .args(["docs", "--port", "0"])
+            .env("XDG_CACHE_HOME", cache.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        if use_external {
+            command.arg("--dir").arg(external.path());
+        }
+        let mut server = Server(command.spawn().unwrap());
+        let stderr = server.0.stderr.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut output = String::new();
+            for line in BufReader::new(stderr).lines() {
+                let line = line.unwrap();
+                output.push_str(&line);
+                output.push('\n');
+                if line.contains("Ctrl-C to stop.") {
+                    break;
+                }
+            }
+            let _ = tx.send(output);
+        });
+        let output = rx.recv_timeout(Duration::from_secs(15)).unwrap();
+        assert!(output.contains("Documentation ready at"), "{output}");
+        assert!(output.contains("agent guide CLI"), "{output}");
+        assert_eq!(
+            output.contains("warning: guide targets CLI"),
+            use_external,
+            "{output}"
+        );
+    }
+}
+
+#[test]
 fn docs_rejects_invalid_snapshots_and_reports_busy_port() {
     let dir = snapshot();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
