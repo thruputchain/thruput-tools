@@ -374,7 +374,6 @@ pub enum CliError {
         tx_hash: String,
         seconds: u64,
         last_status: &'static str,
-        rpc_url: String,
     },
     #[error("transaction {tx_hash} was rejected: {reason}")]
     TransactionInvalid { tx_hash: String, reason: String },
@@ -827,12 +826,9 @@ impl CliError {
             Self::TransferToSelf { .. } => Some(Cow::Borrowed(
                 "select a different recipient or use `--from` to select another source wallet",
             )),
-            Self::ReceiptTimeout {
-                tx_hash, rpc_url, ..
-            } => Some(Cow::Owned(format!(
-                "inspect with `groundhog tx show {} --rpc-url {}` before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).",
+            Self::ReceiptTimeout { tx_hash, .. } => Some(Cow::Owned(format!(
+                "inspect with `groundhog tx show {}` using the same profile and RPC endpoint as the original submission before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).",
                 render_shell_arg(tx_hash),
-                render_shell_arg(rpc_url),
             ))),
             Self::TransactionInvalid { .. } => Some(Cow::Borrowed(
                 "check the transaction arguments and signing wallet, then submit a new transaction",

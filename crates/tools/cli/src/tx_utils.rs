@@ -210,7 +210,7 @@ pub async fn submit_and_poll(
         groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
     )
     .await
-    .map_err(|error| map_submit_and_poll_error(error, rpc_url))
+    .map_err(map_submit_and_poll_error)
 }
 
 pub fn submit_and_poll_blocking(
@@ -236,10 +236,7 @@ pub fn ensure_tx_success(
     )))
 }
 
-fn map_submit_and_poll_error(
-    error: groundhog_json_rpc_client::SubmitAndPollError,
-    rpc_url: &str,
-) -> CliError {
+fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollError) -> CliError {
     match error {
         groundhog_json_rpc_client::SubmitAndPollError::Connect { rpc_url, source } => {
             CliError::RpcConnect(format!("{rpc_url}: {source}"))
@@ -300,7 +297,6 @@ fn map_submit_and_poll_error(
                 None => "unavailable",
                 Some(_) => "unrecognized",
             },
-            rpc_url: rpc_url.to_owned(),
         },
         _ => CliError::ReceiptPollingExhausted,
     }
@@ -335,14 +331,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn receipt_timeout_preserves_status_and_endpoint_in_safe_guidance() {
+    fn receipt_timeout_preserves_status_without_echoing_endpoint() {
         use groundhog_json_rpc_types::hex::Hex0x;
         for (status, expected) in [
             (Some(TransactionStatus::Unknown), "unknown"),
             (Some(TransactionStatus::Pending), "pending"),
             (None, "unavailable"),
         ] {
-            let rpc_url = "https://rpc.example/a'b?x=$(touch /tmp/no)&y=2";
             let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
             let error = map_submit_and_poll_error(
                 groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout {
@@ -350,7 +345,6 @@ mod tests {
                     attempts: 300,
                     last_status: status,
                 },
-                rpc_url,
             );
             assert_eq!(error.code(), "receipt_timeout");
             assert!(
@@ -359,11 +353,9 @@ mod tests {
                     .contains(&format!("last observed status: {expected}"))
             );
             let hint = error.hint().unwrap();
-            let endpoint = crate::terminal::render_shell_arg(rpc_url);
-            assert!(hint.contains(&format!(
-                "groundhog tx show {} --rpc-url {endpoint}",
-                format_tx_hash(&tx_hash)
-            )));
+            assert!(hint.contains(&format!("groundhog tx show {}", format_tx_hash(&tx_hash))));
+            assert!(!hint.contains("--rpc-url"));
+            assert!(hint.contains("same profile and RPC endpoint as the original submission"));
             assert!(hint.contains("sending wallet's HOG balance on the same network"));
             assert!(hint.contains("before submitting the operation again"));
             assert!(!hint.contains("rerun"));
@@ -452,7 +444,6 @@ mod tests {
                     },
                 },
             },
-            "http://127.0.0.1:8545",
         );
 
         assert_eq!(error.code(), "transaction_recent_failure");

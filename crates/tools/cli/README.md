@@ -373,7 +373,8 @@ and does not fetch receipts. Address history includes root invocations only, so
 incoming wallet-wrapped transfers may not appear in a recipient's history.
 
 A receipt timeout includes the last successfully observed status and inspection
-commands for the submission endpoint. `unknown` is inconclusive: it does not
+guidance to reuse the original profile and RPC endpoint. Endpoint URLs are omitted
+from timeout diagnostics because they may contain credentials. `unknown` is inconclusive: it does not
 identify a discard reason. Inspect the transaction before submitting the operation
 again. Detailed local backend logs require `groundhog node --verbose` at startup;
 output goes to the launching terminal unless redirected. Stopping an ephemeral
