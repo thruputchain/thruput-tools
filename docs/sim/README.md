@@ -214,7 +214,9 @@ remaining pending transactions (10 second budget, 250 ms retry interval). Drain
 polls reuse the same `receipt-poll` event shape and are counted in the compact
 `run-completed.scheduledWorkloads` summary. Consumers that need to distinguish
 scheduled load from shutdown reconciliation should inspect `result.jsonl`
-timing/workload details until a dedicated drain counter is added.
+timing/workload details until a dedicated drain counter is added. The deadline
+cancels an unfinished receipt RPC, leaving its transaction pending for unresolved
+accounting; a zero drain budget starts no calls.
 
 `result.json` aggregates per-workload latency, success-only submit latency,
 submit-to-receipt latency percentiles, and `receiptPoll.{present, absent,
@@ -255,10 +257,67 @@ requires:
 - a runtime manifest path, supplied by `target.runtimeManifest` or
   `--runtime-manifest`.
 
+Before setup or traffic, hogsim compares the public `groundhog_networkInfo`
+network hash with the supplied runtime manifest and requires a successful
+`groundhog_chainTip` response. It does not connect to the manifest's private
+scheduler endpoint. The manifest protocol must match hogsim's compiled protocol;
+this is a local client compatibility check, not verification of the server's
+protocol. RC2 exposes neither the executed protocol nor a reset-specific genesis
+identity through these public responses (`networkHash` identifies the network
+name used in signatures). The runtime manifest remains required for bootstrap
+accounts and setup in this version.
+
 CLI overrides win over manifest fields. After resolution, `hogsim` writes the
 effective RPC URL, runtime manifest path, and nonce namespace into
 `simulation.json` under `resolved`. `target-ownership.json` records
 `startedBySim: false` and `cleanupAllowed: false`.
+
+### Native accounts on an existing target
+
+`examples/sim/existing-native-wallet.json` uses explicit `accounts.kind: "native"`.
+Hogsim derives one native pubkey address per actor from `accounts.seed`; those
+are public test keys, not suitable for holding valuable funds. The runtime
+manifest supplies network expectations and provenance, not actor wallet addresses.
+
+Funding defaults to `pre-funded`: each actor must already have at least
+`minimumBalanceRaw` (a positive decimal number of raw HOG units, default `1`).
+Selecting `funding: "faucet"` explicitly permits one public airdrop request per
+underfunded actor, followed by balance verification. Faucet quotas still apply;
+provision larger account sets separately. Setup supports at most 1024 native
+actors and writes addresses, balances, and funding evidence to `native-accounts.json`.
+Faucet requests (including their idempotency keys) are saved before sending, responses
+before balance verification, and setup failures retain their error. Setup uses the
+same RPC timeout as the workload client. An airdrop timeout or transport failure
+is saved as `fundingError` and followed by up to 30 seconds of balance verification;
+no second airdrop is sent. A verified balance permits setup to continue while
+retaining the ambiguous request evidence. An explicit RPC error still fails setup.
+
+For native accounts, `wallet-submit-smoke` executes the native token's balance
+read through the default wallet. Every observed receipt must be `ok`; reverted
+or failed execution fails the run. `contract-call` and `read-after-write` use
+the same native wallet adapter and retain their receipt-waiting semantics.
+
+Native workload expiry is the observed public chain height plus 1,000 blocks.
+Before native writes, the scheduler refreshes its shared tip when absent or 30
+seconds old, with a two-second RPC deadline. This refresh can delay dispatch and
+is part of generator overhead. Refresh failures or regressing heights stop the
+run; signing also rejects observations at least 60 seconds old and height overflow.
+
+Native artifact deployment requires an explicit `accounts.deploymentCollateralRaw`
+budget, transferred from actor zero to each predicted contract address before
+deployment. For example, `"10000000"` transfers one HOG per deployment. Both
+transfer and deployment must commit successfully; deployment records retain the
+collateral amount, recipient, expected transaction hash, returned hash, and committed
+height. The event log checkpoints the signed hash before submission so ambiguous
+transport failures can be reconciled. Choose
+funding for the artifact's deployment/storage cost and the actor's remaining
+balance; the budget is not inferred from a stale cost-model snapshot.
+
+Without `accounts`, existing local bootstrap scenarios retain their legacy
+wallet addresses, setup, and admission-only smoke semantics. Native settings
+cannot be combined with legacy `bootstrap.actorProvisioning`; native accounts
+currently require the `existing` provider. The local provider's bootstrap
+migration and an RPC-only target without a runtime manifest are separate work.
 
 ## Local Provider
 

@@ -20,6 +20,9 @@ pub struct SimulationManifest {
     pub client: Option<ClientSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<BootstrapSpec>,
+    /// Explicit native actors; omission retains manifest-backed bootstrap accounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<NativeAccountsSpec>,
     #[serde(default)]
     pub load_shape: Vec<LoadPhase>,
     #[serde(default)]
@@ -46,6 +49,47 @@ pub struct SimulationManifest {
     pub baseline: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedRunSpec>,
+}
+
+/// Explicit native pubkey workload accounts; omission keeps local bootstrap wallets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeAccountsSpec {
+    /// Explicit account model discriminator, serialized as `native`.
+    pub kind: NativeAccountKind,
+    /// Deterministic test-key seed; these accounts must not hold valuable funds.
+    pub seed: String,
+    /// Whether setup may request faucet funds; defaults to balance verification only.
+    #[serde(default)]
+    pub funding: NativeAccountFunding,
+    /// Minimum raw HOG balance required per actor before load, as a decimal string.
+    /// Defaults to one raw unit; this is a setup check, not a workload cost estimate.
+    #[serde(default = "default_native_minimum_balance")]
+    pub minimum_balance_raw: String,
+    /// Raw HOG transfer to each predicted deployment address, as a decimal string.
+    /// Required when deploying native artifacts; omission does not fund collateral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_collateral_raw: Option<String>,
+}
+/// Account model selected by the explicit `accounts` configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeAccountKind {
+    /// Derive nonce-zero pubkey accounts and use the native `DefaultWallet` ABI.
+    Native,
+}
+/// Funding permission applied during native account setup, before measured load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeAccountFunding {
+    /// Verify existing balances and fail if any actor is below its configured minimum.
+    #[default]
+    PreFunded,
+    /// Request one airdrop per underfunded actor, then verify its minimum balance.
+    Faucet,
+}
+fn default_native_minimum_balance() -> String {
+    "1".into()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

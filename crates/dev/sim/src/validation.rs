@@ -37,6 +37,8 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
         return Err(ValidationError::MissingWorkloads);
     }
 
+    validate_native_accounts(manifest)?;
+
     for (index, phase) in manifest.load_shape.iter().enumerate() {
         phase
             .duration
@@ -712,6 +714,50 @@ fn validate_hex_len(
     Ok(())
 }
 
+fn positive_raw(raw: &str) -> bool {
+    raw.bytes().all(|byte| byte.is_ascii_digit())
+        && raw.parse::<u128>().is_ok_and(|value| value > 0)
+}
+fn validate_native_accounts(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if let Some(accounts) = &manifest.accounts {
+        if accounts.seed.trim().is_empty() || accounts.seed.len() > 1024 {
+            return Err(ValidationError::NativeAccounts {
+                reason: "seed must contain 1..1024 bytes".into(),
+            });
+        }
+        if !positive_raw(&accounts.minimum_balance_raw) {
+            return Err(ValidationError::NativeAccounts {
+                reason: "minimumBalanceRaw must be a positive u128 decimal".into(),
+            });
+        }
+        if let Some(raw) = &accounts.deployment_collateral_raw
+            && !positive_raw(raw)
+        {
+            return Err(ValidationError::NativeAccounts {
+                reason: "deploymentCollateralRaw must be a positive u128 decimal".into(),
+            });
+        }
+        if !manifest.contract_artifacts.is_empty() && accounts.deployment_collateral_raw.is_none() {
+            return Err(ValidationError::NativeAccounts { reason: "native contract deployment requires explicit deploymentCollateralRaw for each predicted contract address".into() });
+        }
+        if actor_provisioning_enabled(manifest) {
+            return Err(ValidationError::NativeAccounts {
+                reason: "native accounts cannot use legacy bootstrap.actorProvisioning".into(),
+            });
+        }
+        if manifest.target.provider != TargetProviderKind::Existing {
+            return Err(ValidationError::NativeAccounts { reason: "native accounts currently require provider existing; local bootstrap scenarios retain their wallet adapter".into() });
+        }
+        if manifest.load_shape.iter().any(|phase| phase.users > 1024) {
+            return Err(ValidationError::NativeAccounts {
+                reason: "native account setup is bounded to 1024 actors".into(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 pub fn validate_against_runtime(
     manifest: &SimulationManifest,
     runtime: &RuntimeManifest,
@@ -734,11 +780,17 @@ pub fn validate_against_runtime(
         .bootstrap_accounts
         .iter()
         .any(|account| account.index == 0 && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
-    if max_users > account_count && actor_provisioning_enabled(manifest) && !has_provisioning_faucet
+    if manifest.accounts.is_none()
+        && max_users > account_count
+        && actor_provisioning_enabled(manifest)
+        && !has_provisioning_faucet
     {
         return Err(ValidationError::ActorProvisioningRequiresSponsor);
     }
-    if max_users > account_count && !actor_provisioning_enabled(manifest) {
+    if manifest.accounts.is_none()
+        && max_users > account_count
+        && !actor_provisioning_enabled(manifest)
+    {
         return Err(ValidationError::TooManyActors {
             requested: max_users,
             available: account_count,
@@ -825,6 +877,8 @@ pub(crate) fn required_bootstrap_accounts(manifest: &SimulationManifest) -> u32 
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
+    #[error("invalid native accounts: {reason}")]
+    NativeAccounts { reason: String },
     #[error("unsupported simulation schemaVersion {actual}")]
     UnsupportedSimulationSchema { actual: u32 },
     #[error("invalid simulation kind `{actual}`")]
@@ -1034,6 +1088,62 @@ mod tests {
         EventQueryOrderSpec, EventQuerySpec, LoadPhase, WorkloadSpec,
     };
     use crate::target::TargetProviderSpec;
+
+    #[test]
+    fn native_accounts_ignore_legacy_inventory_but_reject_unsafe_configuration() {
+        let mut manifest = basic_manifest();
+        manifest.accounts = Some(
+            serde_json::from_value(json!({"kind":"native","seed":"test"})).expect("native config"),
+        );
+        let mut runtime = runtime_manifest();
+        runtime.bootstrap_accounts.clear();
+        validate_manifest(&manifest).expect("native manifest");
+        validate_against_runtime(&manifest, &runtime)
+            .expect("native actors need no legacy accounts");
+        manifest
+            .accounts
+            .as_mut()
+            .expect("native config")
+            .minimum_balance_raw = "0".into();
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(ValidationError::NativeAccounts { .. })
+        ));
+        manifest
+            .accounts
+            .as_mut()
+            .expect("native config")
+            .minimum_balance_raw = "1".into();
+        manifest
+            .contract_artifacts
+            .push(contract_artifact("example", "example.rv32a"));
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(ValidationError::NativeAccounts { .. })
+        ));
+        manifest
+            .accounts
+            .as_mut()
+            .expect("native config")
+            .deployment_collateral_raw = Some("10000000".into());
+        validate_manifest(&manifest).expect("explicit deploy collateral");
+        manifest.target.provider = TargetProviderKind::Local;
+        assert!(matches!(
+            validate_manifest(&manifest),
+            Err(ValidationError::NativeAccounts { .. })
+        ));
+    }
+
+    #[test]
+    fn native_account_settings_reject_unknown_modes_and_fields() {
+        for value in [
+            json!({"kind":"legacy","seed":"test"}),
+            json!({"kind":"native","seed":"test","funding":"automatic"}),
+            json!({"kind":"native","seed":"test","walletArtifact":"old.rv32a"}),
+        ] {
+            assert!(serde_json::from_value::<crate::manifest::NativeAccountsSpec>(value).is_err());
+        }
+    }
 
     #[test]
     fn rejects_chaos_for_existing_provider() {
@@ -2150,6 +2260,7 @@ mod tests {
             },
             client: None,
             bootstrap: None,
+            accounts: None,
             load_shape: vec![LoadPhase {
                 duration: DurationSpec("1s".into()),
                 users: 1,

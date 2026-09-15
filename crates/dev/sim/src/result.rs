@@ -450,6 +450,9 @@ pub enum ChaosEventState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractDeploymentRecord {
+    /// Native target-funding evidence; absent when no collateral transfer was prepared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collateral: Option<NativeDeploymentCollateral>,
     pub name: String,
     pub status: ContractDeploymentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -474,6 +477,28 @@ pub struct ContractDeploymentRecord {
     pub height: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Evidence for the transfer that funds a predicted native deployment address.
+/// Fields are filled as setup progresses and retained if submission or verification fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeDeploymentCollateral {
+    /// Predicted deployment address receiving collateral, encoded as `0x` hex.
+    pub recipient: String,
+    /// Raw HOG amount to transfer, encoded as a decimal string.
+    pub raw_amount: String,
+    /// Locally computed `0x` transaction hash, recorded before submission.
+    /// Absent if preparation failed before the signed transaction identity was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    /// Hash returned by submission, retained even if it differs from `tx_hash`.
+    /// Absent until submission returns a hash; absence does not prove rejection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned_tx_hash: Option<String>,
+    /// Block height from a matching successful receipt; absent until verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

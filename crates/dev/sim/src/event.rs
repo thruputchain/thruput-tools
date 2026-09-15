@@ -696,6 +696,7 @@ mod tests {
     fn contract_deploy_completed_event_shape_matches_stream_contract() {
         let event = ResultEvent::ContractDeployCompleted {
             event: ContractDeploymentRecord {
+                collateral: None,
                 name: "fibonacci".into(),
                 status: ContractDeploymentStatus::Completed,
                 artifact_kind: Some(ContractArtifactKind::Rv32),

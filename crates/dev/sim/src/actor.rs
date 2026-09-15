@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use groundhog_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
-use groundhog_signing::LocalSigner;
+use groundhog_signing::{LocalSigner, PubkeyAccount, source_address_auth_claim};
 use groundhog_xdr::types::{ContractAddress, NetworkHash};
 
 use crate::manifest::SimulationManifest;
@@ -11,6 +11,42 @@ use crate::runtime::SimAccount;
 
 pub const DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR: usize = 1_024;
 
+/// Wallet ABI selected by configuration, never inferred from address bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletKind {
+    /// Manifest-backed dev wallet using the legacy source-address auth claim.
+    LegacyBootstrap,
+    /// Nonce-zero pubkey account using the native `DefaultWallet` ABI.
+    NativePubkey,
+}
+
+pub(crate) const NATIVE_EXPIRY_OFFSET: i64 = 1_000;
+pub(crate) const NATIVE_TIP_MAX_AGE: Duration = Duration::from_mins(1);
+
+/// A public chain-tip observation shared by native actors for signing expiry.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeChainTip {
+    /// Height returned by the public chain-tip RPC.
+    pub height: i64,
+    /// Local time at which that RPC completed successfully.
+    pub observed_at: Instant,
+}
+
+impl NativeChainTip {
+    /// Compute the bounded future expiry, rejecting stale or invalid observations.
+    pub fn expiry(self) -> Result<i64, ActorError> {
+        if self.observed_at.elapsed() >= NATIVE_TIP_MAX_AGE {
+            return Err(ActorError::NativeTipUnavailable);
+        }
+        if self.height < 0 {
+            return Err(ActorError::NativeTipInvalid);
+        }
+        self.height
+            .checked_add(NATIVE_EXPIRY_OFFSET)
+            .ok_or(ActorError::NativeTipInvalid)
+    }
+}
+
 /// Mutable per-actor state owned by the simulator runtime.
 #[derive(Debug)]
 pub struct ActorState {
@@ -18,6 +54,10 @@ pub struct ActorState {
     pub account_index: u32,
     pub signer: LocalSigner,
     pub wallet_address: ContractAddress,
+    /// Selects the transaction wrapper and authentication claim for this actor.
+    pub wallet_kind: WalletKind,
+    /// Most recent shared public tip used to sign native workload transactions.
+    pub(crate) native_chain_tip: Option<NativeChainTip>,
     /// Network this actor signs for. Part of every signature preimage.
     pub network_hash: NetworkHash,
     pub nonce_namespace: NonceNamespace,
@@ -76,6 +116,8 @@ impl ActorState {
             account_index: account.index,
             signer: account.signer,
             wallet_address: account.wallet_address,
+            wallet_kind: WalletKind::LegacyBootstrap,
+            native_chain_tip: None,
             network_hash: account.network_hash,
             nonce_namespace,
             next_nonce_sequence: 0,
@@ -86,6 +128,24 @@ impl ActorState {
             pending_receipts: VecDeque::new(),
             pending_receipt_limit: DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR,
             read_after_write: ReadAfterWriteState::NeedsReconcile,
+        }
+    }
+
+    /// Select the native wallet and derive its address from this actor's key.
+    pub fn use_native_wallet(&mut self) {
+        self.wallet_kind = WalletKind::NativePubkey;
+        self.wallet_address =
+            PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0).address();
+    }
+
+    /// Build the native pubkey or legacy source-address claim for the selected wallet.
+    pub fn auth_claim(&self) -> groundhog_xdr::auth_claim::AuthClaim {
+        match self.wallet_kind {
+            WalletKind::NativePubkey => {
+                PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0)
+                    .auth_claim()
+            }
+            WalletKind::LegacyBootstrap => source_address_auth_claim(),
         }
     }
 
@@ -346,6 +406,12 @@ pub fn required_actor_count(manifest: &SimulationManifest) -> usize {
 /// Errors from actor-state construction and mutation.
 #[derive(Debug, thiserror::Error)]
 pub enum ActorError {
+    /// Native signing has no recent trustworthy chain-tip observation.
+    #[error("native transaction requires a public chain-tip observation less than 60 seconds old")]
+    NativeTipUnavailable,
+    /// Observed height is negative or would overflow the future expiry.
+    #[error("native chain-tip height is invalid or cannot accommodate the expiry offset")]
+    NativeTipInvalid,
     #[error("scenario requests {requested} actors but only {available} accounts are available")]
     TooManyActors { requested: usize, available: usize },
     #[error("actor id {actor_id} does not fit in u32")]

@@ -465,7 +465,15 @@ async fn run_resolved_target(
         rpc_client_config.request_timeout,
     )
     .await?;
-    let accounts = derive_accounts(&loaded_runtime.manifest)?;
+    let accounts = if let Some(spec) = &loaded_sim.manifest.accounts {
+        crate::native::derive_accounts(
+            spec,
+            required_actor_count(&loaded_sim.manifest),
+            &loaded_runtime.manifest,
+        )?
+    } else {
+        derive_accounts(&loaded_runtime.manifest)?
+    };
     validate_executable_workloads(&loaded_sim.manifest)?;
     validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
 
@@ -479,6 +487,11 @@ async fn run_resolved_target(
     };
     let required_actors = required_actor_count(&loaded_sim.manifest);
     let mut actor_states = build_actor_states_from_accounts(accounts, nonce_namespace)?;
+    if loaded_sim.manifest.accounts.is_some() {
+        for actor in &mut actor_states {
+            actor.use_native_wallet();
+        }
+    }
     if actor_states.len() > required_actors {
         actor_states.truncate(required_actors);
     }
@@ -510,6 +523,16 @@ async fn run_resolved_target(
     .await?;
 
     let client = SimHttpClientPool::new(&target.rpc_url, rpc_client_config)?;
+    if let Some(spec) = &loaded_sim.manifest.accounts {
+        crate::native::prepare_accounts(
+            spec,
+            &actor_states,
+            &target.rpc_url,
+            &out_dir,
+            rpc_client_config.request_timeout,
+        )
+        .await?;
+    }
     let mut provisioning_sponsor =
         if crate::provision::actor_provisioning_enabled(&loaded_sim.manifest)
             && actor_states.len() < required_actors
@@ -678,6 +701,7 @@ where
     let schedule_report = if input.contract_setup.failed {
         crate::executor::ScheduleRunReport {
             chaos_failed: false,
+            failure: None,
         }
     } else if let Some(schedule) = input.schedule {
         run_schedule_with_chaos(
@@ -786,7 +810,7 @@ where
     if input.contract_setup.failed {
         outcome = SimRunOutcome::Failed;
     }
-    if schedule_report.chaos_failed {
+    if schedule_report.chaos_failed || schedule_report.failure.is_some() {
         outcome = SimRunOutcome::Failed;
     }
     input
@@ -1169,6 +1193,101 @@ mod tests {
                 .expect("event file should read"),
             Vec::<u8>::new()
         );
+    }
+
+    #[derive(Clone)]
+    struct ExpiryFailureClient;
+
+    impl SimRpcClient for ExpiryFailureClient {
+        async fn chain_tip(&self) -> Result<ChainTip, String> {
+            Err("injected tip failure".into())
+        }
+        async fn send_raw_transaction(&self, _: String) -> Result<TxHash, String> {
+            panic!("failed expiry must stop new submits")
+        }
+        async fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> Result<Option<TransactionReceipt>, String> {
+            Ok(Some(TransactionReceipt {
+                tx_hash,
+                height: 42.into(),
+                status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+                events: Vec::new(),
+                return_data: None,
+                abort_data: None,
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn expiry_failure_keeps_accepted_receipt_reconciliation_and_failed_result() {
+        let mut manifest = manifest();
+        manifest.workloads[0].name = WorkloadKind::WalletSubmitSmoke;
+        let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest bytes");
+        let loaded = LoadedSimulationManifest {
+            config_sha256: Some(simulation_config_sha256(&manifest).expect("config hash")),
+            manifest,
+            sha256: sha256_hex(&bytes),
+            bytes,
+        };
+        let schedule = generate_schedule(&loaded.manifest).expect("schedule");
+        let starts = phase_starts(&loaded.manifest).expect("phases");
+        let file = NamedTempFile::new().expect("events");
+        let mut writer = EventWriter::create(file.path()).await.expect("writer");
+        let mut actors = actor_states();
+        actors[0].use_native_wallet();
+        let accepted = TxHash(Hex0x(SHA256Hash::from([0x55; 32])));
+        actors[0]
+            .record_submitted_tx(accepted, 0, std::time::Instant::now())
+            .expect("earlier admission");
+        let result = execute_loaded_simulation(
+            ExpiryFailureClient,
+            LoadedExecution {
+                run_id: "expiry-failure",
+                loaded_sim: &loaded,
+                runtime_manifest: &runtime_manifest(),
+                runtime_manifest_sha256: "runtime",
+                runtime_config_sha256: "config",
+                target: &resolved_target(),
+                chaos_controller: None,
+                nonce_namespace: NonceNamespace::new(7).expect("namespace"),
+                actor_states: &mut actors,
+                scheduled_workloads: 1,
+                shutdown_simulation_time_ms: 1,
+                resource_sample_interval_ms: 1000,
+                resource_sampler: None,
+                schedule: Some(&schedule),
+                phase_starts: &starts,
+                event_writer: &mut writer,
+                contract_setup: empty_contract_setup(),
+            },
+        )
+        .await
+        .expect("final result survives expiry failure");
+        assert_eq!(result.outcome, SimRunOutcome::Failed);
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        assert_eq!(
+            actors[0]
+                .last_observed_receipt
+                .as_ref()
+                .expect("reconciled receipt")
+                .tx_hash,
+            accepted
+        );
+        assert_eq!(
+            result.workload_counts[&WorkloadKind::ReceiptPoll].completed,
+            1
+        );
+        assert_eq!(
+            result.diagnostics.error_classes[0].error_class,
+            "native-tip-refresh"
+        );
+        let json = serde_json::to_value(&result).expect("result JSON");
+        assert_eq!(json["outcome"], "failed");
+        let events = std::fs::read_to_string(file.path()).expect("event evidence");
+        assert!(events.contains("injected tip failure"));
+        assert!(events.contains("run-completed"));
     }
 
     #[tokio::test]
