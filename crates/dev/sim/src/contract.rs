@@ -75,8 +75,8 @@ pub struct PreparedViewCall {
 
 /// A manifest contract-call target resolved to a deployed contract address.
 ///
-/// The executor wraps this target through the scheduled actor's wallet adapter, so the prepared value contains only the inner
-/// contract call details.
+/// The executor wraps this target through the scheduled actor's wallet adapter,
+/// so the prepared value contains only the inner contract call details.
 #[derive(Debug, Clone)]
 pub struct PreparedContractCall {
     /// Manifest-local contract-call name.

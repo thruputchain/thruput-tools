@@ -14,7 +14,9 @@ pub const DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR: usize = 1_024;
 /// Wallet ABI selected by configuration, never inferred from address bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletKind {
+    /// Manifest-backed dev wallet using the legacy source-address auth claim.
     LegacyBootstrap,
+    /// Nonce-zero pubkey account using the native `DefaultWallet` ABI.
     NativePubkey,
 }
 
@@ -25,6 +27,7 @@ pub struct ActorState {
     pub account_index: u32,
     pub signer: LocalSigner,
     pub wallet_address: ContractAddress,
+    /// Selects the transaction wrapper and authentication claim for this actor.
     pub wallet_kind: WalletKind,
     /// Network this actor signs for. Part of every signature preimage.
     pub network_hash: NetworkHash,
@@ -105,6 +108,7 @@ impl ActorState {
             PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0).address();
     }
 
+    /// Build the native pubkey or legacy source-address claim for the selected wallet.
     pub fn auth_claim(&self) -> groundhog_xdr::auth_claim::AuthClaim {
         match self.wallet_kind {
             WalletKind::NativePubkey => {

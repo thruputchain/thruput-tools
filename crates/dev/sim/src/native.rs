@@ -22,13 +22,18 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{path::Path, time::Duration};
 
+/// Native `DefaultWallet` entrypoint for executing a vector of wallet calls.
 pub const EXECUTE: ContractEntrypointID =
     ContractEntrypointID::new([0xc3, 0xed, 0xb1, 0x1f, 0xdd, 0x6d, 0x5d, 0x58]);
+/// Native `DefaultWallet` entrypoint for deployment; it does not transfer collateral.
 pub const DEPLOY: ContractEntrypointID =
     ContractEntrypointID::new([0x6b, 0xe0, 0xcb, 0x0f, 0x6d, 0xe0, 0x91, 0x7a]);
+/// Native HOG balance-read entrypoint used by the wallet smoke workload.
 pub const BALANCE: ContractEntrypointID =
     ContractEntrypointID::new([0x41, 0xac, 0x95, 0xd6, 0xe0, 0x6e, 0x26, 0x20]);
 
+/// Derive deterministic test signers and nonce-zero pubkey addresses for the manifest network.
+/// This does not fund accounts or select an actor's wallet adapter.
 pub fn derive_accounts(
     spec: &NativeAccountsSpec,
     count: usize,
