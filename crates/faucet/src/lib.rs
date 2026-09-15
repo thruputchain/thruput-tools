@@ -2476,6 +2476,7 @@ mod tests {
                     groundhog_json_rpc_client::PollTransactionReceiptError::ReceiptTimeout {
                         tx_hash,
                         attempts: 1,
+                        last_status: None,
                     },
                 ));
             }

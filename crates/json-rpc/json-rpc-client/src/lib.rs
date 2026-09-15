@@ -50,7 +50,12 @@ pub enum PollTransactionReceiptError {
         status: TransactionStatus,
     },
     #[error("timed out waiting for receipt for {tx_hash:?} after {attempts} attempts")]
-    ReceiptTimeout { tx_hash: TxHash, attempts: usize },
+    ReceiptTimeout {
+        tx_hash: TxHash,
+        attempts: usize,
+        /// Last successfully observed status; absent if status was unavailable.
+        last_status: Option<TransactionStatus>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,7 +77,12 @@ pub enum SubmitAndPollError {
         status: TransactionStatus,
     },
     #[error("timed out waiting for receipt for {tx_hash:?} after {attempts} attempts")]
-    ReceiptTimeout { tx_hash: TxHash, attempts: usize },
+    ReceiptTimeout {
+        tx_hash: TxHash,
+        attempts: usize,
+        /// Last successfully observed status; absent if status was unavailable.
+        last_status: Option<TransactionStatus>,
+    },
 }
 
 pub async fn submit_and_poll(
@@ -126,9 +136,15 @@ pub async fn submit_and_poll_with_client_config<C: ClientT + Sync>(
                 PollTransactionReceiptError::TransactionStatus { tx_hash, status } => {
                     SubmitAndPollError::TransactionStatus { tx_hash, status }
                 }
-                PollTransactionReceiptError::ReceiptTimeout { tx_hash, attempts } => {
-                    SubmitAndPollError::ReceiptTimeout { tx_hash, attempts }
-                }
+                PollTransactionReceiptError::ReceiptTimeout {
+                    tx_hash,
+                    attempts,
+                    last_status,
+                } => SubmitAndPollError::ReceiptTimeout {
+                    tx_hash,
+                    attempts,
+                    last_status,
+                },
             })?;
     Ok((tx_hash, receipt))
 }
@@ -202,6 +218,7 @@ pub async fn poll_transaction_receipt_with_client_config<C: ClientT + Sync>(
     poll_interval: Duration,
 ) -> Result<TransactionReceipt, PollTransactionReceiptError> {
     let mut recent_failure = None;
+    let mut last_status = None;
 
     for attempt in 0..max_attempts {
         match client.get_transaction_receipt(tx_hash).await {
@@ -216,13 +233,16 @@ pub async fn poll_transaction_receipt_with_client_config<C: ClientT + Sync>(
                         tokio::time::sleep(poll_interval).await;
                     }
                 }
-                // Receipt polling remains compatible with endpoints that do not
-                // implement status, and receipts remain authoritative when status
-                // is unknown, pending, or briefly ahead of receipt indexing.
-                Ok(_) | Err(_) if attempt < max_attempts.saturating_sub(1) => {
-                    tokio::time::sleep(poll_interval).await;
+                // Status failures do not erase the last successful observation.
+                // Unknown remains advisory; a later receipt is authoritative.
+                result => {
+                    if let Ok(status) = result {
+                        last_status = Some(status);
+                    }
+                    if attempt < max_attempts.saturating_sub(1) {
+                        tokio::time::sleep(poll_interval).await;
+                    }
                 }
-                Ok(_) | Err(_) => {}
             },
             Err(source) => {
                 return Err(PollTransactionReceiptError::GetTransactionReceipt { tx_hash, source });
@@ -236,6 +256,7 @@ pub async fn poll_transaction_receipt_with_client_config<C: ClientT + Sync>(
         Err(PollTransactionReceiptError::ReceiptTimeout {
             tx_hash,
             attempts: max_attempts,
+            last_status,
         })
     }
 }
