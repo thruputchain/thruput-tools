@@ -340,7 +340,11 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
     I: IntoIterator<Item = ScheduledSimulationEvent>,
 {
-    let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
+    let wallet_entrypoint = if manifest.accounts.is_some() {
+        crate::native::EXECUTE
+    } else {
+        runtime_dev_wallet_action_entrypoint(runtime_manifest)?
+    };
     let run_start = Instant::now();
     let mut next_phase = phase_starts.iter().peekable();
     let mut tasks = JoinSet::new();
@@ -577,21 +581,35 @@ where
 
     loop {
         for actor_index in 0..actor_states.len() {
-            while let Some(target) = actor_states[actor_index].reserve_receipt_poll_target() {
+            loop {
+                if Instant::now() >= deadline {
+                    return Ok(drained);
+                }
+                let Some(target) = actor_states[actor_index].reserve_receipt_poll_target() else {
+                    break;
+                };
+                let tx_hash = target.tx_hash;
                 let tick = ScheduledActorTick {
                     phase_index: 0,
                     actor_id: actor_states[actor_index].actor_id,
                     actor_sequence: u64::from(actor_states[actor_index].next_nonce_sequence),
                     simulation_time_ms,
                 };
-                let completion = execute_receipt_poll(
+                let poll = execute_receipt_poll(
                     client.clone(),
                     &tick,
                     PreparedReceiptPoll {
                         target: Some(target),
                     },
-                )
-                .await?;
+                );
+                let completion = if let Ok(completion) =
+                    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), poll).await
+                {
+                    completion?
+                } else {
+                    actor_states[actor_index].release_receipt_poll_target(tx_hash);
+                    return Ok(drained);
+                };
                 let found_receipt = matches!(
                     completion.receipt_poll,
                     Some(ReceiptPollCompletion { present: true })
@@ -1055,8 +1073,19 @@ fn panic_payload(error: JoinError) -> String {
     }
 }
 
+fn native_failed_receipt_event(event: ResultEvent, status: &ExecStatus) -> ResultEvent {
+    match event {
+        ResultEvent::WorkloadCompleted { mut event } => {
+            event.error_class = Some("native-receipt-status".into());
+            event.error = Some(format!("native transaction committed with {status:?}"));
+            ResultEvent::WorkloadFailed { event }
+        }
+        other => other,
+    }
+}
+
 async fn record_completion(
-    completion: WorkloadCompletion,
+    mut completion: WorkloadCompletion,
     actor_states: &mut [ActorState],
     event_writer: &mut EventWriter,
     metrics: &mut RunMetricsBuilder,
@@ -1093,6 +1122,15 @@ async fn record_completion(
         let actor = actor_states
             .get_mut(observed.actor_id as usize)
             .ok_or(SimError::Executor("actor state missing".into()))?;
+        if actor.wallet_kind == crate::actor::WalletKind::NativePubkey
+            && completion.workload == WorkloadKind::ReceiptPoll
+            && !matches!(observed.receipt.status, ExecStatus::Ok)
+        {
+            completion.error_class = Some("native-receipt-status".into());
+            completion.event =
+                native_failed_receipt_event(completion.event, &observed.receipt.status);
+        }
+
         actor.record_receipt(observed.receipt);
     }
     if let Some(release) = completion.release_receipt_poll {
@@ -6003,6 +6041,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_failed_receipt_is_reconciled_and_fails_the_workload() {
+        let file = NamedTempFile::new().expect("event file");
+        let mut writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0].use_native_wallet();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 0, Instant::now())
+            .expect("submitted tx");
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 1,
+        };
+        let times = ReceiptPollTimes {
+            started_unix: "1".into(),
+            completed_unix: "2".into(),
+            rpc_latency: 1,
+            submit_to_receipt_latency: Some(1),
+        };
+        let completion = receipt_poll_present(
+            &tick,
+            json_string(&tx_hash(0x5a), "txHash").expect("hash"),
+            &times,
+            receipt_with_status(tx_hash(0x5a), ExecStatus::Reverted { message: None }),
+        );
+        record_completion(completion, &mut actors, &mut writer, &mut metrics)
+            .await
+            .expect("reconcile");
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        assert_eq!(metrics.failed_count(), 1);
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events");
+        assert!(events.contains("native-receipt-status"));
+        assert!(events.contains("workload-failed"));
+    }
+
+    #[tokio::test]
     async fn receipt_poll_records_receipt_status_detail() {
         let manifest = receipt_manifest();
         let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
@@ -6150,7 +6230,7 @@ mod tests {
             &mut event_writer,
             &mut metrics,
             30,
-            Duration::ZERO,
+            Duration::from_secs(1),
             Duration::ZERO,
         )
         .await
@@ -6175,6 +6255,75 @@ mod tests {
                 .present,
             2
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_receipt_drain_deadline_cancels_poll_and_preserves_pending() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path()).await.unwrap();
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 1, Instant::now())
+            .unwrap();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5b), 2, Instant::now())
+            .unwrap();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let drained = tokio::time::timeout(
+            Duration::from_millis(500),
+            drain_pending_receipt_polls(
+                SlowReceiptClient {
+                    requested: requested.clone(),
+                },
+                &mut actors,
+                &mut event_writer,
+                &mut metrics,
+                30,
+                Duration::from_millis(20),
+                Duration::ZERO,
+            ),
+        )
+        .await
+        .expect("drain must not wait for the one-second RPC")
+        .unwrap();
+        assert_eq!(drained, 0);
+        assert_eq!(*requested.lock().unwrap(), vec![tx_hash(0x5a)]);
+        assert_eq!(actors[0].pending_receipt_count(), 2);
+        // Cancellation must release the reservation, leaving this hash available
+        // for later reconciliation rather than silently losing it.
+        assert_eq!(
+            actors[0].reserve_receipt_poll_target().unwrap().tx_hash,
+            tx_hash(0x5a)
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_receipt_drain_zero_budget_issues_no_requests() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path()).await.unwrap();
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 1, Instant::now())
+            .unwrap();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let drained = drain_pending_receipt_polls(
+            EchoReceiptClient {
+                requested: requested.clone(),
+            },
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            30,
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(drained, 0);
+        assert!(requested.lock().unwrap().is_empty());
+        assert_eq!(actors[0].pending_receipt_count(), 1);
     }
 
     #[tokio::test]

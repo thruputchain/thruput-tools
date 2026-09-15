@@ -6,7 +6,7 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 
-use crate::actor::ActorState;
+use crate::actor::{ActorState, WalletKind};
 
 // TODO: Lift smoke gas and expiry into the simulation manifest once workload
 // parameters are schema-backed.
@@ -33,31 +33,28 @@ pub fn build_wallet_submit_smoke_transaction(
     actor: &ActorState,
     wallet_entrypoint: ContractEntrypointID,
 ) -> Result<BuiltSubmitTransaction, TransactionBuildError> {
-    let nonce = actor.current_nonce()?;
-    // Phase 1 intentionally invokes the dev wallet against itself with empty
-    // calldata. The workload validates submit-path acceptance; receipt-poll
-    // records execution status separately when that slice lands.
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address: actor.wallet_address,
+    if actor.wallet_kind == WalletKind::NativePubkey {
+        let calldata = xdrs::cxs::encode(&(actor.wallet_address,)).map_err(|error| {
+            TransactionBuildError::BuildWalletAction {
+                source: groundhog_signing::SigningError::XdrEncode(error.to_string()),
+            }
+        })?;
+        return build_contract_call_transaction(
+            actor,
+            crate::native::EXECUTE,
+            groundhog_signing::NATIVE_HOG_ADDRESS,
+            crate::native::BALANCE,
+            &calldata,
+        );
+    }
+    // Legacy local smoke retains its admission-only self-call semantics.
+    build_contract_call_transaction(
+        actor,
         wallet_entrypoint,
-        target_address: actor.wallet_address,
-        target_entrypoint: wallet_entrypoint,
-        target_calldata: &[],
-        gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
-        target_gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
-        block_expiry_height: DEV_WALLET_SMOKE_EXPIRY_HEIGHT,
-        nonce,
-    })
-    .map_err(|source| TransactionBuildError::BuildWalletAction { source })?;
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &actor.signer,
-        SignTransactionParams::default(),
-        &actor.network_hash,
+        actor.wallet_address,
+        wallet_entrypoint,
+        &[],
     )
-    .map_err(|source| TransactionBuildError::SignAndEncode { source })?;
-
-    Ok(BuiltSubmitTransaction { tx_hex, nonce })
 }
 
 /// Build a signed dev-wallet transaction that calls a deployed contract.
@@ -73,17 +70,28 @@ pub fn build_contract_call_transaction(
     target_calldata: &[u8],
 ) -> Result<BuiltSubmitTransaction, TransactionBuildError> {
     let nonce = actor.current_nonce()?;
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address: actor.wallet_address,
-        wallet_entrypoint,
-        target_address,
-        target_entrypoint,
-        target_calldata,
-        gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
-        target_gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
-        block_expiry_height: DEV_WALLET_SMOKE_EXPIRY_HEIGHT,
-        nonce,
-    })
+    let tx = if actor.wallet_kind == WalletKind::NativePubkey {
+        crate::native::execute(
+            actor,
+            target_address,
+            target_entrypoint,
+            target_calldata,
+            nonce,
+            DEV_WALLET_SMOKE_EXPIRY_HEIGHT,
+        )
+    } else {
+        build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+            wallet_address: actor.wallet_address,
+            wallet_entrypoint,
+            target_address,
+            target_entrypoint,
+            target_calldata,
+            gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
+            target_gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
+            block_expiry_height: DEV_WALLET_SMOKE_EXPIRY_HEIGHT,
+            nonce,
+        })
+    }
     .map_err(|source| TransactionBuildError::BuildWalletAction { source })?;
     let tx_hex = sign_and_encode_transaction_hex(
         tx,

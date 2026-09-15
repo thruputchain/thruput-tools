@@ -450,6 +450,8 @@ pub enum ChaosEventState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractDeploymentRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collateral: Option<NativeDeploymentCollateral>,
     pub name: String,
     pub status: ContractDeploymentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -474,6 +476,19 @@ pub struct ContractDeploymentRecord {
     pub height: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeDeploymentCollateral {
+    pub recipient: String,
+    pub raw_amount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

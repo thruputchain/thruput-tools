@@ -8,6 +8,7 @@ pub mod event;
 pub mod executor;
 pub mod manifest;
 pub mod metrics;
+mod native;
 pub mod nonce;
 pub mod provision;
 pub mod resource;

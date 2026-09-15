@@ -465,7 +465,15 @@ async fn run_resolved_target(
         rpc_client_config.request_timeout,
     )
     .await?;
-    let accounts = derive_accounts(&loaded_runtime.manifest)?;
+    let accounts = if let Some(spec) = &loaded_sim.manifest.accounts {
+        crate::native::derive_accounts(
+            spec,
+            required_actor_count(&loaded_sim.manifest),
+            &loaded_runtime.manifest,
+        )?
+    } else {
+        derive_accounts(&loaded_runtime.manifest)?
+    };
     validate_executable_workloads(&loaded_sim.manifest)?;
     validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
 
@@ -479,6 +487,11 @@ async fn run_resolved_target(
     };
     let required_actors = required_actor_count(&loaded_sim.manifest);
     let mut actor_states = build_actor_states_from_accounts(accounts, nonce_namespace)?;
+    if loaded_sim.manifest.accounts.is_some() {
+        for actor in &mut actor_states {
+            actor.use_native_wallet();
+        }
+    }
     if actor_states.len() > required_actors {
         actor_states.truncate(required_actors);
     }
@@ -510,6 +523,9 @@ async fn run_resolved_target(
     .await?;
 
     let client = SimHttpClientPool::new(&target.rpc_url, rpc_client_config)?;
+    if let Some(spec) = &loaded_sim.manifest.accounts {
+        crate::native::prepare_accounts(spec, &actor_states, &target.rpc_url, &out_dir).await?;
+    }
     let mut provisioning_sponsor =
         if crate::provision::actor_provisioning_enabled(&loaded_sim.manifest)
             && actor_states.len() < required_actors

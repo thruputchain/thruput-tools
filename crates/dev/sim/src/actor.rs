@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use groundhog_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
-use groundhog_signing::LocalSigner;
+use groundhog_signing::{LocalSigner, PubkeyAccount, source_address_auth_claim};
 use groundhog_xdr::types::{ContractAddress, NetworkHash};
 
 use crate::manifest::SimulationManifest;
@@ -11,6 +11,13 @@ use crate::runtime::SimAccount;
 
 pub const DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR: usize = 1_024;
 
+/// Wallet ABI selected by configuration, never inferred from address bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletKind {
+    LegacyBootstrap,
+    NativePubkey,
+}
+
 /// Mutable per-actor state owned by the simulator runtime.
 #[derive(Debug)]
 pub struct ActorState {
@@ -18,6 +25,7 @@ pub struct ActorState {
     pub account_index: u32,
     pub signer: LocalSigner,
     pub wallet_address: ContractAddress,
+    pub wallet_kind: WalletKind,
     /// Network this actor signs for. Part of every signature preimage.
     pub network_hash: NetworkHash,
     pub nonce_namespace: NonceNamespace,
@@ -76,6 +84,7 @@ impl ActorState {
             account_index: account.index,
             signer: account.signer,
             wallet_address: account.wallet_address,
+            wallet_kind: WalletKind::LegacyBootstrap,
             network_hash: account.network_hash,
             nonce_namespace,
             next_nonce_sequence: 0,
@@ -86,6 +95,23 @@ impl ActorState {
             pending_receipts: VecDeque::new(),
             pending_receipt_limit: DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR,
             read_after_write: ReadAfterWriteState::NeedsReconcile,
+        }
+    }
+
+    /// Select the native wallet and derive its address from this actor's key.
+    pub fn use_native_wallet(&mut self) {
+        self.wallet_kind = WalletKind::NativePubkey;
+        self.wallet_address =
+            PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0).address();
+    }
+
+    pub fn auth_claim(&self) -> groundhog_xdr::auth_claim::AuthClaim {
+        match self.wallet_kind {
+            WalletKind::NativePubkey => {
+                PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0)
+                    .auth_claim()
+            }
+            WalletKind::LegacyBootstrap => source_address_auth_claim(),
         }
     }
 

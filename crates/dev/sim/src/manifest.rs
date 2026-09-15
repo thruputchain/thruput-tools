@@ -20,6 +20,8 @@ pub struct SimulationManifest {
     pub client: Option<ClientSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<BootstrapSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts: Option<NativeAccountsSpec>,
     #[serde(default)]
     pub load_shape: Vec<LoadPhase>,
     #[serde(default)]
@@ -46,6 +48,36 @@ pub struct SimulationManifest {
     pub baseline: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedRunSpec>,
+}
+
+/// Explicit native pubkey workload accounts; omission keeps local bootstrap wallets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeAccountsSpec {
+    pub kind: NativeAccountKind,
+    pub seed: String,
+    #[serde(default)]
+    pub funding: NativeAccountFunding,
+    #[serde(default = "default_native_minimum_balance")]
+    pub minimum_balance_raw: String,
+    /// Explicit transfer to each predicted deployment address before native deploy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_collateral_raw: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeAccountKind {
+    Native,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NativeAccountFunding {
+    #[default]
+    PreFunded,
+    Faucet,
+}
+fn default_native_minimum_balance() -> String {
+    "1".into()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
