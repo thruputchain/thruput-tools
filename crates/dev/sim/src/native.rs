@@ -91,13 +91,14 @@ pub async fn prepare_accounts(
     actors: &[ActorState],
     rpc_url: &str,
     out_dir: &Path,
+    request_timeout: Duration,
 ) -> Result<(), SimError> {
     let minimum = spec
         .minimum_balance_raw
         .parse::<u128>()
         .map_err(|_| SimError::Executor("invalid accounts.minimumBalanceRaw".into()))?;
     let client = HttpClientBuilder::default()
-        .request_timeout(Duration::from_secs(10))
+        .request_timeout(request_timeout)
         .build(rpc_url)
         .map_err(|error| SimError::RpcClient(error.to_string()))?;
     let mut records = Vec::new();
@@ -174,13 +175,32 @@ async fn prepare_account(
     };
     records.last_mut().expect("current actor record")["fundingRequest"] = json!(request);
     save_accounts(out_dir, records).await?;
-    let response = AirdropApiClient::request_airdrop(client, request)
-        .await
-        .map_err(|error| SimError::Executor(format!("native account funding: {error}")))?;
-    records.last_mut().expect("current actor record")["funding"] = json!(response);
-    save_accounts(out_dir, records).await?;
-    if response.recipient().0 != actor.wallet_address {
-        return Err(SimError::Executor("faucet recipient mismatch".into()));
+    match AirdropApiClient::request_airdrop(client, request).await {
+        Ok(response) => {
+            records.last_mut().expect("bug: current actor record")["funding"] = json!(response);
+            save_accounts(out_dir, records).await?;
+            if response.recipient().0 != actor.wallet_address {
+                return Err(SimError::Executor("faucet recipient mismatch".into()));
+            }
+        }
+        Err(error) => {
+            records.last_mut().expect("bug: current actor record")["fundingError"] =
+                json!(error.to_string());
+            save_accounts(out_dir, records).await?;
+            // A disconnected caller does not cancel an accepted faucet worker.
+            // Reconcile its effect without submitting again or changing the nonce.
+            if !matches!(
+                error,
+                jsonrpsee::core::client::Error::RequestTimeout
+                    | jsonrpsee::core::client::Error::Transport(_)
+                    | jsonrpsee::core::client::Error::RestartNeeded(_)
+                    | jsonrpsee::core::client::Error::ServiceDisconnect
+            ) {
+                return Err(SimError::Executor(format!(
+                    "native account funding: {error}"
+                )));
+            }
+        }
     }
     let balance = tokio::time::timeout(
         Duration::from_secs(30),
@@ -308,8 +328,14 @@ mod tests {
         for initial in [0, 100] {
             let (url, server, calls) = funding_server(actor.wallet_address, initial).await;
             let out = tempfile::tempdir().expect("output");
-            let result =
-                prepare_accounts(&spec, std::slice::from_ref(&actor), &url, out.path()).await;
+            let result = prepare_accounts(
+                &spec,
+                std::slice::from_ref(&actor),
+                &url,
+                out.path(),
+                Duration::from_secs(10),
+            )
+            .await;
             assert_eq!(result.is_ok(), initial > 0);
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             server.stop().expect("stop server");
@@ -361,7 +387,7 @@ mod tests {
                 serde_json::from_value(json!({"kind":"native","seed":"test","funding":"faucet"}))
                     .expect("spec");
             assert!(
-                prepare_accounts(&spec, &[actor], &url, out.path())
+                prepare_accounts(&spec, &[actor], &url, out.path(), Duration::from_secs(10))
                     .await
                     .is_err()
             );
@@ -386,6 +412,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delayed_faucet_uses_configured_timeout_and_reconciles_without_resubmitting() {
+        for (request_timeout, invalid_balance) in [
+            (Duration::from_millis(200), false),
+            (Duration::from_millis(200), true),
+            (Duration::from_secs(2), false),
+        ] {
+            let actor = actor();
+            let address = actor.wallet_address;
+            let out = tempfile::tempdir().expect("output");
+            let server = jsonrpsee::server::ServerBuilder::default()
+                .build("127.0.0.1:0")
+                .await
+                .expect("server");
+            let url = format!("http://{}", server.local_addr().expect("address"));
+            let funded = Arc::new(AtomicUsize::new(0));
+            let balance_funded = funded.clone();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let faucet_calls = calls.clone();
+            let mut module = jsonrpsee::RpcModule::new(());
+            module
+                .register_method("groundhog_getBalance", move |_, (), _| {
+                    let raw = if balance_funded.load(Ordering::SeqCst) == 0 {
+                        "0"
+                    } else if invalid_balance {
+                        "invalid"
+                    } else {
+                        "100"
+                    };
+                    json!({"address":Hex0x(address),"rawBalance":raw,"height":1})
+                })
+                .expect("balance");
+            module.register_async_method("groundhog_requestAirdrop", move |_, _, _| {
+                faucet_calls.fetch_add(1, Ordering::SeqCst);
+                let funded = funded.clone();
+                async move {
+                    // Mirror the hosted worker: funding outlives the caller's timeout.
+                    let worker = tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        funded.store(1, Ordering::SeqCst);
+                    });
+                    worker.await.expect("funding worker");
+                    json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":1,"status":{"result":"ok"}})
+                }
+            }).expect("faucet");
+            let handle = server.start(module);
+            let spec =
+                serde_json::from_value(json!({"kind":"native","seed":"test","funding":"faucet"}))
+                    .expect("spec");
+            let result = prepare_accounts(&spec, &[actor], &url, out.path(), request_timeout).await;
+            assert_eq!(result.is_ok(), !invalid_balance);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            let evidence: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(out.path().join("native-accounts.json")).expect("evidence"),
+            )
+            .expect("JSON");
+            let record = &evidence["accounts"][0];
+            assert!(record["fundingRequest"]["clientNonce"].is_string());
+            let timed_out = request_timeout < Duration::from_millis(500);
+            assert_eq!(record["fundingError"].is_string(), timed_out);
+            assert_eq!(record["funding"].is_object(), !timed_out);
+            if invalid_balance {
+                assert_eq!(record["status"], "failed");
+                assert!(
+                    record["error"]
+                        .as_str()
+                        .expect("error")
+                        .contains("invalid balance response")
+                );
+            } else {
+                assert_eq!(record["status"], "verified");
+                assert_eq!(record["balance"]["rawBalance"], "100");
+            }
+            handle.stop().expect("stop");
+        }
+    }
+
+    #[tokio::test]
     async fn explicit_faucet_funding_is_verified_before_setup_completes() {
         let actor = actor();
         let spec: NativeAccountsSpec = serde_json::from_value(
@@ -394,7 +497,7 @@ mod tests {
         .expect("config");
         let (url, server, calls) = funding_server(actor.wallet_address, 0).await;
         let out = tempfile::tempdir().expect("output");
-        prepare_accounts(&spec, &[actor], &url, out.path())
+        prepare_accounts(&spec, &[actor], &url, out.path(), Duration::from_secs(10))
             .await
             .expect("funded actor");
         assert_eq!(calls.load(Ordering::SeqCst), 1);

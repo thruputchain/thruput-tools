@@ -286,12 +286,22 @@ underfunded actor, followed by balance verification. Faucet quotas still apply;
 provision larger account sets separately. Setup supports at most 1024 native
 actors and writes addresses, balances, and funding evidence to `native-accounts.json`.
 Faucet requests (including their idempotency keys) are saved before sending, responses
-before balance verification, and setup failures retain their error.
+before balance verification, and setup failures retain their error. Setup uses the
+same RPC timeout as the workload client. An airdrop timeout or transport failure
+is saved as `fundingError` and followed by up to 30 seconds of balance verification;
+no second airdrop is sent. A verified balance permits setup to continue while
+retaining the ambiguous request evidence. An explicit RPC error still fails setup.
 
 For native accounts, `wallet-submit-smoke` executes the native token's balance
 read through the default wallet. Every observed receipt must be `ok`; reverted
 or failed execution fails the run. `contract-call` and `read-after-write` use
 the same native wallet adapter and retain their receipt-waiting semantics.
+
+Native workload expiry is the observed public chain height plus 1,000 blocks.
+Before native writes, the scheduler refreshes its shared tip when absent or 30
+seconds old, with a two-second RPC deadline. This refresh can delay dispatch and
+is part of generator overhead. Refresh failures or regressing heights stop the
+run; signing also rejects observations at least 60 seconds old and height overflow.
 
 Native artifact deployment requires an explicit `accounts.deploymentCollateralRaw`
 budget, transferred from actor zero to each predicted contract address before

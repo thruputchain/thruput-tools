@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use groundhog_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
 use groundhog_signing::{LocalSigner, PubkeyAccount, source_address_auth_claim};
@@ -20,6 +20,33 @@ pub enum WalletKind {
     NativePubkey,
 }
 
+pub(crate) const NATIVE_EXPIRY_OFFSET: i64 = 1_000;
+pub(crate) const NATIVE_TIP_MAX_AGE: Duration = Duration::from_mins(1);
+
+/// A public chain-tip observation shared by native actors for signing expiry.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeChainTip {
+    /// Height returned by the public chain-tip RPC.
+    pub height: i64,
+    /// Local time at which that RPC completed successfully.
+    pub observed_at: Instant,
+}
+
+impl NativeChainTip {
+    /// Compute the bounded future expiry, rejecting stale or invalid observations.
+    pub fn expiry(self) -> Result<i64, ActorError> {
+        if self.observed_at.elapsed() >= NATIVE_TIP_MAX_AGE {
+            return Err(ActorError::NativeTipUnavailable);
+        }
+        if self.height < 0 {
+            return Err(ActorError::NativeTipInvalid);
+        }
+        self.height
+            .checked_add(NATIVE_EXPIRY_OFFSET)
+            .ok_or(ActorError::NativeTipInvalid)
+    }
+}
+
 /// Mutable per-actor state owned by the simulator runtime.
 #[derive(Debug)]
 pub struct ActorState {
@@ -29,6 +56,8 @@ pub struct ActorState {
     pub wallet_address: ContractAddress,
     /// Selects the transaction wrapper and authentication claim for this actor.
     pub wallet_kind: WalletKind,
+    /// Most recent shared public tip used to sign native workload transactions.
+    pub(crate) native_chain_tip: Option<NativeChainTip>,
     /// Network this actor signs for. Part of every signature preimage.
     pub network_hash: NetworkHash,
     pub nonce_namespace: NonceNamespace,
@@ -88,6 +117,7 @@ impl ActorState {
             signer: account.signer,
             wallet_address: account.wallet_address,
             wallet_kind: WalletKind::LegacyBootstrap,
+            native_chain_tip: None,
             network_hash: account.network_hash,
             nonce_namespace,
             next_nonce_sequence: 0,
@@ -376,6 +406,12 @@ pub fn required_actor_count(manifest: &SimulationManifest) -> usize {
 /// Errors from actor-state construction and mutation.
 #[derive(Debug, thiserror::Error)]
 pub enum ActorError {
+    /// Native signing has no recent trustworthy chain-tip observation.
+    #[error("native transaction requires a public chain-tip observation less than 60 seconds old")]
+    NativeTipUnavailable,
+    /// Observed height is negative or would overflow the future expiry.
+    #[error("native chain-tip height is invalid or cannot accommodate the expiry offset")]
+    NativeTipInvalid,
     #[error("scenario requests {requested} actors but only {available} accounts are available")]
     TooManyActors { requested: usize, available: usize },
     #[error("actor id {actor_id} does not fit in u32")]

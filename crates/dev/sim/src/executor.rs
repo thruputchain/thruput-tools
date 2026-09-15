@@ -209,9 +209,11 @@ pub struct StreamingScheduleExecution<'a> {
     pub resource_sampler: Option<&'a dyn TargetResourceSampler>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScheduleRunReport {
     pub chaos_failed: bool,
+    /// Scheduling stopped on a recorded failure; accepted writes still need reconciliation.
+    pub failure: Option<String>,
 }
 
 /// Execute a deterministic simulation schedule against a typed RPC client.
@@ -222,7 +224,10 @@ where
     let mut chaos_events = Vec::new();
     run_schedule_with_chaos(client, input, None, &mut chaos_events)
         .await
-        .map(|_| ())
+        .and_then(|report| match report.failure {
+            Some(reason) => Err(SimError::Executor(reason)),
+            None => Ok(()),
+        })
 }
 
 /// Execute a deterministic simulation schedule with an optional target chaos controller.
@@ -317,6 +322,44 @@ where
     .await
 }
 
+const NATIVE_TIP_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const NATIVE_TIP_RPC_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Refresh in the scheduler rather than spawning a background task or adding
+/// an RPC to every transaction. Any refresh failure prevents new native writes.
+async fn refresh_native_chain_tip<C: SimRpcClient>(
+    client: &C,
+    cached: &mut Option<crate::actor::NativeChainTip>,
+    actors: &mut [ActorState],
+) -> Result<(), SimError> {
+    if cached.is_some_and(|tip| tip.observed_at.elapsed() < NATIVE_TIP_REFRESH_INTERVAL) {
+        return Ok(());
+    }
+    let response = tokio::time::timeout(NATIVE_TIP_RPC_TIMEOUT, client.chain_tip())
+        .await
+        .map_err(|_| SimError::Executor("native expiry chain-tip refresh timed out".into()))?
+        .map_err(|error| {
+            SimError::Executor(format!("native expiry chain-tip refresh failed: {error}"))
+        })?;
+    let tip = crate::actor::NativeChainTip {
+        height: *response.height,
+        observed_at: Instant::now(),
+    };
+    tip.expiry()?;
+    if cached.is_some_and(|previous| tip.height < previous.height) {
+        return Err(SimError::Executor(
+            "native expiry chain-tip height regressed; target may have reset".into(),
+        ));
+    }
+    *cached = Some(tip);
+    for actor in actors {
+        if actor.wallet_kind == crate::actor::WalletKind::NativePubkey {
+            actor.native_chain_tip = Some(tip);
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_schedule_events_with_chaos<C, I>(
     client: C,
@@ -355,6 +398,8 @@ where
     let actor_in_flight = actor_in_flight_lanes(phase_starts);
     let mut in_flight = 0_u64;
     let mut chaos_failed = false;
+    let mut failure = None;
+    let mut native_tip = None;
 
     for event in events {
         Box::pin(drain_completed_workloads_and_update_in_flight(
@@ -406,6 +451,31 @@ where
                 let actor_index = tick.actor_id as usize;
                 if actor_states.get(actor_index).is_none() {
                     return Err(SimError::Executor("actor state missing".into()));
+                }
+                if actor_states[actor_index].wallet_kind == crate::actor::WalletKind::NativePubkey
+                    && matches!(
+                        workload,
+                        WorkloadKind::WalletSubmitSmoke
+                            | WorkloadKind::ContractCall
+                            | WorkloadKind::ReadAfterWrite
+                    )
+                    && let Err(error) =
+                        refresh_native_chain_tip(&client, &mut native_tip, actor_states).await
+                {
+                    let reason = error.to_string();
+                    let completion = stopped_workload_completion(
+                        WorkloadTaskContext {
+                            actor_id: tick.actor_id,
+                            workload,
+                            scheduled_time_ms: tick.simulation_time_ms,
+                        },
+                        "native-tip-refresh",
+                        reason.clone(),
+                        "groundhog_chainTip",
+                    )?;
+                    record_completion(completion, actor_states, event_writer, metrics).await?;
+                    failure = Some(reason);
+                    break;
                 }
                 let permits = match acquire_workload_permits(
                     tick,
@@ -514,7 +584,7 @@ where
             }
         }
     }
-    if !chaos_failed {
+    if !chaos_failed && failure.is_none() {
         for phase in next_phase {
             sleep_until_sim_time_draining(
                 run_start,
@@ -555,7 +625,10 @@ where
         metrics,
     )
     .await?;
-    Ok(ScheduleRunReport { chaos_failed })
+    Ok(ScheduleRunReport {
+        chaos_failed,
+        failure,
+    })
 }
 
 /// Poll pending receipt queues once the scheduled load has stopped.
@@ -1731,6 +1804,21 @@ fn chaos_failed_workload_completion(
     context: WorkloadTaskContext,
     simulation_time_ms: u64,
 ) -> Result<WorkloadCompletion, SimError> {
+    let method = rpc_method(context.workload);
+    stopped_workload_completion(
+        context,
+        "chaos-failed",
+        format!("workload aborted at simulation time {simulation_time_ms} because chaos failed"),
+        method,
+    )
+}
+
+fn stopped_workload_completion(
+    context: WorkloadTaskContext,
+    error_class: &str,
+    error: String,
+    rpc_method: &'static str,
+) -> Result<WorkloadCompletion, SimError> {
     let now = unix_ms()?.to_string();
     Ok(WorkloadCompletion {
         event: ResultEvent::WorkloadFailed {
@@ -1741,7 +1829,7 @@ fn chaos_failed_workload_completion(
                 started_at_unix_ms: now.clone(),
                 completed_at_unix_ms: now,
                 latency_ms: 0,
-                rpc_method: rpc_method(context.workload),
+                rpc_method,
                 chain_height: None,
                 chain_block_hash: None,
                 tx_hash: None,
@@ -1767,10 +1855,8 @@ fn chaos_failed_workload_completion(
                 event_cursor: None,
                 event_latest_block: None,
                 event_oldest_block: None,
-                error_class: Some("chaos-failed".into()),
-                error: Some(format!(
-                    "workload aborted at simulation time {simulation_time_ms} because chaos failed"
-                )),
+                error_class: Some(error_class.into()),
+                error: Some(error),
                 read_after_write_name: None,
                 read_after_write_contract: None,
                 read_after_write_expected: None,
@@ -1781,7 +1867,7 @@ fn chaos_failed_workload_completion(
         },
         workload: context.workload,
         latency_ms: 0,
-        error_class: Some("chaos-failed".into()),
+        error_class: Some(error_class.into()),
         skipped: false,
         chain_tip: None,
         submitted_transaction: None,
@@ -4117,6 +4203,144 @@ mod tests {
     struct SuccessfulChaosController;
 
     struct FailingChaosController;
+
+    #[derive(Clone)]
+    struct NativeExpiryClient {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        response: Arc<std::sync::Mutex<Result<i64, String>>>,
+    }
+
+    impl SimRpcClient for NativeExpiryClient {
+        async fn send_raw_transaction(&self, _: String) -> Result<TxHash, String> {
+            panic!("expiry refresh must not submit transactions")
+        }
+        async fn chain_tip(&self) -> Result<ChainTip, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let height = self.response.lock().expect("tip response").clone()?;
+            Ok(ChainTip {
+                height: height.into(),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn native_schedule_stops_before_submit_when_expiry_tip_is_unavailable() {
+        let client = NativeExpiryClient {
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            response: Arc::new(std::sync::Mutex::new(Err("unavailable".into()))),
+        };
+        let manifest = wallet_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule");
+        let starts = phase_starts(&manifest).expect("phases");
+        let file = NamedTempFile::new().expect("event file");
+        let mut writer = EventWriter::create(file.path()).await.expect("writer");
+        let mut actors = actor_states();
+        actors[0].use_native_wallet();
+        let mut metrics = RunMetricsBuilder::default();
+        let report = run_schedule_with_chaos(
+            client.clone(),
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                contract_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
+                read_after_write: &[],
+                resource_sampler: None,
+            },
+            None,
+            &mut Vec::new(),
+        )
+        .await
+        .expect("failed schedule report");
+        assert!(
+            report
+                .failure
+                .expect("failure")
+                .contains("native expiry chain-tip refresh failed")
+        );
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        assert!(actors[0].last_submitted_tx_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn native_expiry_cache_reuses_then_refreshes_tip_and_rejects_failures() {
+        let client = NativeExpiryClient {
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            response: Arc::new(std::sync::Mutex::new(Ok(10_000_100))),
+        };
+        let mut actors = actor_states();
+        actors[0].use_native_wallet();
+        let mut cache = None;
+        refresh_native_chain_tip(&client, &mut cache, &mut actors)
+            .await
+            .expect("initial tip");
+        assert_eq!(
+            actors[0]
+                .native_chain_tip
+                .expect("actor tip")
+                .expiry()
+                .expect("expiry"),
+            10_001_100
+        );
+        refresh_native_chain_tip(&client, &mut cache, &mut actors)
+            .await
+            .expect("reuse tip");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 1);
+        cache.as_mut().expect("cache").observed_at = Instant::now()
+            .checked_sub(NATIVE_TIP_REFRESH_INTERVAL)
+            .expect("test clock age");
+        *client.response.lock().expect("response") = Ok(10_000_200);
+        refresh_native_chain_tip(&client, &mut cache, &mut actors)
+            .await
+            .expect("refresh tip");
+        assert_eq!(client.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            actors[0]
+                .native_chain_tip
+                .expect("actor tip")
+                .expiry()
+                .expect("expiry"),
+            10_001_200
+        );
+        for response in [
+            Err("unavailable".into()),
+            Ok(10_000_199),
+            Ok(i64::MAX),
+            Ok(-1),
+        ] {
+            cache.as_mut().expect("cache").observed_at = Instant::now()
+                .checked_sub(NATIVE_TIP_REFRESH_INTERVAL)
+                .expect("test clock age");
+            *client.response.lock().expect("response") = response;
+            assert!(
+                refresh_native_chain_tip(&client, &mut cache, &mut actors)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                actors[0]
+                    .native_chain_tip
+                    .expect("last valid observation")
+                    .height,
+                10_000_200
+            );
+        }
+        *client.response.lock().expect("response") = Err("initial failure".into());
+        assert!(
+            refresh_native_chain_tip(&client, &mut None, &mut actors)
+                .await
+                .is_err()
+        );
+    }
 
     struct StubResourceSampler {
         calls: Arc<AtomicU64>,

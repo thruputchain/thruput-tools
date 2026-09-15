@@ -20,6 +20,7 @@ groundhog-signing = { workspace = true }
 groundhog-xdr = { workspace = true }
 hdrhistogram = "7"
 hex = { workspace = true }
+jsonrpsee = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -30,7 +31,6 @@ xdr-common = { workspace = true }
 xdrs = { workspace = true }
 
 [dev-dependencies]
-jsonrpsee = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
