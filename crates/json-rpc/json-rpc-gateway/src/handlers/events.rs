@@ -55,11 +55,11 @@ pub async fn get_events(
     let page = event_page_from_result(result)?;
 
     let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
-    for identified in &page.events.0 {
-        if let Some(event) = parse_emitted_event(&identified.emitted_event) {
+    for identified in page.events.0 {
+        if let Some(event) = parse_emitted_event(identified.emitted_event) {
             events.push(IdentifiedEvent {
                 tx_hash: TxHash(Hex0x(identified.tx_hash)),
-                block_height: identified.block_height.clone(),
+                block_height: identified.block_height,
                 sequence_number: identified.sequence_number,
                 event,
             });

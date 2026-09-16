@@ -130,7 +130,7 @@ pub async fn get_transaction_receipt(
     match result {
         TxInfoResult::TxInfoFound { info } => {
             let mut events = Vec::with_capacity(info.events.events.0.len());
-            for raw in &info.events.events.0 {
+            for raw in info.events.events.0 {
                 if let Some(event) = parse_emitted_event(raw) {
                     events.push(event);
                 } else {
@@ -138,12 +138,12 @@ pub async fn get_transaction_receipt(
                         .observe_malformed_event_dropped(REASON_PARSE_FAILED);
                 }
             }
-            let (return_data, abort_data) = match &info.events.root_output {
+            let (return_data, abort_data) = match info.events.root_output {
                 InvocationFrameOutput::Return { return_buffer } => {
-                    (Some(HexBytes(return_buffer.0.clone())), None)
+                    (Some(HexBytes(return_buffer.0)), None)
                 }
                 InvocationFrameOutput::Abort { abort_buffer } => {
-                    (None, Some(HexBytes(abort_buffer.0.clone())))
+                    (None, Some(HexBytes(abort_buffer.0)))
                 }
                 _ => (None, None),
             };
