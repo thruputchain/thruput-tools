@@ -1,9 +1,4 @@
-import {
-  type FormEvent,
-  useEffect,
-  useState,
-  useSyncExternalStore,
-} from "react"
+import { type FormEvent, useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import {
@@ -17,20 +12,10 @@ import { AppHeader } from "@/components/app-header"
 import { FaucetHero } from "@/components/faucet-hero"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
-import {
-  getThemePreference,
-  setThemePreference,
-  subscribeToThemePreference,
-} from "@/theme"
 
 const ADDRESS_REGEX = /^0x[0-9a-fA-F]{64}$/
 
 export function App() {
-  const themePreference = useSyncExternalStore(
-    subscribeToThemePreference,
-    getThemePreference,
-    () => "system",
-  )
   const [address, setAddress] = useState("")
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [networkDescriptor, setNetworkDescriptor] =
@@ -72,16 +57,6 @@ export function App() {
     }
   }
 
-  function toggleTheme() {
-    const resolvedTheme =
-      themePreference === "system"
-        ? window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light"
-        : themePreference
-    setThemePreference(resolvedTheme === "dark" ? "light" : "dark")
-  }
-
   function handleAddressChange(nextAddress: string) {
     setAddress(nextAddress)
     if (fieldError) {
@@ -98,7 +73,7 @@ export function App() {
       return
     }
     if (!ADDRESS_REGEX.test(normalized)) {
-      setFieldError("Enter a 0x-prefixed 64-character Groundhog address.")
+      setFieldError("Enter a 0x-prefixed 64-character Thruput address.")
       return
     }
 
@@ -121,11 +96,10 @@ export function App() {
   }
 
   return (
-    <main className="min-h-dvh bg-background text-foreground">
-      <div className="mx-auto w-full max-w-5xl px-4">
-        <AppHeader onToggleTheme={toggleTheme} />
-
-        <div className="mx-auto flex max-w-2xl flex-col items-center gap-8 py-8">
+    <div className="min-h-dvh bg-background text-foreground">
+      <AppHeader />
+      <main className="mx-auto w-full max-w-5xl px-4 sm:px-6">
+        <div className="mx-auto flex max-w-2xl flex-col items-center gap-8 py-12 sm:py-16">
           <FaucetHero />
           {metadataError ? (
             <div className="w-full rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
@@ -151,10 +125,19 @@ export function App() {
             onAddressChange={handleAddressChange}
             onSubmit={handleSubmit}
           />
+          <p className="text-center text-sm text-muted-foreground">
+            Request airdrops directly from the CLI -{" "}
+            <a
+              href="https://docs.thruput.network/tools/faucet/"
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              Learn more
+            </a>
+          </p>
         </div>
-      </div>
+      </main>
       <Toaster position="bottom-right" />
-    </main>
+    </div>
   )
 }
 

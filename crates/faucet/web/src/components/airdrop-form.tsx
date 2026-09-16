@@ -27,7 +27,7 @@ export function AirdropForm(props: {
     <Card className="w-full">
       <CardHeader className="sr-only">
         <CardTitle>Fund a wallet</CardTitle>
-        <CardDescription>Request HOG for a Groundhog address.</CardDescription>
+        <CardDescription>Request HOG for a Thruput address.</CardDescription>
       </CardHeader>
       <form onSubmit={props.onSubmit} noValidate>
         <CardContent>
@@ -36,11 +36,13 @@ export function AirdropForm(props: {
               <div className="flex flex-col items-center gap-3 sm:flex-row">
                 <Input
                   id="address"
+                  aria-label="Wallet address"
+                  aria-describedby={isInvalid ? "address-error" : undefined}
                   value={props.address}
                   onChange={(event) =>
                     props.onAddressChange(event.target.value)
                   }
-                  placeholder="0x0000"
+                  placeholder="Wallet address (0x...)"
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={isInvalid || undefined}
@@ -72,7 +74,7 @@ export function AirdropForm(props: {
                 </Button>
               </div>
               {props.fieldError ? (
-                <FieldError>{props.fieldError}</FieldError>
+                <FieldError id="address-error">{props.fieldError}</FieldError>
               ) : null}
             </Field>
           </FieldGroup>
