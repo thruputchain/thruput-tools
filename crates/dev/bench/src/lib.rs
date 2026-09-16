@@ -390,6 +390,12 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
         "Benchmarking {}: {} workers, {} maximum in flight, {}s measured after {}s warmup",
         cli.method, cli.workers, effective_max_inflight, cli.duration, cli.warmup
     );
+    if let Some(path) = &cli.load_start_file {
+        std::fs::File::create_new(path).map_err(|source| BenchError::File {
+            path: path.display().to_string(),
+            source,
+        })?;
+    }
     let start = Instant::now();
     let cfg = Arc::new(WorkerConfig {
         url: cli.url.clone(),

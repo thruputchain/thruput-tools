@@ -136,6 +136,9 @@ fn display(value: &Value) -> String {
 }
 
 fn validate(v: &Value) -> Result<(), String> {
+    if !v["target"]["runnerSupplied"]["diagnostic"].is_null() {
+        return Err("diagnostic captures cannot be used for performance comparison".into());
+    }
     if v["schemaVersion"] != 2 || v["kind"] != "groundhog-bench-result" {
         return Err("compare requires benchmark schemaVersion 2".into());
     }
@@ -387,6 +390,12 @@ mod tests {
         );
         b["target"]["gatewayVersion"]["value"]["wireFormat"] = json!("4.0.0");
         assert_ne!(controls(&a, &args), controls(&b, &args));
+    }
+
+    #[test]
+    fn diagnostic_results_cannot_be_compared() {
+        let value = json!({"target":{"runnerSupplied":{"diagnostic":"trace"}}});
+        assert!(validate(&value).unwrap_err().contains("diagnostic"));
     }
 
     #[test]

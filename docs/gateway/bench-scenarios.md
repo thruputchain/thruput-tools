@@ -473,3 +473,35 @@ The default requires the exact corpus digest. `--equivalent-corpus` instead
 requires equal count and receipt-shape digest; it does not establish equal
 cache state or backend data layout. No comparison command infers cold-cache
 behavior or production capacity from this loopback workload.
+
+### Short diagnostic captures
+
+Use the same runner with `--diagnostic trace` or `--diagnostic perf` and
+`--outstanding 128` for a single status workload. Select receipt reads with
+`--diagnostic-method getTransactionReceipt`. Diagnostics require one pool and
+one outstanding count, accept no candidate, and produce no comparison table.
+The node and corpus preparation remain identical to the normal runner.
+
+Capture begins after corpus validation, when the benchmark creates its
+`--load-start-file` marker immediately before warmup. The runner observes this
+marker asynchronously; capture includes warmup and may overlap measurement.
+It is not an exact measured-window profile. The default is five seconds and
+16 MiB; `--diagnostic-seconds` and `--diagnostic-max-mib` are capped at 30 and 64.
+`diagnostic.json` records bounds, truncation and errors. Raw benchmark results
+carry a diagnostic marker, and `compare` rejects them even with `--vary`.
+
+Trace mode enables the gateway's `--trace-spans` option with `RUST_LOG=info`.
+It retains bounded `trace.log` output and drains excess output until gateway
+shutdown. Enabled spans emit close events with busy and idle durations;
+these mean time entered versus time alive but not entered, not CPU time.
+The capture contains existing probes, including ordinary log events. It is
+not a complete distributed trace: spawned tasks may lack parent context,
+and gateway spans do not reveal execution inside hogd. Trace instrumentation,
+formatting and pipe backpressure affect this diagnostic workload.
+
+Perf mode requires Linux and `perf` on PATH. It attaches only to the owned
+gateway, samples user CPU at 99 Hz with DWARF call stacks, and writes
+`perf.data` plus `perf.stderr`. Perf's size limit may overshoot by a record
+buffer. Capture errors fail the run rather than masquerading as empty evidence.
+Use a build with symbols for useful attribution and keep its artifact identity;
+profiled rates are not baseline rates. Neither mode starts a tracing service.

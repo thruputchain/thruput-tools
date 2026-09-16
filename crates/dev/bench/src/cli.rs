@@ -63,6 +63,10 @@ pub(super) struct Cli {
     #[arg(long, default_value = "120")]
     pub(super) setup_timeout_secs: u64,
 
+    /// Create a new marker file after setup, immediately before warmup load starts.
+    #[arg(long)]
+    pub(super) load_start_file: Option<std::path::PathBuf>,
+
     /// Runner-supplied gateway/backend build, host and effective configuration metadata.
     #[arg(long)]
     pub(super) target_info: Option<std::path::PathBuf>,

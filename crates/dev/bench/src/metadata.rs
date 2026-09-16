@@ -96,6 +96,7 @@ pub(super) struct LoggingPolicy {
 pub(super) struct TargetInfo {
     pub(super) schema_version: u32,
     pub(super) topology: String,
+    pub(super) diagnostic: Option<String>,
     pub(super) gateway: ComponentMetadata,
     pub(super) backend: ComponentMetadata,
 }

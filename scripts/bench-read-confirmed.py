@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 import platform
 import socket
+import shutil
+
+from bench_diagnostics import Capture
 import signal
 import statistics
 import subprocess
@@ -39,6 +42,10 @@ def main():
     parser.add_argument("--build-profile", choices=("release", "debug"), default="release", help="declared build profile of supplied artifacts")
     parser.add_argument("--gateway-log-filter", choices=("off", "error", "warn", "info", "debug", "trace"), default="warn")
     parser.add_argument("--gateway-log-sink", choices=("file", "discard"), default="file")
+    parser.add_argument("--diagnostic", choices=("trace", "perf"), help="one separate diagnostic run, excluded from comparisons")
+    parser.add_argument("--diagnostic-method", choices=("getTransactionStatus", "getTransactionReceipt"), default="getTransactionStatus")
+    parser.add_argument("--diagnostic-seconds", type=positive, default=5)
+    parser.add_argument("--diagnostic-max-mib", type=positive, default=16)
     args = parser.parse_args()
     pools = [int(v) for v in (args.pools or ("4,8,16,32,64" if args.scenario == "pool-sweep" else "16")).split(",")]
     outstanding = [int(v) for v in args.outstanding.split(",")]
@@ -46,6 +53,15 @@ def main():
         parser.error("pool sizes and outstanding counts must not contain duplicates")
     if any(v < 1 or v > 256 for v in pools) or any(v < 1 or v > 65536 for v in outstanding):
         parser.error("pool sizes must be 1..256 and outstanding 1..65536")
+    if args.diagnostic:
+        if args.candidate_gateway or len(pools) != 1 or len(outstanding) != 1:
+            parser.error("diagnostics require one pool, one outstanding count, and no candidate")
+        if args.diagnostic_seconds > 30 or args.diagnostic_max_mib > 64:
+            parser.error("diagnostics are bounded to 30 seconds and 64 MiB")
+        if args.diagnostic_seconds > args.warmup + args.duration:
+            parser.error("diagnostic capture must fit within warmup plus measured load duration")
+        if args.diagnostic == "perf" and (platform.system() != "Linux" or not shutil.which("perf")):
+            parser.error("perf diagnostics require Linux and perf on PATH")
     for name in ("cli", "devnode", "gateway", "bench", "candidate_gateway"):
         value = getattr(args, name)
         if value is not None:
@@ -58,6 +74,7 @@ def main():
     env = dict(os.environ, TOKIO_WORKER_THREADS=str(args.runtime_workers), RUST_LOG="warn",
                XDG_CONFIG_HOME=str(out / "config"), XDG_CACHE_HOME=str(out / "cache"))
     children, handles, trials = [], [], []
+    capture = None
 
     def interrupted(signum, _frame):
         raise KeyboardInterrupt(f"received signal {signum}")
@@ -68,13 +85,15 @@ def main():
     def write(path, value):
         path.write_text(json.dumps(value, indent=2) + "\n")
 
-    def launch(argv, name, gateway_process=False):
+    def launch(argv, name, gateway_process=False, trace=False):
         discard = gateway_process and args.gateway_log_sink == "discard"
         stdout = open(os.devnull, "w") if discard else (out / f"{name}.stdout").open("w")
         stderr = open(os.devnull, "w") if discard else (out / f"{name}.stderr").open("w")
         handles.extend((stdout, stderr))
-        process = subprocess.Popen(list(map(str, argv)), env=dict(env, RUST_LOG=args.gateway_log_filter) if gateway_process else env, stdout=stdout, stderr=stderr)
+        process = subprocess.Popen(list(map(str, argv)), env=dict(env, RUST_LOG="info" if trace else args.gateway_log_filter, NO_COLOR="1") if gateway_process else env, stdout=subprocess.PIPE if trace else stdout, stderr=stderr)
         children.append(process)
+        if trace:
+            capture.drain_trace(process.stdout)
         return process
 
     def stop(process):
@@ -132,28 +151,33 @@ def main():
     manifest = out / "node/runtime/runtime-manifest.json"
     corpus = out / "hashes.json"
 
-    def gateway(binary, size, name):
+    def gateway(binary, size, name, diagnostic=False):
         argv = [binary, "--runtime-manifest", manifest, "--listen", f"127.0.0.1:{rpc_port}",
                 "--observability-listen", f"127.0.0.1:{metrics_port}", "--indexer-pool-size", str(size)]
         # The binary resolves its defaults; the runner does not duplicate them.
         effective = json.loads(subprocess.check_output(list(map(str, argv + ["--dump-effective-config"])),
                                                        env=dict(env, RUST_LOG="off"), timeout=30))
-        process = launch(argv, name, gateway_process=True)
+        trace = diagnostic and args.diagnostic == "trace"
+        if trace:
+            argv += ["--trace-spans"]
+        process = launch(argv, name, gateway_process=True, trace=trace)
         wait_until(process, lambda: rpc("chainTip"), 120)
         runtime = json.loads(manifest.read_text())
         info = {"schemaVersion": 1, "topology": "loopback gateway and isolated interval-driven devnode on one host",
             "gateway": {"artifactSha256": binary_hashes[str(binary)], "commitHash": rpc("version").get("commitHash"),
                 "buildProfile": args.build_profile, "workerThreads": args.runtime_workers,
                 "effectiveConfig": effective, "host": host,
-                "logging": {"filter": args.gateway_log_filter, "sink": args.gateway_log_sink, "spanEvents": "none"}},
+                "logging": {"filter": "info" if trace else args.gateway_log_filter, "sink": "bounded-pipe" if trace else args.gateway_log_sink, "spanEvents": "close" if trace else "none"}},
             "backend": {"artifactSha256": binary_hashes[str(args.devnode)],
                 "commitHash": runtime["producer"].get("commitHash"), "host": host,
                 "effectiveConfig": {"ramdbBytes": 2147483648, "devAccountCount": 100, "blockDriver": "interval", "blockIntervalMs": 500}}}
+        if diagnostic:
+            info["diagnostic"] = args.diagnostic
         target = out / f"{name}-target.json"
         write(target, info)
         return process, target
 
-    def bench(name, method, concurrency, process, target, seed=False):
+    def bench(name, method, concurrency, process, target, seed=False, diagnostic=False):
         argv = [args.bench, "--url", url, "--runtime-manifest", manifest, "--method", method,
             "--outstanding", str(concurrency), "--workers", str(args.workers),
             "--warmup", str(args.warmup), "--duration", str(args.duration), "--json",
@@ -165,9 +189,21 @@ def main():
             argv += ["--seed-count", str(args.count), "--seed-output", corpus, "--accounts", "100", "--force"]
         else:
             argv += ["--hashes-file", corpus]
+        marker = out / "load-start"
+        if diagnostic:
+            argv += ["--load-start-file", marker]
         with (out / f"{name}.json").open("w") as stdout, (out / f"{name}.stderr").open("w") as stderr:
-            subprocess.run(list(map(str, argv)), env=env, stdout=stdout, stderr=stderr,
-                           check=True, timeout=args.setup_timeout + args.duration + args.warmup + 60)
+            load = subprocess.Popen(list(map(str, argv)), env=env, stdout=stdout, stderr=stderr)
+            children.append(load)
+            deadline = time.monotonic() + args.setup_timeout + args.duration + args.warmup + 60
+            while load.poll() is None:
+                if diagnostic and capture.started is None and marker.exists():
+                    capture.start(process.pid)
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"benchmark deadline exceeded: {name}")
+                time.sleep(0.02)
+            if load.returncode:
+                raise RuntimeError(f"benchmark exited {load.returncode}: {name}")
         result = json.loads((out / f"{name}.json").read_text())
         if result["outcome"] != "passed" or result["requests"]["successful"] == 0:
             raise RuntimeError(f"invalid trial {name}")
@@ -181,6 +217,11 @@ def main():
         process, target = gateway(args.gateway, pools[0], "seed-gateway")
         bench("seed", "getTransactionReceipt", 8, process, target, seed=True)
         stop(process)
+        if args.diagnostic:
+            capture = Capture(args.diagnostic, out, args.diagnostic_seconds, args.diagnostic_max_mib * 1024 * 1024)
+            process, target = gateway(args.gateway, pools[0], "diagnostic-gateway", diagnostic=True)
+            bench("diagnostic-result", args.diagnostic_method, outstanding[0], process, target, diagnostic=True)
+            return
         variants = [("baseline", args.gateway)]
         if args.candidate_gateway:
             variants.append(("candidate", args.candidate_gateway))
@@ -223,6 +264,10 @@ def main():
             stop(child)
         for handle in handles:
             handle.close()
+        if capture:
+            error = capture.finish()
+            if error:
+                raise RuntimeError(error)
 
 
 if __name__ == "__main__":
