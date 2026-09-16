@@ -63,7 +63,9 @@ impl WorkerResult {
         counts.record(sample.outcome);
         if sample.completed < end && sample.outcome == RequestOutcome::Success {
             let micros = sample.completed.duration_since(sample.started).as_micros() as u64;
-            self.histogram.saturating_record(micros);
+            self.histogram
+                .record(micros)
+                .expect("bug: auto-resizing histogram accepts request latency");
         }
     }
 }
@@ -224,6 +226,29 @@ pub(super) async fn run_worker(
 mod tests {
     use super::*;
     use crate::request::RequestErrorKind;
+
+    #[test]
+    fn latency_histogram_retains_millisecond_and_long_tail_samples() {
+        let start = Instant::now();
+        let end = start + Duration::from_secs(2);
+        let mut result = WorkerResult::new();
+        for micros in [50, 5_000, 100_000, 1_000_000] {
+            result.record(
+                Sample {
+                    started: start,
+                    completed: start + Duration::from_micros(micros),
+                    outcome: RequestOutcome::Success,
+                },
+                start,
+                end,
+            );
+        }
+        assert_eq!(result.histogram.len(), 4);
+        let p50 = result.histogram.value_at_percentile(50.0);
+        let p99 = result.histogram.value_at_percentile(99.0);
+        assert!((5_000..5_010).contains(&p50), "p50={p50}");
+        assert!((1_000_000..1_001_000).contains(&p99), "p99={p99}");
+    }
 
     #[test]
     fn window_excludes_warmup_and_late_starts_and_accounts_drain_separately() {

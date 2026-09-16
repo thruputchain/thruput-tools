@@ -157,6 +157,7 @@ async fn global_outstanding_cap_and_v2_result_contract() {
     assert_eq!(result["schemaVersion"], 2);
     assert_eq!(result["outcome"], "passed");
     assert_eq!(result["kind"], "groundhog-bench-result");
+    assert!(result["successfulLatencyUs"]["p50"].as_u64().unwrap() >= 40_000);
     assert_eq!(result["configuration"]["outstanding"], 3);
     assert_eq!(result["configuration"]["effectiveMaxInflight"], 3);
     assert!(result["configuration"]["maxInflightPerWorker"].is_null());
