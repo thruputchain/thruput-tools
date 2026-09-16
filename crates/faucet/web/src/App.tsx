@@ -125,6 +125,15 @@ export function App() {
             onAddressChange={handleAddressChange}
             onSubmit={handleSubmit}
           />
+          <p className="text-center text-sm text-muted-foreground">
+            Request airdrops directly from the CLI -{" "}
+            <a
+              href="https://docs.thruput.network/tools/faucet/"
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              Learn more
+            </a>
+          </p>
         </div>
       </main>
       <Toaster position="bottom-right" />
