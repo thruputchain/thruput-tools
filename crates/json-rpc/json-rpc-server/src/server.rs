@@ -40,7 +40,7 @@ use crate::{
 #[derive(Debug)]
 pub struct GroundhogRpcServer<S, C, R, V> {
     submit: S,
-    chain: Arc<C>,
+    chain: Arc<ChainTipSource<C>>,
     read: R,
     view: V,
     network_info: NetworkInfo,
@@ -48,12 +48,21 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     build_info: BuildInfo,
     release_version: Option<String>,
     bundle_manifest_digest: Option<String>,
-    /// Shared with the refresh task, which `tokio::spawn` requires to own
-    /// its `'static` handle rather than borrow this one.
-    tip_params: Arc<TipParams>,
     /// Aborts the background refresh when the server is dropped. Held only
     /// for that drop; never read.
     _tip_refresh: Option<AbortOnDrop>,
+}
+
+/// The chain plane and the reading the refresh task publishes from it.
+///
+/// One allocation rather than two: the task polls through the plane and
+/// writes the params, so it has to co-own both for as long as it runs, and
+/// `tokio::spawn` requires it to own them outright rather than borrow from
+/// a server that `into_rpc` will consume.
+#[derive(Debug)]
+struct ChainTipSource<C> {
+    plane: C,
+    params: TipParams,
 }
 
 /// What the submit pre-checks need from a db tip, resolved once per fetch
@@ -241,8 +250,7 @@ impl Drop for AbortOnDrop {
 /// outside a Tokio runtime, where no background work can run and the
 /// chain-dependent pre-checks stay skipped.
 fn spawn_tip_refresh<C: ChainPlane>(
-    chain: Arc<C>,
-    params: Arc<TipParams>,
+    chain: Arc<ChainTipSource<C>>,
     config: &RpcServerConfig,
 ) -> Option<AbortOnDrop> {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -257,9 +265,9 @@ fn spawn_tip_refresh<C: ChainPlane>(
             // runs the chain-dependent checks rather than skipping them for
             // a whole interval.
             if let Some(reading) =
-                probe_tip(&*chain, RpcRequestContext::unbounded(), probe_timeout).await
+                probe_tip(&chain.plane, RpcRequestContext::unbounded(), probe_timeout).await
             {
-                params.store(&reading);
+                chain.params.store(&reading);
             }
             tokio::time::sleep(interval).await;
         }
@@ -329,9 +337,11 @@ where
         config: RpcServerConfig,
         build_info: BuildInfo,
     ) -> Self {
-        let chain = Arc::new(chain);
-        let tip_params = Arc::new(TipParams::default());
-        let tip_refresh = spawn_tip_refresh(chain.clone(), tip_params.clone(), &config);
+        let chain = Arc::new(ChainTipSource {
+            plane: chain,
+            params: TipParams::default(),
+        });
+        let tip_refresh = spawn_tip_refresh(chain.clone(), &config);
         Self {
             submit,
             chain,
@@ -342,7 +352,6 @@ where
             build_info,
             release_version: None,
             bundle_manifest_digest: None,
-            tip_params,
             _tip_refresh: tip_refresh,
         }
     }
@@ -393,7 +402,7 @@ where
     /// poll. `None` until the first poll lands; the caller then runs only
     /// the checks that need no chain reading.
     fn submit_tip_state(&self) -> Option<TipState> {
-        self.tip_params.load()
+        self.chain.params.load()
     }
 
     /// Db-tip reading taken from the backend now, for a decision that must
@@ -403,7 +412,7 @@ where
     /// writer, and the next poll is at most one interval away.
     async fn fresh_tip_state(&self, context: RpcRequestContext) -> Option<TipState> {
         let probe_timeout = Duration::from_millis(self.config.tip_probe_timeout_ms);
-        let reading = probe_tip(&*self.chain, context, probe_timeout).await?;
+        let reading = probe_tip(&self.chain.plane, context, probe_timeout).await?;
         Some(TipState::from_reading(&reading))
     }
 }
@@ -515,7 +524,7 @@ where
     async fn chain_tip(&self) -> RpcResult<ChainTip> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            let reading = self.chain.chain_tip(context).await?;
+            let reading = self.chain.plane.chain_tip(context).await?;
             Ok(reading.tip)
         })
         .await
@@ -525,7 +534,11 @@ where
     async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.get_block_by_number(context, height).await?)
+            Ok(self
+                .chain
+                .plane
+                .get_block_by_number(context, height)
+                .await?)
         })
         .await
     }
@@ -534,7 +547,7 @@ where
     async fn pending_transaction_count(&self) -> RpcResult<u64> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.pending_transaction_count(context).await?)
+            Ok(self.chain.plane.pending_transaction_count(context).await?)
         })
         .await
     }
@@ -1238,7 +1251,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     /// chain-dependent pre-checks instead of skipping them.
     async fn await_tip_reading<S, C, R, V>(server: &GroundhogRpcServer<S, C, R, V>) {
         let started = std::time::Instant::now();
-        while server.tip_params.load().is_none() {
+        while server.chain.params.load().is_none() {
             assert!(
                 started.elapsed() < Duration::from_secs(5),
                 "bug: the refresh task should have published a reading by now"
