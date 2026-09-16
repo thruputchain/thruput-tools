@@ -127,11 +127,14 @@ RPC tests against an ephemeral local node.
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
 
-CLI 0.17 uses SDK 0.34.3, protocol-rs 0.35.2, and XDR 0.10.1. Update
-these dependencies together when migrating an existing Rust project. Despite
-its patch number, SDK 0.34.3 changes public XDR types. Standard interfaces
-`=0.1.30` use this family while preserving the native token contract ABI;
-projects retaining SDK `=0.34.2` should retain interfaces `=0.1.29`.
+CLI 0.17 uses SDK 0.34.4, protocol-rs 0.36.0, and XDR 0.10.1. Update
+these dependencies together when migrating an existing Rust project. SDK
+0.34.4 moves to protocol-rs 0.36.0, whose generated x23 clients require
+rpc_driver 0.11; its public XDR types are unchanged from 0.34.3, which,
+despite its patch number, changed them. Standard interfaces `=0.1.31` use
+this family while preserving the native token contract ABI; projects
+retaining SDK `=0.34.3` should retain interfaces `=0.1.30`, and SDK `=0.34.2`
+interfaces `=0.1.29`.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or
