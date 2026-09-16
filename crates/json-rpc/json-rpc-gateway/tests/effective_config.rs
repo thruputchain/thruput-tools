@@ -22,6 +22,14 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
         assert!(output.status.success(), "{output:?}");
         let config: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(config["indexer_pool_size"], 32);
+        assert_eq!(
+            config["allocator"],
+            if cfg!(feature = "mimalloc") {
+                "mimalloc"
+            } else {
+                "system"
+            }
+        );
         assert_eq!(config["listen_address"], "not-a-socket-address");
     }
 }

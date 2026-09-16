@@ -233,6 +233,9 @@ fn controls_with_dimensions(v: &Value, args: &CompareArgs, dimensions: &[Dimensi
             Dimension::Logging => remove(&mut gateway, &["logging"]),
             Dimension::Allocator => {
                 remove(&mut gateway, &["artifactSha256"]);
+                if let Some(features) = gateway.get_mut("features").and_then(Value::as_array_mut) {
+                    features.retain(|feature| feature.as_str() != Some("mimalloc"));
+                }
                 if let Some(config) = gateway.get_mut("effectiveConfig") {
                     remove(config, &["allocator"]);
                 }
@@ -389,6 +392,30 @@ mod tests {
             controls_with_dimensions(&b, &args, &[])
         );
         b["target"]["gatewayVersion"]["value"]["wireFormat"] = json!("4.0.0");
+        assert_ne!(controls(&a, &args), controls(&b, &args));
+    }
+
+    #[test]
+    fn allocator_variation_keeps_other_features_and_build_settings_controlled() {
+        let a = json!({"target":{"runnerSupplied":{"gateway":{
+            "features":[], "buildProfile":"release", "effectiveConfig":{"allocator":"system"}
+        }}}});
+        let mut b = a.clone();
+        b["target"]["runnerSupplied"]["gateway"]["features"] = json!(["mimalloc"]);
+        b["target"]["runnerSupplied"]["gateway"]["effectiveConfig"]["allocator"] =
+            json!("mimalloc");
+        assert_ne!(controls(&a, &args()), controls(&b, &args()));
+        let mut args = args();
+        args.vary.push(Dimension::Allocator);
+        assert_eq!(controls(&a, &args), controls(&b, &args));
+        assert_ne!(
+            controls_with_dimensions(&a, &args, &[]),
+            controls_with_dimensions(&b, &args, &[])
+        );
+        b["target"]["runnerSupplied"]["gateway"]["features"] = json!(["mimalloc", "other"]);
+        assert_ne!(controls(&a, &args), controls(&b, &args));
+        b["target"]["runnerSupplied"]["gateway"]["features"] = json!(["mimalloc"]);
+        b["target"]["runnerSupplied"]["gateway"]["buildProfile"] = json!("debug");
         assert_ne!(controls(&a, &args), controls(&b, &args));
     }
 

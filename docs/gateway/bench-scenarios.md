@@ -193,6 +193,22 @@ Default shape:
 
 Use this before and after runtime-manifest or benchmark-account changes.
 
+### Allocator experiment
+
+The gateway has an opt-in `mimalloc` feature for controlled comparisons:
+
+```bash
+cargo build --release --locked -p groundhog-json-rpc-gateway --features mimalloc
+```
+
+Default builds retain the system allocator. The feature changes only
+`hog-gateway`; it does not install an allocator in the CLI or shared libraries.
+`hog-gateway --dump-effective-config` reports the compiled allocator. Compare
+otherwise identical builds with `groundhog-bench compare --vary allocator`.
+Keep build profile, source revision and benchmark binary fixed, and record each
+gateway artifact hash. Measure submit traffic as well as confirmed reads before
+considering a release-default change.
+
 ### `gateway-baseline`
 
 Simple standalone-gateway baseline with one read pass and one submit pass.

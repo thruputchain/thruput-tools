@@ -14,6 +14,10 @@ mod storage_batcher;
 mod submitter;
 mod tip_coalescer;
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
 use clap::{CommandFactory, FromArgMatches, Parser};
@@ -183,7 +187,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     apply_cli_overrides(&mut config, cli);
     let network_info = config.network_info()?;
     if dump_effective_config {
-        println!("{}", serde_json::to_string_pretty(&config)?);
+        let mut effective = serde_json::to_value(&config)?;
+        effective["allocator"] = if cfg!(feature = "mimalloc") {
+            "mimalloc"
+        } else {
+            "system"
+        }
+        .into();
+        println!("{}", serde_json::to_string_pretty(&effective)?);
         return Ok(());
     }
 
