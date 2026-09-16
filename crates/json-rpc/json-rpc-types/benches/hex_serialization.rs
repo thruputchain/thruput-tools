@@ -40,8 +40,8 @@ impl fmt::Display for Zeroed<'_> {
                 pair[0] = DIGITS[usize::from(byte >> 4)];
                 pair[1] = DIGITS[usize::from(byte & 0x0f)];
             }
-            let text = std::str::from_utf8(output)
-                .expect("bug: hex encoding contains only ASCII digits");
+            let text =
+                std::str::from_utf8(output).expect("bug: hex encoding contains only ASCII digits");
             f.write_str(text)?;
         }
         Ok(())
@@ -111,7 +111,11 @@ fn main() {
     let smoke = std::env::args().any(|arg| arg == "--test");
     println!("workload,bytes,variant,trial,iterations,elapsed_ns");
     for (workload, name, sizes) in [
-        (Workload::Format, "format", &[0, 32, 256, 257, 2048, 65536][..]),
+        (
+            Workload::Format,
+            "format",
+            &[0, 32, 256, 257, 2048, 65536][..],
+        ),
         (Workload::Json, "json", &[0, 32, 256, 257, 2048, 65536][..]),
         (Workload::HashArray, "hash_array_32", &[32][..]),
     ] {

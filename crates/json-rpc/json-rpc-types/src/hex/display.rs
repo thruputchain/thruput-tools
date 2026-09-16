@@ -20,9 +20,8 @@ impl fmt::Display for HexDisplay<'_> {
             // created. MaybeUninit<u8> has u8's layout and alignment, and the
             // slice excludes the unused tail of encoded. No mutation occurs
             // while these bytes are borrowed by the formatter.
-            let initialized = unsafe {
-                std::slice::from_raw_parts(output.as_ptr().cast::<u8>(), output.len())
-            };
+            let initialized =
+                unsafe { std::slice::from_raw_parts(output.as_ptr().cast::<u8>(), output.len()) };
             let text = std::str::from_utf8(initialized)
                 .expect("bug: hex encoding contains only ASCII digits");
             f.write_str(text)?;
@@ -33,11 +32,10 @@ impl fmt::Display for HexDisplay<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::fmt::Write;
-
     #[test]
     fn every_partial_chunk_matches_reference() {
+        use super::HexDisplay;
+
         let input: Vec<u8> = (0..=255).cycle().take(1024).collect();
         for len in (0..=257).chain([511, 512, 513, 1023, 1024]) {
             let input = &input[..len];
@@ -50,6 +48,9 @@ mod tests {
 
     #[test]
     fn formatter_failure_stops_at_prefix_and_chunk_boundaries() {
+        use super::HexDisplay;
+        use std::fmt::{self, Write};
+
         struct FailingWriter {
             remaining: usize,
             written: String,
