@@ -127,6 +127,15 @@ RPC tests against an ephemeral local node.
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
 
+That self dev-dependency puts the project name in the extern prelude of every
+test target, so `groundhog new` refuses names that would shadow something the
+generated project needs: Rust's built-in crates (`test`, `core`, `std`,
+`alloc`, `proc-macro`), Rust keywords, the scaffold's own dependencies (`sdk`,
+`tokio`, `groundhog-json-rpc-client`), Cargo's build directory names (`build`,
+`deps`, `examples`, `incremental`), and reserved Windows device names. The
+error names the collision; pick another name rather than patching the
+generated manifest.
+
 CLI 0.17 uses SDK 0.34.4, protocol-rs 0.36.0, and XDR 0.10.1. Update
 these dependencies together when migrating an existing Rust project. SDK
 0.34.4 moves to protocol-rs 0.36.0, whose generated x23 clients require
