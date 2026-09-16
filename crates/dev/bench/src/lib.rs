@@ -25,6 +25,7 @@ use hdrhistogram::Histogram;
 mod cli;
 mod corpus;
 mod metadata;
+mod observations;
 mod request;
 mod results;
 mod worker;
@@ -396,6 +397,17 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
         max_response_bytes: cli.max_response_bytes,
         num_workers: cli.workers,
     });
+    let mut observation_tasks = tokio::task::JoinSet::new();
+    let observation_config = observations::Config {
+        metrics_url: cli.metrics_url.clone(),
+        gateway_pid: cli.gateway_pid,
+        interval_ms: cli.sample_interval_ms,
+    };
+    observation_tasks.spawn(observations::collect(
+        observation_config,
+        start + warmup_duration,
+        start + total_duration,
+    ));
     let mut workers = tokio::task::JoinSet::new();
     for (id, client) in clients.into_iter().enumerate() {
         let sem = global_sem
@@ -418,6 +430,11 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
     // of the window. Keep its duration and drain boundary explicit either way.
     tokio::time::sleep_until((start + total_duration).into()).await;
     let finished = Instant::now();
+    let server_observations = observation_tasks
+        .join_next()
+        .await
+        .expect("bug: observation task exists")
+        .map_err(|source| BenchError::WorkerJoin { source })?;
     let actual_duration = measured_duration.as_secs_f64();
     let attempted_requests_per_second = (requests.total + drained.total) as f64 / actual_duration;
     let rates = RateMetrics {
@@ -453,6 +470,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             git_dirty: benchmark_git_dirty(),
         },
         platform,
+        server_observations,
         benchmark_binary_sha256,
         runtime_worker_threads: tokio::runtime::Handle::current().metrics().num_workers(),
         target,

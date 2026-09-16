@@ -191,6 +191,12 @@ async fn transaction_is_pending(
         .clone()
         .try_acquire_owned()
         .map_err(|_| {
+            ctx.metrics.observe_backend_request(
+                HealthBackend::Scheduler,
+                "schedgateway_lookup_tx",
+                BackendRequestOutcome::Rejected,
+                std::time::Duration::ZERO,
+            );
             GatewayError::Overloaded(
                 "scheduler transaction-status lookup capacity exhausted".into(),
             )
@@ -1153,6 +1159,13 @@ mod tests {
                 serde_json::to_value(expected).unwrap()
             );
             assert!(ctx.scheduler.read().await.is_some());
+            let health = crate::health::GatewayHealth::new(
+                &crate::config::GatewayConfig::default(),
+                groundhog_build_info::BuildVersion::new("test", None),
+                None,
+            );
+            let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
+            assert!(metrics.contains("groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_lookup_tx\",outcome=\"rejected\"} 1"));
         }
     }
 

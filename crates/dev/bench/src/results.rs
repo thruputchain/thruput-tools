@@ -47,6 +47,7 @@ pub(super) struct BenchResult {
     pub(super) generated_at_unix_ms: u128,
     pub(super) producer: ProducerMetadata,
     pub(super) platform: HostMetadata,
+    pub(super) server_observations: crate::observations::ServerObservations,
     pub(super) benchmark_binary_sha256: Observation<String>,
     pub(super) runtime_worker_threads: usize,
     pub(super) target: TargetMetadata,

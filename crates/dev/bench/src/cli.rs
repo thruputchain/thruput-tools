@@ -59,6 +59,18 @@ pub(super) struct Cli {
     #[arg(long)]
     pub(super) target_info: Option<std::path::PathBuf>,
 
+    /// Private gateway Prometheus endpoint, sampled during measurement.
+    #[arg(long)]
+    pub(super) metrics_url: Option<String>,
+
+    /// Local gateway PID (Linux /proc only; excludes child processes).
+    #[arg(long)]
+    pub(super) gateway_pid: Option<u32>,
+
+    /// Server observation interval in milliseconds.
+    #[arg(long, default_value = "250", value_parser = clap::value_parser!(u64).range(10..=60000))]
+    pub(super) sample_interval_ms: u64,
+
     /// Duration in seconds.
     #[arg(long, default_value = "10")]
     pub(super) duration: u64,

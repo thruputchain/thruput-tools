@@ -388,3 +388,22 @@ limit was frequently exceeded during these tests; committed answers still
 succeeded through the supported indexer fallback. Larger indexer pools do not
 fix that scheduler pressure. [GH-377](https://linear.app/grndhg/issue/GH-377)
 tracks pending/unknown workloads, admission behavior and warning volume.
+
+### Server observations
+
+Pass `--metrics-url http://127.0.0.1:9090/metrics` for the gateway's private
+metrics endpoint and `--gateway-pid <pid>` when the benchmark runs on the same
+Linux host as the gateway. `--sample-interval-ms` defaults to 250. Process
+sampling uses that PID alone, excludes children, and is unavailable on macOS.
+
+`serverObservations` retains samples with actual start/completion offsets from
+the measured-window start. Sampling begins after warmup and takes a final
+sample at the cutoff; scrape latency and scheduling can overlap the boundaries.
+It does not include the subsequent request drain intentionally. Backend
+request/reconnect counters and CPU time are deltas; RSS and in-flight gauges
+are sampled peaks, not guaranteed instantaneous maxima. Scrape failures,
+missing series, process failures and counter resets produce unavailable
+observations with reasons. A supplied PID verifies process continuity; without
+it, a restart whose counters catch up between samples cannot be detected.
+Health reconnect counters do not count rpc_driver's internal connection
+replacements, which remain explicitly unavailable.
