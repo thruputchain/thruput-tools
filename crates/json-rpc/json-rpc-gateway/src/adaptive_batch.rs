@@ -111,6 +111,11 @@ pub(crate) fn deadline_cohorts<I>(
     deadline: impl Fn(&I) -> Instant,
 ) -> Vec<Vec<I>> {
     items.sort_unstable_by_key(&deadline);
+    if let (Some(first), Some(last)) = (items.first(), items.last())
+        && deadline(last).saturating_duration_since(deadline(first)) <= max_skew
+    {
+        return vec![items];
+    }
     let mut cohorts: Vec<Vec<I>> = Vec::new();
     for item in items {
         let item_deadline = deadline(&item);
@@ -394,6 +399,22 @@ mod tests {
                 .is_err(),
             "cancelled worker should drop its reply"
         );
+    }
+
+    #[test]
+    fn deadline_cohorts_single_group_and_empty() {
+        let base = Instant::now();
+        let skew = Duration::from_millis(10);
+        let items = vec![base + skew, base, base + skew / 2];
+        assert_eq!(
+            deadline_cohorts(items, skew, |deadline| *deadline),
+            vec![vec![base, base + skew / 2, base + skew]]
+        );
+        assert_eq!(
+            deadline_cohorts(vec![base], Duration::ZERO, |deadline| *deadline),
+            vec![vec![base]]
+        );
+        assert!(deadline_cohorts(Vec::<Instant>::new(), skew, |deadline| *deadline).is_empty());
     }
 
     #[test]
