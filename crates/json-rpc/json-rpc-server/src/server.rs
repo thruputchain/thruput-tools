@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 use std::{future::Future, sync::Arc};
 
+use arc_swap::ArcSwapOption;
+
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 
@@ -92,35 +94,40 @@ impl TipState {
 /// at explicit upgrade blocks. Fetches that overlap may complete out of
 /// order; the reading with the higher tip is the later one and is kept.
 ///
-/// The lock is a sync mutex. Every critical section is a few field
-/// accesses over `Copy` data and none of them spans an await, so an async
-/// mutex would add a waiter list and a scheduler round-trip per access for
-/// nothing. It also makes that property hold by construction: a guard held
-/// across an await leaves the server future `!Send`, which does not
-/// compile.
+/// Reads take no lock and touch no shared cache line: serving a submit
+/// loads the current generation through a thread-local slot and copies the
+/// reading out of it, so concurrent submits across worker threads no
+/// longer serialize on the cache. Only the two paths that publish write to
+/// the shared slot, by compare-and-swap: a caller claiming the refresh,
+/// and a fetched tip being recorded.
 #[derive(Debug, Clone, Default)]
 struct TipCache {
-    state: Arc<std::sync::Mutex<TipCacheState>>,
+    generation: Arc<ArcSwapOption<TipGeneration>>,
 }
 
-#[derive(Debug, Default)]
-struct TipCacheState {
-    last_attempt: Option<Instant>,
+/// One coherent view of the cache: when a refresh was last claimed, and
+/// the reading in force as of that claim.
+///
+/// Published whole so a caller cannot pair one fetch's window with another
+/// fetch's reading.
+#[derive(Debug, Clone, Copy)]
+struct TipGeneration {
+    last_attempt: Instant,
+    /// `None` until the first probe succeeds.
     reading: Option<TipState>,
 }
 
-impl TipCacheState {
-    /// Keep `reading` unless a newer one is already stored; says whether it
-    /// was kept.
-    fn record(&mut self, reading: TipState) -> bool {
-        let newer = self
-            .reading
-            .is_none_or(|current| reading.height >= current.height);
-        if newer {
-            self.reading = Some(reading);
-        }
-        newer
-    }
+/// Whether publishing a reading also restarts the TTL window.
+#[derive(Debug, Clone, Copy)]
+enum Window {
+    /// Restart the TTL from now, as a tip fetched outside the claim path
+    /// should: it makes the reading current whether or not a probe was
+    /// owed, so the next refresh is a full TTL away.
+    Restart,
+    /// Leave the window where the claim that ordered this probe put it,
+    /// so the next refresh falls due one TTL after that claim rather than
+    /// one TTL after the probe returned.
+    Keep,
 }
 
 /// What a cache read returned, and whether this call went to the backend
@@ -134,25 +141,92 @@ struct TipRead {
     probed: bool,
 }
 
+/// Whether a swap installed its new value, which `compare_and_swap`
+/// reports by handing back the generation it compared against.
+fn swapped(previous: Option<&Arc<TipGeneration>>, expected: Option<&Arc<TipGeneration>>) -> bool {
+    match (previous, expected) {
+        (Some(previous), Some(expected)) => Arc::ptr_eq(previous, expected),
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
+}
+
 impl TipCache {
-    /// The cache state.
-    ///
-    /// Recovers from a poisoned lock rather than propagating: the state is
-    /// two `Copy` fields written by straight-line assignment, so a panic
-    /// elsewhere cannot leave a torn value for poisoning to protect.
-    fn lock(&self) -> std::sync::MutexGuard<'_, TipCacheState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// The reading in force, or `None` while no probe has ever succeeded.
+    fn in_force(&self) -> Option<TipState> {
+        self.generation
+            .load()
+            .as_deref()
+            .and_then(|generation| generation.reading)
     }
 
     /// Record a reading obtained by any path, restarting the TTL window
     /// when it is the newest.
     fn store(&self, reading: TipState) {
-        let mut state = self.lock();
-        if state.record(reading) {
-            state.last_attempt = Some(Instant::now());
+        self.publish(reading, Window::Restart);
+    }
+
+    /// Publish `reading` unless a newer one is already in force; returns
+    /// the reading in force afterwards.
+    ///
+    /// Retries when a concurrent publish wins the swap, so the generation
+    /// left standing is the one holding the highest tip either way.
+    fn publish(&self, reading: TipState, window: Window) -> Option<TipState> {
+        loop {
+            let current = self.generation.load();
+            let in_force = current.as_deref().and_then(|generation| generation.reading);
+            if in_force.is_some_and(|held| reading.height < held.height) {
+                return in_force;
+            }
+            let last_attempt = match (window, current.as_deref()) {
+                (Window::Keep, Some(generation)) => generation.last_attempt,
+                _ => Instant::now(),
+            };
+            let next = Arc::new(TipGeneration {
+                last_attempt,
+                reading: Some(reading),
+            });
+            let previous = self.generation.compare_and_swap(&current, Some(next));
+            if swapped(previous.as_ref(), current.as_ref()) {
+                return Some(reading);
+            }
         }
+    }
+
+    /// The reading to serve without going to the backend, or `None` when
+    /// this caller claimed the refresh and owes a probe.
+    ///
+    /// Claiming republishes the window before the probe runs, so callers
+    /// arriving during it keep serving the stale reading rather than
+    /// queuing probes of their own. Exactly one caller can win the swap;
+    /// the rest serve what the winner left in force.
+    fn serve_without_probing(&self, now: Instant, ttl: Duration) -> Option<TipRead> {
+        let current = self.generation.load();
+        let in_force = current.as_deref().and_then(|generation| generation.reading);
+        if current
+            .as_deref()
+            .is_some_and(|generation| now.duration_since(generation.last_attempt) < ttl)
+        {
+            return Some(TipRead {
+                state: in_force,
+                probed: false,
+            });
+        }
+
+        let claim = Arc::new(TipGeneration {
+            last_attempt: now,
+            reading: in_force,
+        });
+        let previous = self.generation.compare_and_swap(&current, Some(claim));
+        if swapped(previous.as_ref(), current.as_ref()) {
+            return None;
+        }
+        Some(TipRead {
+            state: previous
+                .as_deref()
+                .and_then(|generation| generation.reading),
+            probed: false,
+        })
     }
 
     /// Current reading, refreshing it through `fetch` when the TTL has
@@ -167,40 +241,26 @@ impl TipCache {
     where
         Fut: Future<Output = Result<TipReading, RpcServerError>>,
     {
-        let now = Instant::now();
-        {
-            let mut state = self.lock();
-            match state.last_attempt {
-                Some(at) if now.duration_since(at) < ttl => {
-                    return TipRead {
-                        state: state.reading,
-                        probed: false,
-                    };
-                }
-                _ => state.last_attempt = Some(now),
-            }
+        if let Some(read) = self.serve_without_probing(Instant::now(), ttl) {
+            return read;
         }
 
         let probe_context = context.capped(probe_timeout);
         let Some(remaining) = probe_context.remaining() else {
             return TipRead {
-                state: self.lock().reading,
+                state: self.in_force(),
                 probed: false,
             };
         };
         let state = match tokio::time::timeout(remaining, fetch(probe_context)).await {
-            Ok(Ok(reading)) => {
-                let mut state = self.lock();
-                state.record(TipState::from_reading(&reading));
-                state.reading
-            }
+            Ok(Ok(reading)) => self.publish(TipState::from_reading(&reading), Window::Keep),
             Ok(Err(error)) => {
                 tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
-                self.lock().reading
+                self.in_force()
             }
             Err(_) => {
                 tracing::warn!("chain tip probe timed out, pre-checks use last reading");
-                self.lock().reading
+                self.in_force()
             }
         };
         TipRead {
@@ -711,6 +771,7 @@ fn validate_address_transaction_query(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tokio::sync::Mutex;
 
@@ -1720,6 +1781,58 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert!(submitted.lock().await.is_empty());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn concurrent_callers_leave_the_refresh_to_a_single_claimer() {
+        // The claim is a compare-and-swap rather than a held lock, so the
+        // "at most one probe per TTL" contract has to survive callers
+        // racing into an expired window from several worker threads.
+        const CALLERS: usize = 16;
+
+        let cache = TipCache::default();
+        let probes = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(tokio::sync::Barrier::new(CALLERS));
+
+        let callers = (0..CALLERS).map(|_| {
+            let cache = cache.clone();
+            let probes = probes.clone();
+            let start = start.clone();
+            tokio::spawn(async move {
+                start.wait().await;
+                cache
+                    .reading(
+                        Duration::from_secs(30),
+                        Duration::from_secs(1),
+                        RpcRequestContext::unbounded(),
+                        |_| async move {
+                            probes.fetch_add(1, Ordering::SeqCst);
+                            Ok(tip_reading(7))
+                        },
+                    )
+                    .await
+            })
+        });
+
+        let reads = futures_util::future::try_join_all(callers)
+            .await
+            .expect("bug: no caller should panic");
+
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            1,
+            "an expired window should be claimed by exactly one caller"
+        );
+        assert_eq!(
+            reads.iter().filter(|read| read.probed).count(),
+            1,
+            "only the caller that claimed the window should report a probe"
+        );
+        assert_eq!(
+            cache.in_force().map(|tip| tip.height),
+            Some(7),
+            "the claimer's reading should be the one left in force"
+        );
+    }
+
     #[tokio::test]
     async fn newer_reading_survives_an_older_fetch_completing_later() {
         // A chainTip request stored height 10 while a probe claimed earlier
@@ -1739,7 +1852,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert!(read.probed);
         assert_eq!(read.state.map(|tip| tip.height), Some(10));
         cache.store(TipState::from_reading(&tip_reading(9)));
-        assert_eq!(cache.lock().reading.map(|tip| tip.height), Some(10));
+        assert_eq!(cache.in_force().map(|tip| tip.height), Some(10));
     }
 
     #[tokio::test]
