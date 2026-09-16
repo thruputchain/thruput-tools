@@ -11,10 +11,18 @@ const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const SUBMIT_CONFIRMATION_ACTION: &str = "submit signed state-changing benchmark transactions";
 
+#[derive(clap::Subcommand)]
+pub(super) enum Command {
+    /// Compare repeated trials after validating experiment compatibility.
+    Compare(crate::compare::CompareArgs),
+}
+
 /// Groundhog JSON-RPC benchmark harness.
 #[derive(Parser)]
 #[command(name = "groundhog-bench", version)]
 pub(super) struct Cli {
+    #[command(subcommand)]
+    pub(super) command: Option<Command>,
     /// JSON-RPC server URL.
     #[arg(long, default_value = "http://127.0.0.1:9545")]
     pub(super) url: String,

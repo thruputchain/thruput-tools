@@ -23,6 +23,7 @@ use groundhog_signing::SigningError;
 use hdrhistogram::Histogram;
 
 mod cli;
+mod compare;
 mod corpus;
 mod metadata;
 mod observations;
@@ -143,7 +144,14 @@ enum BenchError {
 ///
 /// Reports errors using the selected output format and exits with status 1 on failure.
 pub async fn run_cli() {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if let Some(cli::Command::Compare(args)) = cli.command.take() {
+        if let Err(error) = compare::run(args) {
+            eprintln!("error: {error}");
+            process::exit(1);
+        }
+        return;
+    }
     let json = cli.json;
     if let Err(error) = run(cli).await {
         if json && matches!(error, BenchError::ConfirmationRequired) {

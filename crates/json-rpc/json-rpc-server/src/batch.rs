@@ -13,7 +13,7 @@ use jsonrpsee::{
 
 /// Per-array limit on active and buffered entries (1..=1024, default 128).
 /// Independent of backend submit batching and array-length limits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(try_from = "usize")]
 pub struct RpcBatchConcurrency(NonZeroUsize);
 

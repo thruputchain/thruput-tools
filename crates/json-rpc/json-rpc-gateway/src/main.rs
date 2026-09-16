@@ -35,6 +35,10 @@ const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::
 #[derive(Parser)]
 #[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
+    /// Print resolved configuration as JSON and exit without opening listeners.
+    #[arg(long)]
+    dump_effective_config: bool,
+
     /// Path to TOML config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
@@ -159,8 +163,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.apply_runtime_manifest(&manifest)?;
     }
 
+    let dump_effective_config = cli.dump_effective_config;
     apply_cli_overrides(&mut config, cli);
     let network_info = config.network_info()?;
+    if dump_effective_config {
+        println!("{}", serde_json::to_string_pretty(&config)?);
+        return Ok(());
+    }
 
     tracing::info!(
         network_hash = ?network_info.network_hash,

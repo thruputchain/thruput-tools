@@ -407,3 +407,62 @@ observations with reasons. A supplied PID verifies process continuity; without
 it, a restart whose counters catch up between samples cannot be detected.
 Health reconnect counters do not count rpc_driver's internal connection
 replacements, which remain explicitly unavailable.
+
+### Confirmed-read acceptance run and pool sweep
+
+Build `groundhog`, `hog-gateway` and `groundhog-bench` in release mode, then run:
+
+```bash
+python3 scripts/bench-read-confirmed.py \
+  --cli target/release/groundhog --gateway target/release/hog-gateway \
+  --bench target/release/groundhog-bench --devnode /path/to/hog-devnode \
+  --out /path/to/new-results
+```
+
+The `read-confirmed` default owns a fresh interval-driven local node, seeds and
+verifies 12,000 hashes, and runs status and receipt reads at 128 and 512 global
+outstanding requests. It pins eight Tokio runtime threads and two load workers,
+uses three seconds of warmup and twenty measured seconds, and repeats twice.
+Every trial imports and validates the corpus before timing, so these are warm
+reads. Artifacts and logs survive failures; the runner stops only its own
+processes. The output directory must be new.
+
+Use `--scenario pool-sweep` for pools 4, 8, 16, 32 and 64 in forward/reverse
+repeat order. `summary.md` contains throughput medians and ranges; individual
+JSON files retain latency, errors, identity and server observations. The
+`trials.json` index records execution order. `--candidate-gateway /path/to/binary`
+adds alternating baseline/candidate runs on the same corpus and produces
+comparison JSON and Markdown per pool, concurrency and method.
+
+The runner asks each gateway for `--dump-effective-config` before launch. This
+resolves runtime-manifest and CLI overrides without opening listeners. The
+runner records the resolved configuration, artifact hashes, observed commits,
+host and thread controls. `--build-profile` is a runner declaration, defaulting
+to release; callers must supply artifacts built with that profile. Backend
+thread counts and unreported build settings remain unspecified.
+
+### Comparing saved trials
+
+```bash
+groundhog-bench compare \
+  --baseline baseline-r0.json --baseline baseline-r1.json \
+  --candidate candidate-r0.json --candidate candidate-r1.json \
+  --vary gateway-revision
+```
+
+Add `--json` for the machine-readable comparison with per-trial server
+observations. Throughput and latency summaries show repeat spread; errors
+include drain failures. Failed outcomes remain visible and do not establish a
+performance improvement. Available experiment dimensions are `gateway-revision`,
+`pool-size`, `build-settings` and `allocator`; undeclared material differences
+are rejected. Use separate comparisons for each method and outstanding count.
+Paths, timestamps, labels and endpoint addresses are provenance. Topology,
+hosts, benchmark binary, workload controls and resolved non-endpoint gateway
+settings are comparison controls. Omitted identities are reported as unknown,
+not treated as verified equal. Endpoint normalization assumes the declared
+topology is accurate; comparison cannot verify external deployment claims.
+
+The default requires the exact corpus digest. `--equivalent-corpus` instead
+requires equal count and receipt-shape digest; it does not establish equal
+cache state or backend data layout. No comparison command infers cold-cache
+behavior or production capacity from this loopback workload.
