@@ -103,9 +103,9 @@ struct Cli {
     #[arg(long)]
     indexer: Option<String>,
 
-    /// Indexer data connections (positive integer, default 4; overrides config)
+    /// Indexer data connections (1..=256, default 16; overrides config)
     #[arg(long)]
-    indexer_pool_size: Option<std::num::NonZeroUsize>,
+    indexer_pool_size: Option<crate::config::IndexerPoolSize>,
 
     /// `DbGateway` x23 RPC address (overrides config file)
     #[arg(long)]
@@ -474,8 +474,7 @@ mod tests {
     #[test]
     fn indexer_pool_size_defaults_and_cli_override() {
         let mut config = GatewayConfig::default();
-        assert_eq!(config.indexer_pool_size.get(), 4);
-        assert!(toml::from_str::<GatewayConfig>("indexer_pool_size = 0").is_err());
+        assert_eq!(config.indexer_pool_size.get(), 16);
         config = toml::from_str("indexer_pool_size = 8").unwrap();
         apply_cli_overrides(&mut config, Cli::parse_from(["hog-gateway"]));
         assert_eq!(config.indexer_pool_size.get(), 8);
@@ -484,7 +483,29 @@ mod tests {
             Cli::parse_from(["hog-gateway", "--indexer-pool-size", "16"]),
         );
         assert_eq!(config.indexer_pool_size.get(), 16);
-        assert!(Cli::try_parse_from(["hog-gateway", "--indexer-pool-size", "0"]).is_err());
+    }
+
+    #[test]
+    fn indexer_pool_size_cli_and_toml_enforce_the_same_bounds() {
+        for value in ["1", "16", "64", "256"] {
+            let config: GatewayConfig =
+                toml::from_str(&format!("indexer_pool_size = {value}")).unwrap();
+            let cli = Cli::try_parse_from(["hog-gateway", "--indexer-pool-size", value]).unwrap();
+            assert_eq!(config.indexer_pool_size, cli.indexer_pool_size.unwrap());
+        }
+        for value in ["0", "257", "100000", "-1", "18446744073709551616"] {
+            assert!(
+                toml::from_str::<GatewayConfig>(&format!("indexer_pool_size = {value}")).is_err()
+            );
+            assert!(Cli::try_parse_from(["hog-gateway", "--indexer-pool-size", value]).is_err());
+        }
+        assert_eq!(
+            toml::from_str::<GatewayConfig>("")
+                .unwrap()
+                .indexer_pool_size
+                .get(),
+            16
+        );
     }
 
     #[test]

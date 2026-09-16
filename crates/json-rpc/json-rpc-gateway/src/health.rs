@@ -3258,7 +3258,8 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn optional_backend_probe_lanes_remain_available_during_handler_saturation() {
+    async fn optional_backend_probe_lanes_remain_available_after_indexer_reconnect_and_saturation()
+    {
         let (indexer_addr, _indexer_server, indexer_gate) = start_saturated_indexer().await;
         let (db_gateway_addr, _db_gateway_server, db_gateway_gate) =
             start_saturated_db_gateway().await;
@@ -3267,7 +3268,7 @@ mod tests {
         let startup_timeout = Duration::from_secs(1);
         let indexer = connect_optional_indexer(
             Some(&indexer_addr.to_string()),
-            8,
+            32,
             None,
             startup_timeout,
             None,
@@ -3296,6 +3297,8 @@ mod tests {
         .expect("bug: view_gateway should be connected");
         let config = Arc::new(GatewayConfig {
             indexer_address: Some(indexer_addr.to_string()),
+            indexer_pool_size: 32.try_into().unwrap(),
+            scheduler_address: "127.0.0.1:0".into(),
             db_gateway_address: Some(db_gateway_addr.to_string()),
             view_gateway_address: Some(view_gateway_addr.to_string()),
             ..GatewayConfig::default()
@@ -3310,8 +3313,23 @@ mod tests {
             GatewayMetrics::for_tests(),
         );
 
+        let ctx = Arc::new(ctx);
+        *ctx.indexer.write().await = None;
+        drop(indexer);
+        let mut reconnects = ReconnectAttempts::default();
+        maintain_reconnects(&ctx, &mut reconnects).await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while ctx.indexer.read().await.is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("configured indexer reconnect should succeed");
+        let indexer = ctx.indexer.read().await.clone().unwrap();
+        reconnects.shutdown().await;
+
         let tx_hash = TransactionHash::from(SHA256Hash::from([0; 32]));
-        let indexer_calls: Vec<_> = (0..8)
+        let indexer_calls: Vec<_> = (0..32)
             .map(|_| {
                 let client = indexer.clone();
                 tokio::spawn(async move { client.get_transaction_info(&tx_hash).await })
@@ -3330,7 +3348,7 @@ mod tests {
             })
             .collect();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while indexer_gate.calls.load(Ordering::SeqCst) < 8
+            while indexer_gate.calls.load(Ordering::SeqCst) < 32
                 || db_gateway_gate.calls.load(Ordering::SeqCst) < 1
                 || view_gateway_gate.calls.load(Ordering::SeqCst) < 4
             {

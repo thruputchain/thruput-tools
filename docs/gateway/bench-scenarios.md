@@ -176,8 +176,8 @@ between requests.
 ## Indexer connection pool comparison
 
 `hog-gateway --indexer-pool-size N` sets the number of serial indexer data
-connections. The positive integer defaults to **4** and can also be set as
-`indexer_pool_size = 8` at the top level of the gateway TOML config. The CLI
+connections. The range is **1..=256**, with a default of **16**, and can also be set as
+`indexer_pool_size = 16` at the top level of the gateway TOML config. The CLI
 value overrides TOML. Startup and reconnect use the same setting. A separate
 health connection is excluded from this count. Scheduler pools are unchanged.
 
@@ -189,7 +189,7 @@ cargo build --release -p groundhog-json-rpc-gateway
 target/release/hog-gateway \
   --runtime-manifest /path/to/runtime-manifest.json \
   --listen 127.0.0.1:8545 \
-  --indexer-pool-size 8
+  --indexer-pool-size 16
 ```
 
 The setting also works with the existing `--config` and explicit backend-address
@@ -228,8 +228,48 @@ setting, in the order above. The final baseline reproduced the initial result.
 
 All 2,955,225 measured reads succeeded. Receipt p99 improved from about 7.9 ms
 at 4 connections to 3.6 ms at 16; status p99 remained around 9–10 ms. This
-supports making the pool tunable, without establishing a new production default.
+initially supported making the pool tunable. The follow-up below informed the new
+default of 16.
 All processes shared one macOS host over loopback, and the transactions were
 recently written. These are short, warm-data measurements, not hosted capacity
 or a cold-history test. Gateway-observed backend duration includes transport
 queueing and is not a pure backend execution-time measurement.
+
+### Follow-up on macOS and Linux
+
+PR #367 head `43b7081` combined with main `df0c057` was tested in release mode
+against hog-devnode 0.1.28-rc.2 on an Apple M4 Max and an AMD EPYC 9554 Linux host.
+Each host ran the backend, one gateway and the generator over loopback. The CLI
+produced blocks every 500 ms; Tokio worker counts were fixed at eight.
+
+Each sweep used 12,000 verified committed hashes. Pools ran in order
+4, 8, 16, 32, 64, 64, 32, 16, 8, 4, with 128 maximum outstanding requests,
+three seconds warmup and 20 seconds measurement per method. Mean successful
+reads per second across the two trials:
+
+| Pool | Mac status | Mac receipt | Linux status | Linux receipt |
+|---|---|---|---|---|
+| 4 | 30,651 | 34,392 | 57,007 | 62,175 |
+| 8 | 49,264 | 55,645 | 82,828 | 96,102 |
+| 16 | 62,943 | 71,231 | 90,617 | 100,105 |
+| 32 | 64,609 | 76,504 | 94,062 | 98,428 |
+| 64 | 65,615 | 77,699 | 91,224 | 97,500 |
+
+A further single sweep at 512 outstanding requests exercised pools 4, 16, 32 and
+64. Server gauges observed 512 in-flight RPCs on Mac and 508 on Linux. Linux
+receipt throughput at 16 / 32 / 64 was 95,195 / 96,342 / 96,175 reads/s, confirming
+that more client concurrency did not uncover a material advantage for 64.
+All 81,650,079 measured requests across the 56 trials returned correct committed
+status or matching receipts, with zero public RPC errors.
+
+Sixteen is the default and the selected Devnet configuration target: it removes
+most of the four-connection bottleneck with fewer backend connections than 32 or
+64. The upper bound of 256 guards against accidental connection storms; it is
+not a qualified performance recommendation. These short, warm-data loopback
+runs do not establish cross-host, cold-history or mixed-traffic capacity.
+
+Status reads also exercise a separate scheduler lookup pool. Its admission
+limit was frequently exceeded during these tests; committed answers still
+succeeded through the supported indexer fallback. Larger indexer pools do not
+fix that scheduler pressure. [GH-377](https://linear.app/grndhg/issue/GH-377)
+tracks pending/unknown workloads, admission behavior and warning volume.
