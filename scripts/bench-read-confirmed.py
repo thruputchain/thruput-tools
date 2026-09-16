@@ -40,6 +40,8 @@ def main():
     args = parser.parse_args()
     pools = [int(v) for v in (args.pools or ("4,8,16,32,64" if args.scenario == "pool-sweep" else "16")).split(",")]
     outstanding = [int(v) for v in args.outstanding.split(",")]
+    if len(set(pools)) != len(pools) or len(set(outstanding)) != len(outstanding):
+        parser.error("pool sizes and outstanding counts must not contain duplicates")
     if any(v < 1 or v > 256 for v in pools) or any(v < 1 or v > 65536 for v in outstanding):
         parser.error("pool sizes must be 1..256 and outstanding 1..65536")
     for name in ("cli", "devnode", "gateway", "bench", "candidate_gateway"):

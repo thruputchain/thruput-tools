@@ -151,7 +151,7 @@ commits are checked against observed gateway/manifest commits when available;
 missing values remain unknown, not equal or verified. Record all effective
 settings material to an experiment, not just the pool-size example above.
 
-Comparison contract for the upcoming compare command:
+Comparison contract:
 
 - Match schema and measurement semantics, `configuration` load controls,
   generator runtime worker count/host, topology and relevant target settings.
@@ -166,9 +166,8 @@ Comparison contract for the upcoming compare command:
   allocator); reject other material differences and surface unknown metadata.
   Never use a broad force flag to hide ordinary experimental differences.
 
-The compare command, performance pool sweep and server resource observations
-are subsequent #380 slices. This confirmed-read support makes no performance
-claim by itself.
+The executable scenario and comparison commands are documented below. This
+confirmed-read support makes no performance claim by itself.
 
 ## Scenarios
 
