@@ -7,6 +7,9 @@
 //! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
 
+mod display;
+
+use display::HexDisplay;
 use std::borrow::Cow;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -122,27 +125,6 @@ impl JsonSchema for NetworkHashHex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("networkHash must be exactly 64 lowercase hexadecimal characters without a 0x prefix")]
 pub struct NetworkHashHexError;
-
-// Stream bounded chunks to serializers such as serde_json, whose collect_str
-// implementation writes directly into the output buffer. Avoid both a complete
-// hex::encode String and the second allocation used to prepend "0x".
-struct HexDisplay<'a>(&'a [u8]);
-
-impl fmt::Display for HexDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("0x")?;
-        let mut encoded = [0u8; 512];
-        for chunk in self.0.chunks(encoded.len() / 2) {
-            let output = &mut encoded[..chunk.len() * 2];
-            hex::encode_to_slice(chunk, output)
-                .expect("bug: hex output is exactly twice the input length");
-            let text =
-                std::str::from_utf8(output).expect("bug: hex encoding contains only ASCII digits");
-            f.write_str(text)?;
-        }
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
