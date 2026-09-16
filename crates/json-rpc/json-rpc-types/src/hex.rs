@@ -123,6 +123,27 @@ impl JsonSchema for NetworkHashHex {
 #[error("networkHash must be exactly 64 lowercase hexadecimal characters without a 0x prefix")]
 pub struct NetworkHashHexError;
 
+// Stream bounded chunks to serializers such as serde_json, whose collect_str
+// implementation writes directly into the output buffer. Avoid both a complete
+// hex::encode String and the second allocation used to prepend "0x".
+struct HexDisplay<'a>(&'a [u8]);
+
+impl fmt::Display for HexDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("0x")?;
+        let mut encoded = [0u8; 512];
+        for chunk in self.0.chunks(encoded.len() / 2) {
+            let output = &mut encoded[..chunk.len() * 2];
+            hex::encode_to_slice(chunk, output)
+                .expect("bug: hex output is exactly twice the input length");
+            let text =
+                std::str::from_utf8(output).expect("bug: hex encoding contains only ASCII digits");
+            f.write_str(text)?;
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
 // ---------------------------------------------------------------------------
@@ -142,8 +163,7 @@ pub struct Hex0x<T>(pub T);
 
 impl<T: AsRef<[u8]>> Serialize for Hex0x<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let hex_str = format!("0x{}", hex::encode(self.0.as_ref()));
-        serializer.serialize_str(&hex_str)
+        serializer.collect_str(&HexDisplay(self.0.as_ref()))
     }
 }
 
@@ -262,8 +282,7 @@ pub struct HexBytes(pub Vec<u8>);
 
 impl Serialize for HexBytes {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let hex_str = format!("0x{}", hex::encode(&self.0));
-        serializer.serialize_str(&hex_str)
+        serializer.collect_str(&HexDisplay(&self.0))
     }
 }
 
@@ -345,8 +364,7 @@ impl JsonSchema for Topic {
 
 impl Serialize for Topic {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let hex_str = format!("0x{}", hex::encode(self.0));
-        serializer.serialize_str(&hex_str)
+        serializer.collect_str(&HexDisplay(&self.0))
     }
 }
 
@@ -368,6 +386,24 @@ impl<'de> Deserialize<'de> for Topic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_serialization_matches_reference_across_chunk_boundaries() {
+        for len in [0, 1, 31, 32, 255, 256, 257, 511, 512, 513, 2048, 65536] {
+            let bytes: Vec<u8> = (0..=255).cycle().take(len).collect();
+            let expected = format!("\"0x{}\"", hex::encode(&bytes));
+            assert_eq!(
+                serde_json::to_string(&HexBytes(bytes.clone())).unwrap(),
+                expected
+            );
+            assert_eq!(serde_json::to_string(&Hex0x(bytes)).unwrap(), expected);
+        }
+        let bytes = std::array::from_fn(|i| u8::try_from(i * 8).unwrap());
+        assert_eq!(
+            serde_json::to_string(&Topic(bytes)).unwrap(),
+            format!("\"0x{}\"", hex::encode(bytes))
+        );
+    }
 
     #[test]
     fn hex_bytes_roundtrip() {
