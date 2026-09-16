@@ -250,14 +250,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
     let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
     let rpc_metrics = metrics.clone();
+    let call_metrics = metrics.clone();
     let batch_ctx = ctx.clone();
     let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
-        // Metrics must remain outermost: it observes each array once in response order.
+        // Observe arrays outside dispatch and individual calls inside it.
         .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()))
         .layer_fn(move |inner| {
             batch_ctx
                 .config
                 .batch_service(inner, max_response_body_size)
+        })
+        .layer_fn(move |inner| {
+            rpc_middleware::RpcCallMetricsService::new(inner, call_metrics.clone())
         });
     let server = jsonrpsee::server::Server::builder()
         .set_config(server_cfg)

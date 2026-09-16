@@ -1,14 +1,15 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use groundhog_json_rpc_types::error::outcome_for_code;
 use jsonrpsee::{
-    core::middleware::{Batch, BatchEntry, Notification, RpcServiceT},
+    core::middleware::{Batch, BatchEntryErr, Notification, RpcServiceT},
     core::server::MethodResponse,
-    types::Request,
+    types::{Id, Request, error::ErrorCode},
 };
 
 use crate::metrics::GatewayMetrics;
 
+// Outside the batch dispatcher: observe array size and entries rejected during parsing.
 #[derive(Clone)]
 pub(crate) struct RpcMetricsService<S> {
     inner: S,
@@ -36,56 +37,40 @@ where
     type BatchResponse = MethodResponse;
     type NotificationResponse = MethodResponse;
 
-    fn call<'a>(&self, req: Request<'a>) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
-        let metrics = self.metrics.clone();
-        let inner = self.inner.clone();
-        async move { observe_call(metrics, inner, req).await }
+    fn call<'a>(&self, req: Request<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
+        self.inner.call(req)
     }
 
-    fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
+    fn batch<'a>(&self, mut batch: Batch<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
         let metrics = self.metrics.clone();
         let inner = self.inner.clone();
         async move {
             let batch_len = batch.len();
             metrics.observe_rpc_batch_size(batch_len);
-            let started_at = Instant::now();
-            let mut call_methods = Vec::new();
-            for entry in batch.iter() {
-                match entry {
-                    Ok(BatchEntry::Call(req)) => {
-                        call_methods
-                            .push(Some(GatewayMetrics::bound_rpc_method(req.method_name())));
-                    }
-                    Ok(BatchEntry::Notification(_)) => {}
-                    Err(_) => call_methods.push(Some("invalid")),
+            // These entries never reach the per-call middleware. BatchEntryErr
+            // exposes its code only by value; restore it after observing it.
+            for entry in batch.iter_mut() {
+                if let Err(error) = entry {
+                    let (object, id) = std::mem::replace(
+                        error,
+                        BatchEntryErr::new(Id::Null, ErrorCode::InvalidRequest.into()),
+                    )
+                    .into_parts();
+                    metrics.observe_rpc_request(
+                        "invalid",
+                        outcome_for_code(object.code()),
+                        Duration::ZERO,
+                    );
+                    *error = BatchEntryErr::new(id, object);
                 }
             }
-            let guards = call_methods
-                .iter()
-                .filter_map(|method| method.map(|method| metrics.rpc_in_flight_guard(method)))
-                .collect::<Vec<_>>();
+            let started_at = Instant::now();
             let response = inner.batch(batch).await;
-            drop(guards);
-
-            let duration = started_at.elapsed();
-            let outcomes = batch_outcomes(&response, call_methods.len());
             tracing::debug!(
                 batch_len,
-                calls = call_methods.len(),
-                duration_ms = duration.as_millis(),
-                "gateway JSON-RPC batch completed",
+                duration_ms = started_at.elapsed().as_millis(),
+                "gateway JSON-RPC batch completed"
             );
-            for (method, outcome) in call_methods.into_iter().zip(outcomes) {
-                if let Some(method) = method {
-                    tracing::debug!(
-                        method,
-                        outcome,
-                        duration_ms = duration.as_millis(),
-                        "gateway JSON-RPC batch call observed",
-                    );
-                    metrics.observe_rpc_request(method, outcome, duration);
-                }
-            }
             response
         }
     }
@@ -93,7 +78,53 @@ where
     fn notification<'a>(
         &self,
         notification: Notification<'a>,
-    ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
+    ) -> impl Future<Output = MethodResponse> + Send + 'a {
+        self.inner.notification(notification)
+    }
+}
+
+// Inside the dispatcher: each call records its own lifetime and typed outcome.
+#[derive(Clone)]
+pub(crate) struct RpcCallMetricsService<S> {
+    inner: S,
+    metrics: GatewayMetrics,
+}
+
+impl<S> RpcCallMetricsService<S> {
+    pub(crate) fn new(inner: S, metrics: GatewayMetrics) -> Self {
+        Self { inner, metrics }
+    }
+}
+
+impl<S> RpcServiceT for RpcCallMetricsService<S>
+where
+    S: RpcServiceT<
+            MethodResponse = MethodResponse,
+            BatchResponse = MethodResponse,
+            NotificationResponse = MethodResponse,
+        > + Clone
+        + Send
+        + Sync
+        + 'static,
+{
+    type MethodResponse = MethodResponse;
+    type BatchResponse = MethodResponse;
+    type NotificationResponse = MethodResponse;
+
+    fn call<'a>(&self, req: Request<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
+        let metrics = self.metrics.clone();
+        let inner = self.inner.clone();
+        async move { observe_call(metrics, inner, req).await }
+    }
+
+    fn batch<'a>(&self, batch: Batch<'a>) -> impl Future<Output = MethodResponse> + Send + 'a {
+        self.inner.batch(batch)
+    }
+
+    fn notification<'a>(
+        &self,
+        notification: Notification<'a>,
+    ) -> impl Future<Output = MethodResponse> + Send + 'a {
         self.inner.notification(notification)
     }
 }
@@ -118,38 +149,14 @@ where
     response
 }
 
-fn batch_outcomes(response: &MethodResponse, expected_len: usize) -> Vec<&'static str> {
-    // Ignore result payloads and error data: metrics only need the error code.
-    #[derive(serde::Deserialize)]
-    struct Response {
-        error: Option<Error>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct Error {
-        code: i32,
-    }
-
-    let Ok(items) = serde_json::from_str::<Vec<Response>>(response.as_json().get()) else {
-        let outcome = response
-            .as_error_code()
-            .map_or("internal_error", outcome_for_code);
-        return vec![outcome; expected_len];
-    };
-    items
-        .into_iter()
-        .map(|item| {
-            item.error
-                .map_or("ok", |error| outcome_for_code(error.code))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use jsonrpsee::{
-        core::server::{BatchResponseBuilder, ResponsePayload},
+        core::{
+            middleware::BatchEntry,
+            server::{BatchResponseBuilder, ResponsePayload},
+        },
         types::{ErrorObject, Id},
     };
     use std::{
@@ -238,48 +245,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn batch_outcomes_extracts_response_codes() {
-        let payload = serde_json::json!({
-            "events": [{"data": "0xabcd", "error": {"code": -32603}}],
-            "message": "escaped \"text\" and Unicode: 🦔",
-        });
-        let ok = MethodResponse::response(
-            Id::Number(1),
-            jsonrpsee::core::server::ResponsePayload::success(&payload),
-            1024,
-        );
-        let err = MethodResponse::error(
-            Id::Number(2),
-            ErrorObject::owned(
-                groundhog_json_rpc_types::error::codes::BACKEND_TIMEOUT,
-                "backend timeout",
-                Some(&payload),
-            ),
-        );
-        let mut builder = BatchResponseBuilder::new_with_limit(4096);
-        builder.append(ok).expect("ok response should fit");
-        builder.append(err).expect("error response should fit");
-        let response = MethodResponse::from_batch(builder.finish());
-
-        assert_eq!(batch_outcomes(&response, 2), vec!["ok", "backend_timeout"]);
-    }
-
-    #[test]
-    fn batch_outcomes_handles_batch_level_errors_and_notifications() {
-        let response = MethodResponse::error(
-            Id::Null,
-            jsonrpsee::types::error::reject_too_big_batch_response(1024),
-        );
-        let outcome = outcome_for_code(response.as_error_code().unwrap());
-        assert_eq!(batch_outcomes(&response, 2), vec![outcome; 2]);
-        assert!(batch_outcomes(&MethodResponse::notification(), 0).is_empty());
-    }
-
     #[tokio::test]
     async fn rpc_metrics_service_records_call_and_batch() {
         let metrics = GatewayMetrics::for_tests();
-        let service = RpcMetricsService::new(MockRpcService::default(), metrics.clone());
+        let service = RpcMetricsService::new(
+            groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                RpcCallMetricsService::new(MockRpcService::default(), metrics.clone()),
+                4096,
+                groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+            ),
+            metrics.clone(),
+        );
 
         service
             .call(Request::borrowed("groundhog_chainTip", None, Id::Number(1)))
@@ -332,6 +308,7 @@ mod tests {
                     groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
                 )
             })
+            .layer_fn(|inner| RpcCallMetricsService::new(inner, metrics.clone()))
             .service(inner.clone());
         let batch = Batch::from(vec![
             Ok(BatchEntry::Call(Request::borrowed(
@@ -361,11 +338,14 @@ mod tests {
         assert_eq!(*inner.completed.lock().unwrap(), vec!["unknown"]);
         let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
         let before = metrics.gather(&snapshot).unwrap();
-        for method in ["groundhog_chainTip", "invalid", "unknown"] {
+        for (method, active) in [("groundhog_chainTip", 1), ("unknown", 0)] {
             assert!(before.contains(&format!(
-                "groundhog_gateway_rpc_in_flight{{method=\"{method}\"}} 1"
+                "groundhog_gateway_rpc_in_flight{{method=\"{method}\"}} {active}"
             )));
         }
+        assert!(before.contains(
+            "groundhog_gateway_rpc_requests_total{method=\"unknown\",outcome=\"not_implemented\"} 1"
+        ));
         gate.add_permits(1);
         let response = response.await;
         let output: serde_json::Value = serde_json::from_str(response.as_json().get()).unwrap();
@@ -385,9 +365,11 @@ mod tests {
             assert!(body.contains(&format!(
                 "groundhog_gateway_rpc_requests_total{{method=\"{method}\",outcome=\"{outcome}\"}} 1"
             )), "{body}");
-            assert!(body.contains(&format!(
-                "groundhog_gateway_rpc_in_flight{{method=\"{method}\"}} 0"
-            )));
+            if method != "invalid" {
+                assert!(body.contains(&format!(
+                    "groundhog_gateway_rpc_in_flight{{method=\"{method}\"}} 0"
+                )));
+            }
         }
         assert!(body.contains("groundhog_gateway_rpc_batch_size_sum 4"));
         assert!(body.contains("groundhog_gateway_rpc_batch_size_count 1"));
@@ -411,6 +393,7 @@ mod tests {
                     groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
                 )
             })
+            .layer_fn(|inner| RpcCallMetricsService::new(inner, metrics.clone()))
             .service(MockRpcService::default());
         let mut batch = Batch::new();
         for id in 0..3 {
