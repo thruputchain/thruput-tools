@@ -262,3 +262,17 @@ fn init_uses_global_default_when_project_key_is_dangling() {
         env::remove_var("XDG_CONFIG_HOME");
     }
 }
+
+#[test]
+fn new_rejects_reserved_name_without_creating_directory() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("test");
+
+    let result = groundhog_cli::new::run_in(&dir, "test", "counter", "new", &quiet());
+
+    assert!(result.is_err());
+    assert!(
+        !dir.exists(),
+        "a rejected project name must not leave a directory behind"
+    );
+}
