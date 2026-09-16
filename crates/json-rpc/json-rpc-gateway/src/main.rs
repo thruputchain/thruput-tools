@@ -35,6 +35,14 @@ const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::
 #[derive(Parser)]
 #[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
+    /// Print resolved configuration as JSON and exit without opening listeners.
+    #[arg(long)]
+    dump_effective_config: bool,
+
+    /// Emit close events for enabled tracing spans (diagnostics; adds overhead).
+    #[arg(long)]
+    trace_spans: bool,
+
     /// Path to TOML config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
@@ -123,15 +131,27 @@ struct Cli {
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // --- Observability ---
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
     let bundle_identity =
         BundleIdentity::discover(BundleSubject::component("groundhog-rpc"), BUILD_VERSION);
     let cli = parse_cli(&bundle_identity);
+
+    // --- Observability ---
+    let env_filter = if cli.dump_effective_config {
+        EnvFilter::new("off")
+    } else {
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy()
+    };
+    let span_events = if cli.trace_spans {
+        tracing_subscriber::fmt::format::FmtSpan::CLOSE
+    } else {
+        tracing_subscriber::fmt::format::FmtSpan::NONE
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_span_events(span_events)
+        .init();
 
     tracing::info!(
         component_version = bundle_identity.build_version().crate_version(),
@@ -159,8 +179,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.apply_runtime_manifest(&manifest)?;
     }
 
+    let dump_effective_config = cli.dump_effective_config;
     apply_cli_overrides(&mut config, cli);
     let network_info = config.network_info()?;
+    if dump_effective_config {
+        println!("{}", serde_json::to_string_pretty(&config)?);
+        return Ok(());
+    }
 
     tracing::info!(
         network_hash = ?network_info.network_hash,

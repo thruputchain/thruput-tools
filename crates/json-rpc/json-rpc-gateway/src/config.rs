@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr, time::Duration};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use groundhog_json_rpc_types::{
     NetworkHash, NetworkHashHex, SHA256Hash,
@@ -11,7 +11,7 @@ use groundhog_json_rpc_types::{
 };
 
 /// Indexer data connections (1..=256, default 16).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct IndexerPoolSize(std::num::NonZeroUsize);
 
@@ -56,7 +56,7 @@ impl FromStr for IndexerPoolSize {
 pub struct InvalidIndexerPoolSize;
 
 /// Backend names used by readiness policy.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthBackend {
     /// hogd scheduler/mempool backend.
@@ -126,7 +126,7 @@ impl FromStr for HealthBackend {
 /// (packing item reads into `dbgateway_get_items`); see
 /// `GatewayConfig::batch` and `GatewayConfig::storage` for the per-RPC
 /// tuning slots.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdaptiveBatchConfig {
     /// Number of independent sharded worker tasks. Incoming requests
@@ -179,7 +179,7 @@ impl Default for AdaptiveBatchConfig {
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
 /// comes from an RPC initiated strictly after they arrived.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TipConfig {
     /// Maximum number of overlapping `get_tip` RPCs. Covers RTT under
@@ -204,7 +204,7 @@ impl Default for TipConfig {
 ///
 /// Unknown keys are rejected so a typo in an operator config fails
 /// startup instead of silently running with defaults.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewayConfig {
     /// Logical network identifier used by the hosted faucet API.
