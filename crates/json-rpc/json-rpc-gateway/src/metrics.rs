@@ -120,8 +120,12 @@ impl BackendRequestOutcome {
 /// Gateway-owned Prometheus registry and core availability metrics.
 #[derive(Clone)]
 pub struct GatewayMetrics {
+    inner: Arc<MetricsInner>,
+}
+
+struct MetricsInner {
     registry: Registry,
-    gather_lock: Arc<Mutex<()>>,
+    gather_lock: Mutex<()>,
     health_status: GaugeVec,
     backend_up: GaugeVec,
     chain_tip_height: Gauge,
@@ -361,31 +365,33 @@ impl GatewayMetrics {
             .set(1.0);
 
         Ok(Self {
-            registry,
-            gather_lock: Arc::new(Mutex::new(())),
-            health_status,
-            backend_up,
-            chain_tip_height,
-            chain_tip_age_seconds,
-            backend_requests_total,
-            backend_request_duration_seconds,
-            backend_reconnects_total,
-            airdrop_requests_total,
-            airdrop_request_duration_seconds,
-            rpc_requests_total,
-            rpc_request_duration_seconds,
-            rpc_in_flight,
-            rpc_batch_size,
-            rpc_connections_limit,
-            http_requests_total,
-            http_request_duration_seconds,
-            internal_batch_size,
-            internal_batch_rejected_total,
-            internal_batch_in_flight,
-            coalesced_waiters,
-            submitted_transactions_total,
-            view_timeouts_total,
-            malformed_events_dropped_total,
+            inner: Arc::new(MetricsInner {
+                registry,
+                gather_lock: Mutex::new(()),
+                health_status,
+                backend_up,
+                chain_tip_height,
+                chain_tip_age_seconds,
+                backend_requests_total,
+                backend_request_duration_seconds,
+                backend_reconnects_total,
+                airdrop_requests_total,
+                airdrop_request_duration_seconds,
+                rpc_requests_total,
+                rpc_request_duration_seconds,
+                rpc_in_flight,
+                rpc_batch_size,
+                rpc_connections_limit,
+                http_requests_total,
+                http_request_duration_seconds,
+                internal_batch_size,
+                internal_batch_rejected_total,
+                internal_batch_in_flight,
+                coalesced_waiters,
+                submitted_transactions_total,
+                view_timeouts_total,
+                malformed_events_dropped_total,
+            }),
         })
     }
 
@@ -401,10 +407,12 @@ impl GatewayMetrics {
         outcome: BackendRequestOutcome,
         duration: Duration,
     ) {
-        self.backend_requests_total
+        self.inner
+            .backend_requests_total
             .with_label_values(&[backend.as_str(), operation, outcome.as_str()])
             .inc();
-        self.backend_request_duration_seconds
+        self.inner
+            .backend_request_duration_seconds
             .with_label_values(&[backend.as_str(), operation, outcome.result()])
             .observe(duration.as_secs_f64());
     }
@@ -414,7 +422,8 @@ impl GatewayMetrics {
         backend: HealthBackend,
         outcome: BackendReconnectOutcome,
     ) {
-        self.backend_reconnects_total
+        self.inner
+            .backend_reconnects_total
             .with_label_values(&[backend.as_str(), outcome.as_str()])
             .inc();
     }
@@ -425,10 +434,12 @@ impl GatewayMetrics {
         outcome: AirdropRequestOutcome,
         duration: Duration,
     ) {
-        self.airdrop_requests_total
+        self.inner
+            .airdrop_requests_total
             .with_label_values(&[backend, outcome.as_str()])
             .inc();
-        self.airdrop_request_duration_seconds
+        self.inner
+            .airdrop_request_duration_seconds
             .with_label_values(&[backend, outcome.result()])
             .observe(duration.as_secs_f64());
     }
@@ -459,27 +470,29 @@ impl GatewayMetrics {
         outcome: &'static str,
         duration: Duration,
     ) {
-        self.rpc_requests_total
+        self.inner
+            .rpc_requests_total
             .with_label_values(&[method, outcome])
             .inc();
-        self.rpc_request_duration_seconds
+        self.inner
+            .rpc_request_duration_seconds
             .with_label_values(&[method, result_for_outcome(outcome)])
             .observe(duration.as_secs_f64());
     }
 
     pub(crate) fn rpc_in_flight_guard(&self, method: &'static str) -> RpcInFlightGuard {
-        let gauge = self.rpc_in_flight.with_label_values(&[method]);
+        let gauge = self.inner.rpc_in_flight.with_label_values(&[method]);
         gauge.inc();
         RpcInFlightGuard { gauge }
     }
 
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn observe_rpc_batch_size(&self, size: usize) {
-        self.rpc_batch_size.observe(size as f64);
+        self.inner.rpc_batch_size.observe(size as f64);
     }
 
     pub(crate) fn set_rpc_connections_limit(&self, limit: u32) {
-        self.rpc_connections_limit.set(f64::from(limit));
+        self.inner.rpc_connections_limit.set(f64::from(limit));
     }
 
     pub(crate) fn observe_http_request(
@@ -488,17 +501,20 @@ impl GatewayMetrics {
         status_class: &'static str,
         duration: Duration,
     ) {
-        self.http_requests_total
+        self.inner
+            .http_requests_total
             .with_label_values(&[endpoint, status_class])
             .inc();
-        self.http_request_duration_seconds
+        self.inner
+            .http_request_duration_seconds
             .with_label_values(&[endpoint, status_class])
             .observe(duration.as_secs_f64());
     }
 
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn observe_internal_batch_size(&self, component: &'static str, size: usize) {
-        self.internal_batch_size
+        self.inner
+            .internal_batch_size
             .with_label_values(&[component])
             .observe(size as f64);
     }
@@ -508,7 +524,8 @@ impl GatewayMetrics {
         component: &'static str,
         reason: &'static str,
     ) {
-        self.internal_batch_rejected_total
+        self.inner
+            .internal_batch_rejected_total
             .with_label_values(&[component, reason])
             .inc();
     }
@@ -518,6 +535,7 @@ impl GatewayMetrics {
         component: &'static str,
     ) -> InternalBatchInFlightGuard {
         let gauge = self
+            .inner
             .internal_batch_in_flight
             .with_label_values(&[component]);
         gauge.inc();
@@ -526,23 +544,26 @@ impl GatewayMetrics {
 
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn observe_coalesced_waiters(&self, component: &'static str, waiters: usize) {
-        self.coalesced_waiters
+        self.inner
+            .coalesced_waiters
             .with_label_values(&[component])
             .observe(waiters as f64);
     }
 
     pub(crate) fn observe_submitted_transaction(&self, outcome: &'static str) {
-        self.submitted_transactions_total
+        self.inner
+            .submitted_transactions_total
             .with_label_values(&[outcome])
             .inc();
     }
 
     pub(crate) fn observe_view_timeout(&self) {
-        self.view_timeouts_total.inc();
+        self.inner.view_timeouts_total.inc();
     }
 
     pub(crate) fn observe_malformed_event_dropped(&self, reason: &'static str) {
-        self.malformed_events_dropped_total
+        self.inner
+            .malformed_events_dropped_total
             .with_label_values(&[reason])
             .inc();
     }
@@ -550,11 +571,12 @@ impl GatewayMetrics {
     /// Render Prometheus text exposition after refreshing snapshot-backed gauges.
     pub fn gather(&self, snapshot: &GatewayHealthSnapshot) -> prometheus::Result<String> {
         let _guard = self
+            .inner
             .gather_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.update_health(snapshot);
-        let metric_families = self.registry.gather();
+        let metric_families = self.inner.registry.gather();
         let mut buffer = Vec::new();
         TextEncoder::new().encode(&metric_families, &mut buffer)?;
         Ok(String::from_utf8_lossy(&buffer).into_owned())
@@ -567,7 +589,8 @@ impl GatewayMetrics {
             } else {
                 0.0
             };
-            self.health_status
+            self.inner
+                .health_status
                 .with_label_values(&[status.as_str()])
                 .set(value);
         }
@@ -578,19 +601,23 @@ impl GatewayMetrics {
             } else {
                 0.0
             };
-            self.backend_up
+            self.inner
+                .backend_up
                 .with_label_values(&[backend.as_str()])
                 .set(value);
         }
         if let Some(up) = snapshot.named_backend_up("faucet") {
-            self.backend_up
+            self.inner
+                .backend_up
                 .with_label_values(&["faucet"])
                 .set(if up { 1.0 } else { 0.0 });
         }
 
-        self.chain_tip_height
+        self.inner
+            .chain_tip_height
             .set(snapshot.chain_tip_height().unwrap_or(f64::NAN));
-        self.chain_tip_age_seconds
+        self.inner
+            .chain_tip_age_seconds
             .set(snapshot.chain_tip_age_seconds().unwrap_or(f64::NAN));
     }
 }
@@ -640,6 +667,28 @@ mod tests {
         config::{GatewayConfig, HealthBackend},
         health::{GatewayHealth, GatewayHealthSnapshot},
     };
+
+    #[test]
+    fn cloned_metrics_share_observations_and_survive_the_original() {
+        let metrics = GatewayMetrics::for_tests();
+        let clone = metrics.clone();
+        let guard = metrics.rpc_in_flight_guard("groundhog_chainTip");
+        drop(metrics);
+        clone.observe_rpc_request("groundhog_chainTip", "ok", Duration::from_millis(2));
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = clone.gather(&snapshot).unwrap();
+        assert!(body.contains(
+            "groundhog_gateway_rpc_requests_total{method=\"groundhog_chainTip\",outcome=\"ok\"} 1"
+        ));
+        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 1"));
+        drop(guard);
+        assert!(
+            clone
+                .gather(&snapshot)
+                .unwrap()
+                .contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0")
+        );
+    }
 
     #[tokio::test]
     async fn core_metrics_render_health_status_backend_and_build_info() {
