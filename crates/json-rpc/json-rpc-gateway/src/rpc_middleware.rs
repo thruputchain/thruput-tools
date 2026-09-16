@@ -119,23 +119,28 @@ where
 }
 
 fn batch_outcomes(response: &MethodResponse, expected_len: usize) -> Vec<&'static str> {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(response.as_json().get()) else {
-        return vec!["internal_error"; expected_len];
-    };
-    let Some(items) = value.as_array() else {
+    // Ignore result payloads and error data: metrics only need the error code.
+    #[derive(serde::Deserialize)]
+    struct Response {
+        error: Option<Error>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Error {
+        code: i32,
+    }
+
+    let Ok(items) = serde_json::from_str::<Vec<Response>>(response.as_json().get()) else {
         let outcome = response
             .as_error_code()
             .map_or("internal_error", outcome_for_code);
         return vec![outcome; expected_len];
     };
     items
-        .iter()
+        .into_iter()
         .map(|item| {
-            item.get("error")
-                .and_then(|error| error.get("code"))
-                .and_then(serde_json::Value::as_i64)
-                .and_then(|code| i32::try_from(code).ok())
-                .map_or("ok", outcome_for_code)
+            item.error
+                .map_or("ok", |error| outcome_for_code(error.code))
         })
         .collect()
 }
@@ -235,9 +240,13 @@ mod tests {
 
     #[test]
     fn batch_outcomes_extracts_response_codes() {
+        let payload = serde_json::json!({
+            "events": [{"data": "0xabcd", "error": {"code": -32603}}],
+            "message": "escaped \"text\" and Unicode: 🦔",
+        });
         let ok = MethodResponse::response(
             Id::Number(1),
-            jsonrpsee::core::server::ResponsePayload::success("ok"),
+            jsonrpsee::core::server::ResponsePayload::success(&payload),
             1024,
         );
         let err = MethodResponse::error(
@@ -245,7 +254,7 @@ mod tests {
             ErrorObject::owned(
                 groundhog_json_rpc_types::error::codes::BACKEND_TIMEOUT,
                 "backend timeout",
-                None::<()>,
+                Some(&payload),
             ),
         );
         let mut builder = BatchResponseBuilder::new_with_limit(4096);
@@ -254,6 +263,17 @@ mod tests {
         let response = MethodResponse::from_batch(builder.finish());
 
         assert_eq!(batch_outcomes(&response, 2), vec!["ok", "backend_timeout"]);
+    }
+
+    #[test]
+    fn batch_outcomes_handles_batch_level_errors_and_notifications() {
+        let response = MethodResponse::error(
+            Id::Null,
+            jsonrpsee::types::error::reject_too_big_batch_response(1024),
+        );
+        let outcome = outcome_for_code(response.as_error_code().unwrap());
+        assert_eq!(batch_outcomes(&response, 2), vec![outcome; 2]);
+        assert!(batch_outcomes(&MethodResponse::notification(), 0).is_empty());
     }
 
     #[tokio::test]
