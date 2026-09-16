@@ -1,0 +1,28 @@
+{
+	admin off
+	persist_config off
+	auto_https off
+}
+
+:{$PORT:3000} {
+	header {
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	encode gzip zstd
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle_path /api/* {
+		reverse_proxy https://faucet.thruput.network {
+			header_up Host faucet.thruput.network
+		}
+	}
+
+	handle {
+		root * dist
+		file_server
+	}
+}
