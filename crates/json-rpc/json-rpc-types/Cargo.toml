@@ -34,7 +34,3 @@ hex = { workspace = true }
 thiserror = { workspace = true }
 xdrs = { workspace = true }
 xdr-common = { workspace = true }
-
-[[bench]]
-name = "hex_serialization"
-harness = false

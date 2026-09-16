@@ -7,11 +7,9 @@
 //! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
 
-mod display;
-
-use display::HexDisplay;
 use std::borrow::Cow;
 use std::fmt;
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 
 use groundhog_xdr::types::{NetworkHash, SHA256Hash};
@@ -125,6 +123,37 @@ impl JsonSchema for NetworkHashHex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("networkHash must be exactly 64 lowercase hexadecimal characters without a 0x prefix")]
 pub struct NetworkHashHexError;
+
+// Stream bounded chunks to serializers such as serde_json, whose collect_str
+// implementation writes directly into the output buffer. Avoid both a complete
+// hex::encode String and the second allocation used to prepend "0x".
+struct HexDisplay<'a>(&'a [u8]);
+
+impl fmt::Display for HexDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        f.write_str("0x")?;
+        let mut encoded = [MaybeUninit::<u8>::uninit(); 512];
+        for chunk in self.0.chunks(encoded.len() / 2) {
+            let output = &mut encoded[..chunk.len() * 2];
+            for (&byte, pair) in chunk.iter().zip(output.chunks_exact_mut(2)) {
+                pair[0].write(DIGITS[usize::from(byte >> 4)]);
+                pair[1].write(DIGITS[usize::from(byte & 0x0f)]);
+            }
+            // SAFETY: output has exactly two slots per input byte. The loop
+            // above writes both slots of every pair before this reference is
+            // created. MaybeUninit<u8> has u8's layout and alignment, and the
+            // slice excludes the unused tail of encoded. No mutation occurs
+            // while these bytes are borrowed by the formatter.
+            let initialized =
+                unsafe { std::slice::from_raw_parts(output.as_ptr().cast::<u8>(), output.len()) };
+            let text = std::str::from_utf8(initialized)
+                .expect("bug: hex encoding contains only ASCII digits");
+            f.write_str(text)?;
+        }
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
@@ -371,7 +400,7 @@ mod tests {
 
     #[test]
     fn hex_serialization_matches_reference_across_chunk_boundaries() {
-        for len in [0, 1, 31, 32, 255, 256, 257, 511, 512, 513, 2048, 65536] {
+        for len in (0..=257).chain([511, 512, 513, 2048, 65536]) {
             let bytes: Vec<u8> = (0..=255).cycle().take(len).collect();
             let expected = format!("\"0x{}\"", hex::encode(&bytes));
             assert_eq!(
