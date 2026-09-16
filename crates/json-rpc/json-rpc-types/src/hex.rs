@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::fmt;
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 
 use groundhog_xdr::types::{NetworkHash, SHA256Hash};
@@ -130,14 +131,24 @@ struct HexDisplay<'a>(&'a [u8]);
 
 impl fmt::Display for HexDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
         f.write_str("0x")?;
-        let mut encoded = [0u8; 512];
+        let mut encoded = [MaybeUninit::<u8>::uninit(); 512];
         for chunk in self.0.chunks(encoded.len() / 2) {
             let output = &mut encoded[..chunk.len() * 2];
-            hex::encode_to_slice(chunk, output)
-                .expect("bug: hex output is exactly twice the input length");
-            let text =
-                std::str::from_utf8(output).expect("bug: hex encoding contains only ASCII digits");
+            for (&byte, pair) in chunk.iter().zip(output.chunks_exact_mut(2)) {
+                pair[0].write(DIGITS[usize::from(byte >> 4)]);
+                pair[1].write(DIGITS[usize::from(byte & 0x0f)]);
+            }
+            // SAFETY: output has exactly two slots per input byte. The loop
+            // above writes both slots of every pair before this reference is
+            // created. MaybeUninit<u8> has u8's layout and alignment, and the
+            // slice excludes the unused tail of encoded. No mutation occurs
+            // while these bytes are borrowed by the formatter.
+            let initialized =
+                unsafe { std::slice::from_raw_parts(output.as_ptr().cast::<u8>(), output.len()) };
+            // SAFETY: every initialized byte comes from DIGITS, which is ASCII.
+            let text = unsafe { std::str::from_utf8_unchecked(initialized) };
             f.write_str(text)?;
         }
         Ok(())
@@ -389,7 +400,7 @@ mod tests {
 
     #[test]
     fn hex_serialization_matches_reference_across_chunk_boundaries() {
-        for len in [0, 1, 31, 32, 255, 256, 257, 511, 512, 513, 2048, 65536] {
+        for len in (0..=257).chain([511, 512, 513, 2048, 65536]) {
             let bytes: Vec<u8> = (0..=255).cycle().take(len).collect();
             let expected = format!("\"0x{}\"", hex::encode(&bytes));
             assert_eq!(
