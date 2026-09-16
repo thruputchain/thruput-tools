@@ -94,7 +94,6 @@ groundhog-erc20-if = { version = "=0.1.31", registry = "groundhog" }
 sdk = { version = "=0.34.4", registry = "groundhog" }
 
 # --- Async ---
-arc-swap = "1.9"
 async-trait = "0.1"
 futures-util = "0.3"
 aws-config = { version = "1.9.0", default-features = false, features = ["default-https-client", "rt-tokio"] }

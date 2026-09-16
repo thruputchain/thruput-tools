@@ -1697,7 +1697,6 @@ dependencies = [
 name = "groundhog-json-rpc-server"
 version = "0.17.5"
 dependencies = [
- "arc-swap",
  "async-trait",
  "futures-util",
  "groundhog-build-info",

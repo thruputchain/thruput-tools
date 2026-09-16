@@ -24,7 +24,6 @@ groundhog-tx-validation = { workspace = true }
 groundhog-xdr = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
-arc-swap = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
