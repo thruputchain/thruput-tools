@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use xdr_common::VecM;
 
 use crate::config::HealthBackend;
-use crate::context::{GatewayContext, clear_scheduler_if_current};
+use crate::context::GatewayContext;
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
@@ -212,7 +212,6 @@ async fn transaction_is_pending(
     let client = scheduler
         .as_ref()
         .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
-    let generation = client.generation();
     let lookup_client = client.lookup_client().clone();
     let hash = TransactionHash::from(tx_hash.0.0.into_inner());
     let batch: VecM<TransactionHash> = VecM(vec![hash]);
@@ -238,9 +237,8 @@ async fn transaction_is_pending(
             guard.abort().await;
             Err(())
         };
-    if matches!(rpc_result, Ok(Err(_))) {
-        clear_scheduler_if_current(&ctx.scheduler, generation).await;
-    }
+    // This pool is isolated from submission and health probes. A failed lookup
+    // must not tear down those healthy connections; the probe owns reconnects.
     guard.disarm();
     ctx.metrics.observe_backend_request(
         HealthBackend::Scheduler,
@@ -545,7 +543,10 @@ mod tests {
             &self,
             _arg0: ParallelSignedTransactionBatch,
         ) -> Result<SchedGatewaySubmitOutcomeBatch, ProgramError> {
-            panic!("bug: status tests should not submit")
+            Ok(VecM(vec![
+                groundhog_scheduler::SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted;
+                _arg0.segment_tokens.0.len()
+            ]))
         }
 
         async fn schedgateway_get_tip(&self) -> Result<ExpectedDBTip, ProgramError> {
@@ -1169,7 +1170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_errors_when_scheduler_lookup_fails_and_indexer_misses() {
+    async fn failed_status_lookup_preserves_the_submit_path() {
         let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
@@ -1180,9 +1181,15 @@ mod tests {
 
         assert!(matches!(err, GatewayError::BackendUnavailable(_)));
         assert!(
-            ctx.scheduler.read().await.is_none(),
-            "transport failure should clear the matching scheduler generation"
+            ctx.scheduler.read().await.is_some(),
+            "a lookup failure must not disconnect the submit pool"
         );
+        // Exercise the production submitter and its SchedulerSink, with no
+        // reconnect or health loop running between the failed read and write.
+        ctx.batch_submitter
+            .submit(RpcRequestContext::unbounded(), vec![1, 2, 3], test_hash())
+            .await
+            .expect("submission should still reach the scheduler after a lookup error");
     }
 
     #[tokio::test]
