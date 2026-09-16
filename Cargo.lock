@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-agent-knowledge"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "hex",
  "serde",
@@ -1413,7 +1413,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-bench"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
@@ -1432,11 +1432,11 @@ dependencies = [
 
 [[package]]
 name = "groundhog-build-info"
-version = "0.17.4"
+version = "0.17.5"
 
 [[package]]
 name = "groundhog-bundle-identity"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "groundhog-build-info",
  "hex",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "axum",
  "base64",
@@ -1590,7 +1590,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-types",
@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1695,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "groundhog-bundle-identity",
@@ -1791,7 +1791,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "schemars",
  "serde",
@@ -1800,7 +1800,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-artifact"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1832,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-lower"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
@@ -1886,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1948,7 +1948,7 @@ checksum = "77a5e7220cc5ab9b8300bc6a9b065584681d6946ba980c6901c54751e7e114ad"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-toolchain"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "flate2",
@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-tx-validation"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-rv32-artifact",
@@ -2024,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.17.4"
+version = "0.17.5"
 dependencies = [
  "async-trait",
  "rpc_driver",
