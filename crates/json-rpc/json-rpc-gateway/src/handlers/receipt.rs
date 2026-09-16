@@ -712,6 +712,7 @@ mod tests {
 
         let config = ctx.config.clone();
         let rpc_metrics = ctx.metrics.clone();
+        let call_metrics = ctx.metrics.clone();
         let batch_config = config.clone();
         let max_response_body_size = jsonrpsee::core::TEN_MB_SIZE_BYTES;
         let server = jsonrpsee::server::Server::builder()
@@ -733,6 +734,12 @@ mod tests {
                     })
                     .layer_fn(move |inner| {
                         batch_config.batch_service(inner, max_response_body_size)
+                    })
+                    .layer_fn(move |inner| {
+                        crate::rpc_middleware::RpcCallMetricsService::new(
+                            inner,
+                            call_metrics.clone(),
+                        )
                     }),
             )
             .build("127.0.0.1:0")
