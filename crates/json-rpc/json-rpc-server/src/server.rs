@@ -198,35 +198,39 @@ impl TipCache {
     ///
     /// Claiming republishes the window before the probe runs, so callers
     /// arriving during it keep serving the stale reading rather than
-    /// queuing probes of their own. Exactly one caller can win the swap;
-    /// the rest serve what the winner left in force.
+    /// queuing probes of their own.
+    ///
+    /// Losing the swap retries instead of serving whatever the winner
+    /// installed, which leaves the TTL alone deciding who probes. A caller
+    /// under a live window then finds one on the retry and serves the
+    /// reading, while a zero TTL -- the forced refresh that re-reads the
+    /// tip before a bound violation may reject -- never matches a window
+    /// and claims a probe of its own however many callers it raced.
+    /// Serving the winner's generation instead would let that re-read
+    /// reject against the very reading it was meant to look past.
     fn serve_without_probing(&self, now: Instant, ttl: Duration) -> Option<TipRead> {
-        let current = self.generation.load();
-        let in_force = current.as_deref().and_then(|generation| generation.reading);
-        if current
-            .as_deref()
-            .is_some_and(|generation| now.duration_since(generation.last_attempt) < ttl)
-        {
-            return Some(TipRead {
-                state: in_force,
-                probed: false,
-            });
-        }
-
-        let claim = Arc::new(TipGeneration {
-            last_attempt: now,
-            reading: in_force,
-        });
-        let previous = self.generation.compare_and_swap(&current, Some(claim));
-        if swapped(previous.as_ref(), current.as_ref()) {
-            return None;
-        }
-        Some(TipRead {
-            state: previous
+        loop {
+            let current = self.generation.load();
+            let in_force = current.as_deref().and_then(|generation| generation.reading);
+            if current
                 .as_deref()
-                .and_then(|generation| generation.reading),
-            probed: false,
-        })
+                .is_some_and(|generation| now.duration_since(generation.last_attempt) < ttl)
+            {
+                return Some(TipRead {
+                    state: in_force,
+                    probed: false,
+                });
+            }
+
+            let claim = Arc::new(TipGeneration {
+                last_attempt: now,
+                reading: in_force,
+            });
+            let previous = self.generation.compare_and_swap(&current, Some(claim));
+            if swapped(previous.as_ref(), current.as_ref()) {
+                return None;
+            }
+        }
     }
 
     /// Current reading, refreshing it through `fetch` when the TTL has
@@ -1779,6 +1783,133 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "the reading this request fetched is already current"
         );
         assert!(submitted.lock().await.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn a_forced_refresh_sends_every_racing_caller_to_the_backend() {
+        // `fresh_tip_state` re-reads the tip before a bound violation is
+        // allowed to reject, so a caller that loses the claim must not be
+        // handed back the very reading it was trying to look past. One
+        // round lands the lost swap most but not all of the time, so race
+        // repeatedly rather than leave the coverage to chance.
+        const CALLERS: usize = 8;
+        const ROUNDS: usize = 20;
+
+        for round in 0..ROUNDS {
+            let cache = TipCache::default();
+            cache.store(TipState::from_reading(&tip_reading(3)));
+
+            let probes = Arc::new(AtomicUsize::new(0));
+            let start = Arc::new(tokio::sync::Barrier::new(CALLERS));
+
+            let callers = (0..CALLERS).map(|_| {
+                let cache = cache.clone();
+                let probes = probes.clone();
+                let start = start.clone();
+                tokio::spawn(async move {
+                    start.wait().await;
+                    cache
+                        .reading(
+                            Duration::ZERO,
+                            Duration::from_secs(1),
+                            RpcRequestContext::unbounded(),
+                            |_| async move {
+                                probes.fetch_add(1, Ordering::SeqCst);
+                                Ok(tip_reading(9))
+                            },
+                        )
+                        .await
+                })
+            });
+
+            let reads = futures_util::future::try_join_all(callers)
+                .await
+                .expect("bug: no caller should panic");
+
+            assert_eq!(
+                probes.load(Ordering::SeqCst),
+                CALLERS,
+                "round {round}: a zero TTL should send every caller to the backend"
+            );
+            assert!(
+                reads.iter().all(|read| read.probed),
+                "round {round}: no caller should be told its reading came from the cache"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn callers_arriving_during_a_refresh_serve_the_previous_reading() {
+        // The claim carries the reading in force forward, so submits
+        // landing while the probe is in flight keep running the
+        // chain-dependent pre-checks instead of falling back to no config.
+        let cache = TipCache::default();
+        let expired_claim = Instant::now()
+            .checked_sub(Duration::from_secs(90))
+            .expect("bug: the test clock should reach 90 seconds back");
+        cache.generation.store(Some(Arc::new(TipGeneration {
+            last_attempt: expired_claim,
+            reading: Some(TipState::from_reading(&tip_reading(4))),
+        })));
+
+        let probing = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+
+        let refresher = tokio::spawn({
+            let cache = cache.clone();
+            let probing = probing.clone();
+            let release = release.clone();
+            async move {
+                cache
+                    .reading(
+                        Duration::from_secs(30),
+                        Duration::from_secs(5),
+                        RpcRequestContext::unbounded(),
+                        |_| async move {
+                            probing.notify_one();
+                            release.notified().await;
+                            Ok(tip_reading(9))
+                        },
+                    )
+                    .await
+            }
+        });
+
+        // Hold the refresh open so the callers below land mid-probe.
+        probing.notified().await;
+
+        for _ in 0..4 {
+            let read = cache
+                .reading(
+                    Duration::from_secs(30),
+                    Duration::from_secs(5),
+                    RpcRequestContext::unbounded(),
+                    |_| async {
+                        panic!("bug: a caller arriving mid-refresh should not probe");
+                    },
+                )
+                .await;
+
+            assert!(!read.probed);
+            assert_eq!(
+                read.state.map(|tip| tip.height),
+                Some(4),
+                "the claim that started the refresh should carry the reading forward"
+            );
+        }
+
+        release.notify_one();
+        let probe_read = refresher
+            .await
+            .expect("bug: the refreshing caller should not panic");
+
+        assert!(probe_read.probed);
+        assert_eq!(probe_read.state.map(|tip| tip.height), Some(9));
+        assert_eq!(
+            cache.in_force().map(|tip| tip.height),
+            Some(9),
+            "the probe's reading should replace the one it carried forward"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
