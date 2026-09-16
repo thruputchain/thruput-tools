@@ -228,6 +228,12 @@ pub struct GatewayConfig {
     /// indexer return `BackendUnavailable`.
     pub indexer_address: Option<String>,
 
+    /// Number of serial x23 data connections to the indexer (default 4).
+    ///
+    /// Applies at startup and reconnect. The separate health connection is
+    /// excluded; each data connection handles one ordinary RPC at a time.
+    pub indexer_pool_size: std::num::NonZeroUsize,
+
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
     /// Serves `groundhog_getStorageAt`. Optional: when absent the
@@ -302,6 +308,8 @@ impl Default for GatewayConfig {
             shutdown_grace_ms: 10_000,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),
+            indexer_pool_size: std::num::NonZeroUsize::new(4)
+                .expect("bug: default indexer pool size is nonzero"),
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,

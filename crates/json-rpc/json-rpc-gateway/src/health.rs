@@ -594,6 +594,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         spawn_once(&mut attempts.indexer, move || async move {
             let result = connect_optional_indexer(
                 ctx.config.indexer_address.as_deref(),
+                ctx.config.indexer_pool_size.get(),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
@@ -3264,11 +3265,16 @@ mod tests {
         let (view_gateway_addr, _view_gateway_server, view_gateway_gate) =
             start_saturated_view_gateway().await;
         let startup_timeout = Duration::from_secs(1);
-        let indexer =
-            connect_optional_indexer(Some(&indexer_addr.to_string()), None, startup_timeout, None)
-                .await
-                .expect("bug: indexer connection should succeed")
-                .expect("bug: indexer should be connected");
+        let indexer = connect_optional_indexer(
+            Some(&indexer_addr.to_string()),
+            8,
+            None,
+            startup_timeout,
+            None,
+        )
+        .await
+        .expect("bug: indexer connection should succeed")
+        .expect("bug: indexer should be connected");
         let db_gateway = connect_optional_db_gateway(
             Some(&db_gateway_addr.to_string()),
             1,
@@ -3305,7 +3311,7 @@ mod tests {
         );
 
         let tx_hash = TransactionHash::from(SHA256Hash::from([0; 32]));
-        let indexer_calls: Vec<_> = (0..4)
+        let indexer_calls: Vec<_> = (0..8)
             .map(|_| {
                 let client = indexer.clone();
                 tokio::spawn(async move { client.get_transaction_info(&tx_hash).await })
@@ -3324,7 +3330,7 @@ mod tests {
             })
             .collect();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while indexer_gate.calls.load(Ordering::SeqCst) < 4
+            while indexer_gate.calls.load(Ordering::SeqCst) < 8
                 || db_gateway_gate.calls.load(Ordering::SeqCst) < 1
                 || view_gateway_gate.calls.load(Ordering::SeqCst) < 4
             {

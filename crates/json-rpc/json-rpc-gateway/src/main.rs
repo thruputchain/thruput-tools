@@ -103,6 +103,10 @@ struct Cli {
     #[arg(long)]
     indexer: Option<String>,
 
+    /// Indexer data connections (positive integer, default 4; overrides config)
+    #[arg(long)]
+    indexer_pool_size: Option<std::num::NonZeroUsize>,
+
     /// `DbGateway` x23 RPC address (overrides config file)
     #[arg(long)]
     db_gateway: Option<String>,
@@ -171,6 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_grace_ms = config.shutdown_grace_ms,
         scheduler = %config.scheduler_address,
         indexer = ?config.indexer_address,
+        indexer_pool_size = config.indexer_pool_size.get(),
         view_gateway = ?config.view_gateway_address,
         hogd_protocol_override = ?config.hogd_protocol_override,
         "loading configuration",
@@ -350,6 +355,9 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     if let Some(indexer) = cli.indexer {
         config.indexer_address = Some(indexer);
     }
+    if let Some(pool_size) = cli.indexer_pool_size {
+        config.indexer_pool_size = pool_size;
+    }
     if let Some(db_gateway) = cli.db_gateway {
         config.db_gateway_address = Some(db_gateway);
     }
@@ -462,6 +470,22 @@ async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexer_pool_size_defaults_and_cli_override() {
+        let mut config = GatewayConfig::default();
+        assert_eq!(config.indexer_pool_size.get(), 4);
+        assert!(toml::from_str::<GatewayConfig>("indexer_pool_size = 0").is_err());
+        config = toml::from_str("indexer_pool_size = 8").unwrap();
+        apply_cli_overrides(&mut config, Cli::parse_from(["hog-gateway"]));
+        assert_eq!(config.indexer_pool_size.get(), 8);
+        apply_cli_overrides(
+            &mut config,
+            Cli::parse_from(["hog-gateway", "--indexer-pool-size", "16"]),
+        );
+        assert_eq!(config.indexer_pool_size.get(), 16);
+        assert!(Cli::try_parse_from(["hog-gateway", "--indexer-pool-size", "0"]).is_err());
+    }
 
     #[test]
     fn rpc_batch_concurrency_cli_overrides_toml_and_rejects_invalid_values() {

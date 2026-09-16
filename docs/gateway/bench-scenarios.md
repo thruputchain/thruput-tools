@@ -172,3 +172,64 @@ Candidate workload dimensions:
 Keep the shell scenarios for smoke and coarse regressions. Move realistic
 traffic mixes into the benchmark harness once the method mix needs shared state
 between requests.
+
+## Indexer connection pool comparison
+
+`hog-gateway --indexer-pool-size N` sets the number of serial indexer data
+connections. The positive integer defaults to **4** and can also be set as
+`indexer_pool_size = 8` at the top level of the gateway TOML config. The CLI
+value overrides TOML. Startup and reconnect use the same setting. A separate
+health connection is excluded from this count. Scheduler pools are unchanged.
+
+Build once and restart the gateway with each setting against the same backend:
+
+```bash
+cargo build --release -p groundhog-json-rpc-gateway
+
+target/release/hog-gateway \
+  --runtime-manifest /path/to/runtime-manifest.json \
+  --listen 127.0.0.1:8545 \
+  --indexer-pool-size 8
+```
+
+The setting also works with the existing `--config` and explicit backend-address
+options when testing a hosted gateway. It is logged at startup. Restart the
+process to change the value; use 4 to restore the original behavior.
+
+For a controlled comparison, use one gateway and one load generator, hold client
+concurrency fixed, and test 4, 8, 16, 16, 8, 4 connections. Test
+`groundhog_getTransactionStatus` and `groundhog_getTransactionReceipt` separately
+with `params: [txHash]`, rotating through at least 10,000 confirmed transactions.
+Verify status is committed and receipts are non-null before the load run.
+The stock `groundhog-bench --method getTransactionStatus` currently uses a zero
+hash and measures misses, so it does not reproduce this confirmed-record workload.
+Use a generator configured with real hashes. Do not substitute `chainTip`: its
+backend requests are coalesced.
+
+Record successful requests/s, errors, p50/p99 and backend metrics; repeat across
+separate gateway/backend hosts before selecting a deployment value. More
+connections increase backend concurrency and resource use, and can expose other
+bottlenecks.
+
+### Local comparison, September 15, 2026
+
+A gateway built from RPC commit `506335dae613057307b5a94585e32efd6dbcbe19`
+against `hog-devnode 0.1.28-rc.2` was tested with only the indexer pool constant
+changed. The same 12,000 confirmed transaction hashes, one gateway process,
+two load-generator workers and 128 maximum outstanding requests were used in
+all runs. Each run had 2 seconds warmup and 8 measured seconds; two runs per
+setting, in the order above. The final baseline reproduced the initial result.
+
+| Connections | Status reads/s, two runs | Receipt reads/s, two runs |
+|---|---|---|
+| 4 | 18,212 / 18,150 | 20,516 / 20,429 |
+| 8 | 28,976 / 28,836 | 32,620 / 32,651 |
+| 16 | 39,871 / 39,724 | 44,535 / 44,882 |
+
+All 2,955,225 measured reads succeeded. Receipt p99 improved from about 7.9 ms
+at 4 connections to 3.6 ms at 16; status p99 remained around 9–10 ms. This
+supports making the pool tunable, without establishing a new production default.
+All processes shared one macOS host over loopback, and the transactions were
+recently written. These are short, warm-data measurements, not hosted capacity
+or a cold-history test. Gateway-observed backend duration includes transport
+queueing and is not a pure backend execution-time measurement.
