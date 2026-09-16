@@ -38,7 +38,7 @@ class Capture:
         if self.kind == "perf":
             self.command = ["perf", "record", "--pid", str(pid), "--freq", "99",
                 "--event", "cpu-clock:u", "--call-graph", "dwarf,4096",
-                "--no-buildid-cache", "--max-size", str(self.max_bytes),
+                "--no-buildid-cache", "--max-size", f"{self.max_bytes}B",
                 "--output", str(self.out / "perf.data"), "--", "sleep", str(self.seconds)]
             self.perf_log = (self.out / "perf.stderr").open("w")
             self.perf = subprocess.Popen(self.command, stdout=subprocess.DEVNULL, stderr=self.perf_log)
