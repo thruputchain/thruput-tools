@@ -11,13 +11,17 @@ pnpm install
 pnpm dev
 ```
 
-The Vite dev server proxies `/v1` and `/health` to the local faucet API.
-
-To use the hosted Devnet API instead:
+The Vite dev server proxies `/v1` and `/health` to `http://127.0.0.1:8081` by
+default. Set `GROUNDHOG_FAUCET_PROXY_TARGET` to use another faucet API during
+local development. For example, to use the hosted Devnet API:
 
 ```sh
 GROUNDHOG_FAUCET_PROXY_TARGET=https://faucet.thruput.network pnpm dev
 ```
+
+This override configures Vite's local proxy only; it does not configure the
+built static app or Railway's Caddy proxy. For a production build, use
+`VITE_GROUNDHOG_FAUCET_API_BASE` as described below.
 
 ## Railway Deployment
 
