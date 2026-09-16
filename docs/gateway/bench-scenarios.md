@@ -440,6 +440,14 @@ host and thread controls. `--build-profile` is a runner declaration, defaulting
 to release; callers must supply artifacts built with that profile. Backend
 thread counts and unreported build settings remain unspecified.
 
+The runner fixes gateway logging with `--gateway-log-filter` (default `warn`)
+and `--gateway-log-sink file|discard` (default `file`). It records the filter,
+sink and span-event policy in `target.runnerSupplied.gateway.logging`. File
+logging is part of measured cost and can be substantial under fallback load.
+Discarding output still formats enabled events; `off` disables them. Comparisons
+require matching policies unless `--vary logging` explicitly names the experiment.
+Older results have unknown logging policy.
+
 ### Comparing saved trials
 
 ```bash
@@ -453,7 +461,7 @@ Add `--json` for the machine-readable comparison with per-trial server
 observations. Throughput and latency summaries show repeat spread; errors
 include drain failures. Failed outcomes remain visible and do not establish a
 performance improvement. Available experiment dimensions are `gateway-revision`,
-`pool-size`, `build-settings` and `allocator`; undeclared material differences
+`pool-size`, `build-settings`, `allocator` and `logging`; undeclared material differences
 are rejected. Use separate comparisons for each method and outstanding count.
 Paths, timestamps, labels and endpoint addresses are provenance. Topology,
 hosts, benchmark binary, workload controls and resolved non-endpoint gateway

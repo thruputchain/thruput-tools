@@ -80,6 +80,15 @@ pub(super) struct ComponentMetadata {
     pub(super) worker_threads: Option<usize>,
     pub(super) effective_config: Option<BTreeMap<String, serde_json::Value>>,
     pub(super) host: Option<HostMetadata>,
+    pub(super) logging: Option<LoggingPolicy>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LoggingPolicy {
+    pub(super) filter: String,
+    pub(super) sink: String,
+    pub(super) span_events: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

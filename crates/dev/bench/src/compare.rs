@@ -27,6 +27,7 @@ enum Dimension {
     PoolSize,
     BuildSettings,
     Allocator,
+    Logging,
 }
 
 pub(super) fn run(args: CompareArgs) -> Result<(), String> {
@@ -175,6 +176,9 @@ fn controls(v: &Value, args: &CompareArgs) -> Value {
 
 fn controls_with_dimensions(v: &Value, args: &CompareArgs, dimensions: &[Dimension]) -> Value {
     let mut gateway = v["target"]["runnerSupplied"]["gateway"].clone();
+    if let Some(fields) = gateway.as_object_mut() {
+        fields.entry("logging").or_insert(Value::Null);
+    }
     let mut version = v["target"]["gatewayVersion"].clone();
     if let Some(config) = gateway
         .get_mut("effectiveConfig")
@@ -223,6 +227,7 @@ fn controls_with_dimensions(v: &Value, args: &CompareArgs, dimensions: &[Dimensi
                     &["artifactSha256", "buildProfile", "features"],
                 );
             }
+            Dimension::Logging => remove(&mut gateway, &["logging"]),
             Dimension::Allocator => {
                 remove(&mut gateway, &["artifactSha256"]);
                 if let Some(config) = gateway.get_mut("effectiveConfig") {
@@ -382,6 +387,24 @@ mod tests {
         );
         b["target"]["gatewayVersion"]["value"]["wireFormat"] = json!("4.0.0");
         assert_ne!(controls(&a, &args), controls(&b, &args));
+    }
+
+    #[test]
+    fn logging_is_controlled_and_legacy_policy_is_unknown() {
+        let a = json!({"target":{"runnerSupplied":{"gateway":{}}}});
+        let mut b = a.clone();
+        b["target"]["runnerSupplied"]["gateway"]["logging"] = Value::Null;
+        assert_eq!(controls(&a, &args()), controls(&b, &args()));
+        b["target"]["runnerSupplied"]["gateway"]["logging"] =
+            json!({"filter":"warn","sink":"file","spanEvents":"none"});
+        assert_ne!(controls(&a, &args()), controls(&b, &args()));
+        let mut args = args();
+        args.vary.push(Dimension::Logging);
+        assert_eq!(controls(&a, &args), controls(&b, &args));
+        assert_ne!(
+            controls_with_dimensions(&a, &args, &[]),
+            controls_with_dimensions(&b, &args, &[])
+        );
     }
 
     #[test]

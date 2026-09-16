@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--workers", type=positive, default=2)
     parser.add_argument("--setup-timeout", type=positive, default=600)
     parser.add_argument("--build-profile", choices=("release", "debug"), default="release", help="declared build profile of supplied artifacts")
+    parser.add_argument("--gateway-log-filter", choices=("off", "error", "warn", "info", "debug", "trace"), default="warn")
+    parser.add_argument("--gateway-log-sink", choices=("file", "discard"), default="file")
     args = parser.parse_args()
     pools = [int(v) for v in (args.pools or ("4,8,16,32,64" if args.scenario == "pool-sweep" else "16")).split(",")]
     outstanding = [int(v) for v in args.outstanding.split(",")]
@@ -66,11 +68,12 @@ def main():
     def write(path, value):
         path.write_text(json.dumps(value, indent=2) + "\n")
 
-    def launch(argv, name):
-        stdout = (out / f"{name}.stdout").open("w")
-        stderr = (out / f"{name}.stderr").open("w")
+    def launch(argv, name, gateway_process=False):
+        discard = gateway_process and args.gateway_log_sink == "discard"
+        stdout = open(os.devnull, "w") if discard else (out / f"{name}.stdout").open("w")
+        stderr = open(os.devnull, "w") if discard else (out / f"{name}.stderr").open("w")
         handles.extend((stdout, stderr))
-        process = subprocess.Popen(list(map(str, argv)), env=env, stdout=stdout, stderr=stderr)
+        process = subprocess.Popen(list(map(str, argv)), env=dict(env, RUST_LOG=args.gateway_log_filter) if gateway_process else env, stdout=stdout, stderr=stderr)
         children.append(process)
         return process
 
@@ -135,13 +138,14 @@ def main():
         # The binary resolves its defaults; the runner does not duplicate them.
         effective = json.loads(subprocess.check_output(list(map(str, argv + ["--dump-effective-config"])),
                                                        env=dict(env, RUST_LOG="off"), timeout=30))
-        process = launch(argv, name)
+        process = launch(argv, name, gateway_process=True)
         wait_until(process, lambda: rpc("chainTip"), 120)
         runtime = json.loads(manifest.read_text())
         info = {"schemaVersion": 1, "topology": "loopback gateway and isolated interval-driven devnode on one host",
             "gateway": {"artifactSha256": binary_hashes[str(binary)], "commitHash": rpc("version").get("commitHash"),
                 "buildProfile": args.build_profile, "workerThreads": args.runtime_workers,
-                "effectiveConfig": effective, "host": host},
+                "effectiveConfig": effective, "host": host,
+                "logging": {"filter": args.gateway_log_filter, "sink": args.gateway_log_sink, "spanEvents": "none"}},
             "backend": {"artifactSha256": binary_hashes[str(args.devnode)],
                 "commitHash": runtime["producer"].get("commitHash"), "host": host,
                 "effectiveConfig": {"ramdbBytes": 2147483648, "devAccountCount": 100, "blockDriver": "interval", "blockIntervalMs": 500}}}
