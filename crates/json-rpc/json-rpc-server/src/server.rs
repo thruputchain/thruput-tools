@@ -37,7 +37,7 @@ use crate::{
 /// refreshed by whichever path fetches a tip: a submit that finds it stale,
 /// the public `chainTip` method, or the background task started by
 /// [`Self::new`] that keeps it fresh on an idle server.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GroundhogRpcServer<S, C, R, V> {
     submit: S,
     chain: Arc<C>,
@@ -48,11 +48,12 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     build_info: BuildInfo,
     release_version: Option<String>,
     bundle_manifest_digest: Option<String>,
+    /// Shared with the refresh task, which `tokio::spawn` requires to own
+    /// its `'static` handle rather than borrow this one.
     tip_params: Arc<TipParams>,
-    /// Aborts the background refresh when the last clone of the server
-    /// (typically the one jsonrpsee holds) is dropped. Held only for that
-    /// drop; never read.
-    _tip_refresh: Option<Arc<AbortOnDrop>>,
+    /// Aborts the background refresh when the server is dropped. Held only
+    /// for that drop; never read.
+    _tip_refresh: Option<AbortOnDrop>,
 }
 
 /// What the submit pre-checks need from a db tip, resolved once per fetch
@@ -330,8 +331,7 @@ where
     ) -> Self {
         let chain = Arc::new(chain);
         let tip_params = Arc::new(TipParams::default());
-        let tip_refresh =
-            spawn_tip_refresh(chain.clone(), tip_params.clone(), &config).map(Arc::new);
+        let tip_refresh = spawn_tip_refresh(chain.clone(), tip_params.clone(), &config);
         Self {
             submit,
             chain,
