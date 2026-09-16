@@ -3,6 +3,12 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use groundhog_json_rpc_types::{
+    receipt::TransactionReceipt,
+    transaction::{TransactionStatus, TxHash},
+};
+use serde::Deserialize;
+
 use crate::BenchError;
 use crate::workload::make_request;
 
@@ -18,19 +24,23 @@ pub(super) enum RequestErrorKind {
     HttpStatus,
     InvalidJsonRpcResponse,
     JsonRpc,
+    Semantic,
 }
 
-fn classify_json_rpc_value(value: &serde_json::Value, expected_id: u64) -> RequestOutcome {
-    let Some(object) = value.as_object() else {
-        return RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse);
+fn json_rpc_result(
+    value: serde_json::Value,
+    expected_id: u64,
+) -> Result<serde_json::Value, RequestErrorKind> {
+    let serde_json::Value::Object(mut object) = value else {
+        return Err(RequestErrorKind::InvalidJsonRpcResponse);
     };
     if object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
         || object.get("id").and_then(serde_json::Value::as_u64) != Some(expected_id)
     {
-        return RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse);
+        return Err(RequestErrorKind::InvalidJsonRpcResponse);
     }
-    match (object.get("result"), object.get("error")) {
-        (Some(_), None) => RequestOutcome::Success,
+    match (object.remove("result"), object.remove("error")) {
+        (Some(value), None) => Ok(value),
         (None, Some(serde_json::Value::Object(error)))
             if error
                 .get("code")
@@ -41,9 +51,30 @@ fn classify_json_rpc_value(value: &serde_json::Value, expected_id: u64) -> Reque
                     .and_then(serde_json::Value::as_str)
                     .is_some() =>
         {
-            RequestOutcome::Error(RequestErrorKind::JsonRpc)
+            Err(RequestErrorKind::JsonRpc)
         }
-        _ => RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse),
+        _ => Err(RequestErrorKind::InvalidJsonRpcResponse),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ExpectedResult {
+    Any,
+    Committed { height: i64 },
+    Receipt { hash: TxHash, height: i64 },
+}
+
+impl ExpectedResult {
+    pub(super) fn validate(self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Committed { height: expected } => {
+                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { height }) if *height == expected)
+            }
+            Self::Receipt { hash, height } => {
+                matches!(TransactionReceipt::deserialize(value), Ok(receipt) if receipt.tx_hash == hash && *receipt.height == height)
+            }
+        }
     }
 }
 
@@ -59,17 +90,17 @@ fn append_response_chunk(
     Ok(())
 }
 
-async fn classify_response(
+async fn response_value(
     response: Result<reqwest::Response, reqwest::Error>,
     expected_id: u64,
     max_response_bytes: usize,
-) -> RequestOutcome {
+) -> Result<serde_json::Value, RequestErrorKind> {
     let mut response = match response {
         Ok(response) => response,
-        Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
+        Err(_) => return Err(RequestErrorKind::Transport),
     };
     if !response.status().is_success() {
-        return RequestOutcome::Error(RequestErrorKind::HttpStatus);
+        return Err(RequestErrorKind::HttpStatus);
     }
 
     let max_response_bytes_u64 = u64::try_from(max_response_bytes).unwrap_or(u64::MAX);
@@ -77,7 +108,7 @@ async fn classify_response(
         .content_length()
         .is_some_and(|length| length > max_response_bytes_u64)
     {
-        return RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse);
+        return Err(RequestErrorKind::InvalidJsonRpcResponse);
     }
 
     let mut body = Vec::with_capacity(
@@ -90,16 +121,33 @@ async fn classify_response(
         let chunk = match response.chunk().await {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
-            Err(_) => return RequestOutcome::Error(RequestErrorKind::Transport),
+            Err(_) => return Err(RequestErrorKind::Transport),
         };
-        if let Err(kind) = append_response_chunk(&mut body, &chunk, max_response_bytes) {
-            return RequestOutcome::Error(kind);
-        }
+        append_response_chunk(&mut body, &chunk, max_response_bytes)?;
     }
 
     match serde_json::from_slice(&body) {
-        Ok(value) => classify_json_rpc_value(&value, expected_id),
-        Err(_) => RequestOutcome::Error(RequestErrorKind::InvalidJsonRpcResponse),
+        Ok(value) => json_rpc_result(value, expected_id),
+        Err(_) => Err(RequestErrorKind::InvalidJsonRpcResponse),
+    }
+}
+
+pub(super) async fn request_value<F>(
+    request: F,
+    expected_id: u64,
+    request_timeout: Duration,
+    max_response_bytes: usize,
+) -> Result<serde_json::Value, RequestErrorKind>
+where
+    F: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+    let request = async {
+        let response = request.await;
+        response_value(response, expected_id, max_response_bytes).await
+    };
+    match tokio::time::timeout(request_timeout, request).await {
+        Ok(outcome) => outcome,
+        Err(_) => Err(RequestErrorKind::Transport),
     }
 }
 
@@ -108,17 +156,15 @@ pub(super) async fn classify_request<F>(
     expected_id: u64,
     request_timeout: Duration,
     max_response_bytes: usize,
+    expected: ExpectedResult,
 ) -> RequestOutcome
 where
     F: Future<Output = Result<reqwest::Response, reqwest::Error>>,
 {
-    let request = async {
-        let response = request.await;
-        classify_response(response, expected_id, max_response_bytes).await
-    };
-    match tokio::time::timeout(request_timeout, request).await {
-        Ok(outcome) => outcome,
-        Err(_) => RequestOutcome::Error(RequestErrorKind::Transport),
+    match request_value(request, expected_id, request_timeout, max_response_bytes).await {
+        Ok(value) if expected.validate(&value) => RequestOutcome::Success,
+        Ok(_) => RequestOutcome::Error(RequestErrorKind::Semantic),
+        Err(error) => RequestOutcome::Error(error),
     }
 }
 
@@ -144,7 +190,14 @@ pub(super) async fn calibrate_rtt(
     for _ in 0..20 {
         let start = Instant::now();
         let request = client.post(url).json(&body).send();
-        if classify_request(request, 0, request_timeout, max_response_bytes).await
+        if classify_request(
+            request,
+            0,
+            request_timeout,
+            max_response_bytes,
+            ExpectedResult::Any,
+        )
+        .await
             == RequestOutcome::Success
         {
             rtts.push(start.elapsed());
@@ -167,6 +220,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    fn classify_json_rpc_value(value: &serde_json::Value, expected_id: u64) -> RequestOutcome {
+        match json_rpc_result(value.clone(), expected_id) {
+            Ok(_) => RequestOutcome::Success,
+            Err(error) => RequestOutcome::Error(error),
+        }
+    }
 
     #[test]
     fn json_rpc_result_is_successful() {
@@ -227,8 +287,41 @@ mod tests {
     async fn request_timeout_bounds_pending_transport() {
         let request = std::future::pending::<Result<reqwest::Response, reqwest::Error>>();
 
-        let outcome = classify_request(request, 0, Duration::from_millis(1), 1024).await;
+        let outcome = classify_request(
+            request,
+            0,
+            Duration::from_millis(1),
+            1024,
+            ExpectedResult::Any,
+        )
+        .await;
 
         assert_eq!(outcome, RequestOutcome::Error(RequestErrorKind::Transport));
+    }
+    #[test]
+    fn confirmed_results_reject_missing_wrong_height_and_wrong_hash() {
+        let hash: TxHash = serde_json::from_value(json!(format!("0x{}", "aa".repeat(32)))).unwrap();
+        let status = ExpectedResult::Committed { height: 7 };
+        for value in [
+            json!(null),
+            json!({"status":"pending"}),
+            json!({"status":"unknown"}),
+            json!({"status":"committed","height":8}),
+        ] {
+            assert!(!status.validate(&value));
+        }
+        assert!(status.validate(&json!({"status":"committed","height":7})));
+        let expected = ExpectedResult::Receipt { hash, height: 7 };
+        assert!(!expected.validate(&json!(null)));
+        let mut receipt = json!({"txHash":hash,"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[]});
+        assert!(
+            expected.validate(&receipt),
+            "committed execution failures are valid read records"
+        );
+        receipt["height"] = json!(8);
+        assert!(!expected.validate(&receipt));
+        receipt["height"] = json!(7);
+        receipt["txHash"] = json!(format!("0x{}", "bb".repeat(32)));
+        assert!(!expected.validate(&receipt));
     }
 }

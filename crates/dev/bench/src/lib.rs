@@ -23,6 +23,8 @@ use groundhog_signing::SigningError;
 use hdrhistogram::Histogram;
 
 mod cli;
+mod corpus;
+mod metadata;
 mod request;
 mod results;
 mod worker;
@@ -32,9 +34,8 @@ use cli::{Cli, confirm_submission, confirmation_required_json};
 use request::calibrate_rtt;
 use results::{
     BENCH_RESULT_SCHEMA_VERSION, BenchConfiguration, BenchResult, CalibrationMetrics,
-    PlatformMetadata, ProducerMetadata, RateMetrics, RequestErrorCounts, RequestMetrics,
-    RuntimeIdentity, RuntimeProducerIdentity, benchmark_git_commit, benchmark_git_dirty,
-    latency_metrics, print_human_result,
+    ProducerMetadata, RateMetrics, RequestMetrics, RuntimeIdentity, RuntimeProducerIdentity,
+    benchmark_git_commit, benchmark_git_dirty, latency_metrics, print_human_result,
 };
 use worker::{WorkerConfig, run_worker};
 use workload::{
@@ -43,10 +44,22 @@ use workload::{
 
 #[derive(Debug, thiserror::Error)]
 enum BenchError {
-    #[error("--workers must be >= 1")]
-    InvalidWorkers,
-    #[error("--rate must be >= 1")]
-    InvalidRate,
+    #[error("invalid benchmark configuration: {0}")]
+    InvalidConfiguration(String),
+    #[error("benchmark setup failed: {0}")]
+    Setup(String),
+    #[error("failed to access {path}: {source}")]
+    File {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("benchmark recorded failed requests; see the result for counts")]
+    MeasuredFailures,
+    #[error(
+        "benchmark started no requests in the measured window; increase duration or reduce warmup request time"
+    )]
+    EmptyMeasurement,
     #[error("--duration must be >= 1")]
     InvalidDuration,
     #[error("--request-timeout-ms must be >= 1")]
@@ -64,10 +77,10 @@ enum BenchError {
     #[error("unknown method `{method}`")]
     UnknownMethod { method: String },
     #[error(
-        "confirmation required to benchmark sendRawTransaction; pass --force to continue non-interactively"
+        "confirmation required to submit benchmark transactions; pass --force to continue non-interactively"
     )]
     ConfirmationRequired,
-    #[error("sendRawTransaction benchmark cancelled")]
+    #[error("benchmark submission cancelled")]
     ConfirmationDeclined,
     #[error("failed to read or write confirmation: {source}")]
     ConfirmationIo {
@@ -141,15 +154,31 @@ pub async fn run_cli() {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), BenchError> {
-    if cli.workers == 0 {
-        return Err(BenchError::InvalidWorkers);
-    }
-    if !cli.unthrottled && cli.rate == 0 {
-        return Err(BenchError::InvalidRate);
+fn validate_configuration(cli: &Cli) -> Result<(), BenchError> {
+    let invalid = |message: &str| BenchError::InvalidConfiguration(message.into());
+    if cli.workers == 0 || cli.workers > 1024 {
+        return Err(invalid("--workers must be in 1..=1024"));
     }
     if cli.duration == 0 {
         return Err(BenchError::InvalidDuration);
+    }
+    if cli.duration.checked_mul(1000).is_none()
+        || Instant::now()
+            .checked_add(Duration::from_secs(cli.setup_timeout_secs))
+            .is_none()
+        || Instant::now()
+            .checked_add(Duration::from_millis(cli.request_timeout_ms))
+            .is_none()
+    {
+        return Err(invalid(
+            "duration or timeout exceeds the supported clock range",
+        ));
+    }
+    if cli
+        .rate
+        .is_some_and(|rate| rate == 0 || rate > 1_000_000_000)
+    {
+        return Err(invalid("--rate must be in 1..=1000000000"));
     }
     if cli.request_timeout_ms == 0 {
         return Err(BenchError::InvalidRequestTimeout);
@@ -157,17 +186,64 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
     if cli.max_response_bytes == 0 {
         return Err(BenchError::InvalidMaxResponseBytes);
     }
+    if cli.connections_per_worker > 65536 {
+        return Err(invalid("--connections-per-worker must be <= 65536"));
+    }
+    if cli.outstanding.is_some_and(|n| n == 0 || n > 65536) {
+        return Err(invalid("--outstanding must be in 1..=65536"));
+    }
+    if !cli.max_skew.is_finite() || cli.max_skew < 0.0 || cli.max_skew > 86400.0 {
+        return Err(invalid("--max-skew must be finite and in 0..=86400"));
+    }
+    if cli.setup_timeout_secs == 0 {
+        return Err(invalid("--setup-timeout-secs must be >= 1"));
+    }
+    if cli
+        .seed_count
+        .is_some_and(|count| count == 0 || count > corpus::MAX_SEED_COUNT)
+    {
+        return Err(invalid("--seed-count must be in 1..=100000"));
+    }
     validate_method(&cli.method)?;
+    let confirmed = cli.hashes_file.is_some() || cli.seed_count.is_some();
+    if confirmed
+        && !matches!(
+            cli.method.as_str(),
+            "getTransactionStatus" | "getTransactionReceipt"
+        )
+    {
+        return Err(invalid(
+            "a confirmed corpus requires getTransactionStatus or getTransactionReceipt",
+        ));
+    }
+    if cli.method == "getTransactionReceipt" && !confirmed {
+        return Err(invalid(
+            "getTransactionReceipt requires --hashes-file or --seed-count",
+        ));
+    }
+    if cli.tx_batch_size == Some(0) {
+        return Err(invalid("--tx-batch-size must be >= 1"));
+    }
+    Ok(())
+}
 
+async fn run(cli: Cli) -> Result<(), BenchError> {
+    validate_configuration(&cli)?;
     let loaded_manifest = match &cli.runtime_manifest {
         Some(path) => Some(load_runtime_manifest(path).await?),
         None => None,
     };
     let manifest = loaded_manifest.as_ref().map(|loaded| &loaded.manifest);
     let needs_transactions = cli.method == "sendRawTransaction";
-    let (accounts, entrypoint) =
-        transaction_inputs_for_method(&cli.method, manifest, cli.accounts)?;
-
+    let (accounts, entrypoint) = transaction_inputs_for_method(
+        if cli.seed_count.is_some() {
+            "sendRawTransaction"
+        } else {
+            &cli.method
+        },
+        manifest,
+        cli.accounts,
+    )?;
     let stdin = io::stdin();
     let stderr = io::stderr();
     confirm_submission(
@@ -177,152 +253,190 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
         &mut stdin.lock(),
         &mut stderr.lock(),
     )?;
-
-    let total_duration = Duration::from_secs(cli.duration);
-    let warmup_duration = Duration::from_secs(cli.warmup);
-    let total_run_duration = total_duration + warmup_duration;
-    let interval = if cli.unthrottled {
-        Duration::ZERO
-    } else {
-        Duration::from_secs_f64(1.0 / cli.rate as f64)
-    };
-    let max_skew = Duration::from_secs_f64(cli.max_skew);
-    let request_timeout = Duration::from_millis(cli.request_timeout_ms);
-
-    // --- Transaction pre-generation ---
-    let tx_batch = if needs_transactions {
-        eprintln!("Generating transactions...");
-        let batch_size = cli.tx_batch_size.unwrap_or_else(|| {
-            if cli.unthrottled {
-                100_000
-            } else {
-                (cli.rate as usize) * (cli.duration as usize + cli.warmup as usize + 1)
+    if let Some(path) = &cli.seed_output {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                return Err(BenchError::InvalidConfiguration(format!(
+                    "seed output already exists: {}",
+                    path.display()
+                )));
             }
-        });
-        // sendRawTransaction requires the manifest, so the hash is always
-        // available on this path; transaction_inputs_for_method enforces it.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(BenchError::File {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
+    }
+    let measured_duration = Duration::from_secs(cli.duration);
+    let warmup_duration = Duration::from_secs(cli.warmup);
+    let total_duration = measured_duration
+        .checked_add(warmup_duration)
+        .filter(|duration| Instant::now().checked_add(*duration).is_some())
+        .ok_or_else(|| {
+            BenchError::InvalidConfiguration("benchmark duration is too large".into())
+        })?;
+    let rate = cli.rate.unwrap_or(100);
+    let closed_loop = cli.unthrottled || cli.outstanding.is_some();
+    let interval = (!closed_loop).then(|| Duration::from_secs_f64(1.0 / rate as f64));
+    let request_timeout = Duration::from_millis(cli.request_timeout_ms);
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(4)
+        .build()
+        .map_err(|source| BenchError::HttpClient { source })?;
+    let target = metadata::collect(&cli, &client).await?;
+    if let (Some(manifest), Some(info)) = (manifest, &target.runner_supplied)
+        && let (Some(actual), Some(expected)) =
+            (&manifest.producer.commit_hash, &info.backend.commit_hash)
+        && actual != expected
+    {
+        return Err(BenchError::InvalidConfiguration(
+            "runner backend commit differs from runtime manifest".into(),
+        ));
+    }
+    let corpus = if cli.hashes_file.is_some() || cli.seed_count.is_some() {
+        eprintln!("Preparing and validating confirmed hashes outside the measurement window...");
+        Some(corpus::prepare(&cli, manifest, &client).await?)
+    } else {
+        None
+    };
+    let tx_batch = if needs_transactions {
+        let batch_size = match cli.tx_batch_size {
+            Some(count) => count,
+            None if closed_loop => 100_000,
+            None => usize::try_from(
+                rate.checked_mul(
+                    cli.duration
+                        .checked_add(cli.warmup)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or_else(|| {
+                            BenchError::InvalidConfiguration(
+                                "transaction batch size overflow".into(),
+                            )
+                        })?,
+                )
+                .ok_or_else(|| {
+                    BenchError::InvalidConfiguration("transaction batch size overflow".into())
+                })?,
+            )
+            .map_err(|_| {
+                BenchError::InvalidConfiguration("transaction batch size overflow".into())
+            })?,
+        };
         let network_hash = manifest
             .ok_or(BenchError::MissingRuntimeManifest)?
             .network_hash
             .to_network_hash();
-        let batch = generate_tx_batch(batch_size, &accounts, entrypoint, &network_hash)?;
-        eprintln!("Generated {} transactions", batch.len());
-        Arc::new(batch)
+        generate_tx_batch(batch_size, &accounts, entrypoint, &network_hash, 0)?
+            .into_iter()
+            .map(|tx| tx.hex)
+            .collect()
     } else {
-        Arc::new(vec![])
+        Vec::new()
     };
     let transaction_batch_size = tx_batch.len();
-
-    // --- Calibrate RTT to size connection pools ---
-    let probe_client = reqwest::Client::builder()
-        .pool_max_idle_per_host(4)
-        .build()
-        .map_err(|source| BenchError::HttpClient { source })?;
-
-    eprintln!("Calibrating RTT (via chainTip)...");
-    let median_rtt = calibrate_rtt(
-        &probe_client,
-        &cli.url,
-        request_timeout,
-        cli.max_response_bytes,
-    )
-    .await?;
-    eprintln!("Median RTT: {median_rtt:.1?}");
-    drop(probe_client);
-
-    // Little's Law: connections = rate * rtt / workers. We calibrate
-    // with chainTip, which is cheaper than the benchmark method, so
-    // the naive result undersizes the pool (HTTP/1.1 serializes one
-    // request per connection, and the real method's server-side
-    // processing adds latency the calibration doesn't see). Inflate
-    // by 4x to cover that gap; floor of 16 prevents pathological
-    // undersizing at very low rates.
+    let median_rtt =
+        calibrate_rtt(&client, &cli.url, request_timeout, cli.max_response_bytes).await?;
     let connections_per_worker = if cli.connections_per_worker > 0 {
         cli.connections_per_worker
-    } else if cli.unthrottled {
+    } else if let Some(n) = cli.outstanding {
+        n.div_ceil(cli.workers)
+    } else if closed_loop {
         256
     } else {
-        let per_worker_rate = cli.rate as f64 / cli.workers as f64;
-        let needed = (per_worker_rate * median_rtt.as_secs_f64() * 4.0).ceil() as usize;
-        needed.clamp(16, 2048)
+        ((rate as f64 / cli.workers as f64 * median_rtt.as_secs_f64() * 4.0).ceil() as usize)
+            .clamp(16, 2048)
     };
-
-    // Bound total in-flight requests to avoid OOM. Each worker gets its
-    // own semaphore with capacity = 2x its connection pool (allow some
-    // queuing inside reqwest but not unbounded growth).
-    let max_inflight_per_worker = connections_per_worker * 2;
-
-    eprintln!(
-        "Config: {} workers x {} connections ({} max in-flight each)",
-        cli.workers, connections_per_worker, max_inflight_per_worker,
-    );
-    if cli.unthrottled {
-        eprintln!(
-            "Benchmarking {} unthrottled for {}s ({}s warmup)...",
-            cli.method, cli.duration, cli.warmup
-        );
-    } else {
-        eprintln!(
-            "Benchmarking {} at {} req/s for {}s ({}s warmup)...",
-            cli.method, cli.rate, cli.duration, cli.warmup
+    let per_worker_cap = (cli.outstanding.is_none()).then_some(connections_per_worker * 2);
+    let effective_max_inflight = cli
+        .outstanding
+        .unwrap_or(connections_per_worker * 2 * cli.workers);
+    let global_sem = cli
+        .outstanding
+        .map(|n| Arc::new(tokio::sync::Semaphore::new(n)));
+    let mut clients = Vec::with_capacity(cli.workers);
+    for _ in 0..cli.workers {
+        clients.push(
+            reqwest::Client::builder()
+                .pool_max_idle_per_host(connections_per_worker)
+                .build()
+                .map_err(|source| BenchError::HttpClient { source })?,
         );
     }
-
-    // --- Launch workers ---
+    let benchmark_binary_sha256 =
+        match std::env::current_exe().and_then(|path| metadata::binary_digest(&path)) {
+            Ok(value) => metadata::Observation::Observed { value },
+            Err(error) => metadata::Observation::Unavailable {
+                reason: error.to_string(),
+            },
+        };
+    let platform = metadata::HostMetadata::local();
+    let (corpus_identity, records) = match corpus {
+        Some(corpus) => (Some(corpus.identity), corpus.records),
+        None => (None, Vec::new()),
+    };
+    eprintln!(
+        "Benchmarking {}: {} workers, {} maximum in flight, {}s measured after {}s warmup",
+        cli.method, cli.workers, effective_max_inflight, cli.duration, cli.warmup
+    );
     let start = Instant::now();
     let cfg = Arc::new(WorkerConfig {
         url: cli.url.clone(),
         method: cli.method.clone(),
         tx_batch,
+        records,
         start,
         warmup_duration,
-        total_run_duration,
+        measured_duration,
         interval,
-        max_skew,
+        max_skew: Duration::from_secs_f64(cli.max_skew),
         request_timeout,
         max_response_bytes: cli.max_response_bytes,
         num_workers: cli.workers,
-        unthrottled: cli.unthrottled,
     });
-
-    let mut handles = Vec::with_capacity(cli.workers);
-
-    for worker_id in 0..cli.workers {
-        let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(connections_per_worker)
-            .build()
-            .map_err(|source| BenchError::HttpClient { source })?;
-
-        let sem = Arc::new(tokio::sync::Semaphore::new(max_inflight_per_worker));
-        let cfg = cfg.clone();
-
-        handles.push(tokio::spawn(async move {
-            run_worker(worker_id, &cfg, client, sem).await
-        }));
+    let mut workers = tokio::task::JoinSet::new();
+    for (id, client) in clients.into_iter().enumerate() {
+        let sem = global_sem
+            .clone()
+            .unwrap_or_else(|| Arc::new(tokio::sync::Semaphore::new(connections_per_worker * 2)));
+        workers.spawn(run_worker(id, cfg.clone(), client, sem));
     }
-
-    // --- Collect results ---
-    let mut merged_hist =
-        Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram");
-    let mut total_successes = 0u64;
-    let mut errors = RequestErrorCounts::default();
-
-    for handle in handles {
-        let result = handle
-            .await
-            .map_err(|source| BenchError::WorkerJoin { source })?;
-        merged_hist.add(&result.histogram).ok();
-        total_successes += result.successes;
-        errors.merge(result.errors);
+    let mut histogram = Histogram::<u64>::new(3).expect("bug: histogram precision is valid");
+    let mut requests = RequestMetrics::default();
+    let mut drained = RequestMetrics::default();
+    while let Some(result) = workers.join_next().await {
+        let result = result.map_err(|source| BenchError::WorkerJoin { source })??;
+        histogram
+            .add(&result.histogram)
+            .expect("bug: compatible histograms");
+        requests.merge(result.requests);
+        drained.merge(result.drained);
     }
-
-    let total_errors = errors.total();
-    let total_sent = total_successes + total_errors;
-    let actual_duration = total_duration.as_secs_f64();
-    let attempted_requests_per_second = total_sent as f64 / actual_duration;
+    // Open-loop workers can finish their scheduled calls before the last fraction
+    // of the window. Keep its duration and drain boundary explicit either way.
+    tokio::time::sleep_until((start + total_duration).into()).await;
+    let finished = Instant::now();
+    let actual_duration = measured_duration.as_secs_f64();
+    let attempted_requests_per_second = (requests.total + drained.total) as f64 / actual_duration;
+    let rates = RateMetrics {
+        attempted_requests_per_second,
+        successful_requests_per_second: requests.successful as f64 / actual_duration,
+        target_achievement_percent: (!closed_loop)
+            .then_some(attempted_requests_per_second / rate as f64 * 100.0),
+        run_wall_time_ms: finished.duration_since(start).as_secs_f64() * 1000.0,
+    };
     let result = BenchResult {
         schema_version: BENCH_RESULT_SCHEMA_VERSION,
         kind: "groundhog-bench-result",
+        outcome: if requests.failed + drained.failed > 0 {
+            "failed"
+        } else if requests.total + drained.total == 0 {
+            "empty"
+        } else {
+            "passed"
+        },
         generated_at_unix_ms: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -338,18 +452,36 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             git_commit: benchmark_git_commit(),
             git_dirty: benchmark_git_dirty(),
         },
-        platform: PlatformMetadata {
-            os: std::env::consts::OS,
-            arch: std::env::consts::ARCH,
+        platform,
+        benchmark_binary_sha256,
+        runtime_worker_threads: tokio::runtime::Handle::current().metrics().num_workers(),
+        target,
+        corpus: corpus_identity,
+        run: results::RunIdentity {
+            scenario: cli.scenario,
+            target_label: cli.target_label,
+            url: cli.url,
+            runtime_manifest: cli.runtime_manifest.map(|path| path.display().to_string()),
+            hashes_file: cli
+                .hashes_file
+                .or(cli.seed_output)
+                .map(|path| path.display().to_string()),
+        },
+        measurement: results::Measurement {
+            inclusion: "started-and-completed-in-window",
+            window_ms: cli.duration.checked_mul(1000).ok_or_else(|| {
+                BenchError::InvalidConfiguration("duration milliseconds overflow".into())
+            })?,
+            drain_ms: finished
+                .saturating_duration_since(start + total_duration)
+                .as_secs_f64()
+                * 1000.0,
         },
         runtime: loaded_manifest.as_ref().map(|loaded| RuntimeIdentity {
             manifest_sha256: loaded.sha256.clone(),
             manifest_schema_version: loaded.manifest.schema_version,
             kind: loaded.manifest.kind.clone(),
-            chain_state: loaded
-                .manifest
-                .chain_state
-                .map(|chain_state| chain_state.to_string()),
+            chain_state: loaded.manifest.chain_state.map(|state| state.to_string()),
             network_hash: loaded.manifest.network_hash.to_string(),
             protocol: loaded.manifest.protocol.clone(),
             producer: RuntimeProducerIdentity {
@@ -359,47 +491,36 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             },
         }),
         configuration: BenchConfiguration {
-            scenario: cli.scenario,
-            target_label: cli.target_label,
-            url: cli.url,
             method: cli.method,
-            mode: if cli.unthrottled {
+            mode: if cli.outstanding.is_some() {
+                "closed_loop"
+            } else if cli.unthrottled {
                 "unthrottled"
             } else {
                 "rate_limited"
             },
-            target_requests_per_second: (!cli.unthrottled).then_some(cli.rate),
+            target_requests_per_second: (!closed_loop).then_some(rate),
             duration_seconds: cli.duration,
             warmup_seconds: cli.warmup,
             workers: cli.workers,
             connections_per_worker,
-            max_inflight_per_worker,
-            accounts: cli.accounts,
+            max_inflight_per_worker: per_worker_cap,
+            outstanding: cli.outstanding,
+            effective_max_inflight,
+            accounts: if needs_transactions { cli.accounts } else { 0 },
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,
             max_response_bytes: cli.max_response_bytes,
-            runtime_manifest: cli.runtime_manifest.map(|path| path.display().to_string()),
         },
         calibration: CalibrationMetrics {
             median_rtt_us: median_rtt.as_micros() as u64,
         },
-        requests: RequestMetrics {
-            total: total_sent,
-            successful: total_successes,
-            failed: total_errors,
-            errors,
-        },
-        rates: RateMetrics {
-            attempted_requests_per_second,
-            successful_requests_per_second: total_successes as f64 / actual_duration,
-            target_achievement_percent: (!cli.unthrottled)
-                .then_some(attempted_requests_per_second / cli.rate as f64 * 100.0),
-            run_wall_time_ms: start.elapsed().as_secs_f64() * 1000.0,
-        },
-        successful_latency_us: latency_metrics(&merged_hist),
+        requests,
+        drained,
+        rates,
+        successful_latency_us: latency_metrics(&histogram),
     };
-
     if cli.json {
         println!(
             "{}",
@@ -407,6 +528,12 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
         );
     } else {
         print_human_result(&result);
+    }
+    if result.requests.failed + result.drained.failed > 0 {
+        return Err(BenchError::MeasuredFailures);
+    }
+    if result.requests.total + result.drained.total == 0 {
+        return Err(BenchError::EmptyMeasurement);
     }
     Ok(())
 }

@@ -9,7 +9,7 @@ use groundhog_json_rpc_types::runtime_manifest::{
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, derive_dev_account_signer,
-    sign_and_encode_transaction_hex,
+    sign_and_encode_transaction_hex, transaction_hash,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, NetworkHash};
@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use crate::BenchError;
+use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
 
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -35,13 +36,20 @@ pub(super) struct LoadedRuntimeManifest {
     pub(super) sha256: String,
 }
 
-/// Pre-generate a batch of hex-encoded signed transactions.
+#[derive(Debug)]
+pub(super) struct PreparedTransaction {
+    pub(super) hex: String,
+    pub(super) hash: TxHash,
+}
+
+/// Pre-generate a batch of signed transactions and their canonical hashes.
 pub(super) fn generate_tx_batch(
     count: usize,
     accounts: &[BenchAccount],
     wallet_entrypoint: ContractEntrypointID,
     network_hash: &NetworkHash,
-) -> Result<Vec<String>, BenchError> {
+    nonce_start: u64,
+) -> Result<Vec<PreparedTransaction>, BenchError> {
     (0..count)
         .map(|i| {
             let idx = i % accounts.len();
@@ -55,17 +63,24 @@ pub(super) fn generate_tx_batch(
                 gas_limit: 10_000_000,
                 target_gas_limit: 10_000_000,
                 block_expiry_height: 10_000_000,
-                nonce: i as u64,
+                nonce: nonce_start.checked_add(i as u64).ok_or_else(|| {
+                    BenchError::InvalidConfiguration("seed nonce range overflows u64".into())
+                })?,
             })
             .map_err(|source| BenchError::WalletCalldata { source })?;
 
-            sign_and_encode_transaction_hex(
+            let hash =
+                TxHash(Hex0x(transaction_hash(&tx).map_err(|source| {
+                    BenchError::SignAndEncodeTransaction { source }
+                })?));
+            let hex = sign_and_encode_transaction_hex(
                 tx,
                 &account.signer,
                 SignTransactionParams::default(),
                 network_hash,
             )
-            .map_err(|source| BenchError::SignAndEncodeTransaction { source })
+            .map_err(|source| BenchError::SignAndEncodeTransaction { source })?;
+            Ok(PreparedTransaction { hex, hash })
         })
         .collect()
 }
@@ -179,13 +194,13 @@ pub(super) async fn load_runtime_manifest(
 }
 
 /// Build a JSON-RPC request body.
-pub(super) fn make_request(method: &str, tx_hex: &str, id: u64) -> serde_json::Value {
+pub(super) fn make_request(method: &str, input: &str, id: u64) -> serde_json::Value {
     match method {
         "sendRawTransaction" => serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "groundhog_sendRawTransaction",
-            "params": [tx_hex]
+            "params": [input]
         }),
         "chainTip" => serde_json::json!({
             "jsonrpc": "2.0",
@@ -193,11 +208,11 @@ pub(super) fn make_request(method: &str, tx_hex: &str, id: u64) -> serde_json::V
             "method": "groundhog_chainTip",
             "params": []
         }),
-        "getTransactionStatus" => serde_json::json!({
+        "getTransactionStatus" | "getTransactionReceipt" => serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": "groundhog_getTransactionStatus",
-            "params": ["0x0000000000000000000000000000000000000000000000000000000000000000"]
+            "method": format!("groundhog_{method}"),
+            "params": [if input.is_empty() { "0x0000000000000000000000000000000000000000000000000000000000000000" } else { input }]
         }),
         _ => unreachable!("bug: method validated before benchmark starts"),
     }
@@ -205,7 +220,9 @@ pub(super) fn make_request(method: &str, tx_hex: &str, id: u64) -> serde_json::V
 
 pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
     match method {
-        "sendRawTransaction" | "chainTip" | "getTransactionStatus" => Ok(()),
+        "sendRawTransaction" | "chainTip" | "getTransactionStatus" | "getTransactionReceipt" => {
+            Ok(())
+        }
         method => Err(BenchError::UnknownMethod {
             method: method.to_string(),
         }),

@@ -23,13 +23,41 @@ pub(super) struct Cli {
     #[arg(long)]
     pub(super) runtime_manifest: Option<std::path::PathBuf>,
 
-    /// Target requests per second (open-loop).
-    #[arg(long, default_value = "100")]
-    pub(super) rate: u64,
+    /// Target requests per second (open-loop, default 100).
+    #[arg(long, conflicts_with_all = ["outstanding", "unthrottled"])]
+    pub(super) rate: Option<u64>,
 
     /// Dispatch as fast as possible instead of using the open-loop rate schedule.
     #[arg(long)]
     pub(super) unthrottled: bool,
+
+    /// Global maximum outstanding requests (closed-loop), independent of worker count.
+    #[arg(long, conflicts_with = "unthrottled")]
+    pub(super) outstanding: Option<usize>,
+
+    /// Versioned confirmed-hash corpus to validate against the target before timing.
+    #[arg(long, conflicts_with = "seed_count")]
+    pub(super) hashes_file: Option<std::path::PathBuf>,
+
+    /// Submit this many transactions and confirm them before timing read workloads.
+    #[arg(long, requires_all = ["seed_output", "runtime_manifest"])]
+    pub(super) seed_count: Option<usize>,
+
+    /// Persist the fully confirmed seed corpus here; refuses to overwrite an existing file.
+    #[arg(long, requires = "seed_count")]
+    pub(super) seed_output: Option<std::path::PathBuf>,
+
+    /// First seed nonce (defaults to the current Unix time in nanoseconds).
+    #[arg(long, requires = "seed_count")]
+    pub(super) seed_nonce_start: Option<u64>,
+
+    /// Total seed/import validation deadline in seconds, outside the measured window.
+    #[arg(long, default_value = "120")]
+    pub(super) setup_timeout_secs: u64,
+
+    /// Runner-supplied gateway/backend build, host and effective configuration metadata.
+    #[arg(long)]
+    pub(super) target_info: Option<std::path::PathBuf>,
 
     /// Duration in seconds.
     #[arg(long, default_value = "10")]
@@ -99,18 +127,25 @@ pub(super) fn confirm_submission(
     input: &mut impl BufRead,
     error: &mut impl Write,
 ) -> Result<(), BenchError> {
-    if cli.method != "sendRawTransaction" || cli.force {
+    if (cli.method != "sendRawTransaction" && cli.seed_count.is_none()) || cli.force {
         return Ok(());
     }
     if cli.json || !stdin_is_terminal || !stderr_is_terminal {
         return Err(BenchError::ConfirmationRequired);
     }
 
-    let rate = if cli.unthrottled {
+    let rate = if cli.unthrottled || cli.outstanding.is_some() {
         "unthrottled".to_string()
     } else {
-        format!("{} requests/second", cli.rate)
+        format!("{} requests/second", cli.rate.unwrap_or(100))
     };
+    if let Some(count) = cli.seed_count {
+        writeln!(
+            error,
+            "Setup will submit {count} seed transactions before the read benchmark."
+        )
+        .map_err(|source| BenchError::ConfirmationIo { source })?;
+    }
     let url = terminal_safe(&cli.url);
     write!(
         error,
@@ -284,5 +319,32 @@ mod tests {
         let mut cli = Cli::parse_from(["groundhog-bench"]);
         cli.method = method.to_string();
         cli
+    }
+    #[test]
+    fn scheduling_modes_are_mutually_exclusive() {
+        for args in [
+            vec!["groundhog-bench", "--outstanding", "3", "--rate", "100"],
+            vec!["groundhog-bench", "--outstanding", "3", "--unthrottled"],
+            vec!["groundhog-bench", "--rate", "100", "--unthrottled"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+        assert!(Cli::try_parse_from(["groundhog-bench", "--outstanding", "3"]).is_ok());
+    }
+
+    #[test]
+    fn read_workload_seeding_requires_submission_confirmation() {
+        let mut cli = confirmation_cli("getTransactionReceipt");
+        cli.seed_count = Some(3);
+        cli.json = true;
+        let mut input = std::io::Cursor::new(b"yes\n");
+        let mut output = Vec::new();
+        assert!(matches!(
+            confirm_submission(&cli, false, false, &mut input, &mut output),
+            Err(BenchError::ConfirmationRequired)
+        ));
+        assert_eq!(input.position(), 0);
+        cli.force = true;
+        assert!(confirm_submission(&cli, false, false, &mut input, &mut output).is_ok());
     }
 }
