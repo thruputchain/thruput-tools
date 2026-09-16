@@ -91,9 +91,16 @@ impl TipState {
 /// stale height can only under-detect expiry, and the config changes only
 /// at explicit upgrade blocks. Fetches that overlap may complete out of
 /// order; the reading with the higher tip is the later one and is kept.
+///
+/// The lock is a sync mutex. Every critical section is a few field
+/// accesses over `Copy` data and none of them spans an await, so an async
+/// mutex would add a waiter list and a scheduler round-trip per access for
+/// nothing. It also makes that property hold by construction: a guard held
+/// across an await leaves the server future `!Send`, which does not
+/// compile.
 #[derive(Debug, Clone, Default)]
 struct TipCache {
-    state: Arc<tokio::sync::Mutex<TipCacheState>>,
+    state: Arc<std::sync::Mutex<TipCacheState>>,
 }
 
 #[derive(Debug, Default)]
@@ -128,10 +135,21 @@ struct TipRead {
 }
 
 impl TipCache {
+    /// The cache state.
+    ///
+    /// Recovers from a poisoned lock rather than propagating: the state is
+    /// two `Copy` fields written by straight-line assignment, so a panic
+    /// elsewhere cannot leave a torn value for poisoning to protect.
+    fn lock(&self) -> std::sync::MutexGuard<'_, TipCacheState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Record a reading obtained by any path, restarting the TTL window
     /// when it is the newest.
-    async fn store(&self, reading: TipState) {
-        let mut state = self.state.lock().await;
+    fn store(&self, reading: TipState) {
+        let mut state = self.lock();
         if state.record(reading) {
             state.last_attempt = Some(Instant::now());
         }
@@ -151,7 +169,7 @@ impl TipCache {
     {
         let now = Instant::now();
         {
-            let mut state = self.state.lock().await;
+            let mut state = self.lock();
             match state.last_attempt {
                 Some(at) if now.duration_since(at) < ttl => {
                     return TipRead {
@@ -166,23 +184,23 @@ impl TipCache {
         let probe_context = context.capped(probe_timeout);
         let Some(remaining) = probe_context.remaining() else {
             return TipRead {
-                state: self.state.lock().await.reading,
+                state: self.lock().reading,
                 probed: false,
             };
         };
         let state = match tokio::time::timeout(remaining, fetch(probe_context)).await {
             Ok(Ok(reading)) => {
-                let mut state = self.state.lock().await;
+                let mut state = self.lock();
                 state.record(TipState::from_reading(&reading));
                 state.reading
             }
             Ok(Err(error)) => {
                 tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
-                self.state.lock().await.reading
+                self.lock().reading
             }
             Err(_) => {
                 tracing::warn!("chain tip probe timed out, pre-checks use last reading");
-                self.state.lock().await.reading
+                self.lock().reading
             }
         };
         TipRead {
@@ -491,7 +509,7 @@ where
         self.within_request_deadline(context, async {
             let reading = self.chain.chain_tip(context).await?;
             // Every fetched tip refreshes the pre-check cache, config included.
-            self.tip_cache.store(TipState::from_reading(&reading)).await;
+            self.tip_cache.store(TipState::from_reading(&reading));
             Ok(reading.tip)
         })
         .await
@@ -1707,7 +1725,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         // A chainTip request stored height 10 while a probe claimed earlier
         // was still in flight; that probe comes back with height 9.
         let cache = TipCache::default();
-        cache.store(TipState::from_reading(&tip_reading(10))).await;
+        cache.store(TipState::from_reading(&tip_reading(10)));
 
         let read = cache
             .reading(
@@ -1720,11 +1738,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert!(read.probed);
         assert_eq!(read.state.map(|tip| tip.height), Some(10));
-        cache.store(TipState::from_reading(&tip_reading(9))).await;
-        assert_eq!(
-            cache.state.lock().await.reading.map(|tip| tip.height),
-            Some(10)
-        );
+        cache.store(TipState::from_reading(&tip_reading(9)));
+        assert_eq!(cache.lock().reading.map(|tip| tip.height), Some(10));
     }
 
     #[tokio::test]
