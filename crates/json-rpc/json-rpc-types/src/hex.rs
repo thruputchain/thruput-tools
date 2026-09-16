@@ -147,8 +147,8 @@ impl fmt::Display for HexDisplay<'_> {
             // while these bytes are borrowed by the formatter.
             let initialized =
                 unsafe { std::slice::from_raw_parts(output.as_ptr().cast::<u8>(), output.len()) };
-            let text = std::str::from_utf8(initialized)
-                .expect("bug: hex encoding contains only ASCII digits");
+            // SAFETY: every initialized byte comes from DIGITS, which is ASCII.
+            let text = unsafe { std::str::from_utf8_unchecked(initialized) };
             f.write_str(text)?;
         }
         Ok(())
