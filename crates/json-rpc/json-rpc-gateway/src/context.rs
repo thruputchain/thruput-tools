@@ -262,6 +262,7 @@ impl GatewayContext {
         let indexer = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_indexer(
                 config.indexer_address.as_deref(),
+                config.indexer_pool_size.get(),
                 protocol_override,
                 startup_timeout,
                 Some(&metrics),
@@ -545,6 +546,7 @@ where
 
 pub(crate) async fn connect_optional_indexer(
     address: Option<&str>,
+    pool_size: usize,
     protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
@@ -558,7 +560,7 @@ pub(crate) async fn connect_optional_indexer(
         "indexer",
         "indexer_health",
         address,
-        4,
+        pool_size,
         hogd_large_message_config(),
         startup_timeout,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
@@ -1329,7 +1331,7 @@ mod tests {
 
     #[tokio::test]
     async fn optional_indexer_and_db_gateway_without_address_are_absent() {
-        let indexer = connect_optional_indexer(None, None, Duration::from_secs(1), None)
+        let indexer = connect_optional_indexer(None, 4, None, Duration::from_secs(1), None)
             .await
             .expect("missing optional indexer should not fail startup");
         let db_gateway = connect_optional_db_gateway(None, 1, None, Duration::from_secs(1), None)
@@ -1391,9 +1393,14 @@ mod tests {
     async fn configured_indexer_intro_rejection_fails_startup_probe() {
         let (addr, _server) = start_test_indexer(IntroMode::Reject).await;
 
-        let Err(err) =
-            connect_optional_indexer(Some(&addr.to_string()), None, Duration::from_secs(1), None)
-                .await
+        let Err(err) = connect_optional_indexer(
+            Some(&addr.to_string()),
+            4,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
         else {
             panic!("configured indexer intro rejection should fail startup");
         };
@@ -1477,6 +1484,7 @@ mod tests {
 
         let indexer = connect_optional_indexer(
             Some(&indexer_addr.to_string()),
+            4,
             Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
             None,
@@ -1539,6 +1547,7 @@ mod tests {
 
         let indexer = connect_optional_indexer(
             Some(&indexer_addr.to_string()),
+            4,
             None,
             Duration::from_millis(10),
             None,
@@ -1576,6 +1585,7 @@ mod tests {
 
         let indexer = connect_optional_indexer(
             Some(&indexer_addr.to_string()),
+            4,
             None,
             Duration::from_secs(1),
             None,

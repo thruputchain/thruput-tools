@@ -10,6 +10,51 @@ use groundhog_json_rpc_types::{
     },
 };
 
+/// Indexer data connections (1..=256, default 16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "usize")]
+pub struct IndexerPoolSize(std::num::NonZeroUsize);
+
+impl IndexerPoolSize {
+    /// Return the validated connection count.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for IndexerPoolSize {
+    fn default() -> Self {
+        Self(std::num::NonZeroUsize::new(16).expect("bug: default indexer pool size is nonzero"))
+    }
+}
+
+impl TryFrom<usize> for IndexerPoolSize {
+    type Error = InvalidIndexerPoolSize;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match std::num::NonZeroUsize::new(value) {
+            Some(value) if value.get() <= 256 => Ok(Self(value)),
+            _ => Err(InvalidIndexerPoolSize),
+        }
+    }
+}
+
+impl FromStr for IndexerPoolSize {
+    type Err = InvalidIndexerPoolSize;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .parse::<usize>()
+            .map_err(|_| InvalidIndexerPoolSize)?
+            .try_into()
+    }
+}
+
+/// An indexer connection count outside the supported resource bound.
+#[derive(Debug, thiserror::Error)]
+#[error("indexer pool size must be in 1..=256")]
+pub struct InvalidIndexerPoolSize;
+
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -228,6 +273,12 @@ pub struct GatewayConfig {
     /// indexer return `BackendUnavailable`.
     pub indexer_address: Option<String>,
 
+    /// Number of serial x23 data connections to the indexer (1..=256, default 16).
+    ///
+    /// Applies at startup and reconnect. The separate health connection is
+    /// excluded; each data connection handles one ordinary RPC at a time.
+    pub indexer_pool_size: IndexerPoolSize,
+
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
     /// Serves `groundhog_getStorageAt`. Optional: when absent the
@@ -302,6 +353,7 @@ impl Default for GatewayConfig {
             shutdown_grace_ms: 10_000,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),
+            indexer_pool_size: IndexerPoolSize::default(),
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
