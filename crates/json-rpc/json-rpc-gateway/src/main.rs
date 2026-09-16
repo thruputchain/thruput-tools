@@ -136,9 +136,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = parse_cli(&bundle_identity);
 
     // --- Observability ---
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
+    let env_filter = if cli.dump_effective_config {
+        EnvFilter::new("off")
+    } else {
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy()
+    };
     let span_events = if cli.trace_spans {
         tracing_subscriber::fmt::format::FmtSpan::CLOSE
     } else {
