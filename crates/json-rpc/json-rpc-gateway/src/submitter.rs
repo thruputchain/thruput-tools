@@ -182,7 +182,7 @@ impl BatchProcessor for SubmitProcessor {
             }
             self.metrics
                 .observe_internal_batch_size("submit_batcher", cohort.len());
-            let packed = pack(&cohort);
+            let packed = pack(&mut cohort);
             match self.sink.submit(packed, deadline).await {
                 Err(error) => {
                     let outcome = outcome_for_submit_error(&error);
@@ -219,21 +219,27 @@ impl BatchProcessor for SubmitProcessor {
 /// Pack N client tx-byte blobs into one `ParallelSignedTransactionBatch`.
 ///
 /// One segment per tx — same shape as today's single-tx handler, scaled up.
-fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
+fn pack(items: &mut [Item]) -> ParallelSignedTransactionBatch {
     let n = items.len();
     let mut segment_tokens = Vec::with_capacity(n);
     let mut segment_bytes = Vec::with_capacity(n);
     let total_bytes: usize = items.iter().map(|i| i.tx_bytes.len()).sum();
-    let mut xdr = Vec::with_capacity(total_bytes);
-    for item in items {
+    // The processor needs only reply channels after packing. Move the first
+    // owned buffer into the batch; a singleton needs no allocation or copy.
+    let mut xdr = Vec::new();
+    for (index, item) in items.iter_mut().enumerate() {
         segment_tokens.push(1u32);
-        // Bounded by `max_size` and the handler's own size check
-        // (`send_raw_transaction` rejects inputs larger than u32::MAX
-        // before handing them to the submitter).
         let tx_len = u32::try_from(item.tx_bytes.len())
             .expect("bug: tx_bytes > u32::MAX reached the submitter");
         segment_bytes.push(tx_len);
-        xdr.extend_from_slice(&item.tx_bytes);
+        if index == 0 {
+            xdr = std::mem::take(&mut item.tx_bytes);
+            xdr.reserve(total_bytes - xdr.len());
+        } else {
+            xdr.extend_from_slice(&item.tx_bytes);
+            // Do not retain the original payload while awaiting admission.
+            item.tx_bytes = Vec::new();
+        }
     }
     ParallelSignedTransactionBatch::new(ParallelBatch {
         segment_tokens: VecM(segment_tokens),
@@ -1205,9 +1211,30 @@ mod tests {
         assert_eq!(mock.seen(), vec![1]);
     }
 
+    #[test]
+    fn singleton_pack_moves_payload_and_preserves_reply() {
+        let bytes = vec![0x42; 65536];
+        let allocation = bytes.as_ptr();
+        let (reply, mut received) = oneshot::channel();
+        let mut items = [Item {
+            tx_bytes: bytes,
+            reply,
+            backend_deadline: Instant::now() + Duration::from_secs(1),
+        }];
+        let packed = pack(&mut items);
+        assert_eq!(packed.xdr.0.as_ptr(), allocation);
+        assert_eq!(packed.xdr.0, vec![0x42; 65536]);
+        assert_eq!(packed.segment_tokens.0, vec![1]);
+        assert_eq!(packed.segment_bytes.0, vec![65536]);
+        let [item] = items;
+        assert!(item.tx_bytes.is_empty());
+        item.reply.send(Ok(())).unwrap();
+        assert!(received.try_recv().unwrap().is_ok());
+    }
+
     #[tokio::test]
     async fn pack_shape_is_correct() {
-        let items: Vec<Item> = [vec![0x11; 3], vec![0x22; 5], vec![0x33; 2]]
+        let mut items: Vec<Item> = [vec![0x11; 3], vec![0x22; 5], vec![0x33; 2]]
             .into_iter()
             .map(|bytes| {
                 let (tx, _rx) = oneshot::channel();
@@ -1218,7 +1245,7 @@ mod tests {
                 }
             })
             .collect();
-        let packed = pack(&items);
+        let packed = pack(&mut items);
         assert_eq!(packed.segment_tokens.0, vec![1, 1, 1]);
         assert_eq!(packed.segment_bytes.0, vec![3, 5, 2]);
         let mut expected = Vec::new();
@@ -1226,5 +1253,6 @@ mod tests {
         expected.extend_from_slice(&[0x22; 5]);
         expected.extend_from_slice(&[0x33; 2]);
         assert_eq!(packed.xdr.0, expected);
+        assert!(items.iter().all(|item| item.tx_bytes.is_empty()));
     }
 }
