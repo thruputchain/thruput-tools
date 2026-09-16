@@ -30,14 +30,9 @@ env:
 
 jobs:
   publish:
-    runs-on: hog1
+    runs-on: namespace-profile-hogd-linux-2604
 
     steps:
-      - name: Clean up .gitconfig
-        run: |
-            echo "Cleaning up .gitconfig"
-            rm -f /home/hogci/.gitconfig
-
       - name: Setup SSH Agent
         uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
@@ -45,7 +40,7 @@ jobs:
             ${{ secrets.ACTIONS_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure git to use SSH
         run: |
@@ -57,6 +52,11 @@ jobs:
           repository: groundhogchain/actions
           path: actions
           ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
+
+      - name: Configure Namespace Cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: rust
 
       - name: publish dry run
         uses: ./actions/cargo-publish-dry-run
