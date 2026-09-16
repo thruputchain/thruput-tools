@@ -415,7 +415,9 @@ mod tests {
             .expect("bug: default client should connect");
 
         assert_eq!(
-            default.send_call(ProgVers::new(1, 1), 1, &[]).await,
+            default
+                .send_call(ProgVers::new(1, 1), 1, default.call_buf())
+                .await,
             Err(RpcError::SystemError)
         );
 
@@ -429,7 +431,7 @@ mod tests {
         .await
         .expect("bug: accepting client should connect");
         let response = accepting
-            .send_call(ProgVers::new(1, 1), 1, &[])
+            .send_call(ProgVers::new(1, 1), 1, accepting.call_buf())
             .await
             .expect("bug: larger configured limit should accept the response");
 
