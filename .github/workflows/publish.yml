@@ -64,6 +64,11 @@ jobs:
         with:
           cache: rust
 
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        with:
+          tool: cargo-hack@0.6.45
+
       # Fail before creating a tag or publishing any crate if the CLI's
       # committed default is unavailable, malformed, or incompatible.
       - name: Verify managed toolchain catalog and public bundles
