@@ -78,14 +78,25 @@ impl LookupMetrics {
         let in_flight = GaugeVec::new(
             Opts::new(
                 "groundhog_gateway_scheduler_lookup_in_flight",
-                "Local scheduler lookups waiting for an execution permit (queued) or holding one (executing, including client-lock and backend waits).",
+                concat!(
+                    "Local scheduler lookups waiting for an execution permit (queued) or holding ",
+                    "one (executing, including client-lock and backend waits).",
+                ),
             ),
             &["stage"],
         )?;
         let queued = in_flight.with_label_values(&["queued"]);
         let executing = in_flight.with_label_values(&["executing"]);
         let waits = HistogramVec::new(
-            HistogramOpts::new("groundhog_gateway_scheduler_lookup_wait_duration_seconds", "Local scheduler lookup wait duration, including waits ended by timeout, closure, or cancellation. Ready means the permit or client lock was acquired, not that the backend is healthy.").buckets(BACKEND_REQUEST_DURATION_BUCKETS.to_vec()),
+            HistogramOpts::new(
+                "groundhog_gateway_scheduler_lookup_wait_duration_seconds",
+                concat!(
+                    "Local scheduler lookup wait duration, including waits ended by timeout, ",
+                    "closure, or cancellation. Ready means the permit or client lock was ",
+                    "acquired, not that the backend is healthy.",
+                ),
+            )
+            .buckets(BACKEND_REQUEST_DURATION_BUCKETS.to_vec()),
             &["stage", "outcome"],
         )?;
         registry.register(Box::new(admission.clone()))?;

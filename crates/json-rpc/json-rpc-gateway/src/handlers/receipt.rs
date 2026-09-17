@@ -956,7 +956,10 @@ mod tests {
                 "groundhog_gateway_scheduler_lookup_admission_total{outcome=\"full\"} 1\n"
             )
         );
-        assert!(metrics.contains("groundhog_gateway_scheduler_lookup_wait_duration_seconds_count{outcome=\"cancelled\",stage=\"execution_permit\"} 64\n"));
+        assert!(metrics.contains(concat!(
+            "groundhog_gateway_scheduler_lookup_wait_duration_seconds_count",
+            "{outcome=\"cancelled\",stage=\"execution_permit\"} 64\n",
+        )));
         assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 64);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
         gate.release.add_permits(4);
