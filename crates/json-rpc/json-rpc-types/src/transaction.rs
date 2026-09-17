@@ -12,9 +12,9 @@ use crate::{BlockHeight, ContractAddress, SHA256Hash};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct TxHash(pub SHA256Hash);
 
-/// Lightweight status — the result of checking mempool then indexer.
+/// Lightweight transaction status from the mempool and indexer.
 ///
-/// Lookup order: scheduler (Pending) → indexer (Committed) → Unknown.
+/// Pending reports mempool presence; Committed reports an indexed record.
 /// See `docs/gateway/system-design.md` "Transaction Status Lookup Order" for
 /// degraded-mode behavior when a backend is unavailable.
 ///
