@@ -1,6 +1,8 @@
 //! `groundhog_getTransactionReceipt` and `groundhog_getTransactionStatus`
 //! handlers.
 
+use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
+
 use groundhog_indexer::indexer::TxInfoResult;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
@@ -164,16 +166,25 @@ pub async fn get_transaction_receipt(
     }
 }
 
-async fn transaction_is_pending(
+async fn acquire_lookup_permits(
     ctx: &GatewayContext,
     deadline: Instant,
-    tx_hash: TxHash,
-) -> Result<bool, GatewayError> {
+) -> Result<
+    (
+        tokio::sync::OwnedSemaphorePermit,
+        tokio::sync::OwnedSemaphorePermit,
+    ),
+    GatewayError,
+> {
     let admission = ctx
         .scheduler_lookup_admission
         .clone()
         .try_acquire_owned()
-        .map_err(|_| {
+        .map_err(|error| {
+            ctx.metrics.scheduler_lookup().admit(match error {
+                tokio::sync::TryAcquireError::NoPermits => LookupAdmission::Full,
+                tokio::sync::TryAcquireError::Closed => LookupAdmission::Closed,
+            });
             ctx.metrics.observe_backend_request(
                 HealthBackend::Scheduler,
                 "schedgateway_lookup_tx",
@@ -184,17 +195,50 @@ async fn transaction_is_pending(
                 "scheduler transaction-status lookup capacity exhausted".into(),
             )
         })?;
+    ctx.metrics
+        .scheduler_lookup()
+        .admit(LookupAdmission::Accepted);
+    let wait = ctx
+        .metrics
+        .scheduler_lookup()
+        .wait(LookupWaitStage::ExecutionPermit);
     let permit = tokio::time::timeout_at(
         deadline.into(),
         ctx.scheduler_lookup_execution.clone().acquire_owned(),
     )
-    .await
-    .map_err(|_| GatewayError::BackendTimeout)?
-    .map_err(|_| GatewayError::BackendUnavailable("scheduler lookup execution closed".into()))?;
+    .await;
+    wait.finish(match &permit {
+        Ok(Ok(_)) => LookupWaitOutcome::Ready,
+        Ok(Err(_)) => LookupWaitOutcome::Closed,
+        Err(_) => LookupWaitOutcome::Timeout,
+    });
+    let permit = permit
+        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|_| {
+            GatewayError::BackendUnavailable("scheduler lookup execution closed".into())
+        })?;
+    Ok((admission, permit))
+}
+
+async fn transaction_is_pending(
+    ctx: &GatewayContext,
+    deadline: Instant,
+    tx_hash: TxHash,
+) -> Result<bool, GatewayError> {
+    let (admission, permit) = acquire_lookup_permits(ctx, deadline).await?;
+    let execution = ctx.metrics.scheduler_lookup().executing();
     // Queued requests must use the current generation, not a pre-wait snapshot.
-    let scheduler = tokio::time::timeout_at(deadline.into(), ctx.scheduler.read())
-        .await
-        .map_err(|_| GatewayError::BackendTimeout)?;
+    let wait = ctx
+        .metrics
+        .scheduler_lookup()
+        .wait(LookupWaitStage::SchedulerClient);
+    let scheduler = tokio::time::timeout_at(deadline.into(), ctx.scheduler.read()).await;
+    wait.finish(if scheduler.is_ok() {
+        LookupWaitOutcome::Ready
+    } else {
+        LookupWaitOutcome::Timeout
+    });
+    let scheduler = scheduler.map_err(|_| GatewayError::BackendTimeout)?;
     if Instant::now() >= deadline {
         return Err(GatewayError::BackendTimeout);
     }
@@ -209,6 +253,7 @@ async fn transaction_is_pending(
     let worker = tokio::spawn(async move {
         let _admission = admission;
         let _permit = permit;
+        let _execution = execution;
         if Instant::now() >= deadline {
             return None;
         }
@@ -330,7 +375,7 @@ pub async fn get_transaction_status(
         Ok(true) => return Ok(TransactionStatus::Pending),
         Ok(false) => None,
         Err(error) => {
-            tracing::warn!(%error, "scheduler unavailable, cannot detect pending txs");
+            tracing::warn!(%error, "scheduler lookup did not complete; checking indexer");
             Some(error)
         }
     };
@@ -715,6 +760,32 @@ mod tests {
         )
     }
 
+    async fn gathered_metrics(ctx: &GatewayContext) -> String {
+        let health = crate::health::GatewayHealth::new(
+            &GatewayConfig::default(),
+            groundhog_build_info::BuildVersion::new("test", None),
+            None,
+        );
+        ctx.metrics.gather(&health.snapshot().await).unwrap()
+    }
+
+    fn assert_lookup_admission(metrics: &str, outcome: &str, count: usize) {
+        assert!(metrics.contains(&format!(
+            "groundhog_gateway_scheduler_lookup_admission_total{{outcome=\"{outcome}\"}} {count}\n"
+        )));
+    }
+
+    fn assert_lookup_gauges(metrics: &str, queued: usize, executing: usize) {
+        for (stage, value) in [("queued", queued), ("executing", executing)] {
+            assert!(
+                metrics.contains(&format!(
+                    "groundhog_gateway_scheduler_lookup_in_flight{{stage=\"{stage}\"}} {value}\n"
+                )),
+                "unexpected {stage} lookup gauge: {metrics}"
+            );
+        }
+    }
+
     fn test_hash() -> TxHash {
         TxHash(groundhog_json_rpc_types::hex::Hex0x(SHA256Hash::from(
             [7u8; 32],
@@ -881,6 +952,7 @@ mod tests {
             callers.push(caller);
         }
         gate.wait_started(4).await;
+        assert_lookup_gauges(&gathered_metrics(&ctx).await, 64, 4);
         assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 0);
         assert!(matches!(
             watchdog(transaction_is_pending(
@@ -892,6 +964,20 @@ mod tests {
             Err(GatewayError::Overloaded(_))
         ));
         callers.truncate(4);
+        let metrics = gathered_metrics(&ctx).await;
+        assert_lookup_gauges(&metrics, 0, 4);
+        assert!(metrics.contains(
+            "groundhog_gateway_scheduler_lookup_admission_total{outcome=\"accepted\"} 68\n"
+        ));
+        assert!(
+            metrics.contains(
+                "groundhog_gateway_scheduler_lookup_admission_total{outcome=\"full\"} 1\n"
+            )
+        );
+        assert!(metrics.contains(concat!(
+            "groundhog_gateway_scheduler_lookup_wait_duration_seconds_count",
+            "{outcome=\"cancelled\",stage=\"execution_permit\"} 64\n",
+        )));
         assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 64);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
         gate.release.add_permits(4);
@@ -904,6 +990,7 @@ mod tests {
         );
         assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 4);
         assert!(ctx.scheduler.read().await.is_some());
+        assert_lookup_gauges(&gathered_metrics(&ctx).await, 0, 0);
     }
 
     #[tokio::test]
@@ -938,6 +1025,10 @@ mod tests {
             Err(GatewayError::BackendTimeout)
         ));
         drop(slots);
+        let metrics = gathered_metrics(&ctx).await;
+        assert_lookup_gauges(&metrics, 0, 0);
+        assert!(metrics.contains("groundhog_gateway_scheduler_lookup_wait_duration_seconds_count{outcome=\"timeout\",stage=\"execution_permit\"} 1\n"));
+        assert!(metrics.contains("groundhog_gateway_scheduler_lookup_wait_duration_seconds_count{outcome=\"ready\",stage=\"scheduler_client\"} 0\n"));
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
         assert_eq!(indexer_calls.load(Ordering::SeqCst), 0);
         assert_eq!(
@@ -1157,9 +1248,14 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let (indexer_addr, _indexer) = start_fake_indexer(committed_result(), calls.clone()).await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-        assert!(
-            matches!(watchdog(get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())).await.unwrap(), TransactionStatus::Committed { height } if height == 42.into())
-        );
+        let status = watchdog(get_transaction_status(
+            &ctx,
+            RpcRequestContext::unbounded(),
+            test_hash(),
+        ))
+        .await
+        .unwrap();
+        assert!(matches!(status, TransactionStatus::Committed { height } if height == 42.into()));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
@@ -1342,13 +1438,17 @@ mod tests {
                 serde_json::to_value(expected).unwrap()
             );
             assert!(ctx.scheduler.read().await.is_some());
-            let health = crate::health::GatewayHealth::new(
-                &crate::config::GatewayConfig::default(),
-                groundhog_build_info::BuildVersion::new("test", None),
-                None,
+            let metrics = gathered_metrics(&ctx).await;
+            assert_lookup_gauges(&metrics, 0, 0);
+            assert_lookup_admission(&metrics, "full", usize::from(!is_committed));
+            assert_lookup_admission(&metrics, "accepted", 0);
+            assert_eq!(
+                metrics.contains(concat!(
+                    "groundhog_gateway_backend_requests_total{backend=\"scheduler\",",
+                    "operation=\"schedgateway_lookup_tx\",outcome=\"rejected\"} 1",
+                )),
+                !is_committed,
             );
-            let metrics = ctx.metrics.gather(&health.snapshot().await).unwrap();
-            assert_eq!(metrics.contains("groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_lookup_tx\",outcome=\"rejected\"} 1"), !is_committed);
         }
     }
 
@@ -1362,6 +1462,38 @@ mod tests {
             .expect_err("bug: unconsulted mempool must not produce a definite status");
 
         assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+        let metrics = gathered_metrics(&ctx).await;
+        assert_lookup_gauges(&metrics, 0, 0);
+        // Acquiring an empty client lock is ready, not a healthy backend call.
+        assert!(metrics.contains("groundhog_gateway_scheduler_lookup_wait_duration_seconds_count{outcome=\"ready\",stage=\"scheduler_client\"} 1\n"));
+        assert!(!metrics.contains("groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_lookup_tx\",outcome=\"ok\"}"));
+    }
+
+    #[tokio::test]
+    async fn scheduler_client_lock_timeout_releases_lookup_capacity() {
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(None, indexer_addr).await;
+        let write_lock = ctx.scheduler.write().await;
+        let deadline = Instant::now() + std::time::Duration::from_millis(20);
+        let mut lookup = Box::pin(transaction_is_pending(&ctx, deadline, test_hash()));
+        poll_pending(lookup.as_mut());
+        assert_lookup_gauges(&gathered_metrics(&ctx).await, 0, 1);
+        assert!(matches!(
+            watchdog(lookup).await,
+            Err(GatewayError::BackendTimeout)
+        ));
+        drop(write_lock);
+        let metrics = gathered_metrics(&ctx).await;
+        assert_lookup_gauges(&metrics, 0, 0);
+        assert!(metrics.contains("groundhog_gateway_scheduler_lookup_wait_duration_seconds_count{outcome=\"timeout\",stage=\"scheduler_client\"} 1\n"));
+        assert_eq!(
+            ctx.scheduler_lookup_execution.available_permits(),
+            SCHEDULER_LOOKUP_CONCURRENCY
+        );
+        assert_eq!(
+            ctx.scheduler_lookup_admission.available_permits(),
+            SCHEDULER_LOOKUP_MAX_OUTSTANDING
+        );
     }
 
     #[tokio::test]
@@ -1579,6 +1711,12 @@ mod tests {
             generation
         );
         drop(permits);
+        // Admission is held by the worker until abort cleanup, alongside its gauge.
+        assert_lookup_gauges(&gathered_metrics(&ctx).await, 0, 0);
+        assert_eq!(
+            ctx.scheduler_lookup_execution.available_permits(),
+            SCHEDULER_LOOKUP_CONCURRENCY
+        );
 
         let scheduler = ctx
             .scheduler
