@@ -1223,7 +1223,7 @@
         "type": "object"
       },
       "TransactionStatus": {
-        "description": "Lightweight status — the result of checking mempool then indexer.\n\nLookup order: scheduler (Pending) → indexer (Committed) → Unknown.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
+        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
         "oneOf": [
           {
             "description": "In the mempool, not yet in a committed block.",

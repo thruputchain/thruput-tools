@@ -345,16 +345,17 @@ a sufficiently contended array can intentionally receive per-entry `Overloaded`
 errors. Terminal indexer answers may still resolve admission failures, but an
 indexer miss must not turn a failed scheduler admission into `Unknown`.
 
-`getTransactionStatus` checks two backends in order:
+`getTransactionStatus` checks the indexer first. A committed record returns
+immediately without occupying the scheduler lookup lane. Otherwise it checks
+the scheduler: a mempool hit returns `Pending`, including when the indexer is
+unavailable or holds an advisory failure from an earlier attempt. Without a
+mempool hit, a recent-failure diagnostic is returned. An initial indexer miss
+is checked again after the scheduler lookup to cover a commit between the
+reads; only successful misses from both backends can produce `Unknown`.
 
-```
-1. Scheduler (mempool)
-   ├── found → Pending
-   └── not found ──→ 2. Indexer
-                        ├── committed → Committed { height, block_hash }
-                        ├── recent nondeterministic failure → RecentFailure { attemptHeight, conflict }
-                        └── not found → Unknown
-```
+Committed reads use one backend RPC. Pending reads normally use two, and
+unknown reads use three. All stages share one deadline, so a slow indexer can
+consume the budget before a pending lookup is dispatched.
 
 `RecentFailure` is best-effort and advisory: the indexer caches
 proposal-time two-phase-commit failure diagnostics for a few blocks,
@@ -370,14 +371,14 @@ excluded from the block, so `getTransactionReceipt` returns `null`.
 |-----------|---------|----------|
 | Up | Up | Full status (Pending / Committed / RecentFailure / Unknown) |
 | Down | Up | Terminal indexer answers (Committed / RecentFailure) still return. On an indexer miss, return `BackendUnavailable` instead of Unknown: without a mempool answer the gateway cannot claim the transaction is nowhere, and a still-pending transaction must not read as gone. |
-| Up | Down | Return `BackendUnavailable` error. Indexer is the authoritative source; partial results are misleading. |
+| Up | Down | A scheduler hit can still return Pending if budget remains; otherwise return an error. An indexer failure cannot produce Unknown. |
 | Down | Down | Return `BackendUnavailable` error. |
 
 `Unknown` is therefore a positive claim — "not in the mempool and not
 in the indexer" — only produced when both backends answered.
 
-The indexer is treated as the critical backend. If it's unreachable, the
-request fails rather than returning potentially misleading results.
+A scheduler timeout, unavailability, or overload never turns an indexer miss
+into `Unknown`.
 
 ---
 
