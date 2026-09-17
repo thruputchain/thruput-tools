@@ -61,7 +61,7 @@ jobs:
       - name: Install cargo-hack
         uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
-          tool: cargo-hack
+          tool: cargo-hack@0.6.45
 
       - name: publish dry run
         uses: ./actions/cargo-publish-dry-run
