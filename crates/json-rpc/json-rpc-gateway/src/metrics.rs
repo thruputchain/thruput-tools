@@ -1,3 +1,6 @@
+mod lookup;
+pub(crate) use lookup::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -124,6 +127,7 @@ pub struct GatewayMetrics {
 }
 
 struct MetricsInner {
+    lookup: lookup::LookupMetrics,
     registry: Registry,
     gather_lock: Mutex<()>,
     health_status: GaugeVec,
@@ -152,6 +156,10 @@ struct MetricsInner {
 }
 
 impl GatewayMetrics {
+    pub(crate) fn scheduler_lookup(&self) -> &lookup::LookupMetrics {
+        &self.inner.lookup
+    }
+
     /// Create a gateway-owned Prometheus registry with all v1 collectors.
     ///
     /// The registry is intentionally private to the gateway process so metric
@@ -162,6 +170,7 @@ impl GatewayMetrics {
         commit_hash: Option<&'static str>,
     ) -> prometheus::Result<Self> {
         let registry = Registry::new();
+        let lookup = lookup::LookupMetrics::new(&registry)?;
         let health_status = GaugeVec::new(
             Opts::new(
                 "groundhog_gateway_health_status",
@@ -366,6 +375,7 @@ impl GatewayMetrics {
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
+                lookup,
                 registry,
                 gather_lock: Mutex::new(()),
                 health_status,
