@@ -283,7 +283,7 @@ impl<'a> InitUi<'a> {
 
         if self.tty {
             self.clear_screen();
-            Self::render_tty_header(
+            self.render_tty_header(
                 "Groundhog Setup",
                 "Set up your local development environment.",
             );
@@ -306,7 +306,7 @@ impl<'a> InitUi<'a> {
 
         if self.tty {
             self.clear_screen();
-            Self::render_tty_header(
+            self.render_tty_header(
                 "Groundhog Setup",
                 "Set up your local development environment.",
             );
@@ -354,7 +354,7 @@ impl<'a> InitUi<'a> {
 
         if self.tty {
             self.clear_screen();
-            Self::render_tty_completion(title, items);
+            self.print.summary_card(title, items);
         } else {
             self.print.status("");
             self.print.status(title);
@@ -391,8 +391,12 @@ impl<'a> InitUi<'a> {
         }
     }
 
-    fn render_tty_header(title: &str, subtitle: &str) {
+    fn render_tty_header(&self, title: &str, subtitle: &str) {
         let inner_width: usize = 56;
+        if crate::terminal::stderr_width().is_none_or(|width| width < inner_width + 2) {
+            self.print.status(format_args!("{title}\n{subtitle}\n"));
+            return;
+        }
         let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
         let fill = Self::line_fill('─', top_fill);
         eprintln!("{CYAN}╭─ {BOLD}{title}{RESET}{CYAN}{fill}╮{RESET}");
@@ -422,25 +426,6 @@ impl<'a> InitUi<'a> {
             let state_label = state.label();
             eprintln!("  {marker} {label}{padding} {DIM}{state_label}{RESET}");
         }
-    }
-
-    fn render_tty_completion(title: &str, items: &[(String, String)]) {
-        let value_width = items
-            .iter()
-            .map(|(_, value)| value.chars().count())
-            .max()
-            .unwrap_or(0)
-            .max(18);
-        let inner_width = 1 + 10 + 1 + value_width + 1;
-        let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
-        let fill = Self::line_fill('─', top_fill);
-        eprintln!("{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{fill}╮{RESET}");
-        for (label, value) in items {
-            let value_padding =
-                Self::line_fill(' ', value_width.saturating_sub(value.chars().count()));
-            eprintln!("{GREEN}│{RESET} {label:<10} {value}{value_padding} {GREEN}│{RESET}");
-        }
-        eprintln!("{GREEN}╰{}╯{RESET}", Self::line_fill('─', inner_width));
     }
 
     fn line_fill(ch: char, len: usize) -> String {
