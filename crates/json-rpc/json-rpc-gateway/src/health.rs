@@ -538,6 +538,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
                 connect_optional_scheduler(
                     &ctx.config.scheduler_address,
                     scheduler_pool_size(&ctx.config),
+                    ctx.config.scheduler_lookup_pool_size.get(),
                     ctx.protocol,
                     Some(&ctx.metrics),
                 ),
@@ -1807,6 +1808,7 @@ mod tests {
         calls: SchedulerCallCounts,
         tip_behavior: TipBehavior,
         null_behavior: NullBehavior,
+        lookup_gate: Option<HandlerGate>,
     }
 
     fn test_db_tip(network_hash: [u8; 32]) -> DbTip {
@@ -1965,6 +1967,9 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
+            if let Some(gate) = &self.lookup_gate {
+                gate.wait().await;
+            }
             Ok(VecM(vec![None; hashes.0.len()]))
         }
 
@@ -2159,6 +2164,7 @@ mod tests {
                             calls: SchedulerCallCounts::default(),
                             tip_behavior: TipBehavior::Ready,
                             null_behavior: NullBehavior::Ready,
+                            lookup_gate: None,
                         })),
                     ));
                     let mut indexer_services = ServiceMap::new();
@@ -2410,6 +2416,18 @@ mod tests {
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
         SchedulerCallCounts,
     ) {
+        start_test_scheduler_with_lookup(tip_behavior, null_behavior, None).await
+    }
+
+    async fn start_test_scheduler_with_lookup(
+        tip_behavior: TipBehavior,
+        null_behavior: NullBehavior,
+        lookup_gate: Option<HandlerGate>,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        SchedulerCallCounts,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test scheduler should bind");
@@ -2423,6 +2441,7 @@ mod tests {
                 calls: calls.clone(),
                 tip_behavior,
                 null_behavior,
+                lookup_gate,
             }),
         )));
         let server = RpcServer::new(listener, services);
@@ -2821,7 +2840,7 @@ mod tests {
         let (scheduler_addr, _scheduler_server, _) =
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let scheduler =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
                 .await
                 .expect("scheduler connection should succeed")
                 .expect("scheduler should be connected");
@@ -2930,7 +2949,7 @@ mod tests {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
         let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
                 .await
                 .expect("scheduler connection should succeed")
                 .expect("scheduler should be connected");
@@ -2959,12 +2978,12 @@ mod tests {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
         let old_client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
                 .await
                 .expect("old scheduler connection should succeed")
                 .expect("old scheduler should be connected");
         let new_client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
                 .await
                 .expect("new scheduler connection should succeed")
                 .expect("new scheduler should be connected");
@@ -3105,6 +3124,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_lookup_width_survives_scheduler_reconnect() {
+        let gate = HandlerGate::default();
+        let (scheduler_addr, server, _) = start_test_scheduler_with_lookup(
+            TipBehavior::Ready,
+            NullBehavior::Ready,
+            Some(gate.clone()),
+        )
+        .await;
+        let config = GatewayConfig {
+            scheduler_address: scheduler_addr.to_string(),
+            scheduler_lookup_pool_size: 8.try_into().unwrap(),
+            indexer_address: None,
+            db_gateway_address: None,
+            view_gateway_address: None,
+            scheduler_reconnect_grace_ms: 0,
+            ..GatewayConfig::default()
+        };
+        let ctx = Arc::new(
+            GatewayContext::new(config, GatewayMetrics::for_tests())
+                .await
+                .unwrap(),
+        );
+        assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 68);
+        let permits = ctx
+            .scheduler_lookup_execution
+            .clone()
+            .try_acquire_many_owned(8)
+            .unwrap();
+        assert_eq!(ctx.scheduler_lookup_execution.available_permits(), 0);
+        assert!(ctx.scheduler_lookup_execution.try_acquire().is_err());
+        drop(permits);
+        let mut reconnects = ReconnectAttempts::default();
+        for generation in 0..2 {
+            if generation == 1 {
+                *ctx.scheduler_quarantine.write().await = None;
+                maintain_reconnects(&ctx, &mut reconnects).await;
+            }
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    reconnects.reap_finished().await;
+                    if ctx.scheduler_quarantine.read().await.is_some() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("configured scheduler pool should connect");
+            let client = ctx
+                .scheduler_quarantine
+                .read()
+                .await
+                .as_ref()
+                .unwrap()
+                .client
+                .clone();
+            let mut requests = Vec::new();
+            for _ in 0..8 {
+                let client = client.clone();
+                requests.push(tokio::spawn(async move {
+                    client
+                        .lookup_client()
+                        .schedgateway_lookup_tx(&VecM(vec![]))
+                        .await
+                }));
+            }
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while gate.calls.load(Ordering::SeqCst) < (generation + 1) * 8 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("all eight configured connections should execute concurrently");
+            gate.release.notify_waiters();
+            for request in requests {
+                tokio::time::timeout(Duration::from_secs(1), request)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+        reconnects.shutdown().await;
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn quarantined_scheduler_identity_mismatch_is_never_published() {
         let (scheduler_addr, _server, _calls) =
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
@@ -3180,7 +3286,7 @@ mod tests {
             ..GatewayConfig::default()
         });
         let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
                 .await
                 .expect("scheduler connection should succeed")
                 .expect("scheduler should be connected");
@@ -3217,7 +3323,7 @@ mod tests {
         });
         let metrics = GatewayMetrics::for_tests();
         let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, PROTOCOL_VERSION, None)
+            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
                 .await
                 .expect("scheduler connection should succeed")
                 .expect("scheduler should be connected");

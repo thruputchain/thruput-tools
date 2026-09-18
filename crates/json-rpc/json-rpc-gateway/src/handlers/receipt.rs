@@ -733,9 +733,11 @@ mod tests {
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => connect_optional_scheduler(&addr.to_string(), 1, PROTOCOL_VERSION, None)
-                .await
-                .expect("bug: test scheduler should connect"),
+            Some(addr) => {
+                connect_optional_scheduler(&addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
+                    .await
+                    .expect("bug: test scheduler should connect")
+            }
             None => None,
         };
         let indexer = try_connect(
@@ -755,7 +757,11 @@ mod tests {
             )),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
-            Arc::new(GatewayConfig::default()),
+            Arc::new(GatewayConfig {
+                // These queue/cancellation fixtures deliberately exercise four lookup lanes.
+                scheduler_lookup_pool_size: 4.try_into().unwrap(),
+                ..GatewayConfig::default()
+            }),
             GatewayMetrics::for_tests(),
         )
     }
@@ -1152,6 +1158,7 @@ mod tests {
         let replacement = watchdog(connect_optional_scheduler(
             &new_addr.to_string(),
             1,
+            4,
             PROTOCOL_VERSION,
             None,
         ))

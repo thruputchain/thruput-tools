@@ -620,9 +620,10 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   only the gateway reconnect manager may construct the replacement pool and put
   it through quarantine.
 - Direct transaction-status scheduler lookups admit at most 68 outstanding calls
-  across all callers: four execution slots and 64 waiting calls (sixteen waves
-  of the dedicated four-connection pool). This finite burst allowance is local
-  to lookups, independent of JSON-RPC array concurrency and submit queue policy.
+  across all callers, with 16 execution slots by default.
+  `scheduler_lookup_pool_size` changes execution width without increasing admission.
+  This finite burst allowance is local to lookups, independent of JSON-RPC array
+  concurrency and submit queue policy.
   Admitted calls wait asynchronously under the same absolute backend deadline
   used for scheduler execution and indexer fallback. Queue timeout/cancellation
   releases admission without launching x23 work or clearing a healthy scheduler;
@@ -638,11 +639,12 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
 - Each backend keeps its health probe on a dedicated one-connection x23 pool.
   Handler saturation therefore cannot queue an intro or tip probe behind public
   request work, and probe traffic does not consume handler capacity.
-- Scheduler transaction lookups use a dedicated four-connection lane, separate
-  from normal scheduler work and health probes. That lane and the four-connection
-  indexer handler pool accept records up to 64 MiB because lookup results contain
-  protocol-unbounded transaction data. This bounds retained large-record scratch
-  buffers to 512 MiB across those gateway lanes. Health and other gateway pools
+- Scheduler transaction lookups use a dedicated configurable pool, separate
+  from normal scheduler work and health probes. Lookup and indexer handler pools
+  both default to 16 connections and accept records up to 64 MiB because lookup
+  results contain protocol-unbounded transaction data. Retained large-record
+  scratch buffers scale with connection count, up to 2 GiB across those two data
+  pools at their defaults; this is a bound, not an upfront allocation. Health and other gateway pools
   keep the default 16 MiB limit. x23 uses ONC-RPC `AUTH_NONE`; backend listeners
   using this trusted-backend allowance must remain isolated on private network
   paths.
