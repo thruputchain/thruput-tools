@@ -12,6 +12,8 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
             "not-a-socket-address",
             "--indexer-pool-size",
             "32",
+            "--scheduler-lookup-pool-size",
+            "8",
             "--trace-spans",
         ]);
         command.env_remove("RUST_LOG");
@@ -22,6 +24,7 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
         assert!(output.status.success(), "{output:?}");
         let config: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(config["indexer_pool_size"], 32);
+        assert_eq!(config["scheduler_lookup_pool_size"], 8);
         assert_eq!(config["listen_address"], "not-a-socket-address");
     }
 }

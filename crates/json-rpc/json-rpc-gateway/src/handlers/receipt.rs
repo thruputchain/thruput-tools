@@ -733,9 +733,11 @@ mod tests {
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => connect_optional_scheduler(&addr.to_string(), 1, PROTOCOL_VERSION, None)
-                .await
-                .expect("bug: test scheduler should connect"),
+            Some(addr) => {
+                connect_optional_scheduler(&addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
+                    .await
+                    .expect("bug: test scheduler should connect")
+            }
             None => None,
         };
         let indexer = try_connect(
@@ -1152,6 +1154,7 @@ mod tests {
         let replacement = watchdog(connect_optional_scheduler(
             &new_addr.to_string(),
             1,
+            4,
             PROTOCOL_VERSION,
             None,
         ))

@@ -287,6 +287,38 @@ Keep the shell scenarios for smoke and coarse regressions. Move realistic
 traffic mixes into the benchmark harness once the method mix needs shared state
 between requests.
 
+## Scheduler lookup connection pool comparison
+
+`hog-gateway --scheduler-lookup-pool-size N` sets the dedicated scheduler
+transaction-lookup connections and matching execution permits. The range is
+**1..=68**, with a default of **4**. Set `scheduler_lookup_pool_size = 4` at the
+top level of the gateway TOML config; the CLI overrides TOML. Startup and health
+reconnect use the same setting. The value is logged at startup and included in
+`--dump-effective-config`. Restart the gateway to change it.
+
+Total admitted lookups remain capped at **68**, including queued and executing
+requests, independently of the connection count. Excess lookups fail with
+`Overloaded`. This setting does not change scheduler submission/tip connections,
+health connections, or the indexer pool.
+
+Indexer and scheduler lookup clients both use `rpc_driver::FixedSerialPool`
+through `x23-transport`, with one active call per connection and replacement of
+connections whose active call is cancelled. They use separate pool instances;
+scheduler lookups additionally have gateway admission and execution semaphores.
+
+Compare 4, 8, and 16 connections with the same unknown-hash status workload and
+fixed client concurrency. Confirm metrics show `schedgateway_lookup_tx` calls:
+committed hashes can return through the indexer without exercising this pool.
+Record successful lookups/s separately from overload responses, execution-permit
+wait, backend duration, and errors. Repeat in reverse order. Backend duration
+includes transport and gateway scheduling, not just scheduler service time.
+
+Before choosing a deployment value, repeat with release builds, representative
+backend network latency, and concurrent submissions. Check submission and tip
+latency as well as lookup throughput. Increasing this pool increases scheduler
+concurrency; it does not increase the admission bound or guarantee overload-free
+operation. Keep the default until that qualification supports a change.
+
 ## Indexer connection pool comparison
 
 `hog-gateway --indexer-pool-size N` sets the number of serial indexer data
