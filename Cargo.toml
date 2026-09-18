@@ -24,6 +24,7 @@ members = [
     "crates/rv32/lower",
     "crates/dev/node-supervisor",
     "crates/faucet",
+    "crates/firehose",
     "crates/dev/e2e-tests",
     "crates/dev/bench",
     "crates/dev/sim",
