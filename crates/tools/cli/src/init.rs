@@ -283,7 +283,7 @@ impl<'a> InitUi<'a> {
 
         if self.tty {
             self.clear_screen();
-            Self::render_tty_header(
+            self.render_tty_header(
                 "Groundhog Setup",
                 "Set up your local development environment.",
             );
@@ -306,7 +306,7 @@ impl<'a> InitUi<'a> {
 
         if self.tty {
             self.clear_screen();
-            Self::render_tty_header(
+            self.render_tty_header(
                 "Groundhog Setup",
                 "Set up your local development environment.",
             );
@@ -391,10 +391,10 @@ impl<'a> InitUi<'a> {
         }
     }
 
-    fn render_tty_header(title: &str, subtitle: &str) {
+    fn render_tty_header(&self, title: &str, subtitle: &str) {
         let inner_width: usize = 56;
         if crate::terminal::stderr_width().is_none_or(|width| width < inner_width + 2) {
-            eprintln!("{title}\n{subtitle}\n");
+            self.print.status(format_args!("{title}\n{subtitle}\n"));
             return;
         }
         let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
