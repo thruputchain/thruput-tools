@@ -58,7 +58,7 @@ pub struct InvalidIndexerPoolSize;
 // Total lookup admission is independent of the configurable execution width.
 pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
 
-/// Scheduler lookup connections (1..=68, default 4).
+/// Scheduler lookup connections (1..=68, default 16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct SchedulerLookupPoolSize(std::num::NonZeroUsize);
@@ -73,7 +73,7 @@ impl SchedulerLookupPoolSize {
 impl Default for SchedulerLookupPoolSize {
     fn default() -> Self {
         Self(
-            std::num::NonZeroUsize::new(4)
+            std::num::NonZeroUsize::new(16)
                 .expect("bug: default scheduler lookup pool size is nonzero"),
         )
     }
@@ -330,7 +330,7 @@ pub struct GatewayConfig {
     /// excluded; each data connection handles one ordinary RPC at a time.
     pub indexer_pool_size: IndexerPoolSize,
 
-    /// Dedicated scheduler lookup connections and execution permits (1..=68, default 4).
+    /// Dedicated scheduler lookup connections and execution permits (1..=68, default 16).
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 

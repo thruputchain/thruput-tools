@@ -334,8 +334,11 @@ Validation: `serialized_event.len() >= num_topics * 32`.
 
 ## Transaction Status Lookup Order
 
-Scheduler lookups share a gateway-local bound of 68 outstanding calls: four
-executing on a dedicated connection pool and 64 waiting asynchronously. Queueing,
+Scheduler lookups share a gateway-local bound of 68 outstanding calls. By default,
+16 execute on a dedicated connection pool, leaving room for 52 asynchronous
+waiters when all execution slots are occupied. `scheduler_lookup_pool_size`
+(`--scheduler-lookup-pool-size`) configures execution width from 1 to 68 without
+changing total admission. Queueing,
 execution, and indexer fallback share one absolute backend deadline. A lookup
 deadline or cancellation releases permits and replaces only its active lookup
 connection, without invalidating the scheduler's normal submit/tip lane. Actual

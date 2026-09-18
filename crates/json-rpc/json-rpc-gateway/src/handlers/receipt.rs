@@ -757,7 +757,11 @@ mod tests {
             )),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
-            Arc::new(GatewayConfig::default()),
+            Arc::new(GatewayConfig {
+                // These queue/cancellation fixtures deliberately exercise four lookup lanes.
+                scheduler_lookup_pool_size: 4.try_into().unwrap(),
+                ..GatewayConfig::default()
+            }),
             GatewayMetrics::for_tests(),
         )
     }

@@ -115,7 +115,7 @@ struct Cli {
     #[arg(long)]
     indexer_pool_size: Option<crate::config::IndexerPoolSize>,
 
-    /// Scheduler lookup connections (1..=68, default 4; overrides config)
+    /// Scheduler lookup connections (1..=68, default 16; overrides config)
     #[arg(long)]
     scheduler_lookup_pool_size: Option<crate::config::SchedulerLookupPoolSize>,
 
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn scheduler_lookup_pool_size_defaults_and_cli_override() {
         let mut config = GatewayConfig::default();
-        assert_eq!(config.scheduler_lookup_pool_size.get(), 4);
+        assert_eq!(config.scheduler_lookup_pool_size.get(), 16);
         config = toml::from_str("scheduler_lookup_pool_size = 8").unwrap();
         apply_cli_overrides(&mut config, Cli::parse_from(["hog-gateway"]));
         assert_eq!(config.scheduler_lookup_pool_size.get(), 8);
@@ -582,7 +582,7 @@ mod tests {
                 .unwrap()
                 .scheduler_lookup_pool_size
                 .get(),
-            4
+            16
         );
     }
 

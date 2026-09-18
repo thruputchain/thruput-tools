@@ -291,7 +291,7 @@ between requests.
 
 `hog-gateway --scheduler-lookup-pool-size N` sets the dedicated scheduler
 transaction-lookup connections and matching execution permits. The range is
-**1..=68**, with a default of **4**. Set `scheduler_lookup_pool_size = 4` at the
+**1..=68**, with a default of **16**. Set `scheduler_lookup_pool_size = 16` at the
 top level of the gateway TOML config; the CLI overrides TOML. Startup and health
 reconnect use the same setting. The value is logged at startup and included in
 `--dump-effective-config`. Restart the gateway to change it.
@@ -317,7 +317,7 @@ Before choosing a deployment value, repeat with release builds, representative
 backend network latency, and concurrent submissions. Check submission and tip
 latency as well as lookup throughput. Increasing this pool increases scheduler
 concurrency; it does not increase the admission bound or guarantee overload-free
-operation. Keep the default until that qualification supports a change.
+operation. Set the lookup pool to 4 to restore the previous execution width.
 
 ## Indexer connection pool comparison
 
