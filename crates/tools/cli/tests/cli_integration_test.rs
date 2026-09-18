@@ -354,7 +354,18 @@ fn wait_child(mut child: std::process::Child, timeout: Duration) -> ExitStatus {
 }
 
 #[cfg(unix)]
-fn spawn_with_terminal(mut command: Command) -> (std::process::Child, File) {
+fn spawn_with_terminal(command: Command) -> (std::process::Child, File) {
+    spawn_with_terminal_width(command, 0)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_width(mut command: Command, columns: u16) -> (std::process::Child, File) {
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: columns,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
     let mut master_fd = -1;
     let mut slave_fd = -1;
     // SAFETY: openpty initializes both file descriptors on success. Each is
@@ -365,7 +376,7 @@ fn spawn_with_terminal(mut command: Command) -> (std::process::Child, File) {
             &raw mut slave_fd,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &raw mut size,
         )
     };
     assert_eq!(result, 0, "failed to allocate pseudo-terminal");
@@ -2690,6 +2701,40 @@ fn interactive_init_points_to_created_project() {
     assert!(terminal_output.contains("groundhog build"));
     assert!(!terminal_output.contains("groundhog new my-contract"));
     assert!(tmp.path().join("demo-contract/groundhog.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn init_boxes_respect_stderr_terminal_width() {
+    let tmp = TempDir::new().unwrap();
+    let config = tmp.path().join("long-config-directory-".repeat(5));
+    let setup = groundhog()
+        .args(["init", "--quiet"])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(setup.status.success(), "{setup:?}");
+    for columns in [0, 40, 80, 120] {
+        let mut command = groundhog();
+        command
+            .arg("init")
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", &config)
+            .env("TERM", "xterm")
+            .env_remove("NO_COLOR");
+        let (child, terminal) = spawn_with_terminal_width(command, columns);
+        let reader = terminal_output_reader(&terminal);
+        assert!(wait_child(child, Duration::from_secs(10)).success());
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert!(output.contains("Groundhog Ready"));
+        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Setup"), columns >= 58);
+        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Ready"), columns >= 100);
+        if columns < 100 {
+            assert!(output.contains(config.to_str().unwrap()));
+        }
+    }
 }
 
 #[test]
