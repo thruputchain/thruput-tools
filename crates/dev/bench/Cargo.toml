@@ -1,5 +1,6 @@
 [package]
 name = "groundhog-bench"
+default-run = "groundhog-bench"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +10,10 @@ description = "Benchmark harness for Groundhog JSON-RPC endpoints"
 [[bin]]
 name = "groundhog-bench"
 path = "src/main.rs"
+
+[[bin]]
+name = "groundhog-lookup-bench"
+path = "src/lookup_bench.rs"
 
 [dependencies]
 groundhog-json-rpc-types = { workspace = true }
