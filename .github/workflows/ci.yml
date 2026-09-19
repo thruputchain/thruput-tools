@@ -116,10 +116,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: zizmor --no-progress .github/workflows/
 
-      # Advisory only. The pedantic persona adds stale-action-refs and
-      # ref-version-mismatch, which flag SHA pins that no longer point at a tag
-      # and version comments that disagree with the pinned SHA. Not a reason to
-      # block a PR, so failures are reported and ignored.
+      # Advisory only. The pedantic persona adds process-hygiene audits
+      # (concurrency-limits, undocumented-permissions, anonymous-definition)
+      # plus stale-action-refs, which flags a SHA pin that no longer points at
+      # any tag. Useful signal, not a reason to block a PR.
       - name: zizmor (pedantic, advisory)
         continue-on-error: true
         env:
@@ -136,7 +136,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -153,7 +153,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -227,7 +227,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
