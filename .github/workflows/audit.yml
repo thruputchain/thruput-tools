@@ -76,8 +76,18 @@ jobs:
               with urllib.request.urlopen(req) as r:
                   return json.load(r)
 
-          existing = next((i["number"] for i in call("issues?state=open&per_page=100")
-                           if i["title"] == title), None)
+          def find_open_issue():
+              for page in range(1, 21):
+                  batch = call("issues?state=open&per_page=100&page={}".format(page))
+                  for i in batch:
+                      if "pull_request" not in i and i["title"] == title:
+                          return i["number"]
+                  if len(batch) < 100:
+                      return None
+              print("::warning::gave up after 20 pages; may open a duplicate")
+              return None
+
+          existing = find_open_issue()
           if existing:
               print("Commenting on existing issue #{}".format(existing))
               call("issues/{}/comments".format(existing), {"body": body})
