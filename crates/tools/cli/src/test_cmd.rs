@@ -3,6 +3,7 @@ use crate::result::CommandResult;
 use crate::test_json::{
     IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
     TestMode, TestReport, TestRerunInfo, TestRun, TestSummary, TestSummarySource, TestWatchInfo,
+    WORKSPACE_TEST_JSON_SCHEMA_VERSION, WorkspaceTestReport,
 };
 use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,9 @@ pub struct TestOptions {
     pub rerun: bool,
     /// Keep rerunning selected-target tests when project files change.
     pub watch: bool,
+    /// Test every workspace member that declares a `test_rv32` target
+    /// instead of one selected package.
+    pub workspace: bool,
     /// Boolean controls forwarded to the local test harness.
     pub harness: TestHarnessOptions,
 }
@@ -121,7 +125,9 @@ struct WatchContext {
     ignored_dirs: Vec<PathBuf>,
 }
 
-struct IntegrationRun {
+/// A finished test run of one package: its report and, when a test
+/// invocation failed, the exit code of the first one that did.
+struct TestOutcome {
     report: TestReport,
     failed_code: Option<i32>,
 }
@@ -180,6 +186,11 @@ pub fn run_with_options(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    if options.workspace && package.is_some() {
+        return Err(CliError::InvalidTestOptions(
+            "`--workspace` cannot be combined with `--package`".into(),
+        ));
+    }
     if options.watch {
         return run_watch(
             package,
@@ -223,6 +234,11 @@ pub fn run_integration_with_options(
     if options.rerun {
         return Err(CliError::InvalidTestOptions(
             "`--integration` cannot be combined with `--rerun` yet".into(),
+        ));
+    }
+    if options.workspace {
+        return Err(CliError::InvalidTestOptions(
+            "`--integration` cannot be combined with `--workspace` yet".into(),
         ));
     }
 
@@ -343,6 +359,7 @@ fn report_integration_startup_interrupted(
 ) -> Result<(), CliError> {
     if print.is_json() {
         let mut report = build_test_report(
+            &build.project_name,
             &build.project_root,
             &build.profile,
             TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
@@ -382,7 +399,7 @@ fn report_integration_startup_interrupted(
 mod startup_signals;
 
 fn handle_integration_outcome<T>(
-    result: Result<IntegrationRun, CliError>,
+    result: Result<TestOutcome, CliError>,
     stop_result: Result<T, CliError>,
     cmd: &'static str,
     print: &Print,
@@ -432,7 +449,7 @@ fn run_integration_against_node(
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     print: &Print,
-) -> Result<IntegrationRun, CliError> {
+) -> Result<TestOutcome, CliError> {
     print.status(format_args!(
         "Deploying {} to {rpc_url} for integration tests...",
         build.project_name
@@ -497,6 +514,7 @@ fn run_integration_against_node(
     };
 
     let report = build_test_report(
+        &build.project_name,
         &build.project_root,
         &profile,
         TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
@@ -525,7 +543,7 @@ fn run_integration_against_node(
         .find(|output| !output.success)
         .map(|output| output.code);
 
-    Ok(IntegrationRun {
+    Ok(TestOutcome {
         report,
         failed_code,
     })
@@ -581,7 +599,7 @@ fn integration_test_features(package_root: &Path) -> &'static str {
 }
 
 fn finish_integration_run(
-    run: &IntegrationRun,
+    run: &TestOutcome,
     cmd: &'static str,
     print: &Print,
     warnings: Vec<crate::checks::Finding>,
@@ -713,6 +731,204 @@ fn run_once_with_options(
         cargo_args,
     )?;
 
+    if options.workspace {
+        return run_workspace_once(
+            &metadata,
+            options,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            cmd,
+            print,
+        );
+    }
+
+    let outcome = run_package_once(
+        package,
+        options,
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        print,
+    )?;
+    finish_package_run(&outcome, cmd, print)
+}
+
+/// Report one package's outcome the way the command ends: the JSON record
+/// under `--json`, otherwise the error that carries the failing exit code.
+fn finish_package_run(
+    outcome: &TestOutcome,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    if let Some(code) = outcome.failed_code {
+        if print.is_json() {
+            print.json(&CommandResult::failure(cmd, &outcome.report))?;
+            return Err(CliError::CommandReportedFailure);
+        }
+        return Err(CliError::CargoFailed(code));
+    }
+
+    print.json(&CommandResult::new(cmd, &outcome.report))?;
+    Ok(())
+}
+
+/// Test every workspace member that declares a `test_rv32` target, one
+/// package at a time in name order, and report them together.
+///
+/// A package whose tests fail does not stop the others unless
+/// `--fail-fast` is set. A package whose build fails ends the run with that
+/// error, as a compile error does under `cargo test --workspace`.
+fn run_workspace_once(
+    metadata: &crate::build::CargoMetadata,
+    options: &TestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let packages = workspace_test_packages(metadata)?;
+    print.status(format_args!(
+        "Testing {} workspace package(s): {}",
+        packages.len(),
+        packages.join(", ")
+    ));
+
+    let mut reports = Vec::with_capacity(packages.len());
+    let mut failed = Vec::new();
+    let mut skipped = Vec::new();
+    for (index, package) in packages.iter().enumerate() {
+        print.status(format_args!(
+            "Testing {package} ({}/{})...",
+            index + 1,
+            packages.len()
+        ));
+        let outcome = run_package_once(
+            Some(package),
+            options,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            print,
+        )?;
+        let package_failed = outcome.failed_code.is_some();
+        if package_failed {
+            failed.push((*package).to_string());
+        }
+        reports.push(outcome.report);
+        if package_failed && options.harness.fail_fast {
+            skipped.extend(packages[index + 1..].iter().map(|name| (*name).to_string()));
+            break;
+        }
+    }
+    if !skipped.is_empty() {
+        print.warn(format_args!(
+            "--fail-fast: skipped {} remaining package(s): {}",
+            skipped.len(),
+            skipped.join(", ")
+        ));
+    }
+
+    let report = WorkspaceTestReport {
+        schema_version: WORKSPACE_TEST_JSON_SCHEMA_VERSION,
+        workspace_root: metadata.workspace_root.clone(),
+        success: failed.is_empty(),
+        summary: combine_summaries(reports.iter().map(|report| &report.summary)),
+        packages: reports,
+        skipped,
+    };
+    print_workspace_summary(&report, print);
+
+    if failed.is_empty() {
+        print.json(&CommandResult::new(cmd, &report))?;
+        return Ok(());
+    }
+    if print.is_json() {
+        print.json(&CommandResult::failure(cmd, &report))?;
+        return Err(CliError::CommandReportedFailure);
+    }
+    Err(CliError::WorkspaceTestsFailed {
+        failed,
+        total: packages.len(),
+    })
+}
+
+/// The workspace members `--workspace` tests: those declaring a `test_rv32`
+/// test target, in name order.
+fn workspace_test_packages(metadata: &crate::build::CargoMetadata) -> Result<Vec<&str>, CliError> {
+    let mut packages: Vec<&str> = metadata
+        .packages
+        .iter()
+        .filter(|package| package.has_test_target(RV32_TEST_TARGET))
+        .map(|package| package.name.as_str())
+        .collect();
+    packages.sort_unstable();
+    packages.dedup();
+    if packages.is_empty() {
+        return Err(CliError::NoWorkspaceTestPackages(
+            metadata.workspace_root.display().to_string(),
+        ));
+    }
+    Ok(packages)
+}
+
+fn print_workspace_summary(report: &WorkspaceTestReport, print: &Print) {
+    let outcome = |success: bool| if success { "ok" } else { "FAILED" };
+    let mut items: Vec<(String, String)> = report
+        .packages
+        .iter()
+        .map(|package| {
+            (
+                package.package.clone(),
+                format!(
+                    "{} ({})",
+                    outcome(package.success),
+                    describe_summary(&package.summary)
+                ),
+            )
+        })
+        .collect();
+    items.extend(
+        report
+            .skipped
+            .iter()
+            .map(|package| (package.clone(), "skipped (--fail-fast)".to_string())),
+    );
+    items.push((
+        "workspace".to_string(),
+        format!(
+            "{} ({})",
+            outcome(report.success),
+            describe_summary(&report.summary)
+        ),
+    ));
+    print.summary_card("Workspace tests", &items);
+}
+
+fn describe_summary(summary: &TestSummary) -> String {
+    let mut parts = vec![
+        format!("{} passed", summary.passed),
+        format!("{} failed", summary.failed),
+    ];
+    if summary.ignored > 0 {
+        parts.push(format!("{} ignored", summary.ignored));
+    }
+    parts.join(", ")
+}
+
+/// Build one package's artifact and run its selected-target tests.
+///
+/// Returns the outcome instead of reporting it, so a workspace run can
+/// collect every package before deciding how the command ends.
+fn run_package_once(
+    package: Option<&str>,
+    options: &TestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    print: &Print,
+) -> Result<TestOutcome, CliError> {
     // Build the contract artifact (validates project root, checks for cargo on PATH, etc.).
     let build = build_local_test_artifact(package, artifacts, explicit_profile, print)?;
 
@@ -728,7 +944,6 @@ fn run_once_with_options(
 
     if options.rerun && rerun_filters.is_empty() {
         return finish_empty_rerun(
-            cmd,
             &build,
             &profile,
             &cache_path,
@@ -771,6 +986,7 @@ fn run_once_with_options(
     )?;
 
     let report = build_test_report(
+        &build.project_name,
         &build.project_root,
         &profile,
         TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
@@ -786,16 +1002,13 @@ fn run_once_with_options(
         None,
     );
 
-    if let Some(failed) = outputs.iter().find(|output| !output.success) {
-        if print.is_json() {
-            print.json(&CommandResult::failure(cmd, &report))?;
-            return Err(CliError::CommandReportedFailure);
-        }
-        return Err(CliError::CargoFailed(failed.code));
-    }
-
-    print.json(&CommandResult::new(cmd, &report))?;
-    Ok(())
+    Ok(TestOutcome {
+        report,
+        failed_code: outputs
+            .iter()
+            .find(|output| !output.success)
+            .map(|output| output.code),
+    })
 }
 
 fn build_local_test_artifact(
@@ -1002,14 +1215,13 @@ fn filter_rerun_tests(options: &TestOptions, cached_tests: &[String]) -> Vec<Str
 }
 
 fn finish_empty_rerun(
-    cmd: &'static str,
     build: &LocalTestBuild,
     profile: &crate::config::ResolvedProfile,
     cache_path: &Path,
     cached_tests: &[String],
     watch_enabled: bool,
     print: &Print,
-) -> Result<(), CliError> {
+) -> Result<TestOutcome, CliError> {
     if cached_tests.is_empty() {
         clear_failure_cache(cache_path)?;
         print.warn(format_args!(
@@ -1023,6 +1235,7 @@ fn finish_empty_rerun(
         ));
     }
     let report = build_test_report(
+        &build.project_name,
         &build.project_root,
         profile,
         TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
@@ -1037,8 +1250,10 @@ fn finish_empty_rerun(
         TestMode::Rv32,
         None,
     );
-    print.json(&CommandResult::new(cmd, &report))?;
-    Ok(())
+    Ok(TestOutcome {
+        report,
+        failed_code: None,
+    })
 }
 
 fn print_test_status(options: &TestOptions, rerun_count: usize, print: &Print) {
@@ -1118,6 +1333,7 @@ fn should_stop_rerun(options: &TestOptions, outputs: &[TestRunOutput]) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn build_test_report(
+    package: &str,
     project_root: &Path,
     profile: &crate::config::ResolvedProfile,
     artifact: TestArtifactInfo,
@@ -1139,6 +1355,7 @@ fn build_test_report(
     TestReport {
         schema_version: TEST_JSON_SCHEMA_VERSION,
         mode,
+        package: package.to_string(),
         project_root: project_root.to_path_buf(),
         profile: profile.clone(),
         artifact,
@@ -1315,33 +1532,44 @@ fn derive_summary_from_cases(tests: &[TestCase]) -> TestSummary {
 }
 
 fn aggregate_summary(runs: &[TestRun]) -> TestSummary {
-    if runs.is_empty() {
+    combine_summaries(runs.iter().map(|run| &run.summary))
+}
+
+/// Fold summaries of several invocations, or of several packages, into one.
+///
+/// `filtered_out` is zeroed across more than one input because libtest
+/// reports it per invocation and the values do not compose; `source`
+/// degrades to `Derived` when the inputs disagree.
+fn combine_summaries<'a>(summaries: impl IntoIterator<Item = &'a TestSummary>) -> TestSummary {
+    let mut summaries = summaries.into_iter();
+    let Some(first) = summaries.next() else {
         return derive_summary_from_cases(&[]);
-    }
+    };
 
-    let mut summary = runs[0].summary.clone();
-    if runs.len() > 1 {
-        summary.filtered_out = 0;
-    }
+    let mut summary = first.clone();
+    let mut combined = 1usize;
+    for next in summaries {
+        combined += 1;
+        summary.total += next.total;
+        summary.passed += next.passed;
+        summary.failed += next.failed;
+        summary.ignored += next.ignored;
+        summary.measured += next.measured;
 
-    for run in &runs[1..] {
-        summary.total += run.summary.total;
-        summary.passed += run.summary.passed;
-        summary.failed += run.summary.failed;
-        summary.ignored += run.summary.ignored;
-        summary.measured += run.summary.measured;
-
-        match (summary.duration_seconds, run.summary.duration_seconds) {
+        match (summary.duration_seconds, next.duration_seconds) {
             (Some(total), Some(duration)) => summary.duration_seconds = Some(total + duration),
             _ => summary.duration_seconds = None,
         }
 
-        summary.source = match (summary.source, run.summary.source) {
+        summary.source = match (summary.source, next.source) {
             (TestSummarySource::Parsed, TestSummarySource::Parsed) => TestSummarySource::Parsed,
             (TestSummarySource::Empty, TestSummarySource::Empty) => TestSummarySource::Empty,
             (TestSummarySource::Empty, other) | (other, TestSummarySource::Empty) => other,
             _ => TestSummarySource::Derived,
         };
+    }
+    if combined > 1 {
+        summary.filtered_out = 0;
     }
 
     summary
@@ -1686,7 +1914,7 @@ mod tests {
         success: bool,
         artifact_kind: crate::artifacts::ArtifactKind,
         artifact_path: &std::path::Path,
-    ) -> super::IntegrationRun {
+    ) -> super::TestOutcome {
         let profile = crate::config::ResolvedProfile {
             name: "integration".into(),
             network: None,
@@ -1717,6 +1945,7 @@ mod tests {
             stderr: String::new(),
         }];
         let report = super::build_test_report(
+            "demo",
             std::path::Path::new("/project"),
             &profile,
             TestArtifactInfo::new(artifact_kind, artifact_path),
@@ -1737,7 +1966,7 @@ mod tests {
             }),
         );
 
-        super::IntegrationRun {
+        super::TestOutcome {
             report,
             failed_code: if success { None } else { Some(101) },
         }
@@ -1785,6 +2014,7 @@ mod tests {
             source: None,
         };
         let report = super::build_test_report(
+            "demo",
             std::path::Path::new("/project"),
             &profile,
             TestArtifactInfo::new(
@@ -1809,6 +2039,107 @@ mod tests {
         assert_eq!(json["artifact"]["kind"], "rv32");
         assert_eq!(json["artifact"]["path"], "/project/target/demo.rv32a");
         assert!(json.get("integration").is_none());
+    }
+
+    fn metadata_package(name: &str, targets: &[(&str, &str)]) -> crate::build::MetadataPackage {
+        crate::build::MetadataPackage {
+            name: name.into(),
+            version: "0.1.0".into(),
+            manifest_path: std::path::PathBuf::from(format!("/ws/{name}/Cargo.toml")),
+            metadata: None,
+            targets: targets
+                .iter()
+                .map(|(name, kind)| crate::build::MetadataTarget {
+                    name: (*name).into(),
+                    kind: vec![(*kind).into()],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn workspace_test_packages_selects_rv32_test_members_in_name_order() {
+        let metadata = crate::build::CargoMetadata {
+            workspace_root: "/ws".into(),
+            target_directory: "/ws/target".into(),
+            packages: vec![
+                metadata_package("zeta", &[("zeta", "bin"), ("test_rv32", "test")]),
+                metadata_package("helper", &[("helper", "lib")]),
+                metadata_package("alpha", &[("test_rv32", "test")]),
+                metadata_package("bin-only", &[("test_rv32", "bin")]),
+            ],
+        };
+
+        let packages = super::workspace_test_packages(&metadata).unwrap();
+
+        assert_eq!(packages, vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn workspace_test_packages_rejects_a_workspace_without_rv32_tests() {
+        let metadata = crate::build::CargoMetadata {
+            workspace_root: "/ws".into(),
+            target_directory: "/ws/target".into(),
+            packages: vec![metadata_package("helper", &[("helper", "lib")])],
+        };
+
+        let err = super::workspace_test_packages(&metadata).unwrap_err();
+
+        assert!(
+            matches!(err, CliError::NoWorkspaceTestPackages(ref root) if root == "/ws"),
+            "expected NoWorkspaceTestPackages, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn workspace_mode_rejects_an_explicit_package() {
+        let options = TestOptions {
+            workspace: true,
+            ..TestOptions::default()
+        };
+
+        let err = super::run_with_options(
+            Some("demo"),
+            &options,
+            &[],
+            &crate::artifacts::ArtifactOptions::default(),
+            None,
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        let CliError::InvalidTestOptions(message) = err else {
+            panic!("expected InvalidTestOptions, got: {err:?}");
+        };
+        assert!(message.contains("--workspace"));
+        assert!(message.contains("--package"));
+    }
+
+    #[test]
+    fn integration_path_rejects_workspace_mode() {
+        let options = TestOptions {
+            workspace: true,
+            ..TestOptions::default()
+        };
+
+        let err = super::run_integration_with_options(
+            None,
+            &options,
+            &IntegrationTestOptions::default(),
+            &[],
+            &crate::artifacts::ArtifactOptions::default(),
+            None,
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        let CliError::InvalidTestOptions(message) = err else {
+            panic!("expected InvalidTestOptions, got: {err:?}");
+        };
+        assert!(message.contains("--integration"));
+        assert!(message.contains("--workspace"));
     }
 
     #[test]
@@ -2158,6 +2489,7 @@ mod tests {
             skip: vec!["slow".into(), "flaky".into()],
             rerun: false,
             watch: false,
+            workspace: false,
             harness: TestHarnessOptions {
                 fail_fast: true,
                 show_output: true,

@@ -10,7 +10,13 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 5;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 6;
+
+/// Schema version for the `groundhog test --workspace --json` payload.
+///
+/// Bump this when the shape or semantics of `WorkspaceTestReport` change
+/// in a way that could break existing machine consumers.
+pub const WORKSPACE_TEST_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Structured machine-readable report for `groundhog test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -19,6 +25,9 @@ pub struct TestReport {
     pub schema_version: u32,
     #[serde(default)]
     pub mode: TestMode,
+    /// Name of the tested package.
+    #[serde(default)]
+    pub package: String,
     pub project_root: PathBuf,
     pub profile: ResolvedProfile,
     pub artifact: TestArtifactInfo,
@@ -29,6 +38,24 @@ pub struct TestReport {
     pub watch: TestWatchInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub integration: Option<IntegrationTestInfo>,
+}
+
+/// Structured machine-readable report for `groundhog test --workspace --json`.
+///
+/// `packages` holds one [`TestReport`] per tested workspace member in the
+/// order they ran; `summary` aggregates their runs.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTestReport {
+    pub schema_version: u32,
+    pub workspace_root: PathBuf,
+    /// True when every tested package succeeded.
+    pub success: bool,
+    pub summary: TestSummary,
+    pub packages: Vec<TestReport>,
+    /// Selected packages that did not run because `--fail-fast` ended the
+    /// workspace run after an earlier package failed.
+    pub skipped: Vec<String>,
 }
 
 /// Built contract artifact metadata for a `groundhog test --json` report.
@@ -211,6 +238,7 @@ mod tests {
         let report: TestReport = serde_json::from_value(json).expect("v3 report should parse");
 
         assert_eq!(report.mode, TestMode::Rv32);
+        assert!(report.package.is_empty());
         assert_eq!(report.schema_version, 3);
         assert_eq!(report.artifact.kind, ArtifactKind::Rv32);
         assert_eq!(

@@ -177,9 +177,11 @@ enum Command {
                        --integration, starts an ephemeral hog-devnode \
                        local node, deploys the RV32 artifact, and \
                        runs the integration test target with RPC environment \
-                       variables. With --json, emits a structured report \
-                       with mode, artifact metadata, summary, per-test cases, \
-                       and integration node metadata when applicable.",
+                       variables. With --workspace, builds and tests every \
+                       workspace member that declares a test_rv32 target and \
+                       reports them together. With --json, emits a structured \
+                       report with mode, artifact metadata, summary, per-test \
+                       cases, and integration node metadata when applicable.",
         after_help = "Logging:\n  With --integration, local-node supervisor info logs \
                         are written to stderr;\n  add --verbose/-v to also forward \
                         hog-devnode info logs. RUST_LOG overrides\n  the default filter, \
@@ -187,9 +189,16 @@ enum Command {
                         RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug."
     )]
     Test {
-        /// Package to test (required in workspaces)
-        #[arg(short, long)]
+        /// Package to test (required in workspaces unless --workspace is set)
+        #[arg(short, long, conflicts_with = "workspace")]
         package: Option<String>,
+        /// Test every workspace member that declares a `test_rv32` target
+        ///
+        /// Members run one at a time in name order. A failing package does
+        /// not stop the rest unless --fail-fast is set. Not yet supported
+        /// with --integration.
+        #[arg(long)]
+        workspace: bool,
         /// Run only tests whose names contain this substring
         #[arg(long = "match-test")]
         match_test: Option<String>,
@@ -1234,6 +1243,7 @@ fn main() {
             }),
         Command::Test {
             package,
+            workspace,
             match_test,
             fail_fast,
             show_output,
@@ -1262,6 +1272,7 @@ fn main() {
                     skip,
                     rerun,
                     watch,
+                    workspace,
                     harness: groundhog_cli::test_cmd::TestHarnessOptions {
                         fail_fast,
                         show_output,
@@ -2641,6 +2652,31 @@ mod tests {
                 );
             }
             _ => panic!("expected token transfers command"),
+        }
+    }
+
+    #[test]
+    fn test_workspace_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "test", "--workspace"]);
+
+        match cli.command {
+            Command::Test {
+                workspace, package, ..
+            } => {
+                assert!(workspace);
+                assert!(package.is_none());
+            }
+            _ => panic!("expected test command"),
+        }
+    }
+
+    #[test]
+    fn test_workspace_flag_conflicts_with_package() {
+        let result = Cli::try_parse_from(["groundhog", "test", "--workspace", "-p", "demo"]);
+
+        match result {
+            Err(err) => assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict),
+            Ok(_) => panic!("--workspace with -p should be rejected"),
         }
     }
 
