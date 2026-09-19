@@ -14,9 +14,9 @@ use groundhog_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
-    chain_config::ChainConfig,
     events::{EventPage, EventQuery},
     hex::HexBytes,
+    network_config::NetworkConfigParams,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -83,7 +83,7 @@ pub trait GroundhogApi {
     /// when no reading is available or the config is a version this server cannot
     /// read.
     #[method(name = "chainConfig")]
-    async fn chain_config(&self) -> RpcResult<ChainConfig>;
+    async fn chain_config(&self) -> RpcResult<NetworkConfigParams>;
 
     /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]

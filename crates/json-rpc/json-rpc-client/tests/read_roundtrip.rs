@@ -414,7 +414,6 @@ async fn chain_config_roundtrips_stated_parameters_only() {
         .await
         .expect("bug: chainConfig should succeed");
 
-    assert_eq!(*config.height, 42);
     assert_eq!(
         config.max_contract_size_bytes,
         Some(TIP_MAX_CONTRACT_SIZE_BYTES)

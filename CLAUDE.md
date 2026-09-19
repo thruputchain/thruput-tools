@@ -75,8 +75,10 @@ Workspace crates are grouped by boundary:
   and call, XDR encoding.
 - **tx-validation** — off-chain mirror of the bounds hogd's executor checks
   before running a transaction. `NetworkConfigParams` flattens a db tip's
-  network config into per-parameter fields (`None` when unstated);
-  `check_transaction` reports violations as `TxInvalidDetail`.
+  network config into per-parameter fields (`None` when unstated); it is
+  defined in `json-rpc-types` because `chainConfig` returns it on the wire,
+  and re-exported here. `check_transaction` reports violations as
+  `TxInvalidDetail`.
   `ConfigParamName` is the one Rust-side spelling of the parameter names
   hog-devnode's `--network-config` flag and its data-dir metadata key by;
   `groundhog node` parses the flag into it rather than passing a free string.

@@ -492,109 +492,6 @@
         ],
         "type": "object"
       },
-      "ChainConfig": {
-        "description": "The execution parameters a chain's network config states, as read with\nthe chain tip. Returned by `chainConfig`.\n\nEvery parameter is reported exactly as the chain states it. A field is\nabsent when the config does not state that parameter; the node, not this\nsurface, decides what value is then in force, so nothing is filled in\nhere. A config version this build cannot interpret is an error rather\nthan an empty object.",
-        "properties": {
-          "height": {
-            "$ref": "#/components/schemas/BlockHeight",
-            "description": "Tip the config was read with. The parameters govern the block that\nfollows it; they change only at explicit upgrade blocks."
-          },
-          "maxAuthTokenDepth": {
-            "description": "Levels of node nesting an auth token may carry.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxBytestringLen": {
-            "description": "Bytes one bytestring storage item may hold.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxContractSizeBytes": {
-            "description": "Bytes one attached contract's code blob may hold.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxCrossInvokeDepth": {
-            "description": "Invocation frames one transaction may have open at once.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxNewContractsPerTx": {
-            "description": "Contracts one transaction may attach in `contractsToDeploy`.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxRv32CodeBytes": {
-            "description": "Code bytes an RV32 artifact may carry to be attached.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxRv32MemoryBytes": {
-            "description": "Guest data memory bytes an RV32 artifact may declare to be attached.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxSavepointDepth": {
-            "description": "Storage savepoints one transaction may have open at once.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxSha256BufferBytes": {
-            "description": "Bytes one incremental SHA-256 buffer may absorb between resets.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "maxSha256Buffers": {
-            "description": "Concurrently open incremental SHA-256 buffers permitted per\ninvocation frame.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "height"
-        ],
-        "type": "object"
-      },
       "ChainTip": {
         "description": "Current chain tip. Returned by chainTip.",
         "properties": {
@@ -977,6 +874,93 @@
           "descending"
         ],
         "type": "string"
+      },
+      "NetworkConfigParams": {
+        "description": "The execution parameters a chain's network config states, flattened\nfrom the list that carries them. Returned by `chainConfig`.\n\nResolve once where a tip is read, then each parameter is a field rather\nthan a scan of the list. A field is `None` when the config does not\nstate that parameter, and is then absent from the JSON: the node, not\nthis surface, decides what value is in force for it, so nothing is\nfilled in here. `Default` is the reading with nothing stated, and struct\nupdate from it is the way to state a subset.",
+        "properties": {
+          "maxAuthTokenDepth": {
+            "description": "Levels of node nesting an auth token may carry.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxBytestringLen": {
+            "description": "Bytes one bytestring storage item may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxContractSizeBytes": {
+            "description": "Bytes one attached contract's code blob may hold. The protocol fixes\n`kDefaultMaxContractSizeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxCrossInvokeDepth": {
+            "description": "Invocation frames one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxNewContractsPerTx": {
+            "description": "Contracts one transaction may attach in `contractsToDeploy`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32CodeBytes": {
+            "description": "Code bytes an RV32 artifact may carry to be attached. The protocol\nfixes `kDefaultMaxRv32CodeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32MemoryBytes": {
+            "description": "Guest data memory bytes an RV32 artifact may declare to be attached.\nThe protocol fixes `kDefaultMaxRv32MemoryBytes` as the value in force\nwhen unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSavepointDepth": {
+            "description": "Storage savepoints one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSha256Buffers": {
+            "description": "Concurrently open incremental SHA-256 buffers permitted per\ninvocation frame.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "NetworkInfo": {
         "description": "Immutable protocol identity reported by a JSON-RPC server.",
@@ -1733,9 +1717,9 @@
       "name": "groundhog_chainConfig",
       "params": [],
       "result": {
-        "name": "ChainConfig",
+        "name": "NetworkConfigParams",
         "schema": {
-          "$ref": "#/components/schemas/ChainConfig"
+          "$ref": "#/components/schemas/NetworkConfigParams"
         }
       },
       "summary": "The execution parameters the chain's network config states, from the server's most recent tip reading. Only stated parameters are reported: a parameter the config does not state is absent, and the node alone decides what is then in force. The reading is refreshed at most once per cache window (a few seconds), which only matters across an upgrade block. Fails with `BackendUnavailable` when no reading is available or the config is a version this server cannot read.",

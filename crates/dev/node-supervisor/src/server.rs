@@ -977,7 +977,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .chain_config()
             .await
             .expect("bug: chainConfig should dispatch to fake scheduler");
-        assert_eq!(*chain_config.height, 0);
         assert_eq!(
             chain_config.max_sha256_buffers,
             Some(0),

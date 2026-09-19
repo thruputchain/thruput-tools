@@ -536,7 +536,7 @@ remain a later phase.
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | `SchedGateway.schedgateway_lookup_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | `SchedGateway.schedgateway_get_tip` | |
-| `groundhog_chainConfig() → ChainConfig` | `SchedGateway.schedgateway_get_tip` | Stated execution parameters only; an unstated parameter is absent, never defaulted |
+| `groundhog_chainConfig() → NetworkConfigParams` | `SchedGateway.schedgateway_get_tip` | Stated execution parameters only; an unstated parameter is absent, never defaulted |
 | `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** | In OpenRPC; handler is not implemented until a block query backend exists |
 | `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
 | `groundhog_pendingTransactionCount() → u64` | `SchedGateway.schedgateway_pending_tx_count` | In OpenRPC; gateway handler is not wired yet |

@@ -663,7 +663,6 @@ async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
 
         // The mock's tip is at height 0 with a config stating nothing, so
         // the result is the bare height and no parameters.
-        assert_eq!(*config.height, 0);
         assert_eq!(config.max_contract_size_bytes, None);
     }
 }

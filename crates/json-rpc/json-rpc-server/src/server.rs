@@ -10,7 +10,6 @@ use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
-    chain_config::ChainConfig,
     error::codes,
     events::{EventPage, EventQuery},
     hex::HexBytes,
@@ -501,7 +500,7 @@ where
     }
 
     #[tracing::instrument(skip_all)]
-    async fn chain_config(&self) -> RpcResult<ChainConfig> {
+    async fn chain_config(&self) -> RpcResult<NetworkConfigParams> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
             // Served from the same rate-limited reading the submit pre-checks
@@ -521,7 +520,7 @@ where
                 )
                 .into());
             };
-            Ok(params.to_chain_config(BlockHeight::from(state.height)))
+            Ok(params)
         })
         .await
     }
@@ -1690,13 +1689,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .await
             .expect("bug: config should be readable");
 
-        assert_eq!(*config.height, 42);
         assert_eq!(config.max_new_contracts_per_tx, Some(3));
         assert_eq!(
             config,
-            ChainConfig {
+            NetworkConfigParams {
                 max_new_contracts_per_tx: Some(3),
-                ..NetworkConfigParams::default().to_chain_config(BlockHeight::from(42))
+                ..NetworkConfigParams::default()
             },
             "unstated parameters are absent, not defaulted"
         );
