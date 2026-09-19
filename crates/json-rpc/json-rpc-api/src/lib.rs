@@ -14,6 +14,7 @@ use groundhog_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
+    chain_config::ChainConfig,
     events::{EventPage, EventQuery},
     hex::HexBytes,
     network_info::NetworkInfo,
@@ -28,7 +29,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "5.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "5.3.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -73,6 +74,16 @@ pub trait GroundhogApi {
     /// Current chain tip: height, block hash, and the protocol it executed under.
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
+
+    /// The execution parameters the chain's network config states, from the server's
+    /// most recent tip reading. Only stated parameters are reported: a parameter the
+    /// config does not state is absent, and the node alone decides what is then in
+    /// force. The reading is refreshed at most once per cache window (a few seconds),
+    /// which only matters across an upgrade block. Fails with `BackendUnavailable`
+    /// when no reading is available or the config is a version this server cannot
+    /// read.
+    #[method(name = "chainConfig")]
+    async fn chain_config(&self) -> RpcResult<ChainConfig>;
 
     /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]

@@ -10,6 +10,7 @@ use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
+    chain_config::ChainConfig,
     error::codes,
     events::{EventPage, EventQuery},
     hex::HexBytes,
@@ -59,18 +60,19 @@ pub struct GroundhogRpcServer<S, C, R, V> {
 #[derive(Debug, Clone, Copy)]
 struct TipState {
     height: i64,
-    /// Every field unset when the tip's network config is a version this
-    /// build cannot interpret; chain-configured checks are then skipped.
-    params: NetworkConfigParams,
+    /// `None` when the tip's network config is a version this build cannot
+    /// interpret: chain-configured pre-checks are then skipped and
+    /// `chainConfig` reports the config as unreadable rather than empty.
+    params: Option<NetworkConfigParams>,
 }
 
 impl TipState {
     fn from_reading(reading: &TipReading) -> Self {
         let params = match NetworkConfigParams::from_network_config(&reading.network_config) {
-            Ok(params) => params,
+            Ok(params) => Some(params),
             Err(error) => {
                 tracing::warn!(%error, "tip network config unreadable, chain-configured pre-checks skipped");
-                NetworkConfigParams::default()
+                None
             }
         };
         Self {
@@ -358,11 +360,12 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V>
 where
     C: ChainPlane,
 {
-    /// Db-tip reading for the submit pre-checks, served from the shared
-    /// rate-limited cache. Its state is `None` when no reading is available
-    /// (probe failed or timed out with no prior success); the caller then
-    /// runs only the checks that need no chain reading.
-    async fn submit_tip_state(&self, context: RpcRequestContext) -> TipRead {
+    /// Db-tip reading served from the shared rate-limited cache, for the
+    /// submit pre-checks and `chainConfig`. Its state is `None` when no
+    /// reading is available (probe failed or timed out with no prior
+    /// success); a submit then runs only the checks that need no chain
+    /// reading, and `chainConfig` has nothing to report.
+    async fn cached_tip_state(&self, context: RpcRequestContext) -> TipRead {
         self.tip_state_within(Duration::from_millis(self.config.tip_cache_ttl_ms), context)
             .await
     }
@@ -424,8 +427,8 @@ where
             // The pre-checks are advisory mirrors of what the scheduler and
             // executor enforce authoritatively: an unavailable tip reading
             // skips the chain-dependent checks rather than blocking submission.
-            let mut tip = self.submit_tip_state(context).await;
-            let params = tip.state.map(|tip| tip.params).unwrap_or_default();
+            let mut tip = self.cached_tip_state(context).await;
+            let params = tip.state.and_then(|tip| tip.params).unwrap_or_default();
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
                 // A cached config can lag, by up to the TTL, an upgrade block
@@ -435,7 +438,7 @@ where
                 // itself is already current, and the rejection stands.
                 Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
                     tip = self.fresh_tip_state(context).await;
-                    let params = tip.state.map_or(params, |tip| tip.params);
+                    let params = tip.state.and_then(|tip| tip.params).unwrap_or(params);
                     validate_raw_transaction(&tx_hex, &params)?
                 }
                 Err(error) => return Err(error.into()),
@@ -493,6 +496,32 @@ where
             // Every fetched tip refreshes the pre-check cache, config included.
             self.tip_cache.store(TipState::from_reading(&reading)).await;
             Ok(reading.tip)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn chain_config(&self) -> RpcResult<ChainConfig> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            // Served from the same rate-limited reading the submit pre-checks
+            // use, so a burst of callers costs the backend one tip fetch per
+            // TTL window. The config changes only at upgrade blocks, so a
+            // reading inside the window is current for all practical
+            // purposes.
+            let Some(state) = self.cached_tip_state(context).await.state else {
+                return Err(RpcServerError::BackendUnavailable(
+                    "no chain tip reading is available".into(),
+                )
+                .into());
+            };
+            let Some(params) = state.params else {
+                return Err(RpcServerError::BackendUnavailable(
+                    "tip network config is a version this server cannot read".into(),
+                )
+                .into());
+            };
+            Ok(params.to_chain_config(BlockHeight::from(state.height)))
         })
         .await
     }
@@ -1645,6 +1674,121 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             1,
             "the submit should reuse the reading the chainTip call stored"
         );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_reports_exactly_what_the_tip_config_states() {
+        let chain = ConfigChain::new(3);
+        let server = expiry_check_server(
+            chain,
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let config = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+
+        assert_eq!(*config.height, 42);
+        assert_eq!(config.max_new_contracts_per_tx, Some(3));
+        assert_eq!(
+            config,
+            ChainConfig {
+                max_new_contracts_per_tx: Some(3),
+                ..NetworkConfigParams::default().to_chain_config(BlockHeight::from(42))
+            },
+            "unstated parameters are absent, not defaulted"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_refreshes_the_precheck_cache() {
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted);
+
+        server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within the cap the chainConfig call fetched");
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "the submit should reuse the reading the chainConfig call stored"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_serves_the_cached_reading_within_the_ttl() {
+        let chain = ConfigChain::new(3);
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        for _ in 0..3 {
+            server
+                .chain_config()
+                .await
+                .expect("bug: config should be readable");
+        }
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "calls inside the TTL window must not each fetch the db tip"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_refetches_once_the_ttl_has_lapsed() {
+        let chain = ConfigChain::new(1);
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default().with_tip_cache_ttl_ms(0),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let first = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+        chain.set_params(max_contracts_params(2)).await;
+
+        let second = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+
+        assert_eq!(first.max_new_contracts_per_tx, Some(1));
+        assert_eq!(
+            second.max_new_contracts_per_tx,
+            Some(2),
+            "an expired window fetches the tip again and reports the upgraded config"
+        );
+        assert_eq!(*chain.tip_calls.lock().await, 2);
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_fails_when_no_tip_reading_is_available() {
+        let server = expiry_check_server(
+            UnavailableChain,
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let error = server
+            .chain_config()
+            .await
+            .expect_err("bug: nothing to report without a reading");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
     }
 
     #[tokio::test]

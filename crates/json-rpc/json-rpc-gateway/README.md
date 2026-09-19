@@ -23,6 +23,7 @@ groundhog_sendRawTransaction(bytes)            → TxHash
 groundhog_getTransactionReceipt(hash)          → Option<TransactionReceipt>
 groundhog_getTransactionStatus(hash)           → TransactionStatus
 groundhog_chainTip()                           → ChainTip
+groundhog_chainConfig()                        → ChainConfig
 groundhog_getBlockByNumber(height)             → Option<BlockInfo>
 groundhog_pendingTransactionCount()            → u64
 groundhog_getEvents(EventQuery)                → EventPage

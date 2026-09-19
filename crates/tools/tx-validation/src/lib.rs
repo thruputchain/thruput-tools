@@ -22,7 +22,7 @@
 //! re-checks everything, and a reading that lags a block is harmless
 //! because these parameters change only through explicit config upgrades.
 
-use groundhog_json_rpc_types::error::TxInvalidDetail;
+use groundhog_json_rpc_types::{BlockHeight, chain_config::ChainConfig, error::TxInvalidDetail};
 use groundhog_rv32_artifact::{
     DEFAULT_MAX_CODE_BYTES, DEFAULT_MEMORY_BYTES, DeclaredSizes, declared_sizes,
 };
@@ -180,6 +180,42 @@ impl NetworkConfigParams {
     pub fn max_rv32_memory_bytes_in_force(&self) -> u32 {
         self.max_rv32_memory_bytes
             .unwrap_or(DEFAULT_MAX_RV32_MEMORY_BYTES)
+    }
+
+    /// Project the stated parameters onto the wire type `chainConfig`
+    /// returns, for the tip at `height`.
+    ///
+    /// Only what the config states is carried over; the `_in_force`
+    /// accessors' protocol defaults are deliberately not applied, so a
+    /// consumer sees exactly what the chain says. Both structs are spelled
+    /// out field by field so that a parameter added to either one fails to
+    /// compile until the other follows.
+    pub fn to_chain_config(&self, height: BlockHeight) -> ChainConfig {
+        let Self {
+            max_sha256_buffers,
+            max_cross_invoke_depth,
+            max_new_contracts_per_tx,
+            max_bytestring_len,
+            max_contract_size_bytes,
+            max_savepoint_depth,
+            max_sha256_buffer_bytes,
+            max_auth_token_depth,
+            max_rv32_code_bytes,
+            max_rv32_memory_bytes,
+        } = *self;
+        ChainConfig {
+            height,
+            max_sha256_buffers,
+            max_cross_invoke_depth,
+            max_new_contracts_per_tx,
+            max_bytestring_len,
+            max_contract_size_bytes,
+            max_savepoint_depth,
+            max_sha256_buffer_bytes,
+            max_auth_token_depth,
+            max_rv32_code_bytes,
+            max_rv32_memory_bytes,
+        }
     }
 }
 
@@ -526,6 +562,55 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
                 }
             }
         }
+    }
+
+    /// The `camelCase` spelling a protocol field name takes on the JSON wire.
+    fn wire_key(name: ConfigParamName) -> String {
+        let mut key = String::new();
+        let mut upper_next = false;
+        for c in name.as_str().chars() {
+            if c == '_' {
+                upper_next = true;
+            } else if upper_next {
+                key.extend(c.to_uppercase());
+                upper_next = false;
+            } else {
+                key.push(c);
+            }
+        }
+        key
+    }
+
+    #[test]
+    fn every_named_parameter_projects_onto_its_wire_field() {
+        let stated_values: Vec<_> = ConfigParamName::ALL
+            .iter()
+            .copied()
+            .zip(1_000u32..)
+            .collect();
+        let params = NetworkConfigParams::from_network_config(&network_config(
+            stated_values
+                .iter()
+                .map(|(name, value)| stated(*name, *value))
+                .collect(),
+        ))
+        .unwrap();
+
+        let config = params.to_chain_config(BlockHeight::from(7));
+        let encoded = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(encoded["height"], 7);
+        for (name, value) in stated_values {
+            assert_eq!(encoded[wire_key(name)], value, "{name}");
+        }
+        assert_eq!(
+            serde_json::to_value(
+                NetworkConfigParams::default().to_chain_config(BlockHeight::from(7))
+            )
+            .unwrap(),
+            serde_json::json!({ "height": 7 }),
+            "nothing is filled in for unstated parameters"
+        );
     }
 
     #[test]

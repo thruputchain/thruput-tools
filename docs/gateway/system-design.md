@@ -277,7 +277,12 @@ one that serves `chainTip`); the shared server flattens it into
 reading (height plus params) that every fetch refreshes: a submit that
 finds it older than `tip_cache_ttl_ms`, the public `chainTip` method, and
 a background task that probes every `tip_refresh_interval_ms` on an idle
-server. A parameter the config does not state is `None` and its check is
+server. The public `chainConfig` method serves the params from that same
+cached reading rather than fetching the tip itself, so a burst of callers
+costs the backend at most one fetch per `tip_cache_ttl_ms`; it reports
+exactly the stated params and fails rather than answering when there is no
+reading or the config version is unreadable. For the pre-checks, a
+parameter the config does not state is `None` and its check is
 skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
@@ -531,6 +536,7 @@ remain a later phase.
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | `SchedGateway.schedgateway_lookup_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | `SchedGateway.schedgateway_get_tip` | |
+| `groundhog_chainConfig() → ChainConfig` | `SchedGateway.schedgateway_get_tip` | Stated execution parameters only; an unstated parameter is absent, never defaulted |
 | `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** | In OpenRPC; handler is not implemented until a block query backend exists |
 | `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
 | `groundhog_pendingTransactionCount() → u64` | `SchedGateway.schedgateway_pending_tx_count` | In OpenRPC; gateway handler is not wired yet |

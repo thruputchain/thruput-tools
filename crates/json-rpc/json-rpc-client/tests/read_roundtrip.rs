@@ -35,6 +35,8 @@ const EVENT_TOPIC: [u8; 32] = [0x63; 32];
 const EVENT_DATA: &[u8] = &[0xde, 0xad, 0xbe, 0xef];
 const EVENT_CURSOR: &[u8] = &[0x01, 0x02, 0x03];
 const TIP_HASH: [u8; 32] = [0xaa; 32];
+/// The one parameter the read backend's tip config states.
+const TIP_MAX_CONTRACT_SIZE_BYTES: u32 = 1_048_576;
 
 type StorageRead = (ContractAddress, [u8; 32]);
 
@@ -130,7 +132,11 @@ impl ChainPlane for PopulatedReadBackend {
             },
             groundhog_xdr::network_config::NetworkConfig::_0 {
                 v0: groundhog_xdr::network_config::NetworkConfigV0 {
-                    params: VecM(vec![]),
+                    params: VecM(vec![
+                        groundhog_xdr::network_config::ConfigParam::kConfigParamMaxContractSizeBytes {
+                            max_contract_size_bytes: TIP_MAX_CONTRACT_SIZE_BYTES,
+                        },
+                    ]),
                 },
             },
         ))
@@ -394,6 +400,28 @@ async fn chain_tip_roundtrips_height_and_hash() {
     assert_eq!(
         tip.block_hash.0,
         groundhog_xdr::types::SHA256Hash::from(TIP_HASH)
+    );
+
+    stop(handle).await;
+}
+
+#[tokio::test]
+async fn chain_config_roundtrips_stated_parameters_only() {
+    let (client, handle) = start_server(PopulatedReadBackend::default()).await;
+
+    let config = client
+        .chain_config()
+        .await
+        .expect("bug: chainConfig should succeed");
+
+    assert_eq!(*config.height, 42);
+    assert_eq!(
+        config.max_contract_size_bytes,
+        Some(TIP_MAX_CONTRACT_SIZE_BYTES)
+    );
+    assert_eq!(
+        config.max_new_contracts_per_tx, None,
+        "an unstated parameter stays absent across the wire"
     );
 
     stop(handle).await;
