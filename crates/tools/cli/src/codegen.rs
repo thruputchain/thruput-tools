@@ -886,6 +886,22 @@ fn emit_interface_method(
     let _ = writeln!(out, "    {stem}Result,");
     let _ = writeln!(out, "    {iface_name}DeclaredException");
     let _ = writeln!(out, "  >({{");
+    let _ = writeln!(out, "    interfaceName: {},", ts_string_literal(iface_name));
+    let _ = writeln!(
+        out,
+        "    interfaceVersion: {},",
+        ts_string_literal(spec_string_text(&iface.vers)?)
+    );
+    let _ = writeln!(
+        out,
+        "    abiName: {},",
+        ts_string_literal(spec_string_text(&method.name)?)
+    );
+    let _ = writeln!(
+        out,
+        "    publicName: {},",
+        ts_string_literal(public_method_name)
+    );
     let _ = writeln!(
         out,
         "    entrypoint: entrypoints.{iface_name}.{public_method_name},"
@@ -949,7 +965,12 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
     for field in event.topics.iter() {
         let fname = spec_string_text(&field.name)?;
         let ty = event_topic_type(&field.ty);
-        topic_fields.push(format!("{}: {ty}", ts_property_key(fname)?));
+        let documentation = if event_topic_representation(&field.ty) == "hash" {
+            "/** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "
+        } else {
+            ""
+        };
+        topic_fields.push(format!("{documentation}{}: {ty}", ts_property_key(fname)?));
         if event_topic_representation(&field.ty) != "hash" {
             filter_fields.push(format!(
                 "  {}?: ContractEventFilterValue<{ty}>;",
@@ -2532,7 +2553,8 @@ export type Result =
             "missing decoded event type:\n{output}"
         );
         assert!(
-            output.contains("{ \"tag\": Uint8Array }"),
+            output.contains("\"tag\": Uint8Array }")
+                && output.contains("original value cannot be recovered"),
             "missing raw hashed topic shape:\n{output}"
         );
         assert!(
@@ -2987,6 +3009,10 @@ export type Result =
         ));
         assert!(output.contains("  get: defineContractMethod<"));
         assert!(output.contains("  increment: defineContractMethod<"));
+        assert!(output.contains("interfaceName: \"Counter\""));
+        assert!(output.contains("interfaceVersion: \"0.1.0\""));
+        assert!(output.contains("abiName: \"increment\""));
+        assert!(output.contains("publicName: \"increment\""));
         assert!(output.contains("returnType: spec.interfaces[0]!.methods[0]!.return_type"));
         assert!(output.contains("returnType: spec.interfaces[0]!.methods[1]!.return_type"));
         assert!(!output.contains("encodeCalldata"));

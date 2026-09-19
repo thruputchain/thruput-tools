@@ -67,6 +67,10 @@ export const RecursiveTypeContract = {
     RecursiveTypeContractDepthResult,
     RecursiveTypeContractDeclaredException
   >({
+    interfaceName: "RecursiveTypeContract",
+    interfaceVersion: "0.1.0",
+    abiName: "depth",
+    publicName: "depth",
     entrypoint: entrypoints.RecursiveTypeContract.depth,
     args: [
       {
