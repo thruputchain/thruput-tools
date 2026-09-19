@@ -1,4 +1,7 @@
-use crate::keys_json::{ExportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KeysExportReport};
+use crate::keys_json::{
+    ExportedKey, ImportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KEYS_IMPORT_JSON_SCHEMA_VERSION,
+    KeysExportReport, KeysImportReport,
+};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use getrandom::getrandom;
@@ -129,16 +132,48 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
     }
     let seed = strkey::parse_secret_seed(input.trim()).map_err(|_| CliError::InvalidSecretSeed)?;
     let signer = LocalSigner::from_secret_key(*seed);
-    let mut info = write_key(name, &signer)?;
-    if crate::config::load_default_key()?.is_none() {
-        crate::config::save_default_key(name)?;
-        info.is_default = true;
+    let info = write_key(name, &signer)?;
+    let (is_default, warnings) = import_default_selection(name);
+    for warning in &warnings {
+        print.warn(&warning.message);
+        if let Some(hint) = &warning.hint {
+            print.note(hint);
+        }
     }
     print.success(format_args!("Imported key `{name}`"));
     print.detail("public key", &info.public_key_strkey);
     print.detail("account address", &info.address);
-    print.json(&CommandResult::new(cmd, json!({"key":info})))?;
+    let report = KeysImportReport {
+        schema_version: KEYS_IMPORT_JSON_SCHEMA_VERSION,
+        key: ImportedKey {
+            name: info.name,
+            is_default,
+            key_id: info.key_id,
+            public_key: info.public_key,
+            public_key_strkey: info.public_key_strkey,
+            address: info.address,
+            path: info.path,
+        },
+    };
+    print.json(&CommandResult::with_warnings(cmd, warnings, report))?;
     Ok(())
+}
+
+fn import_default_selection(name: &str) -> (Option<bool>, Vec<crate::checks::Finding>) {
+    match crate::config::save_default_key_if_unset(name) {
+        Ok(selected) => (Some(selected), vec![]),
+        Err(error) => {
+            let selected = crate::config::load_default_key()
+                .map(|current| current.as_deref() == Some(name))
+                .ok();
+            (selected, vec![crate::checks::Finding {
+                level: crate::checks::FindingLevel::Warn,
+                code: "key_import_default_selection_failed",
+                message: format!("Key `{name}` was imported, but default selection could not be confirmed ({})", error.code()),
+                hint: Some(format!("After fixing configuration, run `groundhog keys use {name}`; do not import the key again").into()),
+            }])
+        }
+    }
 }
 
 /// List stored signing keys.
@@ -312,6 +347,8 @@ fn validate_key_name(name: &str) -> Result<(), CliError> {
 }
 
 fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError> {
+    // Validate configuration before committing a key; never reread it after the write.
+    let default_key = crate::config::load_default_key()?;
     let path = key_path(name)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -330,19 +367,27 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         serde_json::to_vec_pretty(&keyfile).map_err(|e| CliError::Other(e.to_string()))?,
     );
 
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-
-    let mut file = opts.open(&path)?;
-    file.write_all(&contents)?;
-    file.write_all(b"\n")?;
-
-    load_key_info(name)
+    let parent = path.parent().expect("bug: key path has a parent directory");
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(&contents)?;
+    staged.write_all(b"\n")?;
+    staged.as_file().sync_all()?;
+    staged.persist_noclobber(&path).map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            CliError::KeyExists(name.to_owned())
+        } else {
+            CliError::Io(error.error)
+        }
+    })?;
+    Ok(KeyInfo {
+        name: name.to_owned(),
+        is_default: default_key.as_deref() == Some(name),
+        key_id: DEFAULT_KEY_ID,
+        public_key: hex_prefixed(&public_bytes),
+        public_key_strkey: strkey::format_public_key(&public_bytes),
+        address: hex_prefixed(&derive_pubkey_account_address(public_bytes)),
+        path,
+    })
 }
 
 fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {

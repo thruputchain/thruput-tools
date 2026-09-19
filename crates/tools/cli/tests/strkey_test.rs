@@ -45,7 +45,24 @@ fn strkey_import_export_preserves_legacy_storage_and_public_identity() {
     );
     let value: serde_json::Value = serde_json::from_slice(&imported.stdout).unwrap();
     assert_eq!(value["command"], "keys.import");
-    assert_eq!(value["data"]["key"]["public_key_strkey"], public);
+    assert_eq!(value["data"]["schemaVersion"], 1);
+    assert_eq!(value["data"]["key"]["isDefault"], true);
+    assert_eq!(value["data"]["key"]["keyId"], 0);
+    assert_eq!(
+        value["data"]["key"]["publicKey"],
+        format!(
+            "0x{}",
+            hex::encode(LocalSigner::from_secret_key(seed).verifying_key_bytes())
+        )
+    );
+    assert!(
+        value["data"]["key"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|name| !name.contains('_'))
+    );
+    assert_eq!(value["data"]["key"]["publicKeyStrkey"], public);
     for stream in [&imported.stdout, &imported.stderr] {
         assert!(!String::from_utf8_lossy(stream).contains(secret.as_str()));
     }
@@ -129,4 +146,138 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
     assert!(!home.path().join("groundhog/keys/dev-1.json").exists());
     let good = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
     assert!(good.status.success());
+}
+
+#[test]
+fn import_invalid_config_leaves_no_key_and_can_be_retried() {
+    let home = TempDir::new().unwrap();
+    let config_dir = home.path().join("groundhog");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("config.toml");
+    let invalid = "default_key = [\n";
+    std::fs::write(&config, invalid).unwrap();
+    let result = run(
+        &home,
+        &["--json", "keys", "import", "alice"],
+        Some(&"42".repeat(32)),
+    );
+    assert!(!result.status.success());
+    assert!(!config_dir.join("keys/alice.json").exists());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), invalid);
+    std::fs::write(&config, "").unwrap();
+    let result = run(
+        &home,
+        &["--json", "keys", "import", "alice"],
+        Some(&"42".repeat(32)),
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(config_dir.join("keys/alice.json").exists());
+}
+
+fn assert_imported_with_default_warning(result: &Output, home: &TempDir) {
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["data"]["schemaVersion"], 1);
+    assert_eq!(value["data"]["key"]["isDefault"], false);
+    assert_eq!(
+        value["warnings"][0]["code"],
+        "key_import_default_selection_failed"
+    );
+    assert!(
+        value["warnings"][0]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("groundhog keys use alice")
+    );
+    assert!(home.path().join("groundhog/keys/alice.json").exists());
+}
+
+#[test]
+fn import_config_lock_timeout_reports_import_success_and_recovery() {
+    let home = TempDir::new().unwrap();
+    let config_dir = home.path().join("groundhog");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(config_dir.join("config.toml.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let result = run(
+        &home,
+        &["--json", "keys", "import", "alice"],
+        Some(&"42".repeat(32)),
+    );
+    assert_imported_with_default_warning(&result, &home);
+    assert!(!config_dir.join("config.toml").exists());
+    drop(lock);
+    let recovery = run(&home, &["keys", "use", "alice"], None);
+    assert!(recovery.status.success());
+    assert!(
+        std::fs::read_to_string(config_dir.join("config.toml"))
+            .unwrap()
+            .contains("alice")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn import_rejected_config_write_preserves_key_and_both_config_links() {
+    let home = TempDir::new().unwrap();
+    let config_dir = home.path().join("groundhog");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("config.toml");
+    let alias = config_dir.join("config-alias.toml");
+    let contents = "# shared config\n";
+    std::fs::write(&config, contents).unwrap();
+    std::fs::hard_link(&config, &alias).unwrap();
+    let result = run(
+        &home,
+        &["--json", "keys", "import", "alice"],
+        Some(&"42".repeat(32)),
+    );
+    assert_imported_with_default_warning(&result, &home);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), contents);
+    assert_eq!(std::fs::read_to_string(&alias).unwrap(), contents);
+    let key = config_dir.join("keys/alice.json");
+    let bytes = std::fs::read(&key).unwrap();
+    let retry = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
+    assert!(!retry.status.success());
+    assert_eq!(std::fs::read(key).unwrap(), bytes);
+}
+
+#[test]
+fn import_preserves_an_existing_default_key() {
+    let home = TempDir::new().unwrap();
+    let first = run(
+        &home,
+        &["--json", "keys", "import", "alice"],
+        Some(&"42".repeat(32)),
+    );
+    assert!(first.status.success());
+    let second = run(
+        &home,
+        &["--json", "keys", "import", "bob"],
+        Some(&"ab".repeat(32)),
+    );
+    assert!(second.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(value["data"]["key"]["isDefault"], false);
+    assert_eq!(value["warnings"], serde_json::json!([]));
+    assert!(
+        std::fs::read_to_string(home.path().join("groundhog/config.toml"))
+            .unwrap()
+            .contains("default_key = \"alice\"")
+    );
 }

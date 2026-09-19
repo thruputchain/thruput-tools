@@ -26,3 +26,28 @@ impl Drop for ExportedKey {
         self.private_key.zeroize();
     }
 }
+
+/// First version of the public import result.
+pub const KEYS_IMPORT_JSON_SCHEMA_VERSION: u32 = 1;
+
+/// Stable machine-readable result for `groundhog keys import`.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KeysImportReport {
+    pub(crate) schema_version: u32,
+    pub(crate) key: ImportedKey,
+}
+
+/// Public information about the imported key; never includes the seed.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ImportedKey {
+    pub(crate) name: String,
+    /// None means configuration could not be reread after a default-selection error.
+    pub(crate) is_default: Option<bool>,
+    pub(crate) key_id: u32,
+    pub(crate) public_key: String,
+    pub(crate) public_key_strkey: String,
+    pub(crate) address: String,
+    pub(crate) path: std::path::PathBuf,
+}
