@@ -38,6 +38,9 @@ is present with
 
 Workspace crates are grouped by boundary:
 
+- **client** — embeddable contract invocation and supplied-spec codecs. Accepts resolved
+  inputs and caller-owned async RPC clients; prepares, signs, submits, and waits without
+  CLI configuration, project discovery, terminal output, compiler, or node supervision.
 - **build-info** — dependency-free crate and packaging-platform version
   metadata shared by binaries and diagnostic outputs.
 

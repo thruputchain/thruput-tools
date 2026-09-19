@@ -1,16 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use groundhog_contract_util::NormalizedMethodSignature;
+use groundhog_client::codec::method_entrypoint_id;
+use groundhog_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
-};
+use groundhog_signing::LocalSigner;
 use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::transaction::Transaction;
-use groundhog_xdr::types::NetworkHash;
 use serde_json::json;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
@@ -18,7 +14,7 @@ use crate::artifacts::ArtifactOptions;
 use crate::build::{CargoMetadata, cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
-    format_contract_address, spec_string_text,
+    format_contract_address,
 };
 use crate::config::{ProfileOverrides, find_project_config, resolve_profile_with_overrides};
 use crate::contract_spec::{
@@ -29,7 +25,7 @@ use crate::network_descriptor::resolve_wallet_signing_context;
 use crate::result::CommandResult;
 use crate::tx_utils::{
     command_error_for_exec_status, decode_receipt_abort, format_tx_hash, nonce_from_timestamp,
-    print_failed_receipt_data, resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
+    print_failed_receipt_data, resolve_block_expiry_height, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -55,6 +51,7 @@ pub(crate) struct PreparedCall {
     pub(crate) resolved: ResolvedCall,
     pub(crate) calldata: Vec<u8>,
     pub(crate) tx_hex: String,
+    signed: SignedCall,
 }
 
 #[derive(Debug)]
@@ -68,9 +65,8 @@ struct CallPlan {
     method: String,
     resolved: ResolvedCall,
     calldata: Vec<u8>,
-    transaction: Transaction,
+    transaction: UnsignedCall,
     signer: LocalSigner,
-    network_hash: NetworkHash,
 }
 
 /// Call a method on a deployed contract.
@@ -406,17 +402,20 @@ fn prepare_call_plan_with_runtime(
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address,
-        wallet_entrypoint: wallet_context.entrypoints.do_action,
-        target_address: contract_address,
-        target_entrypoint: resolved.entrypoint,
-        target_calldata: calldata.as_slice(),
-        gas_limit,
-        target_gas_limit: gas_limit,
-        block_expiry_height,
-        nonce: nonce_from_timestamp(),
-    })
+    let tx = groundhog_client::prepare_call(
+        CallRequest {
+            wallet_address,
+            wallet_entrypoint: wallet_context.entrypoints.do_action,
+            target_address: contract_address,
+            target_entrypoint: resolved.entrypoint,
+            target_calldata: calldata.as_slice(),
+            gas_limit,
+            target_gas_limit: gas_limit,
+            block_expiry_height,
+            nonce: nonce_from_timestamp(),
+        },
+        wallet_context.network_hash,
+    )
     .map_err(|e| CliError::Other(e.to_string()))?;
 
     Ok(CallPlan {
@@ -431,18 +430,15 @@ fn prepare_call_plan_with_runtime(
         calldata,
         transaction: tx,
         signer: sender.signer,
-        network_hash: wallet_context.network_hash,
     })
 }
 
 fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
-    let tx_hex = sign_and_encode_transaction_hex(
-        plan.transaction,
-        &plan.signer,
-        SignTransactionParams::default(),
-        &plan.network_hash,
-    )
-    .map_err(|error| CliError::Other(error.to_string()))?;
+    let signed = plan
+        .transaction
+        .sign(&plan.signer)
+        .map_err(|error| CliError::Other(error.to_string()))?;
+    let tx_hex = signed.tx_hex().to_owned();
     Ok(PreparedCall {
         rpc_url: plan.rpc_url,
         contract_address_hex: plan.contract_address_hex,
@@ -453,6 +449,7 @@ fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
         resolved: plan.resolved,
         calldata: plan.calldata,
         tx_hex,
+        signed,
     })
 }
 
@@ -468,7 +465,19 @@ fn submit_prepared_call_with_runtime(
     prepared: &PreparedCall,
     rt: &tokio::runtime::Runtime,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
-    rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
+    rt.block_on(async {
+        let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
+        let submitted = prepared
+            .signed
+            .submit(&client)
+            .await
+            .map_err(crate::tx_utils::map_submit_call_error)?;
+        let receipt = submitted
+            .wait(&client, PollOptions::default())
+            .await
+            .map_err(crate::tx_utils::map_poll_receipt_error)?;
+        Ok((submitted.tx_hash, receipt))
+    })
 }
 
 fn explicit_entrypoint_id(method: &str) -> Result<Option<ContractEntrypointID>, CliError> {
@@ -489,19 +498,6 @@ fn explicit_entrypoint_id(method: &str) -> Result<Option<ContractEntrypointID>, 
         .try_into()
         .map_err(|_| CliError::Other("entrypoint ID must be exactly 8 bytes".into()))?;
     Ok(Some(ContractEntrypointID::from(id)))
-}
-
-/// Compute the canonical entrypoint ID for a method using the shared
-/// `groundhog-contract-util` implementation.  The returned type is from
-/// the workspace `groundhog-xdr` version; the utility crate may lag
-/// behind, so we round-trip through raw bytes.
-fn method_entrypoint_id(interface_name: &str, version: &str, method: &str) -> ContractEntrypointID {
-    let sig = NormalizedMethodSignature::new(method);
-    let id = groundhog_contract_util::contract_entrypoint_id(Some(interface_name), version, &sig);
-    let bytes: [u8; 8] = id.as_ref()[..8]
-        .try_into()
-        .expect("bug: entrypoint ID is always 8 bytes");
-    ContractEntrypointID::from(bytes)
 }
 
 pub(crate) fn resolve_call(
@@ -549,71 +545,7 @@ fn resolve_spec_method(
         return Ok(None);
     };
 
-    let mut interface_matches = Vec::new();
-
-    for interface in spec.interfaces.iter() {
-        let matched_methods = interface
-            .methods
-            .iter()
-            .filter_map(|candidate| match spec_string_text(&candidate.name) {
-                Ok(name) if name == method => Some(Ok(candidate.clone())),
-                Ok(_) => None,
-                Err(err) => Some(Err(err)),
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-        if matched_methods.is_empty() {
-            continue;
-        }
-
-        interface_matches.push((
-            InterfaceSpec {
-                interface_name: spec_string_text(&interface.name)?.to_owned(),
-                interface_version: spec_string_text(&interface.vers)?.to_owned(),
-            },
-            interface.throws.iter().cloned().collect::<Vec<_>>(),
-            matched_methods,
-        ));
-    }
-
-    if interface_matches.is_empty() {
-        return Ok(None);
-    }
-    interface_matches.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
-    if interface_matches.len() > 1 {
-        let descriptions = interface_matches
-            .iter()
-            .map(|(candidate, _, _)| {
-                format!(
-                    "{} v{}",
-                    candidate.interface_name, candidate.interface_version
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(CliError::Other(format!(
-            "method `{method}` matches multiple interfaces in the contract spec: \
-             {descriptions}"
-        )));
-    }
-
-    let (matched, throws, mut methods) = interface_matches
-        .into_iter()
-        .next()
-        .expect("bug: interface match count should be non-zero");
-    if methods.len() > 1 {
-        return Err(CliError::SpecFailed(format!(
-            "contract spec defines `{}` v{}::{method} multiple times",
-            matched.interface_name, matched.interface_version
-        )));
-    }
-
-    Ok(Some(SpecMethodMetadata {
-        interface_name: matched.interface_name,
-        version: matched.interface_version,
-        method: methods.remove(0),
-        type_defs: spec.type_defs.iter().cloned().collect(),
-        throws,
-    }))
+    Ok(groundhog_client::codec::resolve_spec_method(&spec, method)?)
 }
 
 fn resolve_local_contract_metadata(

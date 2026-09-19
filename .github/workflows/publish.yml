@@ -23,6 +23,7 @@ env:
     groundhog-json-rpc-server
     groundhog-json-rpc-client
     groundhog-signing
+    groundhog-client
     groundhog-node-supervisor
     groundhog-rv32-lower
     groundhog-toolchain
