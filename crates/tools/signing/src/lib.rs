@@ -11,6 +11,7 @@ pub mod hash;
 pub mod indices;
 pub mod local;
 pub mod signer;
+pub mod strkey;
 
 pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 pub use build::{

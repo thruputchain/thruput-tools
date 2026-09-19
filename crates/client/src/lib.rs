@@ -8,6 +8,8 @@ pub use groundhog_contract_spec as spec;
 pub use groundhog_json_rpc_client as rpc;
 pub use groundhog_json_rpc_types as types;
 pub use groundhog_signing as signing;
+/// Shared C/G/S text encodings; independent of either CLI.
+pub use groundhog_signing::strkey;
 pub use groundhog_xdr as xdr;
 pub use jsonrpsee;
 

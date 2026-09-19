@@ -2,11 +2,12 @@ use crate::keys_json::{ExportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KeysExportR
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use getrandom::getrandom;
+use groundhog_signing::strkey;
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -34,6 +35,7 @@ struct KeyInfo {
     is_default: bool,
     key_id: u32,
     public_key: String,
+    public_key_strkey: String,
     address: String,
     path: PathBuf,
 }
@@ -79,7 +81,8 @@ pub fn generate(
     info.is_default = became_default;
 
     task.success(format_args!("Generated key `{name}`"));
-    print.detail("address", &info.address);
+    print.detail("public key", &info.public_key_strkey);
+    print.detail("account address", &info.address);
     if fund {
         print.note("Faucet funding is not implemented yet; generated key only");
     }
@@ -94,6 +97,47 @@ pub fn generate(
             "funded": false,
         }),
     ))?;
+    Ok(())
+}
+
+/// Import an S `StrKey` or 32-byte hex seed from a hidden terminal prompt or piped stdin.
+/// No secret command-line argument is accepted and existing keys are never overwritten.
+pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    validate_key_name(name)?;
+    if crate::dev_keys::dev_key_index(name).is_some() {
+        return Err(CliError::ReservedDevKeyName);
+    }
+    if key_path(name)?.exists() {
+        return Err(CliError::KeyExists(name.to_owned()));
+    }
+    let input = if std::io::stdin().is_terminal() {
+        Zeroizing::new(rpassword::prompt_password(
+            "Ed25519 secret seed (S StrKey or hex): ",
+        )?)
+    } else {
+        // Bound untrusted piped input before allocating or decoding it.
+        let mut input = Zeroizing::new(String::new());
+        std::io::stdin()
+            .lock()
+            .take(129)
+            .read_to_string(&mut input)
+            .map_err(|_| CliError::InvalidSecretSeed)?;
+        input
+    };
+    if input.len() > 128 {
+        return Err(CliError::InvalidSecretSeed);
+    }
+    let seed = strkey::parse_secret_seed(input.trim()).map_err(|_| CliError::InvalidSecretSeed)?;
+    let signer = LocalSigner::from_secret_key(*seed);
+    let mut info = write_key(name, &signer)?;
+    if crate::config::load_default_key()?.is_none() {
+        crate::config::save_default_key(name)?;
+        info.is_default = true;
+    }
+    print.success(format_args!("Imported key `{name}`"));
+    print.detail("public key", &info.public_key_strkey);
+    print.detail("account address", &info.address);
+    print.json(&CommandResult::new(cmd, json!({"key":info})))?;
     Ok(())
 }
 
@@ -113,7 +157,10 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
 
     for key in keys {
         let marker = if key.is_default { "*" } else { " " };
-        println!("{marker} {} {}", key.name, key.address);
+        println!(
+            "{marker} {} public-key={} account-address={}",
+            key.name, key.public_key_strkey, key.address
+        );
     }
 
     Ok(())
@@ -121,6 +168,27 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
 
 /// Export a stored private key after interactive confirmation or `force` authorization.
 pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    export_with_format(name, force, KeyExportFormat::Hex, cmd, print)
+}
+
+/// Encoding explicitly selected for private seed export. Hex remains the compatibility default.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum KeyExportFormat {
+    /// A 32-byte lowercase 0x-prefixed seed.
+    #[default]
+    Hex,
+    /// A checksummed Stellar S `StrKey` containing the same seed.
+    Strkey,
+}
+
+/// Export a stored seed in a caller-selected encoding after the existing confirmation gate.
+pub fn export_with_format(
+    name: &str,
+    force: bool,
+    format: KeyExportFormat,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {
@@ -143,7 +211,17 @@ pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         key: ExportedKey {
             name: name.to_string(),
             scheme: "ed25519".into(),
-            private_key: hex_prefixed(&keypair_bytes[..32]),
+            private_key: match format {
+                KeyExportFormat::Hex => hex_prefixed(&keypair_bytes[..32]),
+                KeyExportFormat::Strkey => {
+                    let seed = Zeroizing::new(
+                        <[u8; 32]>::try_from(&keypair_bytes[..32])
+                            .expect("bug: validated keypair contains a seed"),
+                    );
+                    let mut encoded = strkey::format_secret_seed(&seed);
+                    std::mem::take(&mut *encoded)
+                }
+            },
         },
     };
 
@@ -296,6 +374,7 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         is_default: default_key.as_deref() == Some(name),
         key_id: DEFAULT_KEY_ID,
         public_key: hex_prefixed(&public_key),
+        public_key_strkey: strkey::format_public_key(&public_key),
         address: hex_prefixed(&address),
         path,
     })

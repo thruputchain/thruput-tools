@@ -330,12 +330,14 @@ pub fn decode_abort_payload(
     })
 }
 
-/// Parse a hex-encoded contract address.
-pub fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, Error> {
-    Ok(ContractAddress::from(parse_fixed_hex::<32>(
-        hex_str,
-        "contract address",
-    )?))
+/// Parse a C `StrKey` or legacy hex contract address, including in typed calldata.
+pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
+    groundhog_signing::strkey::parse_contract_address(value).map_err(|error| {
+        Error::InvalidArgument {
+            argument: "contract address".into(),
+            message: error.to_string(),
+        }
+    })
 }
 
 /// Format a contract address as 0x-prefixed lowercase hex.
@@ -1210,7 +1212,12 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Err
         "String" | "str" => encode_local_xdr_value(value.to_string(), path),
         "ContractAddress" => encode_local_xdr_value(parse_contract_address(value)?, path),
         "Ed25519PublicKey" => encode_local_xdr_value(
-            Ed25519PublicKey::from(parse_fixed_hex::<32>(value, "ed25519 public key")?),
+            Ed25519PublicKey::from(groundhog_signing::strkey::parse_public_key(value).map_err(
+                |error| Error::InvalidArgument {
+                    argument: "ed25519 public key".into(),
+                    message: error.to_string(),
+                },
+            )?),
             path,
         ),
         "SHA256Hash" => encode_local_xdr_value(
@@ -1804,6 +1811,57 @@ mod tests {
 
     fn spec_string(s: &str) -> ContractSpecString {
         s.try_into().unwrap()
+    }
+
+    #[test]
+    fn strkey_addresses_encode_identically_in_local_and_spec_arguments() {
+        let hex = format!("0x{}", "42".repeat(32));
+        let c = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
+        let g = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+        let metadata = CallMetadata::Local(ContractMetadata {
+            interface_name: "test".into(),
+            version: "1".into(),
+            source: PathBuf::default(),
+            method: MethodMetadata {
+                arg_types: vec!["ContractAddress".into()],
+                return_type: None,
+            },
+        });
+        assert_eq!(
+            encode_args(std::slice::from_ref(&hex), Some(&metadata)).unwrap(),
+            encode_args(std::slice::from_ref(&c), Some(&metadata)).unwrap()
+        );
+        assert!(encode_args(std::slice::from_ref(&g), Some(&metadata)).is_err());
+        let mut metadata = metadata;
+        if let CallMetadata::Local(ref mut local) = metadata {
+            local.method.arg_types = vec!["Ed25519PublicKey".into()];
+        }
+        assert_eq!(
+            encode_args(std::slice::from_ref(&hex), Some(&metadata)).unwrap(),
+            encode_args(std::slice::from_ref(&g), Some(&metadata)).unwrap()
+        );
+        assert!(encode_args(std::slice::from_ref(&c), Some(&metadata)).is_err());
+        let metadata = CallMetadata::Spec(SpecMethodMetadata {
+            interface_name: "test".into(),
+            version: "1".into(),
+            method: ContractSpecMethod {
+                name: spec_string("send"),
+                args: vec![ContractField {
+                    name: spec_string("to"),
+                    ty: ContractType::Address,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Void,
+            },
+            type_defs: vec![],
+            throws: vec![],
+        });
+        assert_eq!(
+            encode_args(std::slice::from_ref(&hex), Some(&metadata)).unwrap(),
+            encode_args(std::slice::from_ref(&c), Some(&metadata)).unwrap()
+        );
+        assert!(encode_args(&[g], Some(&metadata)).is_err());
     }
 
     #[test]

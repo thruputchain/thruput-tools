@@ -52,6 +52,7 @@ sha2 = { workspace = true }
 base64 = "0.22"
 zstd = "0.13"
 zeroize = { workspace = true }
+rpassword = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-rv32-artifact = { workspace = true }
 groundhog-rv32-lower = { workspace = true }

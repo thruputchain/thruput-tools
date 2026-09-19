@@ -8167,7 +8167,7 @@ fn contract_command_preserves_prefixed_address_validation_error() {
         stderr["error"]["details"]["message"]
             .as_str()
             .unwrap()
-            .contains("32 bytes")
+            .contains("C StrKey or 32-byte hex contract address")
     );
 }
 

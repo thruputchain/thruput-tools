@@ -336,6 +336,25 @@ absent. For detailed local backend logs, start `groundhog node --verbose`;
 output goes to that terminal unless redirected. Do not restart an ephemeral
 node just to enable logging: stopping it discards its chain state.
 
+### Key and address interoperability
+
+`groundhog keys import <name>` reads an Ed25519 seed from a hidden terminal
+prompt or piped stdin. It accepts a checksummed Stellar S StrKey or a 32-byte
+hex seed, never a 64-byte stored keypair. Do not put private seeds in command
+arguments. Existing names are not overwritten; `dev-N` names are reserved.
+
+`groundhog keys export <name> --format strkey` exports the same seed as an S
+StrKey after the normal confirmation gate. The default export remains hex.
+For an authorized non-interactive transfer between key stores, pipe export
+stdout directly to the receiving CLI's stdin rather than capturing it in logs.
+
+A G StrKey is an Ed25519 public key, not a derived Groundhog account or wallet
+address. Key commands display public keys separately from account addresses.
+C StrKeys and legacy hex are accepted for contract/wallet address inputs,
+including typed contract arguments. Saved wallet owners accept G StrKeys or
+hex public keys. These encodings preserve bytes and do not identify a network.
+Existing key files and public JSON-RPC wire encodings remain unchanged.
+
 ## Sources and Escalation
 
 Use this source order:

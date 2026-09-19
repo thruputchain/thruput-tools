@@ -958,9 +958,9 @@ fn resolve_airdrop_recipient(
     if let Some(wallet) = profile.resolve_wallet(recipient) {
         return parse_contract_address(&wallet).map(|address| format_contract_address(&address));
     }
-    if recipient.starts_with("0x") {
+    if recipient.starts_with("0x") || recipient.starts_with("0X") || recipient.starts_with('C') {
         let address = parse_contract_address(recipient).map_err(|_| {
-            CliError::Other("wallet address must be a 0x-prefixed 64-character hex string".into())
+            CliError::Other("wallet address must be a C StrKey or 32-byte hex address".into())
         })?;
         return Ok(format_contract_address(&address));
     }
@@ -969,7 +969,7 @@ fn resolve_airdrop_recipient(
         return Ok(format_contract_address(&address.0));
     }
     Err(CliError::Other(format!(
-        "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a 0x-prefixed wallet address",
+        "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
         crate::terminal::terminal_safe(recipient),
         crate::terminal::render_shell_arg(recipient),
     )))
@@ -1276,7 +1276,7 @@ mod tests {
         let err = resolve_airdrop_recipient(&profile, "0xdeadbeef")
             .expect_err("bug: malformed direct address should fail");
 
-        assert!(err.to_string().contains("64-character hex string"));
+        assert!(err.to_string().contains("C StrKey or 32-byte hex address"));
     }
 
     #[test]

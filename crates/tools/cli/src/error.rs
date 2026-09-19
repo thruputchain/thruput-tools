@@ -114,6 +114,10 @@ pub enum CliError {
          hyphens, and underscores"
     )]
     KeyNameInvalid,
+    #[error("expected an S StrKey or 32-byte hex Ed25519 seed on stdin")]
+    InvalidSecretSeed,
+    #[error("dev-N key names are reserved for local bootstrap identities")]
+    ReservedDevKeyName,
     #[error("`--json` is not supported for `{0}`")]
     JsonUnsupported(&'static str),
     #[error("not yet implemented")]
@@ -499,6 +503,8 @@ impl CliError {
             Self::KeyNameEmpty => "key_name_empty",
             Self::EmptyWalletName => "empty_wallet_name",
             Self::KeyNameInvalid => "key_name_invalid",
+            Self::InvalidSecretSeed => "invalid_secret_seed",
+            Self::ReservedDevKeyName => "reserved_dev_key_name",
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
@@ -593,6 +599,12 @@ impl CliError {
     #[allow(clippy::too_many_lines)]
     pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
+            Self::InvalidSecretSeed => Some(Cow::Borrowed(
+                "provide one private seed through stdin or the hidden prompt; never pass it as a command argument",
+            )),
+            Self::ReservedDevKeyName => Some(Cow::Borrowed(
+                "choose a name other than dev-N for an imported key",
+            )),
             Self::CargoNotFound => Some(Cow::Borrowed(
                 "install Rust and ensure `cargo` is on your PATH",
             )),
