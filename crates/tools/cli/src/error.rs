@@ -1310,6 +1310,21 @@ impl From<groundhog_toolchain::InstallError> for CliError {
     }
 }
 
+impl From<groundhog_client::codec::Error> for CliError {
+    fn from(error: groundhog_client::codec::Error) -> Self {
+        use groundhog_client::codec::Error;
+        match error {
+            Error::SpecFailed(message) => Self::SpecFailed(message),
+            Error::InvalidArgument { argument, message } => {
+                Self::InvalidArgument { argument, message }
+            }
+            Error::CallEncode { path, message } => Self::CallEncode { path, message },
+            Error::CallDecode { path, message } => Self::CallDecode { path, message },
+            Error::Other(message) => Self::Other(message),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

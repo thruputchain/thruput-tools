@@ -28,6 +28,7 @@ name = "groundhog"
 path = "src/main.rs"
 
 [dependencies]
+groundhog-client = { workspace = true }
 clap = { workspace = true }
 groundhog-build-info = { workspace = true }
 groundhog-bundle-identity = { workspace = true }
