@@ -67,9 +67,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          have_pyflakes() {
-            command -v pyflakes >/dev/null 2>&1 || command -v pyflakes3 >/dev/null 2>&1
-          }
+          bin="$HOME/.local/bin"
+          mkdir -p "$bin"
+
+          # Probe for the pyflakes *module*, not a console script: Ubuntu's
+          # python3-pyflakes installs no pyflakes/pyflakes3 executable, so a
+          # `command -v` probe reinstalls an already-present package and then
+          # fails the verification below.
+          have_pyflakes() { python3 -c 'import pyflakes' >/dev/null 2>&1; }
+
           missing=()
           command -v shellcheck >/dev/null 2>&1 || missing+=(shellcheck)
           have_pyflakes || missing+=(python3-pyflakes)
@@ -86,10 +92,18 @@ jobs:
           command -v shellcheck >/dev/null 2>&1 \
             || { echo "::error::shellcheck unavailable after install"; exit 1; }
           have_pyflakes \
-            || { echo "::error::pyflakes unavailable after install"; exit 1; }
+            || { echo "::error::pyflakes module unavailable after install"; exit 1; }
+
+          # actionlint's -pyflakes takes an executable, so provide one when the
+          # distro ships only the module. GITHUB_PATH applies to later steps.
+          if ! command -v pyflakes >/dev/null 2>&1; then
+            printf '#!/bin/sh\nexec python3 -m pyflakes "$@"\n' > "$bin/pyflakes"
+            chmod +x "$bin/pyflakes"
+            echo "$bin" >> "$GITHUB_PATH"
+          fi
 
           shellcheck --version | head -2
-          "$(command -v pyflakes || command -v pyflakes3)" --version
+          python3 -m pyflakes --version
 
       - name: Install actionlint and zizmor
         run: |
@@ -122,9 +136,9 @@ jobs:
       - name: Lint workflow helper scripts
         run: |
           set -euo pipefail
-          pyflakes_bin="$(command -v pyflakes || command -v pyflakes3)"
+          # Module form: no dependence on a console script existing.
           if compgen -G '.github/scripts/*.py' >/dev/null; then
-            "$pyflakes_bin" .github/scripts/*.py
+            python3 -m pyflakes .github/scripts/*.py
             echo "helper scripts clean"
           else
             echo "no helper scripts to lint"
@@ -133,10 +147,11 @@ jobs:
       - name: actionlint
         run: |
           set -euo pipefail
-          # No `|| true`: if neither binary resolves, the assignment fails
-          # under `set -e` and the job stops. Passing an empty -pyflakes would
+          # No `|| true`: if this does not resolve, the assignment fails under
+          # `set -e` and the job stops. Passing an empty -pyflakes would
           # disable Python analysis silently, which is the bug this avoids.
-          pyflakes_bin="$(command -v pyflakes || command -v pyflakes3)"
+          # The install step guarantees a `pyflakes` executable, real or shim.
+          pyflakes_bin="$(command -v pyflakes)"
           actionlint -color -pyflakes "$pyflakes_bin"
 
       # Blocking. GH_TOKEN lets zizmor run impostor-commit and
