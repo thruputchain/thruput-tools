@@ -19,9 +19,12 @@ jobs:
     name: Dependency policy (${{ matrix.check }})
     runs-on: namespace-profile-hogd-linux-2604
     strategy:
+      fail-fast: false
       matrix:
         check:
           - advisories
+          - licenses
+          - bans
           - sources
     permissions:
       contents: read
@@ -32,6 +35,15 @@ jobs:
       - name: Check dependency policy
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         env:
+          # 1.85.0 is the Rust already baked into the cargo-deny-action image
+          # (FROM rust:1.85.0-alpine3.20 at the SHA pinned above). Setting it
+          # stops rustup from honouring rust-toolchain.toml (1.96.0) and
+          # downloading a second toolchain inside the container just to run
+          # `cargo metadata`; cargo-deny compiles nothing.
+          #
+          # Keep in lockstep with the action SHA: bumping the action can
+          # change its bundled Rust. Note there is no headroom below this:
+          # our edition 2024 manifests need >= 1.85 exactly.
           RUSTUP_TOOLCHAIN: "1.85.0"
         with:
           arguments: --all-features --locked
