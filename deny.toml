@@ -1,10 +1,72 @@
+# cargo-deny configuration: advisory, license, source, and duplicate-version
+# policy. https://embarkstudios.github.io/cargo-deny/
+#
+# Advisories are checked both per-PR (ci.yml) and daily (audit.yml). The daily
+# run is what catches a new advisory filed against an already-frozen
+# Cargo.lock, which a push-triggered job never sees.
+#
+# Every exception added to this file gets a comment naming the dependency
+# that needs it and why.
+
+[graph]
+all-features = true
+
 [advisories]
 ignore = []
+
+[licenses]
+# Internal crates (publish = false) carry no license field: groundhog-bench,
+# groundhog-e2e-tests, groundhog-sim. They ship to nobody.
+private = { ignore = true }
+allow = [
+    "Apache-2.0",
+    "MIT",
+    # Rust core/std support crates: compiler-builtins, wasi and friends are
+    # licensed Apache-2.0 WITH LLVM-exception, which is not implied by the
+    # bare Apache-2.0 entry above.
+    "Apache-2.0 WITH LLVM-exception",
+    # adler2
+    "0BSD",
+    # fiat-crypto
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    # dual-licensed Apache-2.0 OR BSL-1.0 (ryu)
+    "BSL-1.0",
+    # dunce
+    "CC0-1.0",
+    # webpki-root-certs: the Mozilla CA bundle, distributed under a
+    # permissive data license rather than a code license.
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT-0",
+    # unicode-ident is (MIT OR Apache-2.0) AND Unicode-3.0
+    "Unicode-3.0",
+    # dual-licensed Unlicense OR MIT (byteorder, memchr and similar)
+    "Unlicense",
+    "Zlib",
+]
+# NOTE: r-efi is "MIT OR Apache-2.0 OR LGPL-2.1-or-later". The permissive OR
+# is satisfied by MIT/Apache-2.0 above, so LGPL is deliberately NOT allowed
+# and carries no obligation for us. `cargo deny list` still prints r-efi under
+# LGPL-2.1-or-later because it enumerates every license in an expression;
+# that listing is not evidence of a copyleft dependency.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal path dependencies carry no version requirement; every crate here is
+# publish = false, so path wildcards are safe. Registry wildcards stay denied.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = [
+    # crates.io
     "https://github.com/rust-lang/crates.io-index",
+    # private groundhog registry (kellnr); matches .cargo/config.toml.
+    # The legacy groundhog.dev registry is deliberately NOT listed: it is
+    # being retired, and nothing may re-enter the graph through it.
     "sparse+https://crates.thruput.network/api/v1/crates/",
 ]
