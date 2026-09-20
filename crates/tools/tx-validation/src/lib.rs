@@ -28,7 +28,6 @@ use groundhog_rv32_artifact::{
 };
 use groundhog_xdr::{
     contract::{Contract, kDefaultMaxContractSizeBytes},
-    network_config::{ConfigParam, NetworkConfig},
     transaction::Transaction,
 };
 
@@ -44,143 +43,37 @@ const DEFAULT_MAX_RV32_MEMORY_BYTES: u32 = 65_536;
 const _: () = assert!(DEFAULT_MAX_RV32_CODE_BYTES as usize == DEFAULT_MAX_CODE_BYTES);
 const _: () = assert!(DEFAULT_MAX_RV32_MEMORY_BYTES as usize == DEFAULT_MEMORY_BYTES);
 
-/// The execution parameters a chain's network config states, flattened
-/// from the list that carries them.
+pub use groundhog_json_rpc_types::network_config::{NetworkConfigParams, UnsupportedNetworkConfig};
+
+/// Bytes one attached contract's code blob may hold under `params`.
 ///
-/// Resolve once where a tip is read, then each parameter is a field rather
-/// than a scan of the list. A field is `None` when the config does not
-/// state that parameter; a check that depends on it is then skipped unless
-/// the protocol fixes the value in force for that case. `Default` is the
-/// reading with nothing stated, and struct update from it is the way to
-/// state a subset.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NetworkConfigParams {
-    /// Concurrently open incremental SHA-256 buffers permitted per
-    /// invocation frame.
-    pub max_sha256_buffers: Option<u32>,
-    /// Invocation frames one transaction may have open at once.
-    pub max_cross_invoke_depth: Option<u32>,
-    /// Contracts one transaction may attach in `contractsToDeploy`.
-    pub max_new_contracts_per_tx: Option<u32>,
-    /// Bytes one bytestring storage item may hold.
-    pub max_bytestring_len: Option<u32>,
-    /// Bytes one attached contract's code blob may hold. The value applied
-    /// when unstated is [`Self::max_contract_size_bytes_in_force`].
-    pub max_contract_size_bytes: Option<u32>,
-    /// Storage savepoints one transaction may have open at once.
-    pub max_savepoint_depth: Option<u32>,
-    /// Bytes one incremental SHA-256 buffer may absorb between resets.
-    pub max_sha256_buffer_bytes: Option<u32>,
-    /// Levels of node nesting an auth token may carry.
-    pub max_auth_token_depth: Option<u32>,
-    /// Code bytes an RV32 artifact may carry to be attached. The value
-    /// applied when unstated is [`Self::max_rv32_code_bytes_in_force`].
-    pub max_rv32_code_bytes: Option<u32>,
-    /// Guest data memory bytes an RV32 artifact may declare to be attached.
-    /// The value applied when unstated is
-    /// [`Self::max_rv32_memory_bytes_in_force`].
-    pub max_rv32_memory_bytes: Option<u32>,
+/// The protocol fixes `kDefaultMaxContractSizeBytes` as the value in
+/// force for a configuration that does not state the parameter, since
+/// every chain predating it ran under that cap. Unlike the other bounds,
+/// this one is therefore always known.
+fn max_contract_size_bytes_in_force(params: &NetworkConfigParams) -> u32 {
+    params
+        .max_contract_size_bytes
+        .unwrap_or(kDefaultMaxContractSizeBytes)
 }
 
-impl NetworkConfigParams {
-    /// Flatten the parameters a network config states.
-    ///
-    /// A config version this build cannot interpret is an error rather
-    /// than a guess: the protocol requires a node that cannot name a
-    /// version to fail, and this crate follows suit.
-    pub fn from_network_config(config: &NetworkConfig) -> Result<Self, UnsupportedNetworkConfig> {
-        let params = match config {
-            NetworkConfig::_0 { v0 } => &v0.params,
-            other => {
-                return Err(UnsupportedNetworkConfig {
-                    config: format!("{other:?}"),
-                });
-            }
-        };
-        let mut resolved = Self::default();
-        for param in params.iter() {
-            match param {
-                ConfigParam::kConfigParamMaxSHA256Buffers { max_sha256_buffers } => {
-                    resolved.max_sha256_buffers = Some(*max_sha256_buffers);
-                }
-                ConfigParam::kConfigParamMaxCrossInvokeDepth {
-                    max_cross_invoke_depth,
-                } => {
-                    resolved.max_cross_invoke_depth = Some(*max_cross_invoke_depth);
-                }
-                ConfigParam::kConfigParamMaxNewContractsPerTx {
-                    max_new_contracts_per_tx,
-                } => {
-                    resolved.max_new_contracts_per_tx = Some(*max_new_contracts_per_tx);
-                }
-                ConfigParam::kConfigParamMaxBytestringLen { max_bytestring_len } => {
-                    resolved.max_bytestring_len = Some(*max_bytestring_len);
-                }
-                ConfigParam::kConfigParamMaxContractSizeBytes {
-                    max_contract_size_bytes,
-                } => {
-                    resolved.max_contract_size_bytes = Some(*max_contract_size_bytes);
-                }
-                ConfigParam::kConfigParamMaxSavepointDepth {
-                    max_savepoint_depth,
-                } => {
-                    resolved.max_savepoint_depth = Some(*max_savepoint_depth);
-                }
-                ConfigParam::kConfigParamMaxSHA256BufferBytes {
-                    max_sha256_buffer_bytes,
-                } => {
-                    resolved.max_sha256_buffer_bytes = Some(*max_sha256_buffer_bytes);
-                }
-                ConfigParam::kConfigParamMaxAuthTokenDepth {
-                    max_auth_token_depth,
-                } => {
-                    resolved.max_auth_token_depth = Some(*max_auth_token_depth);
-                }
-                ConfigParam::kConfigParamMaxRv32CodeBytes {
-                    max_rv32_code_bytes,
-                } => {
-                    resolved.max_rv32_code_bytes = Some(*max_rv32_code_bytes);
-                }
-                ConfigParam::kConfigParamMaxRv32MemoryBytes {
-                    max_rv32_memory_bytes,
-                } => {
-                    resolved.max_rv32_memory_bytes = Some(*max_rv32_memory_bytes);
-                }
-                // A parameter this build does not name cannot have decoded;
-                // the arm exists only because the enum is `#[non_exhaustive]`.
-                _ => {}
-            }
-        }
-        Ok(resolved)
-    }
+/// Code bytes an attached RV32 artifact may carry under `params`.
+///
+/// The protocol fixes `kDefaultMaxRv32CodeBytes` as the value in force
+/// for a configuration that does not state the parameter, so, like the
+/// contract size, this bound is always known.
+fn max_rv32_code_bytes_in_force(params: &NetworkConfigParams) -> u32 {
+    params
+        .max_rv32_code_bytes
+        .unwrap_or(DEFAULT_MAX_RV32_CODE_BYTES)
+}
 
-    /// Bytes one attached contract's code blob may hold under this config.
-    ///
-    /// The protocol fixes `kDefaultMaxContractSizeBytes` as the value in
-    /// force for a configuration that does not state the parameter, since
-    /// every chain predating it ran under that cap. Unlike the other
-    /// bounds, this one is therefore always known.
-    pub fn max_contract_size_bytes_in_force(&self) -> u32 {
-        self.max_contract_size_bytes
-            .unwrap_or(kDefaultMaxContractSizeBytes)
-    }
-
-    /// Code bytes an attached RV32 artifact may carry under this config.
-    ///
-    /// The protocol fixes `kDefaultMaxRv32CodeBytes` as the value in force
-    /// for a configuration that does not state the parameter, so, like the
-    /// contract size, this bound is always known.
-    pub fn max_rv32_code_bytes_in_force(&self) -> u32 {
-        self.max_rv32_code_bytes
-            .unwrap_or(DEFAULT_MAX_RV32_CODE_BYTES)
-    }
-
-    /// Guest data memory bytes an attached RV32 artifact may declare under
-    /// this config; `kDefaultMaxRv32MemoryBytes` when unstated.
-    pub fn max_rv32_memory_bytes_in_force(&self) -> u32 {
-        self.max_rv32_memory_bytes
-            .unwrap_or(DEFAULT_MAX_RV32_MEMORY_BYTES)
-    }
+/// Guest data memory bytes an attached RV32 artifact may declare under
+/// `params`; `kDefaultMaxRv32MemoryBytes` when unstated.
+fn max_rv32_memory_bytes_in_force(params: &NetworkConfigParams) -> u32 {
+    params
+        .max_rv32_memory_bytes
+        .unwrap_or(DEFAULT_MAX_RV32_MEMORY_BYTES)
 }
 
 /// The name a chain execution parameter carries outside its XDR encoding.
@@ -210,8 +103,6 @@ pub enum ConfigParamName {
     MaxContractSizeBytes,
     /// [`NetworkConfigParams::max_savepoint_depth`].
     MaxSavepointDepth,
-    /// [`NetworkConfigParams::max_sha256_buffer_bytes`].
-    MaxSha256BufferBytes,
     /// [`NetworkConfigParams::max_auth_token_depth`].
     MaxAuthTokenDepth,
     /// [`NetworkConfigParams::max_rv32_code_bytes`].
@@ -229,7 +120,6 @@ impl ConfigParamName {
         Self::MaxBytestringLen,
         Self::MaxContractSizeBytes,
         Self::MaxSavepointDepth,
-        Self::MaxSha256BufferBytes,
         Self::MaxAuthTokenDepth,
         Self::MaxRv32CodeBytes,
         Self::MaxRv32MemoryBytes,
@@ -244,7 +134,6 @@ impl ConfigParamName {
             Self::MaxBytestringLen => "max_bytestring_len",
             Self::MaxContractSizeBytes => "max_contract_size_bytes",
             Self::MaxSavepointDepth => "max_savepoint_depth",
-            Self::MaxSha256BufferBytes => "max_sha256_buffer_bytes",
             Self::MaxAuthTokenDepth => "max_auth_token_depth",
             Self::MaxRv32CodeBytes => "max_rv32_code_bytes",
             Self::MaxRv32MemoryBytes => "max_rv32_memory_bytes",
@@ -263,7 +152,6 @@ impl ConfigParamName {
             Self::MaxBytestringLen => params.max_bytestring_len,
             Self::MaxContractSizeBytes => params.max_contract_size_bytes,
             Self::MaxSavepointDepth => params.max_savepoint_depth,
-            Self::MaxSha256BufferBytes => params.max_sha256_buffer_bytes,
             Self::MaxAuthTokenDepth => params.max_auth_token_depth,
             Self::MaxRv32CodeBytes => params.max_rv32_code_bytes,
             Self::MaxRv32MemoryBytes => params.max_rv32_memory_bytes,
@@ -312,25 +200,16 @@ pub struct UnknownConfigParamName {
     pub name: String,
 }
 
-/// A network config whose version this build cannot interpret.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unsupported network config version: {config}")]
-pub struct UnsupportedNetworkConfig {
-    /// Debug rendering of the unrecognized config.
-    pub config: String,
-}
-
 /// Check a decoded transaction against the executor's pre-execution bounds.
 ///
 /// The duplicate-attachment rule always applies. The attached-contract
 /// count is checked only when `params` states a bound for it. Each
-/// attached contract's code is checked against the size in force,
-/// [`NetworkConfigParams::max_contract_size_bytes_in_force`], and each
-/// attached RV32 artifact's declared guest memory and code size against
-/// [`NetworkConfigParams::max_rv32_memory_bytes_in_force`] and
-/// [`NetworkConfigParams::max_rv32_code_bytes_in_force`], so pass
-/// `NetworkConfigParams::default()` when no chain reading is available and
-/// the protocol's own values apply.
+/// attached contract's code is checked against the size in force
+/// (`kDefaultMaxContractSizeBytes` when unstated), and each attached RV32
+/// artifact's declared guest memory and code size against
+/// `kDefaultMaxRv32MemoryBytes` and `kDefaultMaxRv32CodeBytes` when
+/// unstated, so pass `NetworkConfigParams::default()` when no chain
+/// reading is available and the protocol's own values apply.
 pub fn check_transaction(
     tx: &Transaction,
     params: &NetworkConfigParams,
@@ -344,7 +223,7 @@ pub fn check_transaction(
         return Err(TxInvalidDetail::TooManyContracts { attached, max });
     }
 
-    let max_bytes = params.max_contract_size_bytes_in_force();
+    let max_bytes = max_contract_size_bytes_in_force(params);
     for (index, contract) in contracts.iter().enumerate() {
         let index = u32::try_from(index).unwrap_or(u32::MAX);
         let size_bytes = u32::try_from(contract_code_size(contract)).unwrap_or(u32::MAX);
@@ -373,8 +252,8 @@ pub fn check_transaction(
     // hogd verifies each attachment after the gates above, and its artifact
     // parser checks the declared memory before the code size; the same order
     // here, so both name the same first violation.
-    let max_memory_bytes = params.max_rv32_memory_bytes_in_force();
-    let max_code_bytes = params.max_rv32_code_bytes_in_force();
+    let max_memory_bytes = max_rv32_memory_bytes_in_force(params);
+    let max_code_bytes = max_rv32_code_bytes_in_force(params);
     for (index, contract) in contracts.iter().enumerate() {
         let Some(sizes) = rv32_declared_sizes(contract) else {
             continue;
@@ -426,8 +305,10 @@ fn contract_code_size(contract: &Contract) -> usize {
 #[cfg(test)]
 mod tests {
     use groundhog_xdr::{
-        contract::ContractBlob, network_config::NetworkConfigV0,
-        precompiles::HogexecPrecompiledNativeContracts, transaction::SignedTransaction,
+        contract::ContractBlob,
+        network_config::{ConfigParam, NetworkConfig, NetworkConfigV0},
+        precompiles::HogexecPrecompiledNativeContracts,
+        transaction::SignedTransaction,
     };
     use xdr_common::{BytesM, VecM};
 
@@ -494,11 +375,6 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
             ConfigParamName::MaxSavepointDepth => ConfigParam::kConfigParamMaxSavepointDepth {
                 max_savepoint_depth: value,
             },
-            ConfigParamName::MaxSha256BufferBytes => {
-                ConfigParam::kConfigParamMaxSHA256BufferBytes {
-                    max_sha256_buffer_bytes: value,
-                }
-            }
             ConfigParamName::MaxAuthTokenDepth => ConfigParam::kConfigParamMaxAuthTokenDepth {
                 max_auth_token_depth: value,
             },
@@ -605,9 +481,6 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
             ConfigParam::kConfigParamMaxSavepointDepth {
                 max_savepoint_depth: 9,
             },
-            ConfigParam::kConfigParamMaxSHA256BufferBytes {
-                max_sha256_buffer_bytes: 8192,
-            },
             ConfigParam::kConfigParamMaxAuthTokenDepth {
                 max_auth_token_depth: 5,
             },
@@ -630,7 +503,6 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
                 max_bytestring_len: Some(4096),
                 max_contract_size_bytes: Some(131_072),
                 max_savepoint_depth: Some(9),
-                max_sha256_buffer_bytes: Some(8192),
                 max_auth_token_depth: Some(5),
                 max_rv32_code_bytes: Some(65536),
                 max_rv32_memory_bytes: Some(1_048_576),
@@ -670,11 +542,11 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
     #[test]
     fn contract_size_in_force_is_the_stated_value_or_the_protocol_default() {
         assert_eq!(
-            NetworkConfigParams::default().max_contract_size_bytes_in_force(),
+            max_contract_size_bytes_in_force(&NetworkConfigParams::default()),
             kDefaultMaxContractSizeBytes
         );
         assert_eq!(
-            contract_size_cap(1024).max_contract_size_bytes_in_force(),
+            max_contract_size_bytes_in_force(&contract_size_cap(1024)),
             1024
         );
     }
@@ -777,12 +649,12 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
     #[test]
     fn rv32_bounds_in_force_are_the_stated_values_or_the_protocol_defaults() {
         let unstated = NetworkConfigParams::default();
-        assert_eq!(unstated.max_rv32_code_bytes_in_force(), 65_536);
-        assert_eq!(unstated.max_rv32_memory_bytes_in_force(), 65_536);
+        assert_eq!(max_rv32_code_bytes_in_force(&unstated), 65_536);
+        assert_eq!(max_rv32_memory_bytes_in_force(&unstated), 65_536);
 
         let stated = rv32_caps(Some(4096), Some(1 << 20));
-        assert_eq!(stated.max_rv32_code_bytes_in_force(), 4096);
-        assert_eq!(stated.max_rv32_memory_bytes_in_force(), 1 << 20);
+        assert_eq!(max_rv32_code_bytes_in_force(&stated), 4096);
+        assert_eq!(max_rv32_memory_bytes_in_force(&stated), 1 << 20);
     }
 
     #[test]

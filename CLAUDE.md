@@ -78,8 +78,10 @@ Workspace crates are grouped by boundary:
   and call, XDR encoding.
 - **tx-validation** — off-chain mirror of the bounds hogd's executor checks
   before running a transaction. `NetworkConfigParams` flattens a db tip's
-  network config into per-parameter fields (`None` when unstated);
-  `check_transaction` reports violations as `TxInvalidDetail`.
+  network config into per-parameter fields (`None` when unstated); it is
+  defined in `json-rpc-types` because `chainConfig` returns it on the wire,
+  and re-exported here. `check_transaction` reports violations as
+  `TxInvalidDetail`.
   `ConfigParamName` is the one Rust-side spelling of the parameter names
   hog-devnode's `--network-config` flag and its data-dir metadata key by;
   `groundhog node` parses the flag into it rather than passing a free string.
@@ -429,7 +431,10 @@ groundhog-bench --url http://127.0.0.1:9546 \
   (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
   that every tip fetch refreshes: a submit that finds it stale, the public
   `chainTip` method, and a background task `GroundhogRpcServer::new` starts
-  on `tip_refresh_interval_ms`. A bound violation found against a cached
+  on `tip_refresh_interval_ms`. The public `chainConfig` method reads
+  through that same cache, so it costs the backend at most one fetch per
+  `tip_cache_ttl_ms` however often it is called, and reports only the
+  parameters the config states. A bound violation found against a cached
   reading is re-checked against a freshly fetched tip before it is
   returned, so a reading that lags a config upgrade never rejects what the
   current config admits. The checks are advisory, not a trust
