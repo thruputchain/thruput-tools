@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/build-info",
+    "crates/client",
     "crates/bundle-identity",
     "crates/json-rpc/json-rpc-types",
     "crates/json-rpc/json-rpc-api",
@@ -53,6 +54,7 @@ tar = { version = "0.4.46", default-features = false }
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
+groundhog-client = { path = "crates/client", version = "=0.17.7", registry = "groundhog" }
 groundhog-build-info = { path = "crates/build-info", version = "=0.17.7", registry = "groundhog" }
 groundhog-bundle-identity = { path = "crates/bundle-identity", version = "=0.17.7", registry = "groundhog" }
 groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.17.7", registry = "groundhog" }
@@ -86,12 +88,13 @@ xdrs = { version = "=0.10.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "=0.10.1", registry = "groundhog" }
 rpc_driver = { version = "=0.12.0", registry = "groundhog" }
 # from the sdk crate:
-groundhog-spec-tool = { version = "=0.34.4", registry = "groundhog" }
-groundhog-contract-util = { version = "=0.34.4", registry = "groundhog" }
-groundhog-domain-separator = { version = "=0.34.4", registry = "groundhog" }
-groundhog-contract-spec = { version = "=0.34.4", registry = "groundhog" }
-groundhog-erc20-if = { version = "=0.1.31", registry = "groundhog" }
-sdk = { version = "=0.34.4", registry = "groundhog" }
+groundhog-spec-tool = { version = "=0.36.0", registry = "groundhog" }
+groundhog-contract-util = { version = "=0.36.0", registry = "groundhog" }
+groundhog-domain-separator = { version = "=0.36.0", registry = "groundhog" }
+groundhog-contract-spec = { version = "=0.36.0", registry = "groundhog" }
+groundhog-u256 = { version = "=0.36.0", registry = "groundhog" }
+groundhog-erc20-if = { version = "=0.1.33", registry = "groundhog" }
+sdk = { version = "=0.36.0", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
