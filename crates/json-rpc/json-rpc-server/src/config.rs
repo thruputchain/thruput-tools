@@ -44,9 +44,8 @@ pub struct RpcServerConfig {
     pub tip_probe_timeout_ms: u64,
 
     /// Interval of the background task that refreshes the tip reading and
-    /// network config. Nothing else polls for the pre-checks, so this sets
-    /// both the backend load they cost and the staleness a submit can see,
-    /// whatever the submission rate.
+    /// network config. Nothing else polls for the pre-checks, so this alone
+    /// sets both the backend load they cost and the staleness a submit sees.
     pub tip_refresh_interval_ms: u64,
 }
 

@@ -230,10 +230,8 @@ impl Drop for AbortOnDrop {
 
 /// Start the task that keeps `params` current.
 ///
-/// It is the only writer, so the reading a submit sees is at most one
-/// interval behind the chain however the server is loaded. Returns `None`
-/// outside a Tokio runtime, where no background work can run and the
-/// chain-dependent pre-checks stay skipped.
+/// Returns `None` outside a Tokio runtime, where no background work can
+/// run and the chain-dependent pre-checks stay skipped.
 fn spawn_tip_refresh<C: ChainPlane>(
     chain: Arc<ChainTipSource<C>>,
     config: &RpcServerConfig,
@@ -1241,7 +1239,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     /// Poll once at startup and then not again, so a test can attribute
     /// every later backend call to the request under test.
-    fn one_poll() -> RpcServerConfig {
+    fn poll_once_config() -> RpcServerConfig {
         RpcServerConfig::default().with_tip_refresh_interval_ms(600_000)
     }
 
@@ -1273,7 +1271,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             CountingTipChain {
                 tip_calls: tip_calls.clone(),
             },
-            one_poll(),
+            poll_once_config(),
             submitted.clone(),
         );
         await_tip_reading(&server).await;
@@ -1473,7 +1471,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     async fn config_reading_rides_on_the_tip_poll() {
         let chain = ConfigChain::new(4);
         let submitted = Arc::new(Mutex::new(Vec::new()));
-        let server = expiry_check_server(chain.clone(), one_poll(), submitted.clone());
+        let server = expiry_check_server(chain.clone(), poll_once_config(), submitted.clone());
         await_tip_reading(&server).await;
 
         for _ in 0..3 {
@@ -1495,7 +1493,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     async fn too_many_contracts_is_rejected_with_structured_data_before_submit() {
         let chain = ConfigChain::new(1);
         let submitted = Arc::new(Mutex::new(Vec::new()));
-        let server = expiry_check_server(chain, one_poll(), submitted.clone());
+        let server = expiry_check_server(chain, poll_once_config(), submitted.clone());
         await_tip_reading(&server).await;
 
         let error = server
@@ -1566,7 +1564,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             },
         ]);
         let submitted = Arc::new(Mutex::new(Vec::new()));
-        let server = expiry_check_server(chain, one_poll(), submitted.clone());
+        let server = expiry_check_server(chain, poll_once_config(), submitted.clone());
         await_tip_reading(&server).await;
 
         let error = server
@@ -1601,7 +1599,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         // the stale cap: it reads the tip again and applies the raised one.
         let chain = ConfigChain::new(1);
         let submitted = Arc::new(Mutex::new(Vec::new()));
-        let server = expiry_check_server(chain.clone(), one_poll(), submitted.clone());
+        let server = expiry_check_server(chain.clone(), poll_once_config(), submitted.clone());
         await_tip_reading(&server).await;
         server
             .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
@@ -1733,7 +1731,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 view_gas_limits: Arc::new(Mutex::new(Vec::new())),
             },
             test_network_info(),
-            one_poll()
+            poll_once_config()
                 .with_request_timeout_ms(500)
                 .with_tip_probe_timeout_ms(50),
             BuildInfo::for_tests(),
@@ -1777,7 +1775,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 view_gas_limits: Arc::new(Mutex::new(Vec::new())),
             },
             test_network_info(),
-            one_poll(),
+            poll_once_config(),
             BuildInfo::for_tests(),
         );
         await_tip_reading(&server).await;
