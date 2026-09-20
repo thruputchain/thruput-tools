@@ -773,11 +773,8 @@ fn finish_package_run(
     Ok(())
 }
 
-/// Test every workspace member that declares a `test_rv32` target, one
-/// package at a time in name order, and report them together.
-///
-/// Failing tests stop the run only under `--fail-fast`; a build or preflight
-/// error always does, with the completed packages still reported.
+/// Test every workspace member with a `test_rv32` target, in name order;
+/// only `--fail-fast` or a build error stops the run early.
 fn run_workspace_once(
     metadata: &crate::build::CargoMetadata,
     options: &TestOptions,
@@ -949,10 +946,8 @@ fn describe_summary(summary: &TestSummary) -> String {
     parts.join(", ")
 }
 
-/// Build one package's artifact and run its selected-target tests.
-///
-/// Returns the outcome instead of reporting it, so a workspace run can
-/// collect every package before deciding how the command ends.
+/// Build one package's artifact and run its tests, returning the outcome
+/// unreported so a workspace run can collect every package first.
 fn run_package_once(
     package: Option<&str>,
     options: &TestOptions,
