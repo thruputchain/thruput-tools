@@ -136,14 +136,13 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-CLI 0.17 uses SDK 0.34.4, protocol-rs 0.36.0, and XDR 0.10.1. Update
-these dependencies together when migrating an existing Rust project. SDK
-0.34.4 moves to protocol-rs 0.36.0, whose generated x23 clients require
-rpc_driver 0.11; its public XDR types are unchanged from 0.34.3, which,
-despite its patch number, changed them. Standard interfaces `=0.1.31` use
-this family while preserving the native token contract ABI; projects
-retaining SDK `=0.34.3` should retain interfaces `=0.1.30`, and SDK `=0.34.2`
-interfaces `=0.1.29`.
+This CLI uses SDK 0.36.0, standard interfaces 0.1.33, protocol-rs 0.36.0,
+and XDR 0.10.1. Update the SDK and interface dependencies together when
+migrating an existing Rust project. SDK 0.36.0 removes the implicit `Clone`
+derive from contract exceptions and encodes supported scalar event topics
+directly as padded 32-byte big-endian values. Rebuild contracts and regenerate
+TypeScript bindings together to adopt that topic encoding; event signatures
+alone do not distinguish it from the previous hashed representation.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or
@@ -239,15 +238,14 @@ only the digest, not the original value; generated comments describe their
 filtering restriction. Regenerate bindings together with the reviewed client
 runtime before adopting the new descriptors.
 
-With the scalar-topic encoding introduced by SDK PR #463, `u32`, `u64`, `u128`,
+With the scalar-topic encoding in SDK 0.36.0, `u32`, `u64`, `u128`,
 `i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are directly decoded and
 filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
 extension, not compact XDR scalar encodings. Strings and byte slices remain
 hash-only. Rebuild contracts and regenerate their bindings together when adopting
 this encoding; an older artifact's event bytes are not changed by regeneration.
-Before releasing this generator, update the workspace SDK-family dependencies
-and the scaffold's SDK version to the release containing that correction, so
-newly scaffolded contracts emit the representation their bindings describe.
+The workspace SDK dependencies and newly scaffolded contracts are pinned to
+SDK 0.36.0 so they emit the representation these bindings describe.
 
 ## TypeScript Application Path
 

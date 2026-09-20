@@ -65,12 +65,11 @@ only the digest, not the original value; generated comments describe their
 filtering restriction. Regenerate bindings together with the reviewed client
 runtime before adopting the new descriptors.
 
-With the scalar-topic encoding introduced by SDK PR #463, `u32`, `u64`, `u128`,
+With the scalar-topic encoding in SDK 0.36.0, `u32`, `u64`, `u128`,
 `i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are directly decoded and
 filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
 extension, not compact XDR scalar encodings. Strings and byte slices remain
 hash-only. Rebuild contracts and regenerate their bindings together when adopting
 this encoding; an older artifact's event bytes are not changed by regeneration.
-Before releasing this generator, update the workspace SDK-family dependencies
-and the scaffold's SDK version to the release containing that correction, so
-newly scaffolded contracts emit the representation their bindings describe.
+The workspace SDK dependencies and newly scaffolded contracts are pinned to
+SDK 0.36.0 so they emit the representation these bindings describe.
