@@ -91,14 +91,9 @@ impl TipState {
 /// pre-checks on this server.
 ///
 /// The background task [`GroundhogRpcServer::new`] starts is the only
-/// writer, polling on `tip_refresh_interval_ms`; a submit just reads the
-/// atomics.
-///
-/// A read is not a snapshot: a submit can pair a height from one poll with
-/// a parameter from the next. That is safe because the height only grows,
-/// the parameters change only at upgrade blocks, and these checks are
-/// advisory. The one decision that cannot rest on a stale reading
-/// (rejecting a transaction for a bound violation) reads its own tip.
+/// writer, so a read is not a snapshot. That is safe: height only grows,
+/// parameters change only at upgrade blocks, and these checks are
+/// advisory. Rejecting for a bound violation re-reads the tip instead.
 #[derive(Debug, Default)]
 struct TipParams {
     /// Set by the first poll that lands. Until then every field below
@@ -251,9 +246,7 @@ fn spawn_tip_refresh<C: ChainPlane>(
     let probe_timeout = Duration::from_millis(config.tip_probe_timeout_ms);
     let task = handle.spawn(async move {
         loop {
-            // Poll before the first sleep so a server that has just come up
-            // runs the chain-dependent checks rather than skipping them for
-            // a whole interval.
+            // Poll before the first sleep so a fresh server is not blind for a whole interval.
             if let Some(reading) =
                 probe_tip(&chain.plane, RpcRequestContext::unbounded(), probe_timeout).await
             {
@@ -1302,7 +1295,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn the_refresh_task_polls_again_on_its_interval() {
+    async fn refresh_task_polls_again_on_its_interval() {
         let tip_calls = Arc::new(Mutex::new(0));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
@@ -1634,7 +1627,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[test]
-    fn an_atomic_parameter_round_trips_every_stated_value_and_the_unstated_one() {
+    fn atomic_parameter_round_trips_every_stated_value_and_the_unstated_one() {
         // The unstated case is a sentinel above the `u32` range rather than a
         // reserved value, so no real limit can be mistaken for it.
         let slot = AtomicOptionU32::default();
@@ -1666,7 +1659,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[test]
-    fn a_later_poll_replaces_every_parameter_it_publishes() {
+    fn later_poll_replaces_every_parameter_it_publishes() {
         // Nothing prunes a parameter an upgrade stopped stating, so each
         // store has to write every field rather than only the stated ones.
         let params = TipParams::default();
@@ -1723,11 +1716,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn the_bound_recheck_probe_is_capped_shorter_than_the_request() {
-        // The re-read before a bound violation may reject is the only
-        // pre-check probe left on a request's own context: it must share
-        // that request's start rather than resetting it, and carry the
-        // shorter probe deadline.
+    async fn bound_recheck_probe_is_capped_shorter_than_the_request() {
+        // This re-read is the only pre-check probe on a request's own
+        // context: it must share that request's start, not reset it.
         let chain = ConfigChain::new(1);
         let submit_contexts = Arc::new(Mutex::new(Vec::new()));
         let server = GroundhogRpcServer::new(
