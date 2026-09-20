@@ -204,12 +204,12 @@ pub struct UnknownConfigParamName {
 ///
 /// The duplicate-attachment rule always applies. The attached-contract
 /// count is checked only when `params` states a bound for it. Each
-/// attached contract's code is checked against the size in force,
-/// `kDefaultMaxContractSizeBytes` when unstated, and each
-/// attached RV32 artifact's declared guest memory and code size against
-/// `kDefaultMaxRv32MemoryBytes` and `kDefaultMaxRv32CodeBytes` when unstated, so pass
-/// `NetworkConfigParams::default()` when no chain reading is available and
-/// the protocol's own values apply.
+/// attached contract's code is checked against the size in force
+/// (`kDefaultMaxContractSizeBytes` when unstated), and each attached RV32
+/// artifact's declared guest memory and code size against
+/// `kDefaultMaxRv32MemoryBytes` and `kDefaultMaxRv32CodeBytes` when
+/// unstated, so pass `NetworkConfigParams::default()` when no chain
+/// reading is available and the protocol's own values apply.
 pub fn check_transaction(
     tx: &Transaction,
     params: &NetworkConfigParams,

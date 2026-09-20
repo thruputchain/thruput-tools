@@ -5,12 +5,9 @@ use serde::{Deserialize, Serialize};
 /// The execution parameters a chain's network config states, flattened
 /// from the list that carries them. Returned by `chainConfig`.
 ///
-/// Resolve once where a tip is read, then each parameter is a field rather
-/// than a scan of the list. A field is `None` when the config does not
-/// state that parameter, and is then absent from the JSON: the node, not
-/// this surface, decides what value is in force for it, so nothing is
-/// filled in here. `Default` is the reading with nothing stated, and struct
-/// update from it is the way to state a subset.
+/// A field is `None`, and absent from the JSON, when the config does not
+/// state that parameter; the node alone decides what is then in force.
+/// `Default` is the reading with nothing stated.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkConfigParams {
@@ -107,11 +104,8 @@ impl NetworkConfigParams {
                 } => {
                     resolved.max_rv32_memory_bytes = Some(*max_rv32_memory_bytes);
                 }
-                // `kConfigParamMaxSHA256BufferBytes` is retired: hogd no
-                // longer implements it, so a chain that still states it has
-                // nothing to surface. Any other parameter this build does not
-                // name cannot have decoded; the arm otherwise exists only
-                // because the enum is `#[non_exhaustive]`.
+                // `kConfigParamMaxSHA256BufferBytes` is retired; otherwise the
+                // catch-all exists only because the enum is `#[non_exhaustive]`.
                 _ => {}
             }
         }

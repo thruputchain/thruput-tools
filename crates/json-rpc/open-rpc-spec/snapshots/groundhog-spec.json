@@ -876,7 +876,7 @@
         "type": "string"
       },
       "NetworkConfigParams": {
-        "description": "The execution parameters a chain's network config states, flattened\nfrom the list that carries them. Returned by `chainConfig`.\n\nResolve once where a tip is read, then each parameter is a field rather\nthan a scan of the list. A field is `None` when the config does not\nstate that parameter, and is then absent from the JSON: the node, not\nthis surface, decides what value is in force for it, so nothing is\nfilled in here. `Default` is the reading with nothing stated, and struct\nupdate from it is the way to state a subset.",
+        "description": "The execution parameters a chain's network config states, flattened\nfrom the list that carries them. Returned by `chainConfig`.\n\nA field is `None`, and absent from the JSON, when the config does not\nstate that parameter; the node alone decides what is then in force.\n`Default` is the reading with nothing stated.",
         "properties": {
           "maxAuthTokenDepth": {
             "description": "Levels of node nesting an auth token may carry.",
@@ -1722,7 +1722,7 @@
           "$ref": "#/components/schemas/NetworkConfigParams"
         }
       },
-      "summary": "The execution parameters the chain's network config states, from the server's most recent tip reading. Only stated parameters are reported: a parameter the config does not state is absent, and the node alone decides what is then in force. The reading is refreshed at most once per cache window (a few seconds), which only matters across an upgrade block. Fails with `BackendUnavailable` when no reading is available or the config is a version this server cannot read.",
+      "summary": "The execution parameters the chain's network config states. Only stated parameters are reported; an unstated one is absent. Served from a tip reading refreshed at most once per cache window. Fails with `BackendUnavailable` when no reading is available or the config version is unreadable.",
       "tags": [
         {
           "name": "Core API"

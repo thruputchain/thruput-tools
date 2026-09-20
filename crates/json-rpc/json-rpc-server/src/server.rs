@@ -562,11 +562,8 @@ where
     async fn chain_config(&self) -> RpcResult<NetworkConfigParams> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            // Served from the same rate-limited reading the submit pre-checks
-            // use, so a burst of callers costs the backend one tip fetch per
-            // TTL window. The config changes only at upgrade blocks, so a
-            // reading inside the window is current for all practical
-            // purposes.
+            // Same rate-limited reading as the submit pre-checks: one tip
+            // fetch per TTL window.
             let Some(state) = self.cached_tip_state(context).await.state else {
                 return Err(RpcServerError::BackendUnavailable(
                     "no chain tip reading is available".into(),
