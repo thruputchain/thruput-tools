@@ -32,11 +32,9 @@ use crate::{
 /// Generic implementation of the public Groundhog JSON-RPC API over
 /// independently-typed submit, chain, read, and view backend planes.
 ///
-/// Holds a cached reading of the db tip (height plus the resolved network
-/// config) that every `sendRawTransaction` pre-check consults. The cache is
-/// refreshed by whichever path fetches a tip: a submit that finds it stale,
-/// the public `chainTip` method, or the background task started by
-/// [`Self::new`] that keeps it fresh on an idle server.
+/// Holds the db-tip reading (height plus the resolved network config) that
+/// every `sendRawTransaction` pre-check consults, kept current by the
+/// background task [`Self::new`] starts.
 #[derive(Debug)]
 pub struct GroundhogRpcServer<S, C, R, V> {
     submit: S,
@@ -55,10 +53,8 @@ pub struct GroundhogRpcServer<S, C, R, V> {
 
 /// The chain plane and the reading the refresh task publishes from it.
 ///
-/// One allocation rather than two: the task polls through the plane and
-/// writes the params, so it has to co-own both for as long as it runs, and
-/// `tokio::spawn` requires it to own them outright rather than borrow from
-/// a server that `into_rpc` will consume.
+/// One allocation rather than two: the spawned refresh task polls through
+/// the plane and writes the params, so it must own both.
 #[derive(Debug)]
 struct ChainTipSource<C> {
     plane: C,
@@ -95,18 +91,14 @@ impl TipState {
 /// pre-checks on this server.
 ///
 /// The background task [`GroundhogRpcServer::new`] starts is the only
-/// writer: it polls the tip on `tip_refresh_interval_ms` and stores the
-/// height and each config parameter in its own atomic. A submit reads
-/// those atomics, so the pre-check path never locks, allocates, or waits
-/// on the backend, and submission rate no longer drives backend load.
+/// writer, polling on `tip_refresh_interval_ms`; a submit just reads the
+/// atomics.
 ///
-/// A read is not a snapshot. A submit can pair a height from one poll with
-/// a parameter from the next, which is fine here: the height only grows,
-/// the parameters change only at explicit upgrade blocks, and the
-/// pre-checks are advisory rather than a trust boundary. The one decision
-/// that must not rest on a reading this stale -- rejecting a transaction
-/// for a bound violation -- reads its own tip from the backend instead of
-/// consulting these.
+/// A read is not a snapshot: a submit can pair a height from one poll with
+/// a parameter from the next. That is safe because the height only grows,
+/// the parameters change only at upgrade blocks, and these checks are
+/// advisory. The one decision that cannot rest on a stale reading
+/// (rejecting a transaction for a bound violation) reads its own tip.
 #[derive(Debug, Default)]
 struct TipParams {
     /// Set by the first poll that lands. Until then every field below
@@ -127,10 +119,8 @@ struct TipParams {
 
 /// An `Option<u32>` held in one atomic word.
 ///
-/// A stated parameter stores its own value, so any `u32` round-trips; the
-/// unstated case stores a sentinel above the range a `u32` can reach,
-/// which is why reading back is a checked conversion rather than a
-/// comparison against a magic number.
+/// The unstated case is a sentinel above the `u32` range, so every real
+/// value round-trips and reading back is a checked conversion.
 #[derive(Debug)]
 struct AtomicOptionU32(AtomicU64);
 
@@ -460,12 +450,9 @@ where
             let params = tip.map(|tip| tip.params).unwrap_or_default();
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
-                // A polled config can lag, by up to a refresh interval, an
-                // upgrade block that raised the violated bound. Read the tip
-                // again before rejecting, so a stale bound never turns away a
-                // transaction the current config admits. A probe that cannot
-                // reach the backend leaves the polled reading in place and the
-                // rejection stands.
+                // A polled config can lag an upgrade that raised this bound,
+                // so re-read the tip before rejecting. A probe that cannot
+                // reach the backend leaves the rejection standing.
                 Err(RpcServerError::TxInvalidDetailed(_)) => {
                     if let Some(fresh) = self.fresh_tip_state(context).await {
                         tip = Some(fresh);

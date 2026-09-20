@@ -43,13 +43,10 @@ pub struct RpcServerConfig {
     /// delay submission past this bound.
     pub tip_probe_timeout_ms: u64,
 
-    /// Interval of the background task that keeps the tip reading (and
-    /// with it the network config) current. It is the only thing that
-    /// polls on the pre-checks' behalf, so this alone sets both the
-    /// backend load they cost and how far behind the chain a submit's
-    /// reading can be, whatever the submission rate. Staleness is safe
-    /// here: the tip only grows, so it can only under-detect expiry, and
-    /// the config changes only at explicit upgrade blocks.
+    /// Interval of the background task that refreshes the tip reading and
+    /// network config. Nothing else polls for the pre-checks, so this sets
+    /// both the backend load they cost and the staleness a submit can see,
+    /// whatever the submission rate.
     pub tip_refresh_interval_ms: u64,
 }
 
