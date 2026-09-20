@@ -3908,8 +3908,9 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 5);
+    assert_eq!(stdout["data"]["schemaVersion"], 6);
     assert_eq!(stdout["data"]["mode"], "rv32");
+    assert_eq!(stdout["data"]["package"], "demo-contract");
     assert_rv32_test_artifact(&stdout["data"]);
     assert!(stdout["data"]["projectRoot"].as_str().is_some());
     assert_eq!(stdout["data"]["success"], false);

@@ -126,6 +126,14 @@ pub enum CliError {
     IntegrationTestNotFound(String),
     #[error("invalid test options: {0}")]
     InvalidTestOptions(String),
+    #[error("no workspace package declares a `test_rv32` test target under {0}")]
+    NoWorkspaceTestPackages(String),
+    #[error(
+        "tests failed in {} of {total} workspace package(s): {}",
+        .failed.len(),
+        .failed.join(", ")
+    )]
+    WorkspaceTestsFailed { failed: Vec<String>, total: usize },
     #[error(
         "`{0}` is set in the environment, so cargo would ignore the project's \
          `.cargo/config.toml` target rustflags (Groundhog linker and codegen flags) and \
@@ -509,6 +517,8 @@ impl CliError {
             Self::NotImplemented => "not_implemented",
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
+            Self::NoWorkspaceTestPackages(_) => "no_workspace_test_packages",
+            Self::WorkspaceTestsFailed { .. } => "workspace_tests_failed",
             Self::EnvRustflagsSet(_) => "env_rustflags_set",
             Self::Rv32LinkerScriptNotConfigured { .. } => "rv32_linker_script_not_configured",
             Self::StatusHasWarnings => "status_has_warnings",
@@ -623,8 +633,9 @@ impl CliError {
                  check that `{name}` is spelled correctly"
             ))),
             Self::PackageRequired => Some(Cow::Borrowed(
-                "run from inside a package directory, or pass \
-                 `-p <package>` to select one",
+                "run from inside a package directory, pass `-p <package>` to select one, \
+                 or pass `--workspace` to `groundhog test` to test every member with a \
+                 `test_rv32` target",
             )),
             Self::CargoMetadataFailed(_) => Some(Cow::Borrowed(
                 "ensure `cargo` is on PATH and you are inside \
@@ -1052,6 +1063,16 @@ impl CliError {
             Self::InvalidTestOptions(_) => Some(Cow::Borrowed(
                 "remove the conflicting `groundhog test` option and rerun the command",
             )),
+            Self::NoWorkspaceTestPackages(_) => Some(Cow::Borrowed(
+                "`--workspace` tests the members that declare a `tests/test_rv32.rs` target, \
+                 as `groundhog new` scaffolds; run `groundhog test -p <package>` to test one \
+                 member",
+            )),
+            Self::WorkspaceTestsFailed { .. } => Some(Cow::Borrowed(
+                "see each package's test output above; rerun one package with \
+                 `groundhog test -p <package>`, or `groundhog test --workspace --rerun` to \
+                 run only the recorded failures",
+            )),
             Self::EnvRustflagsSet(var) => Some(Cow::Owned(format!(
                 "unset it for this build (e.g. `env -u {var} groundhog build`); to add extra \
                  rustflags, append them to the `[target.*]` rustflags lists in the project's \
@@ -1085,6 +1106,10 @@ impl CliError {
                 "stderr": stderr,
             })),
             Self::Rv32LowerFailed(error) => Some(json!({ "message": error.to_string() })),
+            Self::WorkspaceTestsFailed { failed, total } => Some(json!({
+                "failed": failed,
+                "total": total,
+            })),
             Self::CallEncode { path, message } | Self::CallDecode { path, message } => {
                 Some(json!({
                     "path": path,
