@@ -966,7 +966,10 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         let fname = spec_string_text(&field.name)?;
         let ty = event_topic_type(&field.ty);
         let documentation = if event_topic_representation(&field.ty) == "hash" {
-            "/** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "
+            concat!(
+                "/** Hash of the ABI-encoded topic value; ",
+                "the original value cannot be recovered or directly filtered by this binding. */ ",
+            )
         } else {
             ""
         };
