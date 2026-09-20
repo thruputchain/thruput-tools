@@ -257,8 +257,10 @@ run. `--match-test`, `--skip`, `--rerun`, and `--watch` apply to every member.
 `--workspace` conflicts with `-p` and is not yet supported with
 `--integration`. With `--json`, the record's `data` is a workspace report
 (`data.schemaVersion` 1) carrying an aggregate `summary`, one per-package test
-report under `data.packages`, and `data.skipped` naming the members
-`--fail-fast` left unrun.
+report under `data.packages`, and `data.skipped` naming the members left
+unrun. When a package's build fails, the record still carries the members that
+completed, names that package in `data.errored`, and carries the failure in
+the envelope's `error` field.
 
 `groundhog test --integration` builds the RV32 artifact, starts an ephemeral hog-devnode local node,
 deploys the contract with the runtime manifest's lowest-index `local_user`, then runs the `tests/integration.rs` target.

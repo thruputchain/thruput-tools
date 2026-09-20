@@ -777,8 +777,10 @@ fn finish_package_run(
 /// package at a time in name order, and report them together.
 ///
 /// A package whose tests fail does not stop the others unless
-/// `--fail-fast` is set. A package whose build fails ends the run with that
-/// error, as a compile error does under `cargo test --workspace`.
+/// `--fail-fast` is set. A package whose build or preflight errors ends the
+/// run, as a compile error does under `cargo test --workspace`; the report
+/// still carries the packages that completed and names that package in
+/// `errored`, and under `--json` the envelope carries the error.
 fn run_workspace_once(
     metadata: &crate::build::CargoMetadata,
     options: &TestOptions,
@@ -798,33 +800,46 @@ fn run_workspace_once(
     let mut reports = Vec::with_capacity(packages.len());
     let mut failed = Vec::new();
     let mut skipped = Vec::new();
+    let mut errored: Option<(String, CliError)> = None;
     for (index, package) in packages.iter().enumerate() {
         print.status(format_args!(
             "Testing {package} ({}/{})...",
             index + 1,
             packages.len()
         ));
-        let outcome = run_package_once(
+        let remaining = || packages[index + 1..].iter().map(|name| (*name).to_string());
+        let outcome = match run_package_once(
             Some(package),
             options,
             cargo_args,
             artifacts,
             explicit_profile,
             print,
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                errored = Some(((*package).to_string(), error));
+                skipped.extend(remaining());
+                break;
+            }
+        };
         let package_failed = outcome.failed_code.is_some();
         if package_failed {
             failed.push((*package).to_string());
         }
         reports.push(outcome.report);
         if package_failed && options.harness.fail_fast {
-            skipped.extend(packages[index + 1..].iter().map(|name| (*name).to_string()));
+            skipped.extend(remaining());
             break;
         }
     }
     if !skipped.is_empty() {
+        let cause = match &errored {
+            Some((package, _)) => format!("{package} errored before its tests ran"),
+            None => "--fail-fast".to_string(),
+        };
         print.warn(format_args!(
-            "--fail-fast: skipped {} remaining package(s): {}",
+            "{cause}: skipped {} remaining package(s): {}",
             skipped.len(),
             skipped.join(", ")
         ));
@@ -833,13 +848,25 @@ fn run_workspace_once(
     let report = WorkspaceTestReport {
         schema_version: WORKSPACE_TEST_JSON_SCHEMA_VERSION,
         workspace_root: metadata.workspace_root.clone(),
-        success: failed.is_empty(),
+        success: failed.is_empty() && errored.is_none(),
         summary: combine_summaries(reports.iter().map(|report| &report.summary)),
         packages: reports,
         skipped,
+        errored: errored.as_ref().map(|(package, _)| package.clone()),
     };
     print_workspace_summary(&report, print);
 
+    if let Some((_, error)) = errored {
+        if print.is_json() {
+            print.json(&CommandResult::failure_with_error(
+                cmd,
+                &report,
+                crate::result::CommandError::from_cli_error(&error),
+            ))?;
+            return Err(CliError::CommandReportedFailure);
+        }
+        return Err(error);
+    }
     if failed.is_empty() {
         print.json(&CommandResult::new(cmd, &report))?;
         return Ok(());
@@ -889,11 +916,19 @@ fn print_workspace_summary(report: &WorkspaceTestReport, print: &Print) {
             )
         })
         .collect();
+    if let Some(package) = &report.errored {
+        items.push((package.clone(), "errored before its tests ran".to_string()));
+    }
+    let skipped_reason = if report.errored.is_some() {
+        "skipped"
+    } else {
+        "skipped (--fail-fast)"
+    };
     items.extend(
         report
             .skipped
             .iter()
-            .map(|package| (package.clone(), "skipped (--fail-fast)".to_string())),
+            .map(|package| (package.clone(), skipped_reason.to_string())),
     );
     items.push((
         "workspace".to_string(),

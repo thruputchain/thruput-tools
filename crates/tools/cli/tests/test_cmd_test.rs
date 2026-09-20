@@ -416,14 +416,20 @@ impl Drop for PathGuard {
 /// A fake-cargo workspace whose contract members each declare a `test_rv32`
 /// target, plus a `helper` library member without one.
 ///
-/// The fake `cargo test` fails for `failing` and appends every test
-/// invocation's arguments to `args_log`, one `--- end ---` block each.
+/// The fake `cargo build` fails for `build_failing`, the fake `cargo test`
+/// fails for `failing`, and every test invocation's arguments are appended
+/// to `args_log`, one `--- end ---` block each.
 struct WorkspaceFixture {
     fake_bin: PathBuf,
     args_log: PathBuf,
 }
 
-fn write_workspace_fixture(root: &Path, packages: &[&str], failing: &str) -> WorkspaceFixture {
+fn write_workspace_fixture(
+    root: &Path,
+    packages: &[&str],
+    failing: &str,
+    build_failing: &str,
+) -> WorkspaceFixture {
     fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
     fs::create_dir_all(root.join(".cargo")).unwrap();
     fs::write(root.join(".cargo/contract.toml"), "").unwrap();
@@ -477,6 +483,7 @@ fn write_workspace_fixture(root: &Path, packages: &[&str], failing: &str) -> Wor
              if [ \"$1\" = \"build\" ]; then\n\
              \x20 pkg=''\n\
              \x20 while [ $# -gt 0 ]; do\n    if [ \"$1\" = \"-p\" ]; then pkg=\"$2\"; fi\n    shift\n  done\n\
+             \x20 if [ \"$pkg\" = \"{build_failing}\" ]; then\n    echo 'synthetic build failure' >&2\n    exit 1\n  fi\n\
              \x20 case \"$pkg\" in\n{snake_cases}    *) exit 1 ;;\n  esac\n\
              \x20 /bin/mkdir -p '{release}'\n\
              \x20 /bin/cp '{fixture}' \"{release}/$snake\"\n\
@@ -537,6 +544,7 @@ fn test_workspace_runs_every_rv32_member_and_reports_failures() {
         tmp.path(),
         &["beta-contract", "alpha-contract"],
         "beta-contract",
+        "",
     );
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
@@ -587,6 +595,7 @@ fn test_workspace_fail_fast_stops_after_first_failing_member() {
         tmp.path(),
         &["alpha-contract", "beta-contract", "gamma-contract"],
         "beta-contract",
+        "",
     );
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
@@ -638,6 +647,7 @@ fn test_workspace_json_reports_every_member() {
         tmp.path(),
         &["alpha-contract", "beta-contract", "gamma-contract"],
         "beta-contract",
+        "",
     );
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
@@ -677,4 +687,97 @@ fn test_workspace_json_reports_every_member() {
         packages[1]["rerun"]["failedTests"],
         serde_json::json!(["tests::fails"])
     );
+}
+
+#[test]
+#[serial]
+fn test_workspace_build_error_ends_the_run_with_that_error() {
+    let tmp = TempDir::new().unwrap();
+    let fixture = write_workspace_fixture(
+        tmp.path(),
+        &["alpha-contract", "beta-contract", "gamma-contract"],
+        "",
+        "beta-contract",
+    );
+
+    let _cwd = CurrentDirGuard::enter(tmp.path());
+    let _path = PathGuard::set(fixture.fake_bin.as_os_str());
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+
+    let err = groundhog_cli::test_cmd::run_with_options(
+        None,
+        &groundhog_cli::test_cmd::TestOptions {
+            workspace: true,
+            ..groundhog_cli::test_cmd::TestOptions::default()
+        },
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        "test",
+        &groundhog_cli::Print::quiet(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, groundhog_cli::CliError::CargoFailedWithOutput { .. }),
+        "expected the build failure itself, got: {err:?}"
+    );
+    assert_eq!(
+        tested_packages(&fixture.args_log),
+        vec!["alpha-contract".to_string()],
+        "beta-contract never built, so neither it nor gamma-contract should run tests"
+    );
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+/// A member that fails to build under `--json` still yields the workspace
+/// record: the members that completed, the errored member, the members left
+/// unrun, and the build failure in the envelope's `error`.
+#[test]
+#[serial]
+fn test_workspace_json_reports_a_member_that_fails_to_build() {
+    let tmp = TempDir::new().unwrap();
+    let fixture = write_workspace_fixture(
+        tmp.path(),
+        &["alpha-contract", "beta-contract", "gamma-contract"],
+        "",
+        "beta-contract",
+    );
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .current_dir(tmp.path())
+        .env("PATH", &fixture.fake_bin)
+        .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))
+        .args(["--json", "test", "--workspace"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "expected one JSON record, got: {stdout}");
+    let payload: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "test");
+    assert_eq!(payload["error"]["code"], "cargo_failed");
+    assert!(
+        payload["error"]["details"]["stderr"]
+            .as_str()
+            .unwrap()
+            .contains("synthetic build failure"),
+        "expected the build failure output, got: {}",
+        payload["error"]
+    );
+    let data = &payload["data"];
+    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["success"], false);
+    assert_eq!(data["errored"], "beta-contract");
+    assert_eq!(data["skipped"], serde_json::json!(["gamma-contract"]));
+    assert_eq!(data["summary"]["passed"], 2);
+    assert_eq!(data["summary"]["failed"], 0);
+    let packages = data["packages"].as_array().unwrap();
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0]["package"], "alpha-contract");
+    assert_eq!(packages[0]["success"], true);
 }

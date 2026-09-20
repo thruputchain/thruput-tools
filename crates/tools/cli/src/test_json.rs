@@ -53,9 +53,14 @@ pub struct WorkspaceTestReport {
     pub success: bool,
     pub summary: TestSummary,
     pub packages: Vec<TestReport>,
-    /// Selected packages that did not run because `--fail-fast` ended the
-    /// workspace run after an earlier package failed.
+    /// Selected packages that did not run because the run ended earlier:
+    /// under `--fail-fast` after a failing package, or when a package
+    /// errored before its tests ran.
     pub skipped: Vec<String>,
+    /// The package whose build or preflight errored before its tests ran,
+    /// ending the run. The envelope's `error` describes the failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub errored: Option<String>,
 }
 
 /// Built contract artifact metadata for a `groundhog test --json` report.
