@@ -28,7 +28,7 @@ impl Drop for ExportedKey {
 }
 
 /// First version of the public import result.
-pub const KEYS_IMPORT_JSON_SCHEMA_VERSION: u32 = 1;
+pub(crate) const KEYS_IMPORT_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Stable machine-readable result for `groundhog keys import`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

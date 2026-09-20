@@ -1815,9 +1815,10 @@ mod tests {
 
     #[test]
     fn strkey_addresses_encode_identically_in_local_and_spec_arguments() {
-        let hex = format!("0x{}", "42".repeat(32));
-        let c = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
-        let g = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+        let hex_address = format!("0x{}", "42".repeat(32));
+        let contract_strkey =
+            groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
+        let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
         let metadata = CallMetadata::Local(ContractMetadata {
             interface_name: "test".into(),
             version: "1".into(),
@@ -1828,19 +1829,19 @@ mod tests {
             },
         });
         assert_eq!(
-            encode_args(std::slice::from_ref(&hex), Some(&metadata)).unwrap(),
-            encode_args(std::slice::from_ref(&c), Some(&metadata)).unwrap()
+            encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+            encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
         );
-        assert!(encode_args(std::slice::from_ref(&g), Some(&metadata)).is_err());
+        assert!(encode_args(std::slice::from_ref(&public_key_strkey), Some(&metadata)).is_err());
         let mut metadata = metadata;
         if let CallMetadata::Local(ref mut local) = metadata {
             local.method.arg_types = vec!["Ed25519PublicKey".into()];
         }
         assert_eq!(
-            encode_args(std::slice::from_ref(&hex), Some(&metadata)).unwrap(),
-            encode_args(std::slice::from_ref(&g), Some(&metadata)).unwrap()
+            encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+            encode_args(std::slice::from_ref(&public_key_strkey), Some(&metadata)).unwrap()
         );
-        assert!(encode_args(std::slice::from_ref(&c), Some(&metadata)).is_err());
+        assert!(encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).is_err());
         let metadata = CallMetadata::Spec(SpecMethodMetadata {
             interface_name: "test".into(),
             version: "1".into(),
@@ -1858,10 +1859,10 @@ mod tests {
             throws: vec![],
         });
         assert_eq!(
-            encode_args(std::slice::from_ref(&hex), Some(&metadata)).unwrap(),
-            encode_args(std::slice::from_ref(&c), Some(&metadata)).unwrap()
+            encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+            encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
         );
-        assert!(encode_args(&[g], Some(&metadata)).is_err());
+        assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
     }
 
     #[test]

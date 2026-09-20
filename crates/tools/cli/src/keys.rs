@@ -16,6 +16,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_KEY_NAME: &str = "default";
 const DEFAULT_KEY_ID: u32 = 0;
+const MAX_SEED_INPUT_BYTES: usize = 128;
 
 #[derive(Serialize, Deserialize)]
 struct KeyFile {
@@ -122,12 +123,12 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
         let mut input = Zeroizing::new(String::new());
         std::io::stdin()
             .lock()
-            .take(129)
+            .take(MAX_SEED_INPUT_BYTES as u64 + 1)
             .read_to_string(&mut input)
             .map_err(|_| CliError::InvalidSecretSeed)?;
         input
     };
-    if input.len() > 128 {
+    if input.len() > MAX_SEED_INPUT_BYTES {
         return Err(CliError::InvalidSecretSeed);
     }
     let seed = strkey::parse_secret_seed(input.trim()).map_err(|_| CliError::InvalidSecretSeed)?;
@@ -166,12 +167,22 @@ fn import_default_selection(name: &str) -> (Option<bool>, Vec<crate::checks::Fin
             let selected = crate::config::load_default_key()
                 .map(|current| current.as_deref() == Some(name))
                 .ok();
-            (selected, vec![crate::checks::Finding {
+            let finding = crate::checks::Finding {
                 level: crate::checks::FindingLevel::Warn,
                 code: "key_import_default_selection_failed",
-                message: format!("Key `{name}` was imported, but default selection could not be confirmed ({})", error.code()),
-                hint: Some(format!("After fixing configuration, run `groundhog keys use {name}`; do not import the key again").into()),
-            }])
+                message: format!(
+                    "Key `{name}` was imported, but default selection could not be confirmed ({})",
+                    error.code(),
+                ),
+                hint: Some(
+                    format!(
+                        "After fixing configuration, run `groundhog keys use {name}`; \
+                         do not import the key again"
+                    )
+                    .into(),
+                ),
+            };
+            (selected, vec![finding])
         }
     }
 }

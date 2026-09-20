@@ -958,7 +958,7 @@ fn resolve_airdrop_recipient(
     if let Some(wallet) = profile.resolve_wallet(recipient) {
         return parse_contract_address(&wallet).map(|address| format_contract_address(&address));
     }
-    if recipient.starts_with("0x") || recipient.starts_with("0X") || recipient.starts_with('C') {
+    if crate::account_resolution::looks_like_address_literal(recipient) {
         let address = parse_contract_address(recipient).map_err(|_| {
             CliError::Other("wallet address must be a C StrKey or 32-byte hex address".into())
         })?;

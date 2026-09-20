@@ -281,6 +281,11 @@ pub(crate) fn lookup_dev_account_address(
         .into())
 }
 
+/// Recognize explicit address prefixes without validating the address itself.
+pub(crate) fn looks_like_address_literal(value: &str) -> bool {
+    value.starts_with("0x") || value.starts_with("0X") || value.starts_with('C')
+}
+
 /// Resolve a saved wallet, contract alias, direct address, or local dev account.
 pub(crate) fn resolve_address_target(
     profile: &ResolvedProfile,
@@ -292,7 +297,7 @@ pub(crate) fn resolve_address_target(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    if target.starts_with("0x") || target.starts_with("0X") || target.starts_with('C') {
+    if looks_like_address_literal(target) {
         return parse_target_address(target, target);
     }
     if let Some(index) = dev_keys::dev_key_index(target) {
@@ -329,7 +334,7 @@ pub(crate) fn resolve_contract_target(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    if target.starts_with("0x") || target.starts_with("0X") || target.starts_with('C') {
+    if looks_like_address_literal(target) {
         return parse_target_address(target, target);
     }
     Err(CliError::UnknownContractAlias {
