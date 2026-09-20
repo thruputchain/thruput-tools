@@ -886,6 +886,22 @@ fn emit_interface_method(
     let _ = writeln!(out, "    {stem}Result,");
     let _ = writeln!(out, "    {iface_name}DeclaredException");
     let _ = writeln!(out, "  >({{");
+    let _ = writeln!(out, "    interfaceName: {},", ts_string_literal(iface_name));
+    let _ = writeln!(
+        out,
+        "    interfaceVersion: {},",
+        ts_string_literal(spec_string_text(&iface.vers)?)
+    );
+    let _ = writeln!(
+        out,
+        "    abiName: {},",
+        ts_string_literal(spec_string_text(&method.name)?)
+    );
+    let _ = writeln!(
+        out,
+        "    publicName: {},",
+        ts_string_literal(public_method_name)
+    );
     let _ = writeln!(
         out,
         "    entrypoint: entrypoints.{iface_name}.{public_method_name},"
@@ -949,7 +965,15 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
     for field in event.topics.iter() {
         let fname = spec_string_text(&field.name)?;
         let ty = event_topic_type(&field.ty);
-        topic_fields.push(format!("{}: {ty}", ts_property_key(fname)?));
+        let documentation = if event_topic_representation(&field.ty) == "hash" {
+            concat!(
+                "/** Hash of the ABI-encoded topic value; ",
+                "the original value cannot be recovered or directly filtered by this binding. */ ",
+            )
+        } else {
+            ""
+        };
+        topic_fields.push(format!("{documentation}{}: {ty}", ts_property_key(fname)?));
         if event_topic_representation(&field.ty) != "hash" {
             filter_fields.push(format!(
                 "  {}?: ContractEventFilterValue<{ty}>;",
@@ -1746,8 +1770,15 @@ fn exception_name(ty: &ContractType) -> Result<String, CliError> {
 fn event_topic_representation(ty: &ContractType) -> &'static str {
     match ty {
         ContractType::Address => "address",
+        ContractType::U32 => "u32",
+        ContractType::U64 => "u64",
+        ContractType::U128 => "u128",
         ContractType::U256 => "u256",
+        ContractType::I32 => "i32",
+        ContractType::I64 => "i64",
+        ContractType::I128 => "i128",
         ContractType::I256 => "i256",
+        ContractType::Bool => "bool",
         ContractType::Array { array }
             if array.len == 32 && matches!(array.element.as_ref(), ContractType::U8) =>
         {
@@ -1761,7 +1792,8 @@ fn event_topic_type(ty: &ContractType) -> String {
     match event_topic_representation(ty) {
         "address" => "ContractAddress".into(),
         "fixedBytes32" => "FixedBytes<32>".into(),
-        "u256" | "i256" => "bigint".into(),
+        "u32" | "u64" | "u128" | "u256" | "i32" | "i64" | "i128" | "i256" => "bigint".into(),
+        "bool" => "boolean".into(),
         _ => "Uint8Array".into(),
     }
 }
@@ -2532,16 +2564,17 @@ export type Result =
             "missing decoded event type:\n{output}"
         );
         assert!(
-            output.contains("{ \"tag\": Uint8Array }"),
-            "missing raw hashed topic shape:\n{output}"
+            output.contains("\"tag\": bigint }")
+                && !output.contains("original value cannot be recovered"),
+            "missing direct scalar topic shape:\n{output}"
         );
         assert!(
             output.contains("{ \"note\": string }"),
             "missing payload shape:\n{output}"
         );
         assert!(
-            output.contains("export type PingEventFilter = Record<string, never>;"),
-            "missing empty direct-topic filter:\n{output}"
+            output.contains("\"tag\"?: ContractEventFilterValue<bigint>;"),
+            "missing scalar topic filter:\n{output}"
         );
         assert!(
             output.contains("export const PingEvent = defineContractEvent<"),
@@ -2554,7 +2587,7 @@ export type Result =
         assert!(output.contains("type: spec.events[0]!.topics[0]!.ty"));
         assert!(output.contains("type: spec.events[0]!.fields[0]!.ty"));
         assert!(
-            output.contains("representation: \"hash\""),
+            output.contains("representation: \"u64\""),
             "missing topic representation metadata:\n{output}"
         );
 
@@ -2787,6 +2820,7 @@ export type Result =
         let mut spec = spec_with_events();
         let mut event = ping_event_def();
         event.name = spec_string("Record");
+        event.topics.0[0].ty = ContractType::String;
         spec.events = vec![event].try_into().unwrap();
 
         let error = generate_ts_bindings(&spec, "events.spec.xdr").unwrap_err();
@@ -2987,6 +3021,10 @@ export type Result =
         ));
         assert!(output.contains("  get: defineContractMethod<"));
         assert!(output.contains("  increment: defineContractMethod<"));
+        assert!(output.contains("interfaceName: \"Counter\""));
+        assert!(output.contains("interfaceVersion: \"0.1.0\""));
+        assert!(output.contains("abiName: \"increment\""));
+        assert!(output.contains("publicName: \"increment\""));
         assert!(output.contains("returnType: spec.interfaces[0]!.methods[0]!.return_type"));
         assert!(output.contains("returnType: spec.interfaces[0]!.methods[1]!.return_type"));
         assert!(!output.contains("encodeCalldata"));
@@ -3484,6 +3522,40 @@ export type Result =
         assert!(output.contains("representation: \"i256\""));
         assert!(output.contains("{ v: ContractTypeKind.U256 }"));
         assert!(output.contains("{ v: ContractTypeKind.I256 }"));
+    }
+
+    #[test]
+    fn generates_direct_scalar_topic_types_and_filters() {
+        for (ty, representation, ts_type) in [
+            (ContractType::U32, "u32", "bigint"),
+            (ContractType::U64, "u64", "bigint"),
+            (ContractType::U128, "u128", "bigint"),
+            (ContractType::I32, "i32", "bigint"),
+            (ContractType::I64, "i64", "bigint"),
+            (ContractType::I128, "i128", "bigint"),
+            (ContractType::Bool, "bool", "boolean"),
+        ] {
+            let mut spec = spec_with_events();
+            spec.events.0[0].topics.0[0].ty = ty;
+            let output = generate_ts_bindings(&spec, "scalar.spec.xdr").unwrap();
+            assert!(output.contains(&format!("\"tag\": {ts_type}")));
+            assert!(output.contains(&format!("\"tag\"?: ContractEventFilterValue<{ts_type}>")));
+            assert!(output.contains(&format!("representation: \"{representation}\"")));
+            assert!(!output.contains("original value cannot be recovered"));
+        }
+    }
+
+    #[test]
+    fn documents_hashed_string_and_bytes_topics() {
+        for ty in [ContractType::String, ContractType::Bytes] {
+            let mut spec = spec_with_events();
+            spec.events.0[0].topics.0[0].ty = ty;
+            let output = generate_ts_bindings(&spec, "hashed.spec.xdr").unwrap();
+            assert!(output.contains("\"tag\": Uint8Array"));
+            assert!(output.contains("original value cannot be recovered"));
+            assert!(output.contains("representation: \"hash\""));
+            assert!(output.contains("export type PingEventFilter = Record<string, never>;"));
+        }
     }
 
     #[test]

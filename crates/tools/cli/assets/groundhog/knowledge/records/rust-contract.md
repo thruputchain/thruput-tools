@@ -39,14 +39,13 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-CLI 0.17 uses SDK 0.34.4, protocol-rs 0.36.0, and XDR 0.10.1. Update
-these dependencies together when migrating an existing Rust project. SDK
-0.34.4 moves to protocol-rs 0.36.0, whose generated x23 clients require
-rpc_driver 0.11; its public XDR types are unchanged from 0.34.3, which,
-despite its patch number, changed them. Standard interfaces `=0.1.31` use
-this family while preserving the native token contract ABI; projects
-retaining SDK `=0.34.3` should retain interfaces `=0.1.30`, and SDK `=0.34.2`
-interfaces `=0.1.29`.
+This CLI uses SDK 0.36.0, standard interfaces 0.1.33, protocol-rs 0.36.0,
+and XDR 0.10.1. Update the SDK and interface dependencies together when
+migrating an existing Rust project. SDK 0.36.0 removes the implicit `Clone`
+derive from contract exceptions and encodes supported scalar event topics
+directly as padded 32-byte big-endian values. Rebuild contracts and regenerate
+TypeScript bindings together to adopt that topic encoding; event signatures
+alone do not distinguish it from the previous hashed representation.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or

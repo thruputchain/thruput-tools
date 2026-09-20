@@ -23,7 +23,7 @@ hex.workspace = true
 
 groundhog-contract-spec.workspace = true
 groundhog-contract-util.workspace = true
-groundhog-u256 = { version = "=0.34.4", registry = "groundhog", features = ["std"] }
+groundhog-u256 = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 xdrs.workspace = true
 
