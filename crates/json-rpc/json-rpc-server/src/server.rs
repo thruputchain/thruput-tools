@@ -141,9 +141,8 @@ impl Default for AtomicOptionU32 {
 impl TipParams {
     /// Publish a reading the backend returned.
     ///
-    /// A config version this build cannot interpret publishes no
-    /// parameters, which skips the chain-configured checks rather than
-    /// guessing at bounds.
+    /// An uninterpretable config version publishes no parameters, skipping
+    /// the chain-configured checks rather than guessing at bounds.
     fn store(&self, reading: &TipReading) {
         let params = match NetworkConfigParams::from_network_config(&reading.network_config) {
             Ok(params) => params,
@@ -388,8 +387,8 @@ where
     /// Db-tip reading taken from the backend now, for a decision that must
     /// not rest on one that may lag the chain by a refresh interval.
     ///
-    /// Does not publish what it reads: the refresh task stays the only
-    /// writer, and the next poll is at most one interval away.
+    /// Deliberately does not publish what it reads: the refresh task stays
+    /// the only writer.
     async fn fresh_tip_state(&self, context: RpcRequestContext) -> Option<TipState> {
         let probe_timeout = Duration::from_millis(self.config.tip_probe_timeout_ms);
         let reading = probe_tip(&self.chain.plane, context, probe_timeout).await?;
