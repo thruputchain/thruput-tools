@@ -1460,6 +1460,7 @@ dependencies = [
  "getrandom 0.2.17",
  "groundhog-build-info",
  "groundhog-bundle-identity",
+ "groundhog-client",
  "groundhog-contract-spec",
  "groundhog-contract-util",
  "groundhog-erc20-if",
@@ -1498,6 +1499,25 @@ dependencies = [
  "xdrs",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "groundhog-client"
+version = "0.17.7"
+dependencies = [
+ "groundhog-contract-spec",
+ "groundhog-contract-util",
+ "groundhog-json-rpc-client",
+ "groundhog-json-rpc-types",
+ "groundhog-signing",
+ "groundhog-u256",
+ "groundhog-xdr",
+ "hex",
+ "jsonrpsee",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "xdrs",
 ]
 
 [[package]]

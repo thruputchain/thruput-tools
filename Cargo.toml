@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/build-info",
+    "crates/client",
     "crates/bundle-identity",
     "crates/json-rpc/json-rpc-types",
     "crates/json-rpc/json-rpc-api",
@@ -53,6 +54,7 @@ tar = { version = "0.4.46", default-features = false }
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
+groundhog-client = { path = "crates/client", version = "=0.17.7", registry = "groundhog" }
 groundhog-build-info = { path = "crates/build-info", version = "=0.17.7", registry = "groundhog" }
 groundhog-bundle-identity = { path = "crates/bundle-identity", version = "=0.17.7", registry = "groundhog" }
 groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.17.7", registry = "groundhog" }

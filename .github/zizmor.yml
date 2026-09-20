@@ -1,0 +1,33 @@
+# zizmor configuration. https://docs.zizmor.sh/configuration/
+#
+# `unpinned-uses` default: hash-pinning policy for every action
+
+rules:
+  # HIGH severity, and the one worth fixing first: publish.yml interpolates
+  # ${{ github.actor }} straight into a run block, and writes ${{ github.token }}
+  # into the git remote URL (persisting it in .git/config).
+  template-injection:
+    ignore:
+      - publish.yml
+
+  # Checkout steps that do not set `persist-credentials: false`.
+  artipacked:
+    ignore:
+      - publish.yml
+      - publish_dry_run.yml
+
+  # Job runs with default (write) permissions.
+  excessive-permissions:
+    ignore:
+      - publish_dry_run.yml
+
+  # Style: prefers '$/...' over './...' for same-repo composite actions.
+  self-repository:
+    ignore:
+      - publish.yml
+      - publish_dry_run.yml
+
+  # Informational: `gh release` could replace softprops/action-gh-release.
+  superfluous-actions:
+    ignore:
+      - release.yml

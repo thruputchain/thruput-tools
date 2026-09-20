@@ -13661,14 +13661,12 @@ fn spawn_deploy_rpc_with_detail(
 
 fn spawn_transaction_rpc(
     height: i64,
-    receipt: serde_json::Value,
+    mut receipt: serde_json::Value,
     detail_response: DevDetailRpcResponse,
 ) -> (String, thread::JoinHandle<()>) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-
-    let tx_hash = mock_tx_hash();
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -13692,6 +13690,12 @@ fn spawn_transaction_rpc(
             request["params"][0].as_str().unwrap().starts_with("0x"),
             "sendRawTransaction should receive 0x-prefixed tx hex"
         );
+        let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
+        let tx_hash = format!(
+            "0x{}",
+            hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+        );
+        receipt["txHash"] = serde_json::json!(tx_hash);
         send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
 
         // 3. getTransactionReceipt
