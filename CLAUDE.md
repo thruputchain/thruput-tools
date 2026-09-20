@@ -428,9 +428,10 @@ groundhog-bench --url http://127.0.0.1:9546 \
   (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
   that every tip fetch refreshes: a submit that finds it stale, the public
   `chainTip` method, and a background task `GroundhogRpcServer::new` starts
-  on `tip_refresh_interval_ms`. The public `chainConfig` method answers
-  from that cached reading too, never with its own tip fetch, and reports
-  only the parameters the config states. A bound violation found against a cached
+  on `tip_refresh_interval_ms`. The public `chainConfig` method reads
+  through that same cache, so it costs the backend at most one fetch per
+  `tip_cache_ttl_ms` however often it is called, and reports only the
+  parameters the config states. A bound violation found against a cached
   reading is re-checked against a freshly fetched tip before it is
   returned, so a reading that lags a config upgrade never rejects what the
   current config admits. The checks are advisory, not a trust

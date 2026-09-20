@@ -277,11 +277,12 @@ one that serves `chainTip`); the shared server flattens it into
 reading (height plus params) that every fetch refreshes: a submit that
 finds it older than `tip_cache_ttl_ms`, the public `chainTip` method, and
 a background task that probes every `tip_refresh_interval_ms` on an idle
-server. The public `chainConfig` method serves the params from that same
-cached reading rather than fetching the tip itself, so a burst of callers
-costs the backend at most one fetch per `tip_cache_ttl_ms`; it reports
-exactly the stated params and fails rather than answering when there is no
-reading or the config version is unreadable. For the pre-checks, a
+server. The public `chainConfig` method reads through that same cache, so
+however often it is called it costs the backend at most one fetch per
+`tip_cache_ttl_ms`; on a cold cache a caller waits for the in-flight probe
+rather than answering empty. It reports exactly the stated params and fails
+rather than answering when there is no reading or the config version is
+unreadable. For the pre-checks, a
 parameter the config does not state is `None` and its check is
 skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to

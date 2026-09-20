@@ -92,15 +92,38 @@ impl TipState {
 /// stale height can only under-detect expiry, and the config changes only
 /// at explicit upgrade blocks. Fetches that overlap may complete out of
 /// order; the reading with the higher tip is the later one and is kept.
-#[derive(Debug, Clone, Default)]
+///
+/// The one time a caller does queue behind a probe is a cold cache: with
+/// no reading at all, a caller inside the window waits for the in-flight
+/// probe instead of answering empty, so concurrent first callers after
+/// startup share one fetch rather than one of them failing.
+#[derive(Debug, Clone)]
 struct TipCache {
     state: Arc<tokio::sync::Mutex<TipCacheState>>,
+    /// Signalled when a probe finishes, whatever its outcome, so cold-cache
+    /// waiters can re-read the state.
+    probe_done: Arc<tokio::sync::watch::Sender<()>>,
+}
+
+impl Default for TipCache {
+    fn default() -> Self {
+        let (probe_done, _) = tokio::sync::watch::channel(());
+        Self {
+            state: Arc::default(),
+            probe_done: Arc::new(probe_done),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct TipCacheState {
     last_attempt: Option<Instant>,
     reading: Option<TipState>,
+    /// A probe claimed the current window and has not reported back. Stays
+    /// set if that probe's request is cancelled mid-flight; cold-cache
+    /// waiters therefore give up after the probe timeout rather than trust
+    /// it, and the next claimed window resets it.
+    in_flight: bool,
 }
 
 impl TipCacheState {
@@ -151,44 +174,80 @@ impl TipCache {
         Fut: Future<Output = Result<TipReading, RpcServerError>>,
     {
         let now = Instant::now();
-        {
+        // `Some` when this caller waits on a probe another caller claimed;
+        // `None` when it claimed the window itself. Decided under the lock
+        // and released before any await, since the probe locks again.
+        let waiter = {
             let mut state = self.state.lock().await;
             match state.last_attempt {
                 Some(at) if now.duration_since(at) < ttl => {
-                    return TipRead {
-                        state: state.reading,
-                        probed: false,
-                    };
+                    if state.reading.is_some() || !state.in_flight {
+                        return TipRead {
+                            state: state.reading,
+                            probed: false,
+                        };
+                    }
+                    // Subscribed under the lock, so the probe cannot finish
+                    // before the wait begins.
+                    Some(self.probe_done.subscribe())
                 }
-                _ => state.last_attempt = Some(now),
+                _ => {
+                    state.last_attempt = Some(now);
+                    state.in_flight = true;
+                    None
+                }
             }
-        }
+        };
+        let Some(mut probe_done) = waiter else {
+            return self.probe(probe_timeout, context, fetch).await;
+        };
 
+        // A reading obtained this way is as fresh as one this caller probed
+        // for itself, so it counts as probed.
+        let _ = tokio::time::timeout(probe_timeout, probe_done.changed()).await;
+        TipRead {
+            state: self.state.lock().await.reading,
+            probed: true,
+        }
+    }
+
+    /// Run the probe this caller claimed the window for, then release any
+    /// cold-cache waiters.
+    async fn probe<Fut>(
+        &self,
+        probe_timeout: Duration,
+        context: RpcRequestContext,
+        fetch: impl FnOnce(RpcRequestContext) -> Fut,
+    ) -> TipRead
+    where
+        Fut: Future<Output = Result<TipReading, RpcServerError>>,
+    {
         let probe_context = context.capped(probe_timeout);
-        let Some(remaining) = probe_context.remaining() else {
-            return TipRead {
-                state: self.state.lock().await.reading,
-                probed: false,
-            };
+        let outcome = match probe_context.remaining() {
+            Some(remaining) => Some(tokio::time::timeout(remaining, fetch(probe_context)).await),
+            None => None,
         };
-        let state = match tokio::time::timeout(remaining, fetch(probe_context)).await {
-            Ok(Ok(reading)) => {
-                let mut state = self.state.lock().await;
-                state.record(TipState::from_reading(&reading));
-                state.reading
+        let state = {
+            let mut state = self.state.lock().await;
+            match &outcome {
+                Some(Ok(Ok(reading))) => {
+                    state.record(TipState::from_reading(reading));
+                }
+                Some(Ok(Err(error))) => {
+                    tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
+                }
+                Some(Err(_)) => {
+                    tracing::warn!("chain tip probe timed out, pre-checks use last reading");
+                }
+                None => {}
             }
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
-                self.state.lock().await.reading
-            }
-            Err(_) => {
-                tracing::warn!("chain tip probe timed out, pre-checks use last reading");
-                self.state.lock().await.reading
-            }
+            state.in_flight = false;
+            state.reading
         };
+        self.probe_done.send_replace(());
         TipRead {
             state,
-            probed: true,
+            probed: outcome.is_some(),
         }
     }
 }
@@ -1787,6 +1846,67 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect_err("bug: nothing to report without a reading");
 
         assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    /// Chain plane that yields before answering, so a second caller can
+    /// arrive while the first fetch is still in flight.
+    #[derive(Clone)]
+    struct YieldingChain(ConfigChain);
+
+    #[async_trait::async_trait]
+    impl ChainPlane for YieldingChain {
+        async fn chain_tip(
+            &self,
+            context: RpcRequestContext,
+        ) -> Result<TipReading, RpcServerError> {
+            tokio::task::yield_now().await;
+            self.0.chain_tip(context).await
+        }
+
+        async fn get_block_by_number(
+            &self,
+            context: RpcRequestContext,
+            height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            self.0.get_block_by_number(context, height).await
+        }
+
+        async fn pending_transaction_count(
+            &self,
+            context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
+            self.0.pending_transaction_count(context).await
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_chain_config_calls_on_a_cold_cache_share_the_first_fetch() {
+        let chain = ConfigChain::new(3);
+        let server = expiry_check_server(
+            YieldingChain(chain.clone()),
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let (first, second) = tokio::join!(server.chain_config(), server.chain_config());
+
+        assert_eq!(
+            first
+                .expect("bug: the caller that fetched sees its reading")
+                .max_new_contracts_per_tx,
+            Some(3)
+        );
+        assert_eq!(
+            second
+                .expect("bug: a caller arriving mid-fetch waits for that reading")
+                .max_new_contracts_per_tx,
+            Some(3)
+        );
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "the second caller shares the fetch rather than adding one"
+        );
     }
 
     #[tokio::test]
