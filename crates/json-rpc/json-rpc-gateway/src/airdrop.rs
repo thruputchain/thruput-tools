@@ -1085,7 +1085,11 @@ mod tests {
             .await
             .expect("faucet POST should start");
 
-        let probe = facade.probe(Duration::from_millis(10)).await;
+        // A probe blocked behind the forward would wait until `release_post`
+        // fires below, so any deadline short of that proves it is not
+        // blocked; a generous one keeps a loaded runner's loopback round
+        // trip from failing the probe on time alone.
+        let probe = facade.probe(Duration::from_secs(1)).await;
 
         assert!(probe.up);
         assert!(facade.is_validated().await);
