@@ -25,6 +25,10 @@ pub fn run_in(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    // Validate before creating anything, so a rejected name leaves no
+    // empty directory behind.
+    crate::scaffold::validate_name(name)?;
+
     // Use create_dir directly to avoid TOCTOU race with
     // a separate exists() check.
     match fs::create_dir(dir) {

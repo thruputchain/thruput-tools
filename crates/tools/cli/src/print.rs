@@ -385,7 +385,7 @@ fn wizard_answer(answer: &str, default_yes: bool, received_input: bool) -> bool 
 }
 
 fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
-    for line in summary_card_lines(title, items) {
+    for line in summary_card_lines(title, items, crate::terminal::stderr_width()) {
         eprintln!("{line}");
     }
 }
@@ -395,8 +395,13 @@ fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
 /// Values wider than the remaining column budget are wrapped so the card stays
 /// within [`CARD_MAX_WIDTH`] columns, with each continued line marked by
 /// [`CARD_WRAP_MARKER`]. The title and labels are never wrapped, so a card whose
-/// label column alone exceeds the budget still renders wider than it.
-fn summary_card_lines(title: &str, items: &[(String, String)]) -> Vec<String> {
+/// label column alone exceeds the budget may be wider. If the resulting box
+/// cannot fit the terminal (or its width is unknown), emit unboxed values.
+fn summary_card_lines(
+    title: &str,
+    items: &[(String, String)],
+    terminal_width: Option<usize>,
+) -> Vec<String> {
     let title_width = display_width(title);
     let label_width = items
         .iter()
@@ -418,6 +423,15 @@ fn summary_card_lines(title: &str, items: &[(String, String)]) -> Vec<String> {
         .min(value_budget);
     let continued_width = value_width.saturating_sub(CARD_CONTINUATION_INDENT);
     let inner_width = (label_width + value_width + 4).max(title_width + 2);
+    if terminal_width.is_none_or(|width| inner_width + 2 > width) {
+        let mut lines = vec![title.to_string(), String::new()];
+        lines.extend(
+            items
+                .iter()
+                .map(|(label, value)| format!("{label}: {value}")),
+        );
+        return lines;
+    }
     let top_fill = inner_width.saturating_sub(title_width + 2);
     let continuation_label = line_fill(' ', label_width + 1);
 
@@ -630,6 +644,35 @@ mod tests {
     }
 
     #[test]
+    fn summary_card_falls_back_without_losing_values() {
+        let value = "長い/path/".repeat(20);
+        let items = vec![("Path".to_string(), value.clone())];
+        for width in [None, Some(0), Some(40), Some(80)] {
+            assert_eq!(
+                summary_card_lines("Status", &items, width),
+                vec![
+                    "Status".to_string(),
+                    String::new(),
+                    format!("Path: {value}")
+                ]
+            );
+        }
+        assert!(summary_card_lines("Status", &items, Some(100))[0].contains('╭'));
+        let items = vec![("Label".repeat(30), "value".to_string())];
+        assert!(!summary_card_lines("Status", &items, Some(100))[0].contains('╭'));
+    }
+
+    #[test]
+    fn summary_card_keeps_boxes_that_fit_exactly() {
+        let items = vec![("Key".to_string(), "value".to_string())];
+        let lines = summary_card_lines("Status", &items, Some(80));
+        let width = display_width(&plain(&lines[0]));
+        assert!(lines[0].contains('╭'));
+        assert_eq!(summary_card_lines("Status", &items, Some(width)), lines);
+        assert!(!summary_card_lines("Status", &items, Some(width - 1))[0].contains('╭'));
+    }
+
+    #[test]
     fn summary_card_stays_within_the_maximum_width() {
         let items = vec![
             (
@@ -640,7 +683,7 @@ mod tests {
             ("Network".to_string(), "local".to_string()),
         ];
 
-        let widths = summary_card_lines("Groundhog Status", &items)
+        let widths = summary_card_lines("Groundhog Status", &items, Some(CARD_MAX_WIDTH))
             .iter()
             .map(|line| display_width(&plain(line)))
             .collect::<Vec<_>>();
@@ -656,7 +699,7 @@ mod tests {
     fn summary_card_indents_wrapped_values_under_a_blank_label() {
         let items = vec![("Binary".to_string(), "x".repeat(200))];
 
-        let lines = summary_card_lines("Node", &items);
+        let lines = summary_card_lines("Node", &items, Some(CARD_MAX_WIDTH));
 
         let rows = &lines[1..lines.len() - 1];
         assert!(rows.len() > 2);
@@ -680,7 +723,7 @@ mod tests {
     fn summary_card_colors_the_wrap_marker() {
         let items = vec![("Binary".to_string(), "x".repeat(120))];
 
-        let lines = summary_card_lines("Node", &items);
+        let lines = summary_card_lines("Node", &items, Some(CARD_MAX_WIDTH));
 
         assert!(lines[1].contains(&format!("{GREEN}{CARD_WRAP_MARKER}{RESET}")));
     }
@@ -696,7 +739,7 @@ mod tests {
             ("Plain".to_string(), "local".to_string()),
         ];
 
-        let lines = summary_card_lines("状態", &items);
+        let lines = summary_card_lines("状態", &items, Some(CARD_MAX_WIDTH));
 
         let widths = lines
             .iter()

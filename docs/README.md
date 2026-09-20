@@ -18,6 +18,8 @@ This directory has two kinds of documents:
 - [Groundhog simulation](sim/) - current `hogsim` docs for stateful
   end-to-end chain traffic, soak tests, target orchestration, and result
   artifacts.
+- [Scheduler lookup miss benchmark](gateway/lookup-bench.md) - targeted admission,
+  queue, and backend-call diagnostics using never-submitted hashes.
 - [Benchmark scenario library](gateway/bench-scenarios.md) - repeatable local
   benchmark scenarios.
 - [Gateway roadmap](gateway/roadmap.md) - high-level gateway product roadmap.

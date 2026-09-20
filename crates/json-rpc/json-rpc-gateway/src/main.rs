@@ -35,6 +35,14 @@ const BUILD_VERSION: groundhog_build_info::BuildVersion = groundhog_build_info::
 #[derive(Parser)]
 #[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
+    /// Print resolved configuration as JSON and exit without opening listeners.
+    #[arg(long)]
+    dump_effective_config: bool,
+
+    /// Emit close events for enabled tracing spans (diagnostics; adds overhead).
+    #[arg(long)]
+    trace_spans: bool,
+
     /// Path to TOML config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
@@ -107,6 +115,10 @@ struct Cli {
     #[arg(long)]
     indexer_pool_size: Option<crate::config::IndexerPoolSize>,
 
+    /// Scheduler lookup connections (1..=68, default 16; overrides config)
+    #[arg(long)]
+    scheduler_lookup_pool_size: Option<crate::config::SchedulerLookupPoolSize>,
+
     /// `DbGateway` x23 RPC address (overrides config file)
     #[arg(long)]
     db_gateway: Option<String>,
@@ -123,15 +135,27 @@ struct Cli {
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // --- Observability ---
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
-
     let bundle_identity =
         BundleIdentity::discover(BundleSubject::component("groundhog-rpc"), BUILD_VERSION);
     let cli = parse_cli(&bundle_identity);
+
+    // --- Observability ---
+    let env_filter = if cli.dump_effective_config {
+        EnvFilter::new("off")
+    } else {
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy()
+    };
+    let span_events = if cli.trace_spans {
+        tracing_subscriber::fmt::format::FmtSpan::CLOSE
+    } else {
+        tracing_subscriber::fmt::format::FmtSpan::NONE
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_span_events(span_events)
+        .init();
 
     tracing::info!(
         component_version = bundle_identity.build_version().crate_version(),
@@ -159,8 +183,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.apply_runtime_manifest(&manifest)?;
     }
 
+    let dump_effective_config = cli.dump_effective_config;
     apply_cli_overrides(&mut config, cli);
     let network_info = config.network_info()?;
+    if dump_effective_config {
+        println!("{}", serde_json::to_string_pretty(&config)?);
+        return Ok(());
+    }
 
     tracing::info!(
         network_hash = ?network_info.network_hash,
@@ -176,6 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         scheduler = %config.scheduler_address,
         indexer = ?config.indexer_address,
         indexer_pool_size = config.indexer_pool_size.get(),
+        scheduler_lookup_pool_size = config.scheduler_lookup_pool_size.get(),
         view_gateway = ?config.view_gateway_address,
         hogd_protocol_override = ?config.hogd_protocol_override,
         "loading configuration",
@@ -355,6 +385,9 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     if let Some(indexer) = cli.indexer {
         config.indexer_address = Some(indexer);
     }
+    if let Some(pool_size) = cli.scheduler_lookup_pool_size {
+        config.scheduler_lookup_pool_size = pool_size;
+    }
     if let Some(pool_size) = cli.indexer_pool_size {
         config.indexer_pool_size = pool_size;
     }
@@ -503,6 +536,51 @@ mod tests {
             toml::from_str::<GatewayConfig>("")
                 .unwrap()
                 .indexer_pool_size
+                .get(),
+            16
+        );
+    }
+
+    #[test]
+    fn scheduler_lookup_pool_size_defaults_and_cli_override() {
+        let mut config = GatewayConfig::default();
+        assert_eq!(config.scheduler_lookup_pool_size.get(), 16);
+        config = toml::from_str("scheduler_lookup_pool_size = 8").unwrap();
+        apply_cli_overrides(&mut config, Cli::parse_from(["hog-gateway"]));
+        assert_eq!(config.scheduler_lookup_pool_size.get(), 8);
+        apply_cli_overrides(
+            &mut config,
+            Cli::parse_from(["hog-gateway", "--scheduler-lookup-pool-size", "4"]),
+        );
+        assert_eq!(config.scheduler_lookup_pool_size.get(), 4);
+    }
+
+    #[test]
+    fn scheduler_lookup_pool_size_cli_and_toml_enforce_the_same_bounds() {
+        for value in ["1", "4", "64", "68"] {
+            let config: GatewayConfig =
+                toml::from_str(&format!("scheduler_lookup_pool_size = {value}")).unwrap();
+            let cli = Cli::try_parse_from(["hog-gateway", "--scheduler-lookup-pool-size", value])
+                .unwrap();
+            assert_eq!(
+                config.scheduler_lookup_pool_size,
+                cli.scheduler_lookup_pool_size.unwrap()
+            );
+        }
+        for value in ["0", "69", "100000", "-1", "18446744073709551616"] {
+            assert!(
+                toml::from_str::<GatewayConfig>(&format!("scheduler_lookup_pool_size = {value}"))
+                    .is_err()
+            );
+            assert!(
+                Cli::try_parse_from(["hog-gateway", "--scheduler-lookup-pool-size", value])
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            toml::from_str::<GatewayConfig>("")
+                .unwrap()
+                .scheduler_lookup_pool_size
                 .get(),
             16
         );

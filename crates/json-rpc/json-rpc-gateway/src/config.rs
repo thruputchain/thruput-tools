@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr, time::Duration};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use groundhog_json_rpc_types::{
     NetworkHash, NetworkHashHex, SHA256Hash,
@@ -11,7 +11,7 @@ use groundhog_json_rpc_types::{
 };
 
 /// Indexer data connections (1..=256, default 16).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct IndexerPoolSize(std::num::NonZeroUsize);
 
@@ -55,8 +55,59 @@ impl FromStr for IndexerPoolSize {
 #[error("indexer pool size must be in 1..=256")]
 pub struct InvalidIndexerPoolSize;
 
+// Total lookup admission is independent of the configurable execution width.
+pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
+
+/// Scheduler lookup connections (1..=68, default 16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "usize")]
+pub struct SchedulerLookupPoolSize(std::num::NonZeroUsize);
+
+impl SchedulerLookupPoolSize {
+    /// Return the validated connection count.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for SchedulerLookupPoolSize {
+    fn default() -> Self {
+        Self(
+            std::num::NonZeroUsize::new(16)
+                .expect("bug: default scheduler lookup pool size is nonzero"),
+        )
+    }
+}
+
+impl TryFrom<usize> for SchedulerLookupPoolSize {
+    type Error = InvalidSchedulerLookupPoolSize;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match std::num::NonZeroUsize::new(value) {
+            Some(value) if value.get() <= SCHEDULER_LOOKUP_MAX_OUTSTANDING => Ok(Self(value)),
+            _ => Err(InvalidSchedulerLookupPoolSize),
+        }
+    }
+}
+
+impl FromStr for SchedulerLookupPoolSize {
+    type Err = InvalidSchedulerLookupPoolSize;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .parse::<usize>()
+            .map_err(|_| InvalidSchedulerLookupPoolSize)?
+            .try_into()
+    }
+}
+
+/// A scheduler lookup connection count outside the supported resource bound.
+#[derive(Debug, thiserror::Error)]
+#[error("scheduler lookup pool size must be in 1..=68")]
+pub struct InvalidSchedulerLookupPoolSize;
+
 /// Backend names used by readiness policy.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum HealthBackend {
     /// hogd scheduler/mempool backend.
@@ -126,7 +177,7 @@ impl FromStr for HealthBackend {
 /// (packing item reads into `dbgateway_get_items`); see
 /// `GatewayConfig::batch` and `GatewayConfig::storage` for the per-RPC
 /// tuning slots.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AdaptiveBatchConfig {
     /// Number of independent sharded worker tasks. Incoming requests
@@ -179,7 +230,7 @@ impl Default for AdaptiveBatchConfig {
 /// a waiter list; when the call returns, every waiter receives the
 /// same `BlockTip` via fanout. Linearizable: each waiter's result
 /// comes from an RPC initiated strictly after they arrived.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TipConfig {
     /// Maximum number of overlapping `get_tip` RPCs. Covers RTT under
@@ -204,7 +255,7 @@ impl Default for TipConfig {
 ///
 /// Unknown keys are rejected so a typo in an operator config fails
 /// startup instead of silently running with defaults.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewayConfig {
     /// Logical network identifier used by the hosted faucet API.
@@ -278,6 +329,10 @@ pub struct GatewayConfig {
     /// Applies at startup and reconnect. The separate health connection is
     /// excluded; each data connection handles one ordinary RPC at a time.
     pub indexer_pool_size: IndexerPoolSize,
+
+    /// Dedicated scheduler lookup connections and execution permits (1..=68, default 16).
+    /// Total lookup admission remains fixed at 68, including executing requests.
+    pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
@@ -354,6 +409,7 @@ impl Default for GatewayConfig {
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),
             indexer_pool_size: IndexerPoolSize::default(),
+            scheduler_lookup_pool_size: SchedulerLookupPoolSize::default(),
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,

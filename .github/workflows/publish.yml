@@ -23,6 +23,7 @@ env:
     groundhog-json-rpc-server
     groundhog-json-rpc-client
     groundhog-signing
+    groundhog-client
     groundhog-node-supervisor
     groundhog-rv32-lower
     groundhog-toolchain
@@ -34,14 +35,9 @@ jobs:
     permissions:
       actions: write
       contents: write
-    runs-on: hog1
+    runs-on: namespace-profile-hogd-linux-2604
 
     steps:
-      - name: Clean up .gitconfig
-        run: |
-            echo "Cleaning up .gitconfig"
-            rm -f /home/hogci/.gitconfig
-
       - name: Setup SSH Agent
         uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
@@ -49,7 +45,7 @@ jobs:
             ${{ secrets.ACTIONS_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
         with:
           persist-credentials: true
 
@@ -63,6 +59,16 @@ jobs:
           repository: groundhogchain/actions
           path: actions
           ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
+
+      - name: Configure Namespace Cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        with:
+          cache: rust
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        with:
+          tool: cargo-hack@0.6.45
 
       # Fail before creating a tag or publishing any crate if the CLI's
       # committed default is unavailable, malformed, or incompatible.
@@ -124,4 +130,11 @@ jobs:
       - name: trigger binary release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run release.yml --ref "${{ steps.publish-tag.outputs.tag }}"
+          TAG: ${{ steps.publish-tag.outputs.tag }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/dispatches" \
+            -d "{\"ref\":\"$TAG\"}"

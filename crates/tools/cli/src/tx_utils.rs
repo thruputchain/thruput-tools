@@ -185,17 +185,13 @@ pub(crate) fn print_receipt_data(
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
-    use groundhog_json_rpc_client::GroundhogApiClient;
-
     let client = crate::http_client::rpc_client(rpc_url)?;
-    let tip = client
-        .chain_tip()
+    groundhog_client::resolve_block_expiry_height(&client, DEFAULT_BLOCK_EXPIRY_OFFSET)
         .await
         .map_err(|e| CliError::RpcMethodFailed {
             method: "chainTip",
             message: e.to_string(),
-        })?;
-    Ok((*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET))
+        })
 }
 
 pub async fn submit_and_poll(
@@ -234,6 +230,42 @@ pub fn ensure_tx_success(
         "{label} {}; tx: {tx_hash}",
         summarize_exec_status(&receipt.status),
     )))
+}
+
+pub(crate) fn map_submit_call_error(error: groundhog_client::SubmitCallError) -> CliError {
+    match error {
+        groundhog_client::SubmitCallError::Rpc { source, .. } => map_submit_and_poll_error(
+            groundhog_json_rpc_client::SubmitAndPollError::SendRawTransaction(source),
+        ),
+        mismatch @ groundhog_client::SubmitCallError::HashMismatch { .. } => {
+            CliError::Other(mismatch.to_string())
+        }
+    }
+}
+
+pub(crate) fn map_poll_receipt_error(
+    error: groundhog_json_rpc_client::PollTransactionReceiptError,
+) -> CliError {
+    use groundhog_json_rpc_client::{
+        PollTransactionReceiptError as Poll, SubmitAndPollError as Combined,
+    };
+    map_submit_and_poll_error(match error {
+        Poll::Connect { rpc_url, source } => Combined::Connect { rpc_url, source },
+        Poll::GetTransactionReceipt { source, .. } => Combined::GetTransactionReceipt(source),
+        Poll::TransactionStatus { tx_hash, status } => {
+            Combined::TransactionStatus { tx_hash, status }
+        }
+        Poll::ReceiptTimeout {
+            tx_hash,
+            attempts,
+            last_status,
+        } => Combined::ReceiptTimeout {
+            tx_hash,
+            attempts,
+            last_status,
+        },
+        _ => return CliError::ReceiptPollingExhausted,
+    })
 }
 
 fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollError) -> CliError {

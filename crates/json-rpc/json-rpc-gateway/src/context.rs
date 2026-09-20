@@ -37,9 +37,9 @@ use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
 
 static NEXT_SCHEDULER_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(test)]
 pub(crate) const SCHEDULER_LOOKUP_CONCURRENCY: usize = 4;
-// Allow sixteen waves of waiting work without expanding the dedicated x23 pool.
-pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = SCHEDULER_LOOKUP_CONCURRENCY + 64;
+pub(crate) use crate::config::SCHEDULER_LOOKUP_MAX_OUTSTANDING;
 const HEALTH_PROBE_POOL_SIZE: usize = 1;
 
 #[derive(Clone)]
@@ -242,6 +242,7 @@ impl GatewayContext {
             connect_optional_scheduler(
                 &config.scheduler_address,
                 sched_pool_size,
+                config.scheduler_lookup_pool_size.get(),
                 protocol,
                 Some(&metrics),
             ),
@@ -369,7 +370,9 @@ impl GatewayContext {
         Self {
             scheduler,
             scheduler_lookup_admission: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_MAX_OUTSTANDING)),
-            scheduler_lookup_execution: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_CONCURRENCY)),
+            scheduler_lookup_execution: Arc::new(Semaphore::new(
+                config.scheduler_lookup_pool_size.get(),
+            )),
             scheduler_quarantine: Arc::new(RwLock::new(None)),
             indexer,
             batch_submitter,
@@ -409,6 +412,7 @@ pub(crate) struct QuarantinedScheduler {
 pub(crate) async fn connect_optional_scheduler(
     address: &str,
     pool_size: usize,
+    lookup_pool_size: usize,
     protocol: ProtocolCommit,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<SchedulerClient>, ConnectError> {
@@ -426,7 +430,7 @@ pub(crate) async fn connect_optional_scheduler(
     let Some(lookup_client) = try_connect_with_config_and_canceled_call_policy(
         "scheduler_lookup",
         address,
-        SCHEDULER_LOOKUP_CONCURRENCY,
+        lookup_pool_size,
         hogd_large_message_config(),
         CanceledCallPolicy::ReplaceConnection,
         SchedGateway_SchedGateway1_Client::new,
@@ -1373,7 +1377,7 @@ mod tests {
         let (addr, _server) = start_test_scheduler_gateway(IntroMode::Reject).await;
 
         let Err(err) =
-            connect_optional_scheduler(&addr.to_string(), 1, PROTOCOL_VERSION, None).await
+            connect_optional_scheduler(&addr.to_string(), 1, 4, PROTOCOL_VERSION, None).await
         else {
             panic!("configured scheduler gateway intro rejection should fail startup");
         };
@@ -1467,7 +1471,7 @@ mod tests {
         let protocol =
             protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes");
 
-        let client = connect_optional_scheduler(&addr.to_string(), 1, protocol, None)
+        let client = connect_optional_scheduler(&addr.to_string(), 1, 4, protocol, None)
             .await
             .expect("matching scheduler gateway protocol override should pass startup")
             .expect("configured scheduler gateway should be connected");

@@ -344,7 +344,13 @@ mod tests {
             .expect("bug: test RPC server should have a local address");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SizedResponse(response_size)));
-        let handle = RpcServer::new(listener, services).start().await;
+        // The server stands in for hogd, whose replies exceed rpc_driver's
+        // default message size. rpc_driver bounds a connection's unsent
+        // outbound bytes at its configured message size, so the server must
+        // carry the large-message limit or it closes the connection instead
+        // of writing the reply.
+        let config = ConnectionConfig::new(Some(HOGD_LARGE_MESSAGE_SIZE), services);
+        let handle = RpcServer::new_with_config(listener, config).start().await;
         (addr, handle)
     }
 

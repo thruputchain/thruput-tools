@@ -1,3 +1,29 @@
+/// Width of the terminal receiving human status output, when available.
+pub(crate) fn stderr_width() -> Option<usize> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let mut size = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: size is writable and TIOCGWINSZ only fills that winsize.
+        let result = unsafe {
+            libc::ioctl(
+                std::io::stderr().as_raw_fd(),
+                libc::TIOCGWINSZ,
+                &raw mut size,
+            )
+        };
+        if result == 0 && size.ws_col > 0 {
+            return Some(usize::from(size.ws_col));
+        }
+    }
+    None
+}
+
 /// Escape control and bidirectional-formatting characters in terminal output.
 pub(crate) fn terminal_safe(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());

@@ -7,7 +7,8 @@ we can compare results over time instead of rebuilding one-off shell commands.
 All scenarios start a real `hog-devnode` through `groundhog node`, read
 `data.runtime_manifest.path` from startup JSON, start a standalone
 `hog-gateway --runtime-manifest`, and run `groundhog-bench` against the
-selected target. Smoke runs build the CLI, gateway, and benchmark in debug mode
+selected target. The node produces blocks on a fixed 500 ms interval so
+submissions through the standalone gateway also commit. Smoke runs build the CLI, gateway, and benchmark in debug mode
 for a shorter correctness loop; `gateway-baseline` and `submit-ramp` use release
 mode so their timings are comparable. Set `BENCH_BUILD_PROFILE=debug|release`
 to override the scenario default.
@@ -47,14 +48,126 @@ GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
 ```
 
 Without `BENCH_RESULTS_DIR`, the benchmark retains its human-readable output.
-Both formats count a request as successful only after receiving a complete,
-matching JSON-RPC 2.0 `result`; transport failures, HTTP failures, malformed or
-mismatched responses, and JSON-RPC `error` responses are reported separately
-in JSON. Persisted results include the scenario and target label, source commit
-and dirty-worktree status, runtime-manifest hash and identity, complete run
-configuration, and successful-response latency sample count.
-Producer metadata also records whether the benchmark binary was built in debug
-or release mode.
+Results use schema version 2. Both formats distinguish transport, HTTP, invalid
+JSON-RPC, JSON-RPC error and semantic failures. The command writes the result
+before exiting nonzero if measured or drained requests failed, or if no requests
+started in the measured window. `outcome` is `passed`, `failed`, or `empty`. Setup failures
+produce no measured result.
+
+### Confirmed status and receipt reads
+
+Prepare a corpus against a running node/gateway, outside the timed window.
+For a standalone gateway backed by a local node, start the node with
+`--block-driver interval --block-interval-ms 500`; instant mode is triggered
+only by submissions through that node's own RPC endpoint:
+
+```bash
+groundhog-bench --url http://127.0.0.1:9546 \
+  --runtime-manifest "$RUNTIME_MANIFEST" \
+  --method getTransactionReceipt --seed-count 12000 \
+  --seed-output ./confirmed-hashes.json --accounts 10 --force \
+  --outstanding 128 --workers 2 --warmup 3 --duration 20 --json > receipts.json
+
+groundhog-bench --url http://127.0.0.1:9546 \
+  --method getTransactionStatus --hashes-file ./confirmed-hashes.json \
+  --outstanding 128 --workers 2 --warmup 3 --duration 20 --json > status.json
+```
+
+`--outstanding N` is a global maximum across all workers, independent of HTTP
+idle-pool sizing. It conflicts with `--rate` and `--unthrottled`. Without any of
+these options the harness retains its 100 rps open-loop default. The existing
+`--unthrottled` mode retains its per-worker cap of twice the configured idle
+connections. These are maximum concurrency limits, not a guarantee that every
+slot stays occupied. `--connections-per-worker` sets the maximum **idle** HTTP
+connections, not an active connection limit.
+
+The seed uses the existing dev-wallet self-call fixture with empty inner
+calldata. It may commit with a deterministic execution failure; that still
+produces a valid receipt for read measurement. Each submission's returned hash
+must match its locally computed hash. Seed nonces start at the current Unix
+time in nanoseconds unless `--seed-nonce-start` is supplied. Reusing a nonce base
+can reuse existing transactions; it does not establish fresh submissions.
+Seeding requires the same confirmation as direct submission (`--force` for
+noninteractive runs). Importing an existing corpus is read-only.
+
+A hashes file is a JSON object with `schemaVersion: 1`, the target `networkHash`
+(as a `0x`-prefixed hash), and a nonempty `hashes` array of unique transaction
+hashes. Files are bounded to 16 MiB and 100,000 hashes. The network must match
+the live target and any supplied runtime manifest. All hashes must pass live
+preflight checks: committed status, non-null matching receipt and equal height.
+Seeding can wait for commitment; imports fail if a record is no longer available.
+`--setup-timeout-secs` bounds seed/import validation as a whole (default 120).
+The completed seed file is published atomically without replacing an existing
+file. A timeout may leave already-submitted transactions on the target.
+
+During timed reads, status must remain committed at the preflight height, and
+receipts must decode and match both hash and height. Null receipts, pending or
+unknown status, and mismatched records are semantic failures, not successful
+requests. Each run measures one method; its counts and latency are identified
+by `configuration.method`.
+
+### Measurement and result contract
+
+Warmup, measured window and drain are separate. `requests` and
+`successfulLatencyUs` include only requests that **start and finish** inside the
+measured window. Warmup requests are excluded even if they finish later.
+Requests started in the measured window but completed after cutoff are recorded
+in `drained`, with `measurement.drainMs` reported separately. Successful
+throughput is `requests.successful / durationSeconds`; attempted rate includes
+both measured and drained requests. No request is started after cutoff, and each
+in-flight request has a complete-response timeout. These semantics differ from
+schema v1; do not compare rates across the two versions.
+
+The result records effective load controls, actual generator runtime worker
+count, generator host CPU/OS and executable digest. `producer` describes the
+benchmark; `runtime` retains backend identity from the manifest; and
+`target.gatewayVersion` comes from the target's version RPC. Unavailable
+observations carry a reason. Runtime-supplied benchmark Git labels remain
+reported provenance; the executable digest identifies the actual running file.
+
+Gateway pool sizes, build profile/features, dirty state, host and worker count
+cannot be inferred from the public version RPC. A launcher can supply
+`--target-info target-info.json` with this shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "topology": "gateway, backend and generator share one host over loopback",
+  "gateway": {
+    "buildProfile": "release",
+    "features": [],
+    "workerThreads": 8,
+    "effectiveConfig": {"indexerPoolSize": 16}
+  },
+  "backend": {}
+}
+```
+
+Each component may additionally carry `artifactSha256`, `commitHash`,
+`gitDirty`, and `host` (`os`, `arch`, `cpuModel`, `logicalCpus`, `osRelease`).
+This data is explicitly stored as `target.runnerSupplied`. The launcher must
+record the binaries and effective configuration it actually started. Supplied
+commits are checked against observed gateway/manifest commits when available;
+missing values remain unknown, not equal or verified. Record all effective
+settings material to an experiment, not just the pool-size example above.
+
+Comparison contract:
+
+- Match schema and measurement semantics, `configuration` load controls,
+  generator runtime worker count/host, topology and relevant target settings.
+- Keep `run` labels, URLs, paths, timestamps, raw manifest hashes and source
+  identities as provenance, not automatic workload mismatch reasons.
+- `corpus.sha256` identifies the ordered network/hash corpus. Its count and
+  `shapeSha256` describe the observed distribution of execution status,
+  return/abort sizes and per-event topic/data sizes. Matching shape permits a
+  declared equivalent re-seeding experiment; it does not prove equivalent
+  backend state, locality or cache warmth.
+- Declare the varied dimension (gateway revision, pool size, build settings or
+  allocator); reject other material differences and surface unknown metadata.
+  Never use a broad force flag to hide ordinary experimental differences.
+
+The executable scenario and comparison commands are documented below. This
+confirmed-read support makes no performance claim by itself.
 
 ## Scenarios
 
@@ -73,6 +186,7 @@ Default shape:
 - CLI node `sendRawTransaction`
 - standalone gateway `chainTip`
 - standalone gateway `sendRawTransaction`
+- confirmed receipt seeding and status import on both endpoints (8 outstanding)
 - `BENCH_RATE=3`
 - `BENCH_DURATION=2`
 - `BENCH_ACCOUNTS=3`
@@ -173,6 +287,38 @@ Keep the shell scenarios for smoke and coarse regressions. Move realistic
 traffic mixes into the benchmark harness once the method mix needs shared state
 between requests.
 
+## Scheduler lookup connection pool comparison
+
+`hog-gateway --scheduler-lookup-pool-size N` sets the dedicated scheduler
+transaction-lookup connections and matching execution permits. The range is
+**1..=68**, with a default of **16**. Set `scheduler_lookup_pool_size = 16` at the
+top level of the gateway TOML config; the CLI overrides TOML. Startup and health
+reconnect use the same setting. The value is logged at startup and included in
+`--dump-effective-config`. Restart the gateway to change it.
+
+Total admitted lookups remain capped at **68**, including queued and executing
+requests, independently of the connection count. Excess lookups fail with
+`Overloaded`. This setting does not change scheduler submission/tip connections,
+health connections, or the indexer pool.
+
+Indexer and scheduler lookup clients both use `rpc_driver::FixedSerialPool`
+through `x23-transport`, with one active call per connection and replacement of
+connections whose active call is cancelled. They use separate pool instances;
+scheduler lookups additionally have gateway admission and execution semaphores.
+
+Compare 4, 8, and 16 connections with the same unknown-hash status workload and
+fixed client concurrency. Confirm metrics show `schedgateway_lookup_tx` calls:
+committed hashes can return through the indexer without exercising this pool.
+Record successful lookups/s separately from overload responses, execution-permit
+wait, backend duration, and errors. Repeat in reverse order. Backend duration
+includes transport and gateway scheduling, not just scheduler service time.
+
+Before choosing a deployment value, repeat with release builds, representative
+backend network latency, and concurrent submissions. Check submission and tip
+latency as well as lookup throughput. Increasing this pool increases scheduler
+concurrency; it does not increase the admission bound or guarantee overload-free
+operation. Set the lookup pool to 4 to restore the previous execution width.
+
 ## Indexer connection pool comparison
 
 `hog-gateway --indexer-pool-size N` sets the number of serial indexer data
@@ -201,9 +347,9 @@ concurrency fixed, and test 4, 8, 16, 16, 8, 4 connections. Test
 `groundhog_getTransactionStatus` and `groundhog_getTransactionReceipt` separately
 with `params: [txHash]`, rotating through at least 10,000 confirmed transactions.
 Verify status is committed and receipts are non-null before the load run.
-The stock `groundhog-bench --method getTransactionStatus` currently uses a zero
-hash and measures misses, so it does not reproduce this confirmed-record workload.
-Use a generator configured with real hashes. Do not substitute `chainTip`: its
+Without a corpus, `groundhog-bench --method getTransactionStatus` uses a zero
+hash and measures misses. Supply `--hashes-file` or `--seed-count` as described
+above to measure confirmed records. Do not substitute `chainTip`: its
 backend requests are coalesced.
 
 Record successful requests/s, errors, p50/p99 and backend metrics; repeat across
@@ -273,3 +419,121 @@ limit was frequently exceeded during these tests; committed answers still
 succeeded through the supported indexer fallback. Larger indexer pools do not
 fix that scheduler pressure. [GH-377](https://linear.app/grndhg/issue/GH-377)
 tracks pending/unknown workloads, admission behavior and warning volume.
+
+### Server observations
+
+Pass `--metrics-url http://127.0.0.1:9090/metrics` for the gateway's private
+metrics endpoint and `--gateway-pid <pid>` when the benchmark runs on the same
+Linux host as the gateway. `--sample-interval-ms` defaults to 250. Process
+sampling uses that PID alone, excludes children, and is unavailable on macOS.
+
+`serverObservations` retains samples with actual start/completion offsets from
+the measured-window start. Sampling begins after warmup and takes a final
+sample at the cutoff; scrape latency and scheduling can overlap the boundaries.
+It does not include the subsequent request drain intentionally. Backend
+request/reconnect counters and CPU time are deltas; RSS and in-flight gauges
+are sampled peaks, not guaranteed instantaneous maxima. Scrape failures,
+missing series, process failures and counter resets produce unavailable
+observations with reasons. A supplied PID verifies process continuity; without
+it, a restart whose counters catch up between samples cannot be detected.
+Health reconnect counters do not count rpc_driver's internal connection
+replacements, which remain explicitly unavailable.
+
+### Confirmed-read acceptance run and pool sweep
+
+Build `groundhog`, `hog-gateway` and `groundhog-bench` in release mode, then run:
+
+```bash
+python3 scripts/bench-read-confirmed.py \
+  --cli target/release/groundhog --gateway target/release/hog-gateway \
+  --bench target/release/groundhog-bench --devnode /path/to/hog-devnode \
+  --out /path/to/new-results
+```
+
+The `read-confirmed` default owns a fresh interval-driven local node, seeds and
+verifies 12,000 hashes, and runs status and receipt reads at 128 and 512 global
+outstanding requests. It pins eight Tokio runtime threads and two load workers,
+uses three seconds of warmup and twenty measured seconds, and repeats twice.
+Every trial imports and validates the corpus before timing, so these are warm
+reads. Artifacts and logs survive failures; the runner stops only its own
+processes. The output directory must be new.
+
+Use `--scenario pool-sweep` for pools 4, 8, 16, 32 and 64 in forward/reverse
+repeat order. `summary.md` contains throughput medians and ranges; individual
+JSON files retain latency, errors, identity and server observations. The
+`trials.json` index records execution order. `--candidate-gateway /path/to/binary`
+adds alternating baseline/candidate runs on the same corpus and produces
+comparison JSON and Markdown per pool, concurrency and method.
+
+The runner asks each gateway for `--dump-effective-config` before launch. This
+resolves runtime-manifest and CLI overrides without opening listeners. The
+runner records the resolved configuration, artifact hashes, observed commits,
+host and thread controls. `--build-profile` is a runner declaration, defaulting
+to release; callers must supply artifacts built with that profile. Backend
+thread counts and unreported build settings remain unspecified.
+
+The runner fixes gateway logging with `--gateway-log-filter` (default `warn`)
+and `--gateway-log-sink file|discard` (default `file`). It records the filter,
+sink and span-event policy in `target.runnerSupplied.gateway.logging`. File
+logging is part of measured cost and can be substantial under fallback load.
+Discarding output still formats enabled events; `off` disables them. Comparisons
+require matching policies unless `--vary logging` explicitly names the experiment.
+Older results have unknown logging policy.
+
+### Comparing saved trials
+
+```bash
+groundhog-bench compare \
+  --baseline baseline-r0.json --baseline baseline-r1.json \
+  --candidate candidate-r0.json --candidate candidate-r1.json \
+  --vary gateway-revision
+```
+
+Add `--json` for the machine-readable comparison with per-trial server
+observations. Throughput and latency summaries show repeat spread; errors
+include drain failures. Failed outcomes remain visible and do not establish a
+performance improvement. Available experiment dimensions are `gateway-revision`,
+`pool-size`, `build-settings`, `allocator` and `logging`; undeclared material differences
+are rejected. Use separate comparisons for each method and outstanding count.
+Paths, timestamps, labels and endpoint addresses are provenance. Topology,
+hosts, benchmark binary, workload controls and resolved non-endpoint gateway
+settings are comparison controls. Omitted identities are reported as unknown,
+not treated as verified equal. Endpoint normalization assumes the declared
+topology is accurate; comparison cannot verify external deployment claims.
+
+The default requires the exact corpus digest. `--equivalent-corpus` instead
+requires equal count and receipt-shape digest; it does not establish equal
+cache state or backend data layout. No comparison command infers cold-cache
+behavior or production capacity from this loopback workload.
+
+### Short diagnostic captures
+
+Use the same runner with `--diagnostic trace` or `--diagnostic perf` and
+`--outstanding 128` for a single status workload. Select receipt reads with
+`--diagnostic-method getTransactionReceipt`. Diagnostics require one pool and
+one outstanding count, accept no candidate, and produce no comparison table.
+The node and corpus preparation remain identical to the normal runner.
+
+Capture begins after corpus validation, when the benchmark creates its
+`--load-start-file` marker immediately before warmup. The runner observes this
+marker asynchronously; capture includes warmup and may overlap measurement.
+It is not an exact measured-window profile. The default is five seconds and
+16 MiB; `--diagnostic-seconds` and `--diagnostic-max-mib` are capped at 30 and 64.
+`diagnostic.json` records bounds, truncation and errors. Raw benchmark results
+carry a diagnostic marker, and `compare` rejects them even with `--vary`.
+
+Trace mode enables the gateway's `--trace-spans` option with `RUST_LOG=info`.
+It retains bounded `trace.log` output and drains excess output until gateway
+shutdown. Enabled spans emit close events with busy and idle durations;
+these mean time entered versus time alive but not entered, not CPU time.
+The capture contains existing probes, including ordinary log events. It is
+not a complete distributed trace: spawned tasks may lack parent context,
+and gateway spans do not reveal execution inside hogd. Trace instrumentation,
+formatting and pipe backpressure affect this diagnostic workload.
+
+Perf mode requires Linux and `perf` on PATH. It attaches only to the owned
+gateway, samples user CPU at 99 Hz with DWARF call stacks, and writes
+`perf.data` plus `perf.stderr`. Perf's size limit may overshoot by a record
+buffer. Capture errors fail the run rather than masquerading as empty evidence.
+Use a build with symbols for useful attribution and keep its artifact identity;
+profiled rates are not baseline rates. Neither mode starts a tracing service.

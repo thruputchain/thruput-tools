@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/build-info",
+    "crates/client",
     "crates/bundle-identity",
     "crates/json-rpc/json-rpc-types",
     "crates/json-rpc/json-rpc-api",
@@ -28,7 +29,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.17.5"
+version = "0.17.7"
 edition = "2024"
 # Keep in step with rust-toolchain.toml. Without this, `cargo install
 # groundhog-cli` on an older stable fails deep in dependency resolution with
@@ -53,22 +54,23 @@ tar = { version = "0.4.46", default-features = false }
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-groundhog-build-info = { path = "crates/build-info", version = "=0.17.5", registry = "groundhog" }
-groundhog-bundle-identity = { path = "crates/bundle-identity", version = "=0.17.5", registry = "groundhog" }
-groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.17.5", registry = "groundhog" }
-groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.17.5", registry = "groundhog" }
-groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.17.5", registry = "groundhog" }
-groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.17.5", registry = "groundhog" }
-groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.17.5", registry = "groundhog" }
-groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.17.5", registry = "groundhog" }
-groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.17.5", registry = "groundhog" }
-groundhog-signing = { path = "crates/tools/signing", version = "=0.17.5", registry = "groundhog" }
-groundhog-tx-validation = { path = "crates/tools/tx-validation", version = "=0.17.5", registry = "groundhog" }
-groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.17.5", registry = "groundhog" }
-groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.17.5", registry = "groundhog" }
-groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.17.5", registry = "groundhog" }
+groundhog-client = { path = "crates/client", version = "=0.17.7", registry = "groundhog" }
+groundhog-build-info = { path = "crates/build-info", version = "=0.17.7", registry = "groundhog" }
+groundhog-bundle-identity = { path = "crates/bundle-identity", version = "=0.17.7", registry = "groundhog" }
+groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.17.7", registry = "groundhog" }
+groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.17.7", registry = "groundhog" }
+groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.17.7", registry = "groundhog" }
+groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.17.7", registry = "groundhog" }
+groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.17.7", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.17.7", registry = "groundhog" }
+groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.17.7", registry = "groundhog" }
+groundhog-signing = { path = "crates/tools/signing", version = "=0.17.7", registry = "groundhog" }
+groundhog-tx-validation = { path = "crates/tools/tx-validation", version = "=0.17.7", registry = "groundhog" }
+groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.17.7", registry = "groundhog" }
+groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.17.7", registry = "groundhog" }
+groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.17.7", registry = "groundhog" }
 
-groundhog-toolchain = { path = "crates/tools/toolchain", version = "=0.17.5", registry = "groundhog" }
+groundhog-toolchain = { path = "crates/tools/toolchain", version = "=0.17.7", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 # These crates define or encode the protocol schema. Keep them exact and update
@@ -84,7 +86,7 @@ groundhog_coordinator = { version = "=0.36.0", registry = "groundhog" }
 groundhog-trace = { version = "=0.36.0", registry = "groundhog" }
 xdrs = { version = "=0.10.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "=0.10.1", registry = "groundhog" }
-rpc_driver = { version = "=0.11.0", registry = "groundhog" }
+rpc_driver = { version = "=0.12.0", registry = "groundhog" }
 # from the sdk crate:
 groundhog-spec-tool = { version = "=0.34.4", registry = "groundhog" }
 groundhog-contract-util = { version = "=0.34.4", registry = "groundhog" }

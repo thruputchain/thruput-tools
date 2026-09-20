@@ -132,7 +132,7 @@ fn view_response_from_gateway_result(
     match result {
         ViewGatewayResult::ViewGatewayOk { payload } => {
             let mut events = Vec::with_capacity(payload.events.0.len());
-            for raw in &payload.events.0 {
+            for raw in payload.events.0 {
                 if let Some(event) = parse_emitted_event(raw) {
                     events.push(event);
                 } else {

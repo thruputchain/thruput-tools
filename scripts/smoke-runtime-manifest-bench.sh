@@ -226,22 +226,24 @@ run_bench_command() {
         printf -v sequence '%03d' "$BENCH_RESULT_SEQUENCE"
         local output="$BENCH_RUN_DIR/$sequence-$filename"
         BENCH_RESULT_TMP="$output.tmp"
+        local bench_exit=0
         "$BENCH" "$@" \
             --request-timeout-ms "$BENCH_REQUEST_TIMEOUT_MS" \
             --max-response-bytes "$BENCH_MAX_RESPONSE_BYTES" \
-            --json > "$BENCH_RESULT_TMP"
+            --json > "$BENCH_RESULT_TMP" || bench_exit=$?
         python3 - "$BENCH_RESULT_TMP" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
     result = json.load(handle)
-if result.get("schemaVersion") != 1 or result.get("kind") != "groundhog-bench-result":
+if result.get("schemaVersion") != 2 or result.get("kind") != "groundhog-bench-result":
     raise SystemExit("invalid groundhog-bench result envelope")
 PY
         mv "$BENCH_RESULT_TMP" "$output"
         BENCH_RESULT_TMP=""
         log "Wrote benchmark result: $output"
+        return "$bench_exit"
     else
         "$BENCH" "$@" \
             --request-timeout-ms "$BENCH_REQUEST_TIMEOUT_MS" \
@@ -293,6 +295,30 @@ run_bench_pair() {
         "$BENCH_WARMUP" "$BENCH_WORKERS" "$BENCH_ACCOUNTS"
 }
 
+bench_confirmed_reads() {
+    local label="$1"
+    local url="$2"
+    local manifest="$3"
+    local slug
+    slug="$(benchmark_slug "$label")"
+    local hashes="$WORK/$slug-hashes.json"
+
+    log "Bench $label confirmed receipts: seed $BENCH_ACCOUNTS hashes, 8 outstanding"
+    run_bench_command "$slug-confirmed-receipts.json" \
+        --scenario "$BENCH_SCENARIO" --target-label "$label" \
+        --url "$url" --runtime-manifest "$manifest" \
+        --method getTransactionReceipt --outstanding 8 \
+        --seed-count "$BENCH_ACCOUNTS" --seed-output "$hashes" \
+        --accounts "$BENCH_ACCOUNTS" --force \
+        --duration "$BENCH_DURATION" --warmup "$BENCH_WARMUP" --workers "$BENCH_WORKERS"
+    log "Bench $label confirmed status: import verified corpus, 8 outstanding"
+    run_bench_command "$slug-confirmed-status.json" \
+        --scenario "$BENCH_SCENARIO" --target-label "$label" \
+        --url "$url" --runtime-manifest "$manifest" \
+        --method getTransactionStatus --outstanding 8 --hashes-file "$hashes" \
+        --duration "$BENCH_DURATION" --warmup "$BENCH_WARMUP" --workers "$BENCH_WORKERS"
+}
+
 run_smoke() {
     local node_url="$1"
     local gateway_url="$2"
@@ -300,6 +326,8 @@ run_smoke() {
 
     run_bench_pair "CLI node" "$node_url" "$manifest"
     run_bench_pair "standalone gateway" "$gateway_url" "$manifest"
+    bench_confirmed_reads "CLI node" "$node_url" "$manifest"
+    bench_confirmed_reads "standalone gateway" "$gateway_url" "$manifest"
 }
 
 run_gateway_baseline() {
@@ -439,6 +467,10 @@ NODE_ARGS=(
     node
     --port
     0
+    --block-driver
+    interval
+    --block-interval-ms
+    500
     --startup-timeout-secs
     "$NODE_STARTUP_TIMEOUT_SECS"
     --hog-devnode-binary

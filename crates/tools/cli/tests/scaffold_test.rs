@@ -335,7 +335,7 @@ fn scaffold_stub_has_empty_contract() {
 fn scaffold_unknown_template_errors() {
     let tmp = TempDir::new().unwrap();
 
-    let result = groundhog_cli::scaffold::generate(tmp.path(), "test", "nope");
+    let result = groundhog_cli::scaffold::generate(tmp.path(), "my-project", "nope");
     assert!(result.is_err());
 }
 
@@ -388,4 +388,128 @@ fn scaffold_rejects_consecutive_hyphens() {
     let tmp = TempDir::new().unwrap();
     let result = groundhog_cli::scaffold::generate(tmp.path(), "my--project", "counter");
     assert!(result.is_err());
+}
+
+/// Names that must be refused because the scaffold they would produce cannot
+/// build. Each entry pairs the name with a phrase the rejection must explain.
+const RESERVED_NAME_CASES: &[(&str, &str)] = &[
+    // Rust sysroot crates: the self dev-dependency puts the package name in
+    // the extern prelude of every test target, shadowing these.
+    ("test", "built-in"),
+    ("std", "built-in"),
+    ("core", "built-in"),
+    ("alloc", "built-in"),
+    ("proc-macro", "built-in"),
+    // Rust keywords: `use <name>::..` and `extern crate <name>;` will not parse.
+    ("crate", "keyword"),
+    ("self", "keyword"),
+    ("super", "keyword"),
+    ("fn", "keyword"),
+    ("async", "keyword"),
+    ("await", "keyword"),
+    ("dyn", "keyword"),
+    ("try", "keyword"),
+    ("gen", "keyword"),
+    ("match", "keyword"),
+    ("box", "keyword"),
+    ("yield", "keyword"),
+    // The scaffold's own dependencies: a duplicate extern name.
+    ("sdk", "dependency"),
+    ("tokio", "dependency"),
+    ("groundhog-json-rpc-client", "dependency"),
+    // Cargo build directories: the RV32 bin target name would collide with a
+    // directory under `target/<triple>/release`, which is where `groundhog
+    // build` looks for the ELF.
+    ("build", "build directory"),
+    ("deps", "build directory"),
+    ("examples", "build directory"),
+    ("incremental", "build directory"),
+    // Reserved Windows device names: the project directory cannot be created.
+    ("con", "Windows"),
+    ("prn", "Windows"),
+    ("aux", "Windows"),
+    ("nul", "Windows"),
+    ("com1", "Windows"),
+    ("com9", "Windows"),
+    ("lpt1", "Windows"),
+    ("lpt9", "Windows"),
+];
+
+#[test]
+fn scaffold_rejects_reserved_names() {
+    for (name, expected_reason) in RESERVED_NAME_CASES {
+        let tmp = TempDir::new().unwrap();
+        let err = groundhog_cli::scaffold::generate(tmp.path(), name, "counter")
+            .expect_err(&format!("`{name}` must be rejected"));
+        let message = err.to_string();
+        assert!(
+            message.contains(expected_reason),
+            "`{name}` rejected without explaining `{expected_reason}`: {message}"
+        );
+    }
+}
+
+#[test]
+fn scaffold_accepts_names_that_merely_resemble_reserved_ones() {
+    // Weak keywords are contextual and work fine as crate names, and a
+    // reserved word as one hyphenated segment is not a collision.
+    for name in [
+        "union",
+        "macro-rules",
+        "my-test",
+        "test-helper",
+        "gen-counter",
+        "sdk2",
+        "build-tools",
+        "console",
+        "com10",
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("project");
+        fs::create_dir(&dir).unwrap();
+        groundhog_cli::scaffold::generate(&dir, name, "counter")
+            .unwrap_or_else(|e| panic!("`{name}` must be accepted: {e}"));
+    }
+}
+
+#[test]
+fn every_scaffold_dependency_name_is_reserved() {
+    // A dependency added to the template without being reserved would make
+    // `groundhog new <that-name>` produce a project that cannot build.
+    let manifest = include_str!("../templates/Cargo.toml.tmpl");
+    let mut in_dependencies = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            // `[target.'cfg(..)'.dependencies.groundhog-json-rpc-client]` names
+            // the dependency in the header itself.
+            in_dependencies = false;
+            if let Some((prefix, name)) = header.rsplit_once(".dependencies.") {
+                let _ = prefix;
+                assert_reserved_dependency(name);
+                continue;
+            }
+            in_dependencies = header.ends_with("dependencies");
+            continue;
+        }
+        if !in_dependencies || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, _)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name == "{{PROJECT_NAME}}" {
+            continue;
+        }
+        assert_reserved_dependency(name);
+    }
+}
+
+fn assert_reserved_dependency(name: &str) {
+    let tmp = TempDir::new().unwrap();
+    assert!(
+        groundhog_cli::scaffold::generate(tmp.path(), name, "counter").is_err(),
+        "template dependency `{name}` is not a reserved project name"
+    );
 }
