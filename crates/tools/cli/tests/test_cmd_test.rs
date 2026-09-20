@@ -413,12 +413,8 @@ impl Drop for PathGuard {
     }
 }
 
-/// A fake-cargo workspace whose contract members each declare a `test_rv32`
-/// target, plus a `helper` library member without one.
-///
-/// The fake `cargo build` fails for `build_failing`, the fake `cargo test`
-/// fails for `failing`, and every test invocation's arguments are appended
-/// to `args_log`, one `--- end ---` block each.
+/// A fake-cargo workspace of contract members with `test_rv32` targets plus a
+/// `helper` library; every `cargo test` invocation's arguments land in `args_log`.
 struct WorkspaceFixture {
     fake_bin: PathBuf,
     args_log: PathBuf,

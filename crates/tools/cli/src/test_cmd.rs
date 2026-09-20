@@ -776,11 +776,8 @@ fn finish_package_run(
 /// Test every workspace member that declares a `test_rv32` target, one
 /// package at a time in name order, and report them together.
 ///
-/// A package whose tests fail does not stop the others unless
-/// `--fail-fast` is set. A package whose build or preflight errors ends the
-/// run, as a compile error does under `cargo test --workspace`; the report
-/// still carries the packages that completed and names that package in
-/// `errored`, and under `--json` the envelope carries the error.
+/// Failing tests stop the run only under `--fail-fast`; a build or preflight
+/// error always does, with the completed packages still reported.
 fn run_workspace_once(
     metadata: &crate::build::CargoMetadata,
     options: &TestOptions,
