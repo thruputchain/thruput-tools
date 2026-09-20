@@ -309,8 +309,7 @@ where
     ///
     /// When called inside a Tokio runtime this also starts the background
     /// task that refreshes the cached db-tip reading every
-    /// `tip_refresh_interval_ms`; it stops when the last clone of the
-    /// server is dropped.
+    /// `tip_refresh_interval_ms`; it stops when the server is dropped.
     pub fn new(
         submit: S,
         chain: C,
