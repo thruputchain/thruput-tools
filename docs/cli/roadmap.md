@@ -288,6 +288,7 @@ Maintenance rules:
 - [x] `groundhog test --skip`
 - [x] `groundhog test --rerun`
 - [x] `groundhog test --watch`
+- [x] `groundhog test --workspace`
 - [x] Machine-readable `groundhog test --json` output for RV32 and integration
 - [ ] Better human test output controls
 - [ ] Storage cost reporting
@@ -455,7 +456,7 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
 1. **Cheap CLI wins**
    - Shipped: `--match-test`, `--fail-fast`, `--show-output`,
      `--no-capture`, `--test-threads`, `--skip`, `--rerun`,
-     `--watch`, `--integration`
+     `--watch`, `--integration`, `--workspace`
    - `--integration` now orchestrates the v1 single-contract local-node
      path: start hogd-dev without `--data-dir`, deploy the target contract, run
      `tests/integration.rs` with RPC environment variables, then clean up.
@@ -490,7 +491,8 @@ Do not treat these as near-term roadmap items:
 - `groundhog repl`
 - `groundhog clone`
 - `groundhog update`
-- multi-contract workspace support
+- multi-contract workspace support beyond `groundhog test --workspace`
+  (multi-contract integration orchestration and deployment)
 - broad Foundry parity work for its own sake
 
 These may matter later, but they are downstream of the core execution

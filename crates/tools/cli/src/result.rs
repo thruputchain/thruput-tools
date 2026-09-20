@@ -8,6 +8,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::CliError;
 use crate::checks::{Finding, FindingLevel};
 
 /// Uniform JSON envelope for command output.
@@ -48,6 +49,21 @@ impl CommandError {
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
+    }
+
+    /// The envelope form of a command error: its stable code, message,
+    /// hint, and structured details, as the stderr error envelope reports
+    /// them.
+    pub fn from_cli_error(error: &CliError) -> Self {
+        let command_error = Self::new(
+            error.code(),
+            error.to_string(),
+            error.details_json().unwrap_or(Value::Null),
+        );
+        match error.hint() {
+            Some(hint) => command_error.with_hint(hint),
+            None => command_error,
+        }
     }
 }
 

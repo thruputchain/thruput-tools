@@ -531,6 +531,27 @@ pub struct MetadataPackage {
     /// The package's `[package.metadata]` table; `None` when it has none.
     #[serde(default)]
     pub metadata: Option<PackageMetadata>,
+    /// The package's build targets: its lib, bins, tests, and so on.
+    #[serde(default)]
+    pub targets: Vec<MetadataTarget>,
+}
+
+impl MetadataPackage {
+    /// True when the package declares a test target with this name, whether
+    /// auto-discovered under `tests/` or listed as `[[test]]`.
+    pub fn has_test_target(&self, name: &str) -> bool {
+        self.targets
+            .iter()
+            .any(|target| target.name == name && target.kind.iter().any(|kind| kind == "test"))
+    }
+}
+
+/// One build target of a package, as far as the CLI reads it.
+#[derive(Debug, serde::Deserialize)]
+pub struct MetadataTarget {
+    pub name: String,
+    /// The target kinds cargo reports, such as `lib`, `bin`, or `test`.
+    pub kind: Vec<String>,
 }
 
 /// A package's `[package.metadata]` table, as far as the CLI reads it.

@@ -230,6 +230,7 @@ groundhog test --fail-fast                  # stop the selected harness on first
 groundhog test --show-output                # show captured stdout for passing tests
 groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set selected harness thread count
+groundhog test --workspace                  # every workspace member with tests/test_rv32.rs
 groundhog test --integration                # local node + RV32 deploy + tests/integration.rs
 ```
 
@@ -244,7 +245,22 @@ stdout with `ok` set to `true` or `false` as appropriate. The
 machine-readable payload is versioned with `data.schemaVersion` and
 includes structured per-run and per-test results rather than only
 aggregated cargo output text. Schema v5 reports the built artifact under
-`data.artifact` with `kind` and `path` fields.
+`data.artifact` with `kind` and `path` fields; v6 adds `data.package`, the
+tested package's name.
+
+In a multi-contract Cargo workspace, `groundhog test --workspace` builds and
+tests every member that declares a `test_rv32` target (the
+`tests/test_rv32.rs` file `groundhog new` scaffolds), one package at a time in
+name order, then prints a per-package summary. A failing package does not stop
+the others unless `--fail-fast` is set; a package whose build fails ends the
+run. `--match-test`, `--skip`, `--rerun`, and `--watch` apply to every member.
+`--workspace` conflicts with `-p` and is not yet supported with
+`--integration`. With `--json`, the record's `data` is a workspace report
+(`data.schemaVersion` 1) carrying an aggregate `summary`, one per-package test
+report under `data.packages`, and `data.skipped` naming the members left
+unrun. When a package's build fails, the record still carries the members that
+completed, names that package in `data.errored`, and carries the failure in
+the envelope's `error` field.
 
 `groundhog test --integration` builds the RV32 artifact, starts an ephemeral hog-devnode local node,
 deploys the contract with the runtime manifest's lowest-index `local_user`, then runs the `tests/integration.rs` target.

@@ -25,7 +25,9 @@ RV32 artifact. They exercise different paths and neither substitutes for the
 other. The scaffolded SDK downloads its test executor from public storage; no
 FFI download credentials are required. Cargo registry authentication follows
 the early-access setup instructions. Use `groundhog test --integration` for
-RPC tests against an ephemeral local node.
+RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
+`groundhog test --workspace` runs the RV32 tests of every member that has a
+`tests/test_rv32.rs` target and reports them together.
 
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
