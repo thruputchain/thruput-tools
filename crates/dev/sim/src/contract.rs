@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_types::{
-    hex::HexBytes,
-    receipt::{ExecStatus, TransactionReceipt},
-    runtime_manifest::RuntimeManifest,
-    transaction::TxHash,
+    hex::HexBytes, receipt::ExecStatus, runtime_manifest::RuntimeManifest, transaction::TxHash,
 };
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
@@ -21,13 +18,13 @@ use xdr_common::{BytesM, VecM};
 use crate::actor::{ActorError, ActorState, WalletKind};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
-use crate::executor::{DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT};
+use crate::executor::DEFAULT_RECEIPT_DRAIN_TIMEOUT;
 use crate::manifest::{
     ContractArtifactSpec, EntrypointSpec, EventQueryAnchorSpec, EventQueryOrderSpec,
     SimulationManifest,
 };
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
-use crate::rpc::{SimRpcClient, SimRpcError, receipt_wait_detail, wait_for_receipt};
+use crate::rpc::{SimRpcClient, SimRpcError, wait_for_receipt};
 use crate::util::{json_string, sha256_hex};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
@@ -517,7 +514,15 @@ where
             };
         }
     };
-    let receipt = match await_receipt(client, tx_hash, "contract deploy").await {
+    let receipt = match wait_for_receipt(
+        &client,
+        tx_hash,
+        "contract deploy",
+        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+    )
+    .await
+    .map_err(SimError::from)
+    {
         Ok(receipt) => receipt,
         Err(error) => {
             return DeployAttempt {
@@ -552,29 +557,6 @@ where
         progress,
         result: Ok(()),
     }
-}
-
-/// Wait for `tx_hash`'s receipt on the simulator's default drain schedule.
-///
-/// `step` names the workload step in the error detail, so a deploy wait and a
-/// collateral wait stay distinguishable. The budget is checked between
-/// lookups, so a wait can outlast it by at most one request timeout.
-async fn await_receipt<C>(
-    client: C,
-    tx_hash: TxHash,
-    step: &str,
-) -> Result<TransactionReceipt, SimError>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    wait_for_receipt(
-        &client,
-        tx_hash,
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
-        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
-    )
-    .await
-    .map_err(|error| SimError::Executor(receipt_wait_detail(step, &error)))
 }
 
 async fn fund_native_deployment<C>(
@@ -658,7 +640,13 @@ where
         .collateral
         .as_mut()
         .ok_or_else(|| SimError::Executor("collateral record missing".into()))?;
-    let receipt = await_receipt(client, tx_hash, "native deployment collateral").await?;
+    let receipt = wait_for_receipt(
+        &client,
+        tx_hash,
+        "native deployment collateral",
+        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+    )
+    .await?;
     if receipt.tx_hash != tx_hash || !matches!(receipt.status, ExecStatus::Ok) {
         return Err(SimError::Executor(format!(
             "native deployment collateral did not commit successfully: {:?}",
@@ -874,6 +862,7 @@ mod tests {
         BlockHeight,
         block::ChainTip,
         hex::Hex0x,
+        receipt::TransactionReceipt,
         runtime_manifest::RuntimeManifest,
         view::{ViewRequest, ViewResponse},
     };

@@ -39,7 +39,7 @@ use crate::manifest::{
 use crate::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
 use crate::resource::{ResourceSample, ResourceSampleRequest, TargetResourceSampler};
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState, ResourceSamplePoint};
-use crate::rpc::{SimRpcClient, receipt_wait_detail, wait_for_receipt};
+use crate::rpc::{SimRpcClient, wait_for_receipt};
 use crate::scheduler::{
     PhaseStart, ScheduleCursor, ScheduledActorTick, ScheduledSimulationEvent,
     select_workload_for_tick,
@@ -2600,7 +2600,14 @@ where
     };
 
     let tx_hash_json = json_string(&tx_hash, "txHash")?;
-    let receipt = poll_workload_receipt(client, tx_hash, "contract-call").await;
+    let receipt = wait_for_receipt(
+        &client,
+        tx_hash,
+        "contract-call",
+        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+    )
+    .await
+    .map_err(SimError::from);
     let completed_at = Instant::now();
     let latency_ms = duration_ms(completed_at.duration_since(started));
     let submit_to_receipt_latency_ms = Some(duration_ms(
@@ -3009,7 +3016,14 @@ where
     };
 
     // 4. Await receipt.
-    let receipt = poll_workload_receipt(client.clone(), tx_hash, "read-after-write").await;
+    let receipt = wait_for_receipt(
+        &client,
+        tx_hash,
+        "read-after-write",
+        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+    )
+    .await
+    .map_err(SimError::from);
     let completed_at = Instant::now();
     let submit_to_receipt_latency_ms = Some(duration_ms(
         completed_at.saturating_duration_since(submitted_at),
@@ -3183,24 +3197,6 @@ where
             ))
         }
     }
-}
-
-async fn poll_workload_receipt<C>(
-    client: C,
-    tx_hash: TxHash,
-    workload: &str,
-) -> Result<TransactionReceipt, SimError>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    wait_for_receipt(
-        &client,
-        tx_hash,
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
-        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
-    )
-    .await
-    .map_err(|error| SimError::Executor(receipt_wait_detail(workload, &error)))
 }
 
 fn contract_call_failure_completion(

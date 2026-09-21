@@ -23,6 +23,9 @@ use groundhog_json_rpc_types::{
     view::{ViewRequest, ViewResponse},
 };
 
+use crate::error::SimError;
+use crate::executor::DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL;
+
 /// Why a simulator RPC call did not produce a result.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -189,16 +192,25 @@ where
     }
 }
 
-/// One-line diagnostic for a receipt wait that ended without a receipt.
+/// A receipt wait that ended without a receipt.
 ///
-/// `label` names what was waiting, such as `"airdrop"` or `"contract-call"`,
-/// so a simulator event says which step stalled.
-pub fn receipt_wait_detail(label: &str, error: &ReceiptWaitError) -> String {
-    match error {
-        ReceiptPollError::Timeout { attempts, .. } => {
-            format!("{label} receipt poll timed out after {attempts} attempts")
-        }
-        other => format!("{label} receipt poll failed: {other}"),
+/// `step` names what was waiting, such as `"airdrop"` or `"contract-call"`, so
+/// a simulator event says which step stalled.
+#[derive(Debug, thiserror::Error)]
+pub enum ReceiptWaitFailure {
+    #[error("{step} receipt poll timed out after {attempts} attempts")]
+    Timeout { step: String, attempts: usize },
+    #[error("{step} receipt poll failed: {source}")]
+    Failed {
+        step: String,
+        #[source]
+        source: ReceiptWaitError,
+    },
+}
+
+impl From<ReceiptWaitFailure> for SimError {
+    fn from(error: ReceiptWaitFailure) -> Self {
+        SimError::Executor(error.to_string())
     }
 }
 
@@ -226,22 +238,33 @@ where
 
 /// Wait for `tx_hash`'s receipt, retrying for at most `budget`.
 ///
-/// The simulator polls receipts only: it records what a client observes, so an
-/// advisory status lookup would add a request per attempt without changing the
-/// outcome it measures.
+/// This is the simulator's only receipt wait; `step` names the workload step so
+/// a failure says which one stalled. The simulator polls receipts only: it
+/// records what a client observes, so an advisory status lookup would add a
+/// request per attempt without changing the outcome it measures.
 pub async fn wait_for_receipt<C>(
     client: &C,
     tx_hash: TxHash,
+    step: &str,
     budget: Duration,
-    interval: Duration,
-) -> Result<TransactionReceipt, ReceiptWaitError>
+) -> Result<TransactionReceipt, ReceiptWaitFailure>
 where
     C: SimRpcClient + Sync + ?Sized,
 {
     poll_receipt(
         &SimReceiptSource(client),
         tx_hash,
-        ReceiptPollConfig::within(budget, interval),
+        ReceiptPollConfig::within(budget, DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL),
     )
     .await
+    .map_err(|source| match source {
+        ReceiptPollError::Timeout { attempts, .. } => ReceiptWaitFailure::Timeout {
+            step: step.to_owned(),
+            attempts,
+        },
+        source => ReceiptWaitFailure::Failed {
+            step: step.to_owned(),
+            source,
+        },
+    })
 }

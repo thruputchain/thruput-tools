@@ -24,9 +24,8 @@ use crate::{
     actor::{ActorState, required_actor_count},
     error::SimError,
     event::{ActorProvisionEvent, EventWriter, ResultEvent},
-    executor::DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
     manifest::{ActorProvisioningSpec, ContractArtifactKind, SimulationManifest},
-    rpc::{SimRpcClient, receipt_wait_detail, wait_for_receipt},
+    rpc::{SimRpcClient, wait_for_receipt},
     runtime::{SimAccount, derive_provisioned_account_signer},
     util::{json_string, sha256_hex},
 };
@@ -413,16 +412,9 @@ where
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = wait_for_receipt(
-        &client,
-        tx_hash,
-        PROVISION_RECEIPT_TIMEOUT,
-        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
-    )
-    .await
-    .map_err(|error| {
-        ProvisionTxError::with_hash(tx_hash, receipt_wait_detail("wallet create", &error))
-    })?;
+    let receipt = wait_for_receipt(&client, tx_hash, "wallet create", PROVISION_RECEIPT_TIMEOUT)
+        .await
+        .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,
@@ -483,16 +475,9 @@ where
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = wait_for_receipt(
-        &client,
-        tx_hash,
-        PROVISION_RECEIPT_TIMEOUT,
-        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
-    )
-    .await
-    .map_err(|error| {
-        ProvisionTxError::with_hash(tx_hash, receipt_wait_detail("airdrop", &error))
-    })?;
+    let receipt = wait_for_receipt(&client, tx_hash, "airdrop", PROVISION_RECEIPT_TIMEOUT)
+        .await
+        .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,
