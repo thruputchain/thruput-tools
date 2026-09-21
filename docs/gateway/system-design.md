@@ -106,7 +106,7 @@ still produce per-entry overload errors.
 
 | Data | Source | Existing RPC | Notes |
 |------|--------|-------------|-------|
-| Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
+| Transaction receipt (events, height, status, gas used) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, tx, TxEventLog }`; `TxEventLog.gas_consumed` is consensus-committed |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
 | Chain tip (height, hash) | hogd `SchedGateway` | `schedgateway_get_tip()` | |
 | Transaction submission | hogd `SchedGateway` | `schedgateway_submit_tx_batch(batch)` | Returns one request-scoped admission outcome per exact signed transaction |
@@ -534,7 +534,7 @@ remain a later phase.
 | Method | Data Source | Notes |
 |--------|-----------|-------|
 | `groundhog_sendRawTransaction(bytes) → TxHash` | hogd `SchedGateway` | Return the hash only after `Admitted`; this does not imply nomination or commitment |
-| `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
+| `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1; `gasUsed` from `TxEventLog.gas_consumed` |
 | `groundhog_getTransactionStatus(hash) → Status` | `SchedGateway.schedgateway_lookup_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | `SchedGateway.schedgateway_get_tip` | |
 | `groundhog_chainConfig() → NetworkConfigParams` | `SchedGateway.schedgateway_get_tip` | Stated execution parameters only; an unstated parameter is absent, never defaulted |

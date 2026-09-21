@@ -313,7 +313,7 @@ mod tests {
         assert!(status.validate(&json!({"status":"committed","height":7})));
         let expected = ExpectedResult::Receipt { hash, height: 7 };
         assert!(!expected.validate(&json!(null)));
-        let mut receipt = json!({"txHash":hash,"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[]});
+        let mut receipt = json!({"txHash":hash,"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":1500});
         assert!(
             expected.validate(&receipt),
             "committed execution failures are valid read records"

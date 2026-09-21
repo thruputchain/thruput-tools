@@ -13,7 +13,9 @@ use crate::transaction::TxHash;
 ///   Committed blocks include both successful and deterministically-failed
 ///   txs (reverts, OOG). If a receipt exists, the tx was committed.
 /// - No `blockHash`: SCP instant finality, height is sufficient.
-/// - No `gasUsed`/`gasPrice`, `transactionIndex`, `logsBloom`.
+/// - No `gasPrice`, `transactionIndex`, `logsBloom`.
+/// - `gasUsed` is committed by consensus as part of the transaction's event
+///   log (`TxEventLog.gas_consumed`).
 ///
 /// `storage_delta` (net HOG locked/unlocked) is deferred — hogd's
 /// `TxInfo` doesn't include it. Will be added when indexer support lands.
@@ -49,6 +51,14 @@ pub struct TransactionReceipt {
     /// readable reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort_data: Option<HexBytes>,
+
+    /// Gas the transaction consumed: the root frame, every frame it invoked,
+    /// and the pre-execution validation of attached contracts. On an
+    /// out-of-gas fault it equals the transaction's gas limit.
+    ///
+    /// Committed by consensus as part of the event log, so every node
+    /// reports the same figure.
+    pub gas_used: u64,
 }
 
 /// `kind` reported for a deterministic execution fault when the node
