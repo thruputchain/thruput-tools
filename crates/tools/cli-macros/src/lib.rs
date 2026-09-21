@@ -63,7 +63,17 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let meta = VariantMeta::parse(variant)?;
         let name = variant.ident.to_string();
         let code = meta.code;
-        catalog.push(quote!((#name, #code)));
+        let (hint_kind, hint_text) = meta
+            .hint
+            .as_ref()
+            .map_or_else(|| ("", quote!("")), Hint::catalog);
+        let details_keys = meta
+            .details
+            .as_ref()
+            .map(|details| details.catalog(variant))
+            .transpose()?
+            .unwrap_or_default();
+        catalog.push(quote!((#name, #code, #hint_kind, #hint_text, #details_keys)));
 
         let unbound = pattern(variant, false);
         code_arms.push(quote!(#unbound => #code,));
@@ -80,13 +90,28 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         #[automatically_derived]
         impl #ident {
-            /// Every variant's name paired with its stable code, in
-            /// declaration order.
+            /// Every variant's declared metadata, in declaration order.
             ///
-            /// Codes are a machine-readable contract, so pin this catalog
-            /// with a snapshot test: renaming a variant renames its derived
-            /// code, and the test is what makes that visible.
-            pub const CODES: &'static [(&'static str, &'static str)] = &[#(#catalog,)*];
+            /// Each entry is the variant's name, its code, the kind of hint
+            /// it declares (`""`, `"text"`, `"format"`, or `"computed"`),
+            /// that hint's text or format template (empty unless the kind is
+            /// `"text"` or `"format"`), and the `camelCase` keys its
+            /// `--json` details carry (empty for a variant that carries
+            /// none, `"computed"` when an expression builds the payload).
+            ///
+            /// Codes and details keys are a machine-readable contract, so
+            /// pin this catalog with a snapshot test: it is what makes an
+            /// edit to any of them visible, including the rename of a
+            /// variant whose code is derived from its name. The two
+            /// `computed` forms depend on field values, so they need tests
+            /// of their own.
+            pub const METADATA: &'static [(
+                &'static str,
+                &'static str,
+                &'static str,
+                &'static str,
+                &'static str,
+            )] = &[#(#catalog,)*];
 
             /// Stable machine-readable error code.
             #[allow(clippy::too_many_lines)]
@@ -152,7 +177,14 @@ fn reject_duplicate(attr: &Attribute, seen: bool) -> syn::Result<()> {
 /// How a variant's hint text is produced.
 enum Hint {
     /// A format string over the variant's fields, as `#[error(...)]` writes one.
-    Format { lit: LitStr, args: Vec<Expr> },
+    ///
+    /// `lit` addresses the generated tuple bindings; `source` is the
+    /// template as written, which is what the catalog reports.
+    Format {
+        lit: LitStr,
+        source: LitStr,
+        args: Vec<Expr>,
+    },
     /// A `&'static str` constant shared by several variants.
     Text(Expr),
     /// An expression yielding the hint, with the variant's fields in scope.
@@ -163,7 +195,8 @@ impl Hint {
     fn parse(attr: &Attribute) -> syn::Result<Self> {
         attr.parse_args_with(|input: ParseStream| {
             if input.peek(LitStr) {
-                let lit = rewrite_positional(&input.parse::<LitStr>()?);
+                let source: LitStr = input.parse()?;
+                let lit = rewrite_positional(&source);
                 let mut args = Vec::new();
                 while input.peek(Token![,]) {
                     input.parse::<Token![,]>()?;
@@ -172,7 +205,7 @@ impl Hint {
                     }
                     args.push(input.parse()?);
                 }
-                return Ok(Self::Format { lit, args });
+                return Ok(Self::Format { lit, source, args });
             }
             let key: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
@@ -191,9 +224,27 @@ impl Hint {
         })
     }
 
+    /// The hint's kind and its statically known text, for the catalog.
+    ///
+    /// The text of an `expr` hint depends on the error's field values, so it
+    /// reports no text and needs a test of its own.
+    fn catalog(&self) -> (&'static str, TokenStream2) {
+        match self {
+            Self::Format { source, args, .. } => {
+                if args.is_empty() && !has_placeholder(&source.value()) {
+                    ("text", quote!(#source))
+                } else {
+                    ("format", quote!(#source))
+                }
+            }
+            Self::Text(expr) => ("text", quote!(#expr)),
+            Self::Expr(_) => ("computed", quote!("")),
+        }
+    }
+
     fn body(&self) -> Body {
         match self {
-            Self::Format { lit, args } => {
+            Self::Format { lit, args, .. } => {
                 if args.is_empty() && !has_placeholder(&lit.value()) {
                     Body::unbound(quote!(::core::option::Option::Some(
                         ::std::borrow::Cow::Borrowed(#lit)
@@ -243,6 +294,23 @@ impl Details {
             let fields = Punctuated::<Ident, Token![,]>::parse_terminated(input)?;
             Ok(Self::Fields(fields.into_iter().collect()))
         })
+    }
+
+    /// The `camelCase` keys this variant's details carry, for the catalog.
+    ///
+    /// An `expr` payload is built by hand and needs a test of its own, so it
+    /// reports `computed` rather than a key list.
+    fn catalog(&self, variant: &Variant) -> syn::Result<String> {
+        let fields = match self {
+            Self::Expr(_) => return Ok("computed".to_owned()),
+            Self::All => named_fields(variant)?,
+            Self::Fields(fields) => fields.clone(),
+        };
+        Ok(fields
+            .iter()
+            .map(|field| camel_case(&field.to_string()))
+            .collect::<Vec<_>>()
+            .join(", "))
     }
 
     fn body(&self, variant: &Variant) -> syn::Result<Body> {

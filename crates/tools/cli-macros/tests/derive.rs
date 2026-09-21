@@ -61,14 +61,42 @@ fn codes_default_to_the_variant_name_in_snake_case() {
 }
 
 #[test]
-fn the_catalog_lists_every_variant_in_declaration_order() {
+fn the_catalog_describes_every_variant_in_declaration_order() {
+    assert_eq!(TestError::METADATA.len(), 7);
     assert_eq!(
-        TestError::CODES.first(),
-        Some(&("Plain", "plain")),
-        "the catalog should start at the first declared variant"
+        TestError::METADATA.first(),
+        Some(&("Plain", "plain", "", "", "")),
+        "a variant declaring nothing should report only its derived code"
     );
-    assert_eq!(TestError::CODES.len(), 7);
-    assert!(TestError::CODES.contains(&("Renamed", "renamed_code")));
+    assert!(TestError::METADATA.contains(&(
+        "Renamed",
+        "renamed_code",
+        "text",
+        "a static next step",
+        ""
+    )));
+    assert!(
+        TestError::METADATA.contains(&(
+            "Positional",
+            "positional",
+            "format",
+            "check `{0}` and `{1}`",
+            ""
+        )),
+        "a format hint should report the template as written"
+    );
+    assert!(TestError::METADATA.contains(&("Subset", "subset", "text", SHARED_HINT, "kept")));
+    assert!(
+        TestError::METADATA.contains(&("Computed", "computed", "computed", "", "computed")),
+        "an expression hint and an expression payload depend on field values"
+    );
+    assert!(TestError::METADATA.contains(&(
+        "SnakeCasedKeys",
+        "snake_cased_keys",
+        "",
+        "",
+        "walletName"
+    )));
 }
 
 #[test]
