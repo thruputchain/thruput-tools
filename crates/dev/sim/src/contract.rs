@@ -517,7 +517,7 @@ where
             };
         }
     };
-    let receipt = match poll_receipt(client, tx_hash).await {
+    let receipt = match await_receipt(client, tx_hash, "contract deploy").await {
         Ok(receipt) => receipt,
         Err(error) => {
             return DeployAttempt {
@@ -554,7 +554,16 @@ where
     }
 }
 
-async fn poll_receipt<C>(client: C, tx_hash: TxHash) -> Result<TransactionReceipt, SimError>
+/// Wait for `tx_hash`'s receipt on the simulator's default drain schedule.
+///
+/// `step` names the workload step in the error detail, so a deploy wait and a
+/// collateral wait stay distinguishable. The budget is checked between
+/// lookups, so a wait can outlast it by at most one request timeout.
+async fn await_receipt<C>(
+    client: C,
+    tx_hash: TxHash,
+    step: &str,
+) -> Result<TransactionReceipt, SimError>
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
@@ -565,7 +574,7 @@ where
         DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
     )
     .await
-    .map_err(|error| SimError::Executor(receipt_wait_detail("contract deploy", &error)))
+    .map_err(|error| SimError::Executor(receipt_wait_detail(step, &error)))
 }
 
 async fn fund_native_deployment<C>(
@@ -649,12 +658,7 @@ where
         .collateral
         .as_mut()
         .ok_or_else(|| SimError::Executor("collateral record missing".into()))?;
-    let receipt =
-        tokio::time::timeout(DEFAULT_RECEIPT_DRAIN_TIMEOUT, poll_receipt(client, tx_hash))
-            .await
-            .map_err(|_| {
-                SimError::Executor("native deployment collateral receipt timed out".into())
-            })??;
+    let receipt = await_receipt(client, tx_hash, "native deployment collateral").await?;
     if receipt.tx_hash != tx_hash || !matches!(receipt.status, ExecStatus::Ok) {
         return Err(SimError::Executor(format!(
             "native deployment collateral did not commit successfully: {:?}",
