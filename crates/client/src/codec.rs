@@ -28,12 +28,6 @@ pub enum Error {
     Other(String),
 }
 
-/// Decode a finalized contract spec from traditional XDR bytes.
-pub fn decode_spec(bytes: &[u8]) -> Result<groundhog_contract_spec::ContractSpec, Error> {
-    xdrs::txs::decode(bytes)
-        .map_err(|e| Error::SpecFailed(format!("failed to decode .spec.xdr: {e}")))
-}
-
 /// Derive the canonical method selector from interface identity and method name.
 pub fn method_entrypoint_id(
     interface_name: &str,

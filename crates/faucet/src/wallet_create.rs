@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use xdr_common::VecM;
 
 use crate::{
-    airdrop::{AirdropSubmitError, AirdropSubmitter},
+    airdrop::{AirdropSubmitError, AirdropSubmitter, hex_string, parse_tx_hash},
     config::PolicyRuntimeConfig,
     error::{error_response, error_response_with_retry_after},
     policy::{
@@ -165,7 +165,7 @@ impl WalletCreateService {
             network_id: request.network_id.clone(),
             genesis_hash: hex_string(request.genesis_hash.0),
             owner_public_key: hex_string(request.owner_public_key.0),
-            client_nonce: hex_encode(&request.client_nonce.0),
+            client_nonce: hex::encode(&request.client_nonce.0),
         };
         let now = SystemTime::now();
         if let Err(error) = self.policy_store.expire(now) {
@@ -1075,18 +1075,8 @@ fn wallet_create_error_code(error: &WalletCreateError) -> &'static str {
     }
 }
 
-fn hex_string(bytes: impl AsRef<[u8]>) -> String {
-    format!("0x{}", hex_encode(bytes.as_ref()))
-}
-
 fn tx_hash_string(tx_hash: &TxHash) -> String {
     hex_string(tx_hash.0.0)
-}
-
-fn parse_tx_hash(value: &str) -> Option<TxHash> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes: [u8; 32] = hex_decode(value).ok()?.try_into().ok()?;
-    Some(TxHash(ApiSha256Hash::from(SHA256Hash::from(bytes))))
 }
 
 fn parse_32_hex<T>(value: &str) -> T
@@ -1094,43 +1084,11 @@ where
     T: From<[u8; 32]>,
 {
     let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex_decode(value).expect("bug: policy store hex should decode");
+    let bytes = hex::decode(value).expect("bug: policy store hex should decode");
     let bytes: [u8; 32] = bytes
         .try_into()
         .expect("bug: policy store fixed hex should be 32 bytes");
     T::from(bytes)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
-fn hex_decode(value: &str) -> Result<Vec<u8>, ()> {
-    if !value.len().is_multiple_of(2) {
-        return Err(());
-    }
-    let mut bytes = Vec::with_capacity(value.len() / 2);
-    for chunk in value.as_bytes().chunks_exact(2) {
-        let high = hex_nibble(chunk[0])?;
-        let low = hex_nibble(chunk[1])?;
-        bytes.push((high << 4) | low);
-    }
-    Ok(bytes)
-}
-
-fn hex_nibble(byte: u8) -> Result<u8, ()> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(()),
-    }
 }
 
 fn verify_owner_signature(

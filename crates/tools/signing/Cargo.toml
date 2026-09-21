@@ -16,9 +16,6 @@ exclude = [
     "tests/",
 ]
 
-[features]
-default = ["std"]
-std = []
 
 [lints]
 workspace = true
@@ -32,7 +29,6 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 ed25519-dalek = { workspace = true }
-zeroize = { workspace = true }
 
 [dev-dependencies]
 groundhog-json-rpc-server = { workspace = true }

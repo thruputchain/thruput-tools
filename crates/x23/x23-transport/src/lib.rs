@@ -138,28 +138,6 @@ where
     .await
 }
 
-/// Establish a fixed pool with an explicit active-call cancellation policy.
-pub async fn connect_with_canceled_call_policy<C, F>(
-    service: &'static str,
-    addr: &str,
-    pool_size: usize,
-    canceled_call_policy: CanceledCallPolicy,
-    build: F,
-) -> Result<C, ConnectError>
-where
-    F: FnOnce(Arc<dyn RpcSender>) -> C,
-{
-    connect_with_config_and_canceled_call_policy(
-        service,
-        addr,
-        pool_size,
-        ConnectionConfig::default(),
-        canceled_call_policy,
-        build,
-    )
-    .await
-}
-
 /// Establish a fixed pool with explicit connection and cancellation policies.
 pub async fn connect_with_config_and_canceled_call_policy<C, F>(
     service: &'static str,

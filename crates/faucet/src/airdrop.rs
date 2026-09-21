@@ -92,7 +92,7 @@ impl AirdropService {
             network_id: request.network_id.clone(),
             genesis_hash: hex_string(request.genesis_hash.0),
             recipient: hex_string(request.recipient.0),
-            client_nonce: hex_encode(request.client_nonce.as_bytes()),
+            client_nonce: hex::encode(request.client_nonce.as_bytes()),
         };
         let now = SystemTime::now();
         if let Err(error) = self.policy_store.expire(now) {
@@ -801,21 +801,11 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     }
 }
 
-fn hex_string(bytes: impl AsRef<[u8]>) -> String {
-    format!("0x{}", hex_encode(bytes.as_ref()))
+pub(crate) fn hex_string(bytes: impl AsRef<[u8]>) -> String {
+    format!("0x{}", hex::encode(bytes.as_ref()))
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
-fn parse_tx_hash(value: &str) -> Option<TxHash> {
+pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
     let value = value.strip_prefix("0x").unwrap_or(value);
     let bytes: [u8; 32] = hex::decode(value).ok()?.try_into().ok()?;
     Some(TxHash(SHA256Hash::from(
@@ -1081,7 +1071,7 @@ fn entrypoint_bytes(entrypoint: &HexBytes) -> Result<[u8; 8], AirdropRuntimeConf
     let len = entrypoint.0.len();
     entrypoint
         .0
-        .clone()
+        .as_slice()
         .try_into()
         .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(len))
 }
@@ -1090,7 +1080,7 @@ fn encode_transfer_calldata(
     recipient: &groundhog_xdr::types::ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, AirdropSubmitError> {
-    xdrs::cxs::encode(&(recipient, raw_amount))
+    groundhog_signing::native_hog_transfer_calldata(recipient, raw_amount)
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
 }
 

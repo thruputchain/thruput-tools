@@ -104,21 +104,22 @@ async fn readiness_endpoint(state: ObservabilityState, endpoint: &'static str) -
 async fn metrics_endpoint(State(state): State<ObservabilityState>) -> Response {
     let started_at = Instant::now();
     let snapshot = state.health.snapshot().await;
+    // Record this request before rendering so the scrape includes its own
+    // sample without encoding the registry a second time.
+    let duration = started_at.elapsed();
+    state.metrics.observe_http_request(
+        "metrics",
+        crate::metrics::status_class(StatusCode::OK.as_u16()),
+        duration,
+    );
     match state.metrics.gather(&snapshot) {
         Ok(body) => {
-            let duration = started_at.elapsed();
-            state.metrics.observe_http_request(
-                "metrics",
-                crate::metrics::status_class(StatusCode::OK.as_u16()),
-                duration,
-            );
             tracing::debug!(
                 endpoint = "metrics",
                 status = StatusCode::OK.as_u16(),
                 duration_ms = duration.as_millis(),
                 "gateway metrics endpoint completed",
             );
-            let body = state.metrics.gather(&snapshot).unwrap_or(body);
             ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
         }
         Err(err) => {

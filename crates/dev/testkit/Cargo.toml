@@ -23,7 +23,6 @@ groundhog-node-supervisor = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-xdr = { workspace = true }
 sha2 = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }

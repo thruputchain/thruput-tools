@@ -31,7 +31,6 @@ groundhog_indexer = { workspace = true }
 groundhog_scheduler = { workspace = true }
 groundhog_view = { workspace = true }
 groundhog_scp = { workspace = true }
-groundhog_coordinator = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
 libc = { workspace = true }
@@ -55,3 +54,4 @@ serial_test = { workspace = true }
 [[example]]
 name = "fake_hogd_dev"
 path = "tests/fixtures/fake_hogd_dev.rs"
+test = true

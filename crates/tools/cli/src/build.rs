@@ -602,11 +602,6 @@ pub fn resolve_package<'a>(
         .ok_or(CliError::PackageRequired)
 }
 
-/// Run `cargo metadata` and parse the result.
-pub fn cargo_metadata() -> Result<CargoMetadata, CliError> {
-    cargo_metadata_with_artifacts(&ArtifactOptions::default())
-}
-
 pub fn cargo_metadata_with_artifacts(
     artifacts: &ArtifactOptions,
 ) -> Result<CargoMetadata, CliError> {
