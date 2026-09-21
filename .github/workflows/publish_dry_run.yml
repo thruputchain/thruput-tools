@@ -21,6 +21,7 @@ env:
     groundhog-rv32-artifact
     groundhog-tx-validation
     groundhog-json-rpc-server
+    groundhog-hogd-backend
     groundhog-json-rpc-client
     groundhog-signing
     groundhog-client
