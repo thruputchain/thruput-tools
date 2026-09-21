@@ -405,6 +405,7 @@ fn print_committed(
         height: receipt.height,
         status: receipt.status,
         events: receipt.events,
+        gas_used: receipt.gas_used,
         return_data: receipt.return_data,
         abort_data: receipt.abort_data,
         abort: crate::abort_json::AbortReport::from_decode(decoded_abort.as_ref()),

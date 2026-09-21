@@ -169,6 +169,10 @@ pub const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
 pub const CANNED_HEIGHT_A: i64 = 5;
 /// Block height for `CANNED_TX_HASH_B`.
 pub const CANNED_HEIGHT_B: i64 = 10;
+/// Gas the fake indexer's event log records for `CANNED_TX_HASH_A`.
+pub const CANNED_GAS_USED_A: u64 = 1_500;
+/// Gas the fake indexer's event log records for `CANNED_TX_HASH_B`.
+pub const CANNED_GAS_USED_B: u64 = 2_500;
 /// Cursor value the fake uses between page 1 and page 2 of `get_events`.
 pub const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
 /// Storage key that returns `CANNED_STORAGE_VALUE` from the fake `DbGateway`.
@@ -1593,6 +1597,7 @@ impl FakeIndexer {
                 root_output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![]),
                 },
+                gas_consumed: CANNED_GAS_USED_A,
                 events: VecM(vec![]),
             },
         };
@@ -1607,6 +1612,7 @@ impl FakeIndexer {
                 root_output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![]),
                 },
+                gas_consumed: CANNED_GAS_USED_B,
                 events: VecM(vec![]),
             },
         };

@@ -58,7 +58,7 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         "groundhog_getTransactionReceipt" => {
             assert_eq!(request["params"], json!([HASH]));
             let count = state.receipts.fetch_add(1, Ordering::SeqCst);
-            json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[]})
+            json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":1500})
         }
         _ => panic!("unexpected method {method}"),
     };
