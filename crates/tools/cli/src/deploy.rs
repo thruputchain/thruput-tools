@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::decode_fixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_types::hex::HexBytes;
@@ -618,11 +619,8 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
 
 /// Parse a `0x`-prefixed hex string into a 32-byte array.
 fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
-    let stripped = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    let bytes = hex::decode(stripped)
-        .map_err(|e| CliError::Other(format!("invalid predicted address hex: {e}")))?;
-    <[u8; 32]>::try_from(bytes.as_slice())
-        .map_err(|_| CliError::Other("predicted address must be exactly 32 bytes".into()))
+    decode_fixed_hex(hex_str)
+        .map_err(|error| CliError::Other(format!("invalid predicted address: {error}")))
 }
 
 fn warn_if_stale(

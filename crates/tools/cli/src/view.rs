@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::Path;
 
 use groundhog_json_rpc_client::GroundhogApiClient;
@@ -9,9 +10,7 @@ use groundhog_json_rpc_types::{
 
 use crate::account_resolution::{lookup_dev_account_address, resolve_contract_target};
 use crate::artifacts::ArtifactOptions;
-use crate::call::{
-    ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
-};
+use crate::call::{ResolvedCall, format_entrypoint_id, resolve_call, selector_json};
 use crate::codec::{
     AbortDecodeError, DecodedAbort, decode_abort, decode_return, encode_args,
     format_contract_address, parse_contract_address,
@@ -141,7 +140,7 @@ fn prepare_view(
     let caller = resolve_caller(&resolved_profile, from, rt)?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
     let entrypoint_id = format_entrypoint_id(resolved.entrypoint);
-    let calldata_hex = format_hex_bytes(&calldata_bytes);
+    let calldata_hex = prefixed_hex(&calldata_bytes);
 
     Ok(PreparedView {
         rpc_url: rpc_url.to_owned(),
@@ -237,7 +236,7 @@ fn print_view_response(
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("height", *response.height);
             if !return_data.0.is_empty() && decoded_return_value.is_none() {
-                print.detail("return", format_hex_bytes(&return_data.0));
+                print.detail("return", prefixed_hex(&return_data.0));
             }
         }
         RootInvocationOutput::Abort { abort_data } => {
@@ -253,10 +252,10 @@ fn print_view_response(
                     print.detail("abort value", &abort.value);
                 }
                 Some(Err(error)) => {
-                    print.detail("abort", format_hex_bytes(&abort_data.0));
+                    print.detail("abort", prefixed_hex(&abort_data.0));
                     print.detail("abort decode error", error);
                 }
-                None => print.detail("abort", format_hex_bytes(&abort_data.0)),
+                None => print.detail("abort", prefixed_hex(&abort_data.0)),
             }
         }
         RootInvocationOutput::Fault => {

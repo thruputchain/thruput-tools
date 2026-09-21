@@ -344,7 +344,8 @@ fn parse_network_hash(value: &str) -> Result<NetworkHashHex, String> {
 }
 
 fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, String> {
-    serde_json::from_value(serde_json::Value::String(value.to_owned()))
+    groundhog_json_rpc_types::hex::decode_fixed_hex(value)
+        .map(|bytes| SHA256Hash::from(groundhog_xdr::types::SHA256Hash::from(bytes)))
         .map_err(|error| error.to_string())
 }
 

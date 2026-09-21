@@ -1,8 +1,8 @@
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::error::SimError;
 use crate::manifest::{EntrypointSpec, SimulationManifest, WorkloadKind};
@@ -21,7 +21,7 @@ impl LoadedSimulationManifest {
     /// Re-encode the manifest after runtime overrides and refresh both hashes.
     pub fn refresh_hashes(&mut self) -> Result<(), SimError> {
         let bytes = serde_json::to_vec_pretty(&self.manifest)?;
-        let sha256 = sha256_hex(&bytes);
+        let sha256 = sha256_prefixed_hex(&bytes);
         let config_sha256 = simulation_config_sha256(&self.manifest)?;
         self.bytes = bytes;
         self.sha256 = sha256;
@@ -34,7 +34,7 @@ impl LoadedSimulationManifest {
 pub async fn load_simulation_manifest(path: &Path) -> Result<LoadedSimulationManifest, SimError> {
     let bytes = tokio::fs::read(path).await?;
     let manifest = serde_json::from_slice(&bytes)?;
-    let sha256 = sha256_hex(&bytes);
+    let sha256 = sha256_prefixed_hex(&bytes);
     Ok(LoadedSimulationManifest {
         manifest,
         sha256,
@@ -59,7 +59,7 @@ pub fn simulation_config_sha256(manifest: &SimulationManifest) -> Result<String,
         config.target.rpc_url = None;
     }
     canonicalize_entrypoints(&mut config)?;
-    Ok(sha256_hex(&serde_json::to_vec(&config)?))
+    Ok(sha256_prefixed_hex(&serde_json::to_vec(&config)?))
 }
 
 fn canonicalize_entrypoints(manifest: &mut SimulationManifest) -> Result<(), SimError> {
@@ -82,11 +82,6 @@ fn canonicalize_entrypoint(entrypoint: &mut EntrypointSpec) -> Result<(), SimErr
         .map_err(|error| SimError::Executor(format!("failed to resolve entrypoint: {error}")))?;
     *entrypoint = EntrypointSpec::Raw(format!("0x{}", hex::encode(bytes)));
     Ok(())
-}
-
-/// Return a 0x-prefixed SHA-256 digest for bytes.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
 
 /// Write a value as pretty JSON.

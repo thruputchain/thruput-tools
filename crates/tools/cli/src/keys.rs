@@ -2,6 +2,7 @@ use crate::keys_json::{ExportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KeysExportR
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use getrandom::getrandom;
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -143,7 +144,7 @@ pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         key: ExportedKey {
             name: name.to_string(),
             scheme: "ed25519".into(),
-            private_key: hex_prefixed(&keypair_bytes[..32]),
+            private_key: prefixed_hex(&keypair_bytes[..32]),
         },
     };
 
@@ -279,10 +280,10 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
     }
 
     let public_key = if let Some(ref pk_hex) = keyfile.public_key_hex {
-        parse_hex_32(pk_hex)?
+        parse_stored_hex::<32>(pk_hex)?
     } else {
         // Legacy key without public_key_hex — must load keypair.
-        let keypair_bytes = zeroize::Zeroizing::new(parse_hex_64(&keyfile.keypair_hex)?);
+        let keypair_bytes = zeroize::Zeroizing::new(parse_stored_hex::<64>(&keyfile.keypair_hex)?);
         let signing_key = LocalSigner::from_keypair_bytes(*keypair_bytes)
             .map_err(|error| signing_error(&error))?;
         signing_key.verifying_key_bytes()
@@ -295,8 +296,8 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         name: name.to_string(),
         is_default: default_key.as_deref() == Some(name),
         key_id: DEFAULT_KEY_ID,
-        public_key: hex_prefixed(&public_key),
-        address: hex_prefixed(&address),
+        public_key: prefixed_hex(public_key),
+        address: prefixed_hex(address),
         path,
     })
 }
@@ -323,7 +324,9 @@ fn load_stored_keypair_bytes(name: &str) -> Result<Zeroizing<[u8; 64]>, CliError
         )));
     }
 
-    Ok(Zeroizing::new(parse_hex_64(&keyfile.keypair_hex)?))
+    Ok(Zeroizing::new(parse_stored_hex::<64>(
+        &keyfile.keypair_hex,
+    )?))
 }
 
 fn read_keyfile(name: &str) -> Result<KeyFile, CliError> {
@@ -379,24 +382,8 @@ fn derive_pubkey_account_address(public_key: [u8; 32]) -> [u8; 32] {
     bytes
 }
 
-fn parse_hex_32(input: &str) -> Result<[u8; 32], CliError> {
-    let stripped = input.strip_prefix("0x").unwrap_or(input);
-    let bytes = hex::decode(stripped).map_err(|e| CliError::Other(e.to_string()))?;
-    bytes
-        .try_into()
-        .map_err(|_| CliError::Other("invalid stored public key length".into()))
-}
-
-fn parse_hex_64(input: &str) -> Result<[u8; 64], CliError> {
-    let stripped = input.strip_prefix("0x").unwrap_or(input);
-    let bytes = hex::decode(stripped).map_err(|e| CliError::Other(e.to_string()))?;
-    bytes
-        .try_into()
-        .map_err(|_| CliError::Other("invalid stored key length".into()))
-}
-
-fn hex_prefixed(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
+fn parse_stored_hex<const N: usize>(input: &str) -> Result<[u8; N], CliError> {
+    decode_fixed_hex(input).map_err(|error| CliError::Other(format!("invalid stored key: {error}")))
 }
 
 fn signing_error(error: &groundhog_signing::SigningError) -> CliError {

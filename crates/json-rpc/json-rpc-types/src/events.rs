@@ -130,7 +130,7 @@ pub struct PaginationCursor(pub Vec<u8>);
 
 impl Serialize for PaginationCursor {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        HexBytes(self.0.clone()).serialize(serializer)
+        serializer.collect_str(&crate::hex::HexDisplay(&self.0))
     }
 }
 

@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -34,7 +35,7 @@ use std::net::SocketAddr;
 use xdr_common::VecM;
 
 use crate::{
-    airdrop::{AirdropSubmitError, AirdropSubmitter, hex_string, parse_tx_hash},
+    airdrop::{AirdropSubmitError, AirdropSubmitter, parse_tx_hash},
     config::PolicyRuntimeConfig,
     error::{error_response, error_response_with_retry_after},
     policy::{
@@ -163,8 +164,8 @@ impl WalletCreateService {
         };
         let key = WalletCreateAttemptKey {
             network_id: request.network_id.clone(),
-            genesis_hash: hex_string(request.genesis_hash.0),
-            owner_public_key: hex_string(request.owner_public_key.0),
+            genesis_hash: prefixed_hex(request.genesis_hash.0),
+            owner_public_key: prefixed_hex(request.owner_public_key.0),
             client_nonce: hex::encode(&request.client_nonce.0),
         };
         let now = SystemTime::now();
@@ -264,7 +265,7 @@ impl WalletCreateService {
         match self.policy_store.check_and_record_quotas(
             &[
                 QuotaCheck {
-                    key: QuotaKey::WalletCreateOwner(hex_string(owner_public_key)),
+                    key: QuotaKey::WalletCreateOwner(prefixed_hex(owner_public_key)),
                     max: self.policy_config.wallet_create.owner_quota_max,
                     window: Duration::from_secs(
                         self.policy_config.wallet_create.owner_quota_window_secs,
@@ -892,9 +893,9 @@ fn new_wallet_create_attempt(
 ) -> WalletCreateAttempt {
     WalletCreateAttempt {
         key,
-        deploy_nonce: hex_string(request.deploy_nonce.0),
-        wallet_address: hex_string(prepared.wallet_address.0),
-        wallet_contract_hash: hex_string(prepared.wallet_contract_hash.0),
+        deploy_nonce: prefixed_hex(request.deploy_nonce.0),
+        wallet_address: prefixed_hex(prepared.wallet_address.0),
+        wallet_contract_hash: prefixed_hex(prepared.wallet_contract_hash.0),
         prefund_raw_amount: prepared.prefund_raw_amount.clone(),
         status: WalletCreateAttemptStatus::Prepared,
         prefund_tx_hash: None,
@@ -912,7 +913,7 @@ fn existing_wallet_create_attempt(
     request: &CreateWalletRequest,
     mut attempt: WalletCreateAttempt,
 ) -> WalletCreateFlow {
-    if attempt.deploy_nonce != hex_string(request.deploy_nonce.0) {
+    if attempt.deploy_nonce != prefixed_hex(request.deploy_nonce.0) {
         return WalletCreateFlow::Respond(error_response(
             StatusCode::CONFLICT,
             "wallet_create_idempotency_conflict",
@@ -1076,19 +1077,14 @@ fn wallet_create_error_code(error: &WalletCreateError) -> &'static str {
 }
 
 fn tx_hash_string(tx_hash: &TxHash) -> String {
-    hex_string(tx_hash.0.0)
+    prefixed_hex(tx_hash.0.0)
 }
 
 fn parse_32_hex<T>(value: &str) -> T
 where
     T: From<[u8; 32]>,
 {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex::decode(value).expect("bug: policy store hex should decode");
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .expect("bug: policy store fixed hex should be 32 bytes");
-    T::from(bytes)
+    T::from(decode_fixed_hex(value).expect("bug: policy store hex should be 32 bytes"))
 }
 
 fn verify_owner_signature(

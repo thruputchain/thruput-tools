@@ -1,5 +1,6 @@
 //! Call argument and return-value codecs for contract specs and local source metadata.
 
+use groundhog_json_rpc_types::hex::{FixedHexError, decode_fixed_hex, prefixed_hex};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -334,7 +335,7 @@ pub fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, Error> {
 
 /// Format a contract address as 0x-prefixed lowercase hex.
 pub fn format_contract_address(address: &ContractAddress) -> String {
-    format!("0x{}", hex::encode(address.as_ref()))
+    prefixed_hex(address)
 }
 
 /// Decode a spec string as UTF-8 text and validate it as a safe identifier.
@@ -1773,15 +1774,12 @@ where
 }
 
 fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], Error> {
-    let stripped = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex::decode(stripped).map_err(|e| Error::InvalidArgument {
+    decode_fixed_hex(value).map_err(|error| Error::InvalidArgument {
         argument: label.to_string(),
-        message: format!("`{value}` is not valid hex: {e}"),
-    })?;
-    let len = bytes.len();
-    bytes.try_into().map_err(|_| Error::InvalidArgument {
-        argument: label.to_string(),
-        message: format!("must be {N} bytes, got {len}"),
+        message: match error {
+            FixedHexError::InvalidHex(error) => format!("`{value}` is not valid hex: {error}"),
+            FixedHexError::InvalidLength { len, .. } => format!("must be {N} bytes, got {len}"),
+        },
     })
 }
 
@@ -1789,5 +1787,5 @@ fn hex_json_value<T>(value: T) -> Value
 where
     T: AsRef<[u8]>,
 {
-    Value::from(format!("0x{}", hex::encode(value.as_ref())))
+    Value::from(prefixed_hex(value))
 }

@@ -1,5 +1,6 @@
 //! hog-devnode process adapter.
 
+use groundhog_json_rpc_types::hex::{prefixed_hex, sha256_prefixed_hex};
 use std::{
     collections::BTreeMap,
     env,
@@ -24,7 +25,6 @@ use groundhog_json_rpc_types::{
 use groundhog_signing::LocalSigner;
 use groundhog_tx_validation::ConfigParamName;
 use serde::{Deserialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, BufReader},
@@ -859,7 +859,7 @@ fn parse_manifest_readiness_pointer(
     let advertised_manifest_hash = pointer.manifest_hash;
     let manifest_hash = advertised_manifest_hash.to_ascii_lowercase();
     let manifest_bytes = read_runtime_manifest_bytes(program, &manifest_path)?;
-    let actual_hash = sha256_hex(&manifest_bytes);
+    let actual_hash = sha256_prefixed_hex(&manifest_bytes);
     if actual_hash != manifest_hash {
         return Err(NodeSupervisorError::RuntimeManifestHashMismatch {
             program: program.to_string(),
@@ -1156,10 +1156,6 @@ fn validate_manifest_hash_format(program: &str, hash: &str) -> Result<(), NodeSu
     })
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(Sha256::digest(bytes)))
-}
-
 fn validate_dev_account_count(expected: usize, actual: usize) -> Result<(), NodeSupervisorError> {
     if actual == expected {
         return Ok(());
@@ -1260,13 +1256,9 @@ fn validate_dev_account_public_key(
 
     Err(NodeSupervisorError::DevAccountPublicKeyMismatch {
         index,
-        expected: format_hex(&expected),
-        actual: format_hex(actual),
+        expected: prefixed_hex(expected),
+        actual: prefixed_hex(actual),
     })
-}
-
-fn format_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
 }
 
 fn validate_configured_binary(path: &Path) -> Result<PathBuf, NodeSupervisorError> {
@@ -2235,7 +2227,7 @@ mod tests {
         manifest["chainState"] = serde_json::json!("recovered");
         let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
         fs::write(&path, &bytes).expect("bug: manifest should be writable");
-        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+        pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
 
         let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
             .expect("bug: recovered readiness should parse");
@@ -2265,7 +2257,7 @@ mod tests {
             .remove("chainState");
         let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
         fs::write(&path, &bytes).expect("bug: manifest should be writable");
-        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+        pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
 
         let error = parse_readiness_line("hogd-dev", &pointer.to_string())
             .expect_err("manifest readiness without chainState should fail");
@@ -2296,7 +2288,7 @@ mod tests {
             .remove("schedulerGateway");
         let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
         fs::write(&path, &bytes).expect("bug: manifest should be writable");
-        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+        pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
 
         let error = parse_readiness_line("hogd-dev", &pointer.to_string())
             .expect_err("manifest readiness without schedulerGateway should fail");
@@ -2324,7 +2316,7 @@ mod tests {
         manifest["kind"] = serde_json::json!("hog-devnode-runtime");
         let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
         fs::write(&path, &bytes).expect("bug: manifest should be writable");
-        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+        pointer["manifestHash"] = serde_json::json!(super::sha256_prefixed_hex(&bytes));
 
         let error = parse_readiness_line("hog-devnode", &pointer.to_string())
             .expect_err("unexpected runtime manifest kind should fail");
@@ -2413,7 +2405,8 @@ mod tests {
                 .expect("bug: pointer has manifest path"),
         );
         fs::write(&path, b"tampered").expect("bug: manifest should be writable");
-        pointer["manifestHash"] = serde_json::Value::String(super::sha256_hex(b"original"));
+        pointer["manifestHash"] =
+            serde_json::Value::String(super::sha256_prefixed_hex(b"original"));
         let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
 
         let err = parse_readiness_line("hogd-dev", &line)
@@ -2511,7 +2504,7 @@ mod tests {
     fn manifest_pointer_fields_do_not_fall_back_to_legacy_readiness() {
         let line = format!(
             r#"{{"schemaVersion":2,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
-            super::sha256_hex(b"missing"),
+            super::sha256_prefixed_hex(b"missing"),
         );
 
         let err = parse_readiness_line("hogd-dev", &line)
@@ -3385,7 +3378,7 @@ mod tests {
         format!(
             r#"{{"schemaVersion":2,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
             manifest_path.display(),
-            super::sha256_hex(manifest.as_bytes()),
+            super::sha256_prefixed_hex(manifest.as_bytes()),
         )
     }
 

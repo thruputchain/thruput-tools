@@ -28,7 +28,8 @@ use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAd
 use crate::rpc::{
     ReceiptWaitFailure, SimReceiptSource, SimRpcClient, SimRpcError, receipt_poll_config,
 };
-use crate::util::{json_string, sha256_hex};
+use crate::util::json_string;
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
@@ -391,7 +392,7 @@ fn prepare_deploy(
     block_expiry_height: i64,
 ) -> Result<PreparedDeploy, SimError> {
     let artifact_bytes = std::fs::read(artifact_path)?;
-    let artifact_sha256 = sha256_hex(&artifact_bytes);
+    let artifact_sha256 = sha256_prefixed_hex(&artifact_bytes);
     let blob = ContractBlob {
         data: BytesM(artifact_bytes),
     };

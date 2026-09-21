@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_client::codec::method_entrypoint_id;
@@ -253,7 +254,7 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     let entrypoint_id = format_entrypoint_id(prepared.resolved.entrypoint);
-    let calldata_hex = format_hex_bytes(&prepared.calldata);
+    let calldata_hex = prefixed_hex(&prepared.calldata);
 
     print.status(format_args!(
         "Prepared dry-run call {} on {} via {}.",
@@ -291,10 +292,6 @@ fn print_dry_run(
 
 pub(crate) fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
     format!("0x{}", hex::encode(entrypoint.into_inner()))
-}
-
-pub(crate) fn format_hex_bytes(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
 }
 
 fn selector_summary(resolved: &ResolvedCall) -> String {

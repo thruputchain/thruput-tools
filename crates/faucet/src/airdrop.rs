@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -90,8 +91,8 @@ impl AirdropService {
         }
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
-            genesis_hash: hex_string(request.genesis_hash.0),
-            recipient: hex_string(request.recipient.0),
+            genesis_hash: prefixed_hex(request.genesis_hash.0),
+            recipient: prefixed_hex(request.recipient.0),
             client_nonce: hex::encode(request.client_nonce.as_bytes()),
         };
         let now = SystemTime::now();
@@ -126,7 +127,7 @@ impl AirdropService {
         };
         let quota_checks = [
             QuotaCheck {
-                key: QuotaKey::AirdropRecipient(hex_string(request.recipient.0)),
+                key: QuotaKey::AirdropRecipient(prefixed_hex(request.recipient.0)),
                 max: 1,
                 window: Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
             },
@@ -384,7 +385,7 @@ impl AirdropService {
             Ok(accepted) => {
                 let amount_matches =
                     accepted.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
-                attempt.tx_hash = Some(hex_string(accepted.tx_hash.0.0));
+                attempt.tx_hash = Some(prefixed_hex(accepted.tx_hash.0.0));
                 // An accepted transaction must not age out while its receipt is unresolved;
                 // otherwise the same idempotency key could submit a second transaction.
                 attempt.expires_at = None;
@@ -801,13 +802,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     }
 }
 
-pub(crate) fn hex_string(bytes: impl AsRef<[u8]>) -> String {
-    format!("0x{}", hex::encode(bytes.as_ref()))
-}
-
 pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes: [u8; 32] = hex::decode(value).ok()?.try_into().ok()?;
+    let bytes = decode_fixed_hex(value).ok()?;
     Some(TxHash(SHA256Hash::from(
         groundhog_xdr::types::SHA256Hash::from(bytes),
     )))

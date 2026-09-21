@@ -6,15 +6,8 @@ use tempfile::tempdir;
 
 use groundhog_sim::validation::{ValidationError, validate_manifest};
 
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use groundhog_sim::util::*;
-
-#[test]
-fn sha256_hex_returns_prefixed_digest() {
-    assert_eq!(
-        sha256_hex(b"abc"),
-        "0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
-}
 
 #[test]
 fn simulation_config_hash_excludes_run_identity_but_preserves_effective_config() {
@@ -33,7 +26,7 @@ fn simulation_config_hash_excludes_run_identity_but_preserves_effective_config()
 
     loaded.refresh_hashes().expect("hashes should refresh");
 
-    assert_eq!(loaded.sha256, sha256_hex(&loaded.bytes));
+    assert_eq!(loaded.sha256, sha256_prefixed_hex(&loaded.bytes));
     let loaded_config_sha256 = loaded
         .config_sha256
         .as_deref()
@@ -52,7 +45,7 @@ fn simulation_config_hash_excludes_run_identity_but_preserves_effective_config()
         .nonce_namespace = 2;
     let different_nonce_bytes =
         serde_json::to_vec_pretty(&different_nonce).expect("manifest should encode");
-    assert_ne!(loaded.sha256, sha256_hex(&different_nonce_bytes));
+    assert_ne!(loaded.sha256, sha256_prefixed_hex(&different_nonce_bytes));
     assert_eq!(
         loaded_config_sha256,
         simulation_config_sha256(&different_nonce).expect("config should hash")
