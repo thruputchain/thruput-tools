@@ -1,5 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{future::Future, sync::Arc};
+use tokio::time::Instant;
 
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
@@ -32,11 +33,12 @@ use crate::{
 /// independently-typed submit, chain, read, and view backend planes.
 ///
 /// Holds a cached reading of the db tip (height plus the resolved network
-/// config) that every `sendRawTransaction` pre-check consults. The cache is
-/// refreshed by whichever path fetches a tip: a submit that finds it stale,
-/// the public `chainTip` method, or the background task started by
-/// [`Self::new`] that keeps it fresh on an idle server.
-#[derive(Debug, Clone)]
+/// config) that every `sendRawTransaction` pre-check consults. The
+/// background task started by [`Self::new`] refreshes it once per
+/// `tip_refresh_interval_ms`, which is also how long a reading is reused,
+/// so a submit reads what that task published rather than fetching on its
+/// own latency path. `chainTip` and a bound re-check still fetch directly.
+#[derive(Debug)]
 pub struct GroundhogRpcServer<S, C, R, V> {
     submit: S,
     chain: Arc<C>,
@@ -51,7 +53,7 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     /// Aborts the background refresh when the last clone of the server
     /// (typically the one jsonrpsee holds) is dropped. Held only for that
     /// drop; never read.
-    _tip_refresh: Option<Arc<AbortOnDrop>>,
+    _tip_refresh: Option<AbortOnDrop>,
 }
 
 /// What the submit pre-checks need from a db tip, resolved once per fetch
@@ -84,8 +86,11 @@ impl TipState {
 /// Rate-limited, best-effort db-tip reading shared by all
 /// `sendRawTransaction` pre-checks on this server.
 ///
-/// A submit asks the backend at most once per TTL; submits inside the
-/// window reuse the last reading. The submit that finds the window expired
+/// A submit asks the backend at most once per reuse window; submits
+/// inside the window reuse the last reading. The window is
+/// `tip_refresh_interval_ms`, which is also how often the background task
+/// refreshes, so on a server with that task running the refresh renews a
+/// reading as its window closes and submits stay off the backend. The submit that finds the window expired
 /// claims the refresh before awaiting it, so concurrent submits keep using
 /// the stale reading instead of queuing behind the probe. Failed or
 /// timed-out probes keep the previous reading: the tip only grows, so a
@@ -99,18 +104,25 @@ impl TipState {
 /// startup share one fetch rather than one of them failing.
 #[derive(Debug, Clone)]
 struct TipCache {
-    state: Arc<tokio::sync::Mutex<TipCacheState>>,
+    inner: Arc<TipCacheInner>,
+}
+
+#[derive(Debug)]
+struct TipCacheInner {
+    state: tokio::sync::Mutex<TipCacheState>,
     /// Signalled when a probe finishes, whatever its outcome, so cold-cache
     /// waiters can re-read the state.
-    probe_done: Arc<tokio::sync::watch::Sender<()>>,
+    probe_done: tokio::sync::watch::Sender<()>,
 }
 
 impl Default for TipCache {
     fn default() -> Self {
         let (probe_done, _) = tokio::sync::watch::channel(());
         Self {
-            state: Arc::default(),
-            probe_done: Arc::new(probe_done),
+            inner: Arc::new(TipCacheInner {
+                state: tokio::sync::Mutex::default(),
+                probe_done,
+            }),
         }
     }
 }
@@ -152,20 +164,20 @@ struct TipRead {
 }
 
 impl TipCache {
-    /// Record a reading obtained by any path, restarting the TTL window
-    /// when it is the newest.
+    /// Record a reading obtained by any path, restarting the reuse
+    /// window when it is the newest.
     async fn store(&self, reading: TipState) {
-        let mut state = self.state.lock().await;
+        let mut state = self.inner.state.lock().await;
         if state.record(reading) {
             state.last_attempt = Some(Instant::now());
         }
     }
 
-    /// Current reading, refreshing it through `fetch` when the TTL has
-    /// lapsed.
+    /// Current reading, refreshing it through `fetch` once `window` has
+    /// lapsed since the last attempt.
     async fn reading<Fut>(
         &self,
-        ttl: Duration,
+        window: Duration,
         probe_timeout: Duration,
         context: RpcRequestContext,
         fetch: impl FnOnce(RpcRequestContext) -> Fut,
@@ -178,9 +190,9 @@ impl TipCache {
         // `None` when it claimed the window itself. Decided under the lock
         // and released before any await, since the probe locks again.
         let waiter = {
-            let mut state = self.state.lock().await;
+            let mut state = self.inner.state.lock().await;
             match state.last_attempt {
-                Some(at) if now.duration_since(at) < ttl => {
+                Some(at) if now.duration_since(at) < window => {
                     if state.reading.is_some() || !state.in_flight {
                         return TipRead {
                             state: state.reading,
@@ -189,7 +201,7 @@ impl TipCache {
                     }
                     // Subscribed under the lock, so the probe cannot finish
                     // before the wait begins.
-                    Some(self.probe_done.subscribe())
+                    Some(self.inner.probe_done.subscribe())
                 }
                 _ => {
                     state.last_attempt = Some(now);
@@ -206,7 +218,7 @@ impl TipCache {
         // for itself, so it counts as probed.
         let _ = tokio::time::timeout(probe_timeout, probe_done.changed()).await;
         TipRead {
-            state: self.state.lock().await.reading,
+            state: self.inner.state.lock().await.reading,
             probed: true,
         }
     }
@@ -228,7 +240,7 @@ impl TipCache {
             None => None,
         };
         let state = {
-            let mut state = self.state.lock().await;
+            let mut state = self.inner.state.lock().await;
             match &outcome {
                 Some(Ok(Ok(reading))) => {
                     state.record(TipState::from_reading(reading));
@@ -244,7 +256,7 @@ impl TipCache {
             state.in_flight = false;
             state.reading
         };
-        self.probe_done.send_replace(());
+        self.inner.probe_done.send_replace(());
         TipRead {
             state,
             probed: outcome.is_some(),
@@ -277,7 +289,11 @@ fn spawn_tip_refresh<C: ChainPlane>(
         tracing::debug!("no tokio runtime, chain tip refresh task not started");
         return None;
     };
-    let interval = Duration::from_millis(config.tip_refresh_interval_ms.max(1));
+    if config.tip_refresh_interval_ms == 0 {
+        tracing::debug!("tip refresh interval is zero, every pre-check fetches its own tip");
+        return None;
+    }
+    let interval = Duration::from_millis(config.tip_refresh_interval_ms);
     let probe_timeout = Duration::from_millis(config.tip_probe_timeout_ms);
     let task = handle.spawn(async move {
         loop {
@@ -346,8 +362,9 @@ where
     ///
     /// When called inside a Tokio runtime this also starts the background
     /// task that refreshes the cached db-tip reading every
-    /// `tip_refresh_interval_ms`; it stops when the last clone of the
-    /// server is dropped.
+    /// `tip_refresh_interval_ms`; it stops when the server is dropped. An
+    /// interval of zero starts no task and makes every pre-check fetch its
+    /// own reading.
     pub fn new(
         submit: S,
         chain: C,
@@ -359,8 +376,7 @@ where
     ) -> Self {
         let chain = Arc::new(chain);
         let tip_cache = TipCache::default();
-        let tip_refresh =
-            spawn_tip_refresh(chain.clone(), tip_cache.clone(), &config).map(Arc::new);
+        let tip_refresh = spawn_tip_refresh(chain.clone(), tip_cache.clone(), &config);
         Self {
             submit,
             chain,
@@ -424,8 +440,11 @@ where
     /// success); a submit then runs only the checks that need no chain
     /// reading, and `chainConfig` has nothing to report.
     async fn cached_tip_state(&self, context: RpcRequestContext) -> TipRead {
-        self.tip_state_within(Duration::from_millis(self.config.tip_cache_ttl_ms), context)
-            .await
+        self.tip_state_within(
+            Duration::from_millis(self.config.tip_refresh_interval_ms),
+            context,
+        )
+        .await
     }
 
     /// Db-tip reading fetched now regardless of the cache window, for a
@@ -434,10 +453,10 @@ where
         self.tip_state_within(Duration::ZERO, context).await
     }
 
-    async fn tip_state_within(&self, ttl: Duration, context: RpcRequestContext) -> TipRead {
+    async fn tip_state_within(&self, window: Duration, context: RpcRequestContext) -> TipRead {
         self.tip_cache
             .reading(
-                ttl,
+                window,
                 Duration::from_millis(self.config.tip_probe_timeout_ms),
                 context,
                 |probe_context| self.chain.chain_tip(probe_context),
@@ -489,8 +508,9 @@ where
             let params = tip.state.and_then(|tip| tip.params).unwrap_or_default();
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
-                // A cached config can lag, by up to the TTL, an upgrade block
-                // that raised the violated bound. Read the tip again before
+                // A cached config can lag an upgrade block that raised the
+                // violated bound, by up to a refresh interval. Read the tip
+                // again before
                 // rejecting, so a stale bound never turns away a transaction
                 // the current config admits. A reading this request fetched
                 // itself is already current, and the rejection stands.
@@ -563,7 +583,7 @@ where
         let context = self.request_context();
         self.within_request_deadline(context, async {
             // Same rate-limited reading as the submit pre-checks: one tip
-            // fetch per TTL window.
+            // fetch per refresh interval.
             let Some(state) = self.cached_tip_state(context).await.state else {
                 return Err(RpcServerError::BackendUnavailable(
                     "no chain tip reading is available".into(),
@@ -1368,7 +1388,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn expiry_precheck_probes_tip_at_most_once_per_ttl() {
+    async fn expiry_precheck_probes_tip_at_most_once_per_refresh_interval() {
         let tip_calls = Arc::new(Mutex::new(0));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
@@ -1389,20 +1409,67 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             *tip_calls.lock().await,
             1,
-            "tip should be probed once within the cache TTL"
+            "tip should be probed once within the refresh interval"
         );
         assert_eq!(submitted.lock().await.len(), 3);
     }
 
-    #[tokio::test]
-    async fn expiry_precheck_probes_tip_again_after_ttl() {
+    /// The window a pre-check reuses a reading for must never be shorter
+    /// than the interval that refreshes it. When it was (`tip_cache_ttl_ms`
+    /// defaulted to 3s against a 5s refresh) every cycle held a stretch
+    /// where the reading had expired but the refresh had not yet run, and
+    /// the first submit to arrive in it fetched on its own latency path.
+    #[tokio::test(start_paused = true)]
+    async fn submit_inside_the_refresh_interval_does_not_fetch_its_own_tip() {
+        const INTERVAL_MS: u64 = 10_000;
+
         let tip_calls = Arc::new(Mutex::new(0));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
             CountingTipChain {
                 tip_calls: tip_calls.clone(),
             },
-            RpcServerConfig::default().with_tip_cache_ttl_ms(0),
+            RpcServerConfig::default().with_tip_refresh_interval_ms(INTERVAL_MS),
+            submitted.clone(),
+        );
+
+        server
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: unexpired transaction should submit");
+        assert_eq!(
+            *tip_calls.lock().await,
+            1,
+            "the first submit warms the reading"
+        );
+
+        // The last instant still inside the interval. Any reuse window
+        // shorter than it (a hardcoded constant, or a fraction of it as
+        // the 3s-against-5s defaults were) has lapsed by here, and the
+        // refresh task's first tick has not yet run.
+        tokio::time::advance(Duration::from_millis(INTERVAL_MS - 1)).await;
+
+        server
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: unexpired transaction should submit");
+        assert_eq!(
+            *tip_calls.lock().await,
+            1,
+            "a submit inside the refresh interval must reuse the reading \
+             rather than fetch one on its own latency path"
+        );
+    }
+
+    #[tokio::test]
+    async fn expiry_precheck_probes_tip_again_once_the_window_lapses() {
+        let tip_calls = Arc::new(Mutex::new(0));
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(
+            CountingTipChain {
+                tip_calls: tip_calls.clone(),
+            },
+            RpcServerConfig::default().with_tip_refresh_interval_ms(0),
             submitted.clone(),
         );
 
@@ -1779,7 +1846,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn chain_config_rpc_serves_the_cached_reading_within_the_ttl() {
+    async fn chain_config_rpc_serves_the_cached_reading_within_the_refresh_interval() {
         let chain = ConfigChain::new(3);
         let server = expiry_check_server(
             chain.clone(),
@@ -1797,16 +1864,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             *chain.tip_calls.lock().await,
             1,
-            "calls inside the TTL window must not each fetch the db tip"
+            "calls inside the refresh interval must not each fetch the db tip"
         );
     }
 
     #[tokio::test]
-    async fn chain_config_rpc_refetches_once_the_ttl_has_lapsed() {
+    async fn chain_config_rpc_refetches_once_the_window_lapses() {
         let chain = ConfigChain::new(1);
         let server = expiry_check_server(
             chain.clone(),
-            RpcServerConfig::default().with_tip_cache_ttl_ms(0),
+            RpcServerConfig::default().with_tip_refresh_interval_ms(0),
             Arc::new(Mutex::new(Vec::new())),
         );
         let first = server
@@ -1909,7 +1976,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[tokio::test]
     async fn bound_violation_is_rechecked_against_a_fresh_tip_before_rejecting() {
         // The cached config caps attachments at one; an upgrade then raises
-        // it to two. A submit inside the TTL must not reject on the stale
+        // it to two. A submit inside the window must not reject on the stale
         // cap: it reads the tip again and applies the raised one.
         let chain = ConfigChain::new(1);
         let submitted = Arc::new(Mutex::new(Vec::new()));
@@ -1981,7 +2048,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(read.state.map(|tip| tip.height), Some(10));
         cache.store(TipState::from_reading(&tip_reading(9))).await;
         assert_eq!(
-            cache.state.lock().await.reading.map(|tip| tip.height),
+            cache.inner.state.lock().await.reading.map(|tip| tip.height),
             Some(10)
         );
     }

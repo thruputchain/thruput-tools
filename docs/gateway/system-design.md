@@ -275,12 +275,15 @@ network config arrives with every `schedgateway_get_tip` reply (the same
 one that serves `chainTip`); the shared server flattens it into
 `NetworkConfigParams` once per fetch and keeps a single cached db-tip
 reading (height plus params) that every fetch refreshes: a submit that
-finds it older than `tip_cache_ttl_ms`, the public `chainTip` method, and
-a background task that probes every `tip_refresh_interval_ms` on an idle
-server. The public `chainConfig` method reads through that same cache, so
-however often it is called it costs the backend at most one fetch per
-`tip_cache_ttl_ms`; on a cold cache a caller waits for the in-flight probe
-rather than answering empty. It reports exactly the stated params and fails
+finds it older than `tip_refresh_interval_ms`, the public `chainTip`
+method, and a background task that probes on that same interval. One value
+governs both the reuse window and the refresh period, so the refresh
+renews a reading as its window closes and a submit reads what the task
+published instead of fetching on its own latency path; an interval of zero
+starts no task and makes every pre-check fetch its own reading. The public
+`chainConfig` method reads through that same cache, so however often it is
+called it costs the backend at most one fetch per interval; on a cold
+cache a caller waits for the in-flight probe rather than answering empty. It reports exactly the stated params and fails
 rather than answering when there is no reading or the config version is
 unreadable. For the pre-checks, a
 parameter the config does not state is `None` and its check is
