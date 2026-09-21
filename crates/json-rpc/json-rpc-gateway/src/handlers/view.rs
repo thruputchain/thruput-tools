@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use groundhog_hogd_backend::view as shared_view;
-use groundhog_json_rpc_server::RpcRequestContext;
+use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
 use groundhog_view::ViewGatewayResult;
 use groundhog_xdr::view::TransactionViewQuery;
@@ -11,11 +11,10 @@ use groundhog_xdr::view::TransactionViewQuery;
 use crate::{
     config::HealthBackend,
     context::GatewayContext,
-    error::GatewayError,
-    metrics::{BackendRequestOutcome, GatewayMetrics, REASON_PARSE_FAILED},
+    metrics::{GatewayMetrics, REASON_PARSE_FAILED},
 };
 
-use super::{VIEW_GATEWAY, backend_deadline};
+use super::{VIEW_GATEWAY, backend_deadline, timed_backend_call};
 
 /// Execute a sandboxed contract simulation through hogd `ViewGateway`.
 #[tracing::instrument(
@@ -33,14 +32,14 @@ pub async fn view(
     context: RpcRequestContext,
     request: ViewRequest,
     gas_limit: u64,
-) -> Result<ViewResponse, GatewayError> {
+) -> Result<ViewResponse, RpcServerError> {
     let client = ctx.view_gateway.read().await.clone().ok_or_else(|| {
         if ctx.config.view_gateway_address.is_some() {
             // Startup currently rejects configured-but-unreachable ViewGateway
             // endpoints; this covers future runtime disconnect/reconnect modes.
-            GatewayError::BackendUnavailable("view_gateway not connected".into())
+            RpcServerError::BackendUnavailable("view_gateway not connected".into())
         } else {
-            GatewayError::NotImplemented("view".into())
+            RpcServerError::NotImplemented("view".into())
         }
     })?;
 
@@ -56,35 +55,28 @@ async fn view_response_from_client(
     metrics: &GatewayMetrics,
     query: &TransactionViewQuery,
     deadline: Instant,
-) -> Result<ViewResponse, GatewayError> {
-    let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout_at(deadline.into(), client.viewgateway_view(query)).await;
-    let outcome = match &rpc_result {
-        Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(ViewGatewayResult::ViewGatewayOk { .. })) => BackendRequestOutcome::Ok,
-        Ok(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
-    };
-    metrics.observe_backend_request(
+) -> Result<ViewResponse, RpcServerError> {
+    let result = timed_backend_call(
+        metrics,
         HealthBackend::ViewGateway,
         "viewgateway_view",
-        outcome,
-        started_at.elapsed(),
-    );
-    if rpc_result.is_err() {
+        VIEW_GATEWAY,
+        deadline,
+        client.viewgateway_view(query),
+        |result| matches!(result, ViewGatewayResult::ViewGatewayOk { .. }),
+    )
+    .await;
+    if matches!(result, Err(RpcServerError::BackendTimeout)) {
         metrics.observe_view_timeout();
     }
-    let result = rpc_result
-        .map_err(|_| GatewayError::BackendTimeout)?
-        .map_err(|source| GatewayError::BackendUnavailable(format!("view_gateway: {source}")))?;
-
-    view_response_from_gateway_result(result, metrics)
+    view_response_from_gateway_result(result?, metrics)
 }
 
 /// Decode the `ViewGateway` result and meter any events dropped as malformed.
 fn view_response_from_gateway_result(
     result: ViewGatewayResult,
     metrics: &GatewayMetrics,
-) -> Result<ViewResponse, GatewayError> {
+) -> Result<ViewResponse, RpcServerError> {
     let outcome = shared_view::view_outcome(VIEW_GATEWAY, result)?;
     metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, outcome.dropped_events);
     Ok(outcome.response)
@@ -249,18 +241,18 @@ mod tests {
         let metrics = GatewayMetrics::for_tests();
         assert!(matches!(
             view_response_from_gateway_result(ViewGatewayResult::ViewGatewayAbandoned, &metrics),
-            Err(GatewayError::BackendUnavailable(_))
+            Err(RpcServerError::BackendUnavailable(_))
         ));
         assert!(matches!(
             view_response_from_gateway_result(
                 ViewGatewayResult::ViewGatewayInternalError,
                 &metrics
             ),
-            Err(GatewayError::BackendUnavailable(_))
+            Err(RpcServerError::BackendUnavailable(_))
         ));
         assert!(matches!(
             view_response_from_gateway_result(ViewGatewayResult::Default { outcome: 99 }, &metrics),
-            Err(GatewayError::BackendUnavailable(_))
+            Err(RpcServerError::BackendUnavailable(_))
         ));
     }
 
@@ -283,7 +275,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(result, Err(GatewayError::BackendTimeout)),
+            matches!(result, Err(RpcServerError::BackendTimeout)),
             "ViewGateway timeout should surface BackendTimeout, got {result:?}"
         );
     }

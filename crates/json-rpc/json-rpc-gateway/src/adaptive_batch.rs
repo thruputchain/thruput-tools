@@ -28,8 +28,8 @@ use tokio::task::{AbortHandle, JoinSet};
 pub(crate) use groundhog_hogd_backend::submit::deadline_cohorts;
 
 use crate::config::AdaptiveBatchConfig;
-use crate::error::GatewayError;
 use crate::metrics::{GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
+use groundhog_json_rpc_server::RpcServerError;
 
 /// Per-batch processing policy supplied by each batcher callsite.
 ///
@@ -203,9 +203,9 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
     /// error in the caller — surfaced rather than panicked) or if the
     /// shard channel has been closed (shard task exited);
     /// `Overloaded` when the shard's ingress channel is full.
-    pub(crate) fn try_send(&self, item: I, shard_idx: usize) -> Result<(), GatewayError> {
+    pub(crate) fn try_send(&self, item: I, shard_idx: usize) -> Result<(), RpcServerError> {
         let Some(sender) = self.inner.shards.get(shard_idx) else {
-            return Err(GatewayError::BackendUnavailable(format!(
+            return Err(RpcServerError::BackendUnavailable(format!(
                 "{} shard index {shard_idx} out of range (n_shards={})",
                 self.name,
                 self.inner.shards.len(),
@@ -215,7 +215,7 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
             mpsc::error::TrySendError::Full(_) => {
                 self.metrics
                     .observe_internal_batch_rejected(self.component, REASON_INGRESS_FULL);
-                GatewayError::Overloaded(format!(
+                RpcServerError::Overloaded(format!(
                     "gateway {} ingress queue full (shard {shard_idx})",
                     self.name
                 ))
@@ -223,7 +223,7 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
             mpsc::error::TrySendError::Closed(_) => {
                 self.metrics
                     .observe_internal_batch_rejected(self.component, REASON_CLOSED);
-                GatewayError::BackendUnavailable(format!("{} shut down", self.name))
+                RpcServerError::BackendUnavailable(format!("{} shut down", self.name))
             }
         })
     }

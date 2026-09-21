@@ -7,17 +7,15 @@ use std::{
     time::Duration,
 };
 
-use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayIntroOutcome};
+use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_hogd_backend::{IntroOutcome, intro};
-use groundhog_indexer::{
-    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
-};
+use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use groundhog_json_rpc_types::protocol_token::{protocol_from_text, protocol_text};
 use groundhog_scheduler::sched_gateway::{
     SchedGateway_SchedGateway1_Client, SchedGatewayIntroOutcome,
 };
 use groundhog_scp::network::ProtocolCommit;
-use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
+use groundhog_view::ViewGateway_ViewGateway1_Client;
 use groundhog_x23_transport::{
     ConnectError, hogd_large_message_config, try_connect, try_connect_with_canceled_call_policy,
     try_connect_with_config, try_connect_with_config_and_canceled_call_policy,
@@ -552,43 +550,97 @@ where
     }
 }
 
-pub(crate) async fn connect_optional_indexer(
-    address: Option<&str>,
+/// How one optional backend is named across connect, health, and metrics.
+#[derive(Debug)]
+pub(crate) struct OptionalBackendNames {
+    pub(crate) backend: HealthBackend,
+    /// Pool label; also the `service` a connect error names and the word
+    /// health messages use for the backend.
+    pub(crate) service: &'static str,
+    pub(crate) probe_service: &'static str,
+    /// Intro RPC name, as metrics and logs report it.
+    pub(crate) intro_service: &'static str,
+}
+
+pub(crate) const INDEXER_NAMES: OptionalBackendNames = OptionalBackendNames {
+    backend: HealthBackend::Indexer,
+    service: "indexer",
+    probe_service: "indexer_health",
+    intro_service: "indexer_block_explorer_intro",
+};
+
+pub(crate) const DB_GATEWAY_NAMES: OptionalBackendNames = OptionalBackendNames {
+    backend: HealthBackend::DbGateway,
+    service: "db_gateway",
+    probe_service: "db_gateway_health",
+    intro_service: "dbgateway_intro",
+};
+
+pub(crate) const VIEW_GATEWAY_NAMES: OptionalBackendNames = OptionalBackendNames {
+    backend: HealthBackend::ViewGateway,
+    service: "view_gateway",
+    probe_service: "view_gateway_health",
+    intro_service: "viewgateway_intro",
+};
+
+/// How one optional backend is pooled and introduced.
+struct OptionalBackend<F> {
+    names: &'static OptionalBackendNames,
     pool_size: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+}
+
+/// Connect an optional backend's pools and run its intro handshake within
+/// `startup_timeout`.
+///
+/// `Ok(None)` is degraded mode: the address is unset, the pools could not
+/// be opened, or the intro RPC itself failed. A rejected intro is a hard
+/// error, because it means this gateway speaks the wrong protocol.
+async fn connect_optional_backend<C, F, O>(
+    spec: OptionalBackend<F>,
+    address: Option<&str>,
     protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
-) -> Result<Option<IndexerClient>, ConnectError> {
+    intro: impl AsyncFnOnce(&C, &ProtocolCommit) -> Result<O, rpc_driver::RpcError>,
+    classify: fn(O) -> IntroOutcome,
+) -> Result<Option<BackendClient<C>>, ConnectError>
+where
+    F: Fn(Arc<dyn RpcSender>) -> C + Copy,
+{
     let Some(address) = address else {
         return Ok(None);
     };
 
+    let names = spec.names;
     let connect_started_at = Instant::now();
     let Some(client) = connect_backend_pair(
-        "indexer",
-        "indexer_health",
+        names.service,
+        names.probe_service,
         address,
-        pool_size,
-        hogd_large_message_config(),
+        spec.pool_size,
+        spec.connection_config,
         startup_timeout,
-        IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
+        spec.build,
     )
     .await?
     else {
         return Ok(None);
     };
+    let timed_out = || ConnectError::StartupProbeTimedOut {
+        service: names.service,
+        addr: address.to_string(),
+        timeout: startup_timeout,
+    };
     let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
         tracing::warn!(
             addr = address,
-            service = "indexer_block_explorer_intro",
+            service = names.intro_service,
             timeout = ?startup_timeout,
             "optional backend connect consumed startup timeout, starting in degraded mode"
         );
-        return Err(ConnectError::StartupProbeTimedOut {
-            service: "indexer",
-            addr: address.to_string(),
-            timeout: startup_timeout,
-        });
+        return Err(timed_out());
     };
 
     let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
@@ -596,23 +648,19 @@ pub(crate) async fn connect_optional_indexer(
     // bytes the backend rejected.
     let protocol_version = protocol_text(&protocol);
     let started_at = Instant::now();
-    let intro_result = tokio::time::timeout(
-        intro_timeout,
-        client
-            .probe_client()
-            .indexer_block_explorer_intro(&protocol),
-    )
-    .await;
+    let intro_result = tokio::time::timeout(intro_timeout, intro(client.probe_client(), &protocol))
+        .await
+        .map(|result| result.map(classify));
     if let Some(metrics) = metrics {
         let outcome = match &intro_result {
             Err(_) => BackendRequestOutcome::Timeout,
-            Ok(Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)) => BackendRequestOutcome::Ok,
+            Ok(Ok(outcome)) if outcome.accepted() => BackendRequestOutcome::Ok,
             Ok(Ok(_)) => BackendRequestOutcome::Rejected,
             Ok(Err(_)) => BackendRequestOutcome::Error,
         };
         metrics.observe_backend_request(
-            HealthBackend::Indexer,
-            "indexer_block_explorer_intro",
+            names.backend,
+            names.intro_service,
             outcome,
             started_at.elapsed(),
         );
@@ -620,37 +668,54 @@ pub(crate) async fn connect_optional_indexer(
     let Ok(intro_outcome) = intro_result else {
         tracing::warn!(
             addr = address,
-            service = "indexer_block_explorer_intro",
+            service = names.intro_service,
             timeout = ?startup_timeout,
             "optional backend intro timed out, starting in degraded mode"
         );
-        return Err(ConnectError::StartupProbeTimedOut {
-            service: "indexer",
-            addr: address.to_string(),
-            timeout: startup_timeout,
-        });
+        return Err(timed_out());
     };
 
     match intro_outcome {
-        Ok(outcome) if intro::indexer_block_explorer(outcome).accepted() => Ok(Some(client)),
+        Ok(outcome) if outcome.accepted() => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
-            service: "indexer",
+            service: names.service,
             addr: address.to_string(),
-            reason: intro_rejection_reason(
-                intro::indexer_block_explorer(outcome),
-                &protocol_version,
-            ),
+            reason: intro_rejection_reason(outcome, &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
                 addr = address,
-                service = "indexer_block_explorer_intro",
+                service = names.intro_service,
                 error = %source,
                 "optional backend intro failed, starting in degraded mode"
             );
             Ok(None)
         }
     }
+}
+
+pub(crate) async fn connect_optional_indexer(
+    address: Option<&str>,
+    pool_size: usize,
+    protocol_override: Option<ProtocolCommit>,
+    startup_timeout: Duration,
+    metrics: Option<&GatewayMetrics>,
+) -> Result<Option<IndexerClient>, ConnectError> {
+    connect_optional_backend(
+        OptionalBackend {
+            names: &INDEXER_NAMES,
+            pool_size,
+            connection_config: hogd_large_message_config(),
+            build: IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
+        },
+        address,
+        protocol_override,
+        startup_timeout,
+        metrics,
+        async |client, protocol| client.indexer_block_explorer_intro(protocol).await,
+        intro::indexer_block_explorer,
+    )
+    .await
 }
 
 pub(crate) async fn connect_optional_db_gateway(
@@ -660,93 +725,21 @@ pub(crate) async fn connect_optional_db_gateway(
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<DbGatewayClient>, ConnectError> {
-    let Some(address) = address else {
-        return Ok(None);
-    };
-
-    let connect_started_at = Instant::now();
-    let Some(client) = connect_backend_pair(
-        "db_gateway",
-        "db_gateway_health",
+    connect_optional_backend(
+        OptionalBackend {
+            names: &DB_GATEWAY_NAMES,
+            pool_size,
+            connection_config: ConnectionConfig::default(),
+            build: DbGateway_DbGateway1_Client::new,
+        },
         address,
-        pool_size,
-        ConnectionConfig::default(),
+        protocol_override,
         startup_timeout,
-        DbGateway_DbGateway1_Client::new,
+        metrics,
+        async |client, protocol| client.dbgateway_intro(protocol).await,
+        intro::db_gateway,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
-    let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
-        tracing::warn!(
-            addr = address,
-            service = "dbgateway_intro",
-            timeout = ?startup_timeout,
-            "optional backend connect consumed startup timeout, starting in degraded mode"
-        );
-        return Err(ConnectError::StartupProbeTimedOut {
-            service: "db_gateway",
-            addr: address.to_string(),
-            timeout: startup_timeout,
-        });
-    };
-
-    let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
-    // The text form of what is actually sent, so a mismatch message quotes the
-    // bytes the backend rejected.
-    let protocol_version = protocol_text(&protocol);
-    let started_at = Instant::now();
-    let intro_result = tokio::time::timeout(
-        intro_timeout,
-        client.probe_client().dbgateway_intro(&protocol),
-    )
-    .await;
-    if let Some(metrics) = metrics {
-        let outcome = match &intro_result {
-            Err(_) => BackendRequestOutcome::Timeout,
-            Ok(Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
-            Ok(Ok(_)) => BackendRequestOutcome::Rejected,
-            Ok(Err(_)) => BackendRequestOutcome::Error,
-        };
-        metrics.observe_backend_request(
-            HealthBackend::DbGateway,
-            "dbgateway_intro",
-            outcome,
-            started_at.elapsed(),
-        );
-    }
-    let Ok(intro_outcome) = intro_result else {
-        tracing::warn!(
-            addr = address,
-            service = "dbgateway_intro",
-            timeout = ?startup_timeout,
-            "optional backend intro timed out, starting in degraded mode"
-        );
-        return Err(ConnectError::StartupProbeTimedOut {
-            service: "db_gateway",
-            addr: address.to_string(),
-            timeout: startup_timeout,
-        });
-    };
-
-    match intro_outcome {
-        Ok(outcome) if intro::db_gateway(outcome).accepted() => Ok(Some(client)),
-        Ok(outcome) => Err(ConnectError::StartupRejected {
-            service: "db_gateway",
-            addr: address.to_string(),
-            reason: intro_rejection_reason(intro::db_gateway(outcome), &protocol_version),
-        }),
-        Err(source) => {
-            tracing::warn!(
-                addr = address,
-                service = "dbgateway_intro",
-                error = %source,
-                "optional backend intro failed, starting in degraded mode"
-            );
-            Ok(None)
-        }
-    }
+    .await
 }
 
 pub(crate) async fn connect_optional_view_gateway(
@@ -755,93 +748,21 @@ pub(crate) async fn connect_optional_view_gateway(
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<ViewGatewayClient>, ConnectError> {
-    let Some(address) = address else {
-        return Ok(None);
-    };
-
-    let connect_started_at = Instant::now();
-    let Some(client) = connect_backend_pair(
-        "view_gateway",
-        "view_gateway_health",
+    connect_optional_backend(
+        OptionalBackend {
+            names: &VIEW_GATEWAY_NAMES,
+            pool_size: view_gateway_pool_size(),
+            connection_config: ConnectionConfig::default(),
+            build: ViewGateway_ViewGateway1_Client::new,
+        },
         address,
-        view_gateway_pool_size(),
-        ConnectionConfig::default(),
+        protocol_override,
         startup_timeout,
-        ViewGateway_ViewGateway1_Client::new,
+        metrics,
+        async |client, protocol| client.viewgateway_intro(protocol).await,
+        intro::view_gateway,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
-    let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
-        tracing::warn!(
-            addr = address,
-            service = "view_gateway_intro",
-            timeout = ?startup_timeout,
-            "optional backend connect consumed startup timeout, starting in degraded mode"
-        );
-        return Err(ConnectError::StartupProbeTimedOut {
-            service: "view_gateway",
-            addr: address.to_string(),
-            timeout: startup_timeout,
-        });
-    };
-
-    let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
-    // The text form of what is actually sent, so a mismatch message quotes the
-    // bytes the backend rejected.
-    let protocol_version = protocol_text(&protocol);
-    let started_at = Instant::now();
-    let intro_result = tokio::time::timeout(
-        intro_timeout,
-        client.probe_client().viewgateway_intro(&protocol),
-    )
-    .await;
-    if let Some(metrics) = metrics {
-        let outcome = match &intro_result {
-            Err(_) => BackendRequestOutcome::Timeout,
-            Ok(Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
-            Ok(Ok(_)) => BackendRequestOutcome::Rejected,
-            Ok(Err(_)) => BackendRequestOutcome::Error,
-        };
-        metrics.observe_backend_request(
-            HealthBackend::ViewGateway,
-            "viewgateway_intro",
-            outcome,
-            started_at.elapsed(),
-        );
-    }
-    let Ok(intro_outcome) = intro_result else {
-        tracing::warn!(
-            addr = address,
-            service = "view_gateway_intro",
-            timeout = ?startup_timeout,
-            "optional backend intro timed out, starting in degraded mode"
-        );
-        return Err(ConnectError::StartupProbeTimedOut {
-            service: "view_gateway",
-            addr: address.to_string(),
-            timeout: startup_timeout,
-        });
-    };
-
-    match intro_outcome {
-        Ok(outcome) if intro::view_gateway(outcome).accepted() => Ok(Some(client)),
-        Ok(outcome) => Err(ConnectError::StartupRejected {
-            service: "view_gateway",
-            addr: address.to_string(),
-            reason: intro_rejection_reason(intro::view_gateway(outcome), &protocol_version),
-        }),
-        Err(source) => {
-            tracing::warn!(
-                addr = address,
-                service = "view_gateway_intro",
-                error = %source,
-                "optional backend intro failed, starting in degraded mode"
-            );
-            Ok(None)
-        }
-    }
+    .await
 }
 
 /// Pick a scheduler pool size that covers every concurrent RPC the gateway
@@ -875,9 +796,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_trait::async_trait;
+    use groundhog_db_gateway::DbGatewayIntroOutcome;
     use groundhog_db_gateway::{
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
+    use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
     use groundhog_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
         EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
@@ -889,6 +812,7 @@ mod tests {
         SchedGatewaySubmitOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
+    use groundhog_view::ViewGatewayIntroOutcome;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
     };

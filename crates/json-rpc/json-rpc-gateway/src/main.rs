@@ -3,7 +3,6 @@ mod airdrop;
 mod backend;
 mod config;
 mod context;
-mod error;
 mod handlers;
 mod health;
 mod metrics;
