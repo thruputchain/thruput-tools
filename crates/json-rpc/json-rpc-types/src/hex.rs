@@ -444,6 +444,11 @@ impl<'de> Deserialize<'de> for Topic {
         let s = String::deserialize(deserializer)?;
         decode_fixed_hex(&s)
             .map(Topic)
-            .map_err(serde::de::Error::custom)
+            .map_err(|error| match error {
+                FixedHexError::InvalidHex(error) => serde::de::Error::custom(error),
+                FixedHexError::InvalidLength { .. } => {
+                    serde::de::Error::custom("topic must be exactly 32 bytes")
+                }
+            })
     }
 }
