@@ -275,12 +275,18 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Start the task that keeps `cache` fresh on an idle server.
+/// Start the task that keeps `cache` fresh.
 ///
-/// Each tick refreshes only if no probe ran within the interval, so the
-/// task never adds load to a server whose submits already keep the reading
-/// current. Returns `None` outside a Tokio runtime, where no background
-/// work can run and submits alone refresh the cache.
+/// Ticks land on a fixed schedule rather than an interval after the last
+/// probe returned: scheduling from the probe's end would push every later
+/// refresh out by the time that probe took, leaving the reading expired
+/// for as long between the two, which is exactly the stretch a submit
+/// would fill by fetching for itself. Each tick probes unconditionally,
+/// since this task is what the reuse window is measured against.
+///
+/// Returns `None` outside a Tokio runtime, where no background work can
+/// run, and for a zero interval, which disables reuse so that every
+/// pre-check fetches its own reading.
 fn spawn_tip_refresh<C: ChainPlane>(
     chain: Arc<C>,
     cache: TipCache,
@@ -297,11 +303,18 @@ fn spawn_tip_refresh<C: ChainPlane>(
     let interval = Duration::from_millis(config.tip_refresh_interval_ms);
     let probe_timeout = Duration::from_millis(config.tip_probe_timeout_ms);
     let task = handle.spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        // An overrunning probe resumes on schedule rather than firing the
+        // ticks it missed back to back.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // `interval` yields its first tick immediately; the task's own
+        // first probe belongs one interval in, as `new` documents.
+        ticker.tick().await;
         loop {
-            tokio::time::sleep(interval).await;
+            ticker.tick().await;
             cache
                 .reading(
-                    interval,
+                    Duration::ZERO,
                     probe_timeout,
                     RpcRequestContext::unbounded(),
                     |context| chain.chain_tip(context),
@@ -441,11 +454,24 @@ where
     /// success); a submit then runs only the checks that need no chain
     /// reading, and `chainConfig` has nothing to report.
     async fn cached_tip_state(&self, context: RpcRequestContext) -> TipRead {
-        self.tip_state_within(
-            Duration::from_millis(self.config.tip_refresh_interval_ms),
-            context,
+        self.tip_state_within(self.tip_reuse_window(), context)
+            .await
+    }
+
+    /// How long a reading stays reusable: until the next background
+    /// refresh is due, plus the longest that refresh's probe may take to
+    /// publish. A reading older than that means the task is not keeping
+    /// up (not started, stopped, or a backend that cannot answer), so the
+    /// caller fetches its own. Zero when the interval disables refreshing.
+    fn tip_reuse_window(&self) -> Duration {
+        if self.config.tip_refresh_interval_ms == 0 {
+            return Duration::ZERO;
+        }
+        Duration::from_millis(
+            self.config
+                .tip_refresh_interval_ms
+                .saturating_add(self.config.tip_probe_timeout_ms),
         )
-        .await
     }
 
     /// Db-tip reading fetched now regardless of the cache window, for a
@@ -1234,10 +1260,27 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     /// Chain plane that counts `chain_tip` calls and reports a fixed
-    /// pre-expiry tip.
+    /// pre-expiry tip, optionally taking `probe_duration` to answer.
     #[derive(Clone)]
     struct CountingTipChain {
         tip_calls: Arc<Mutex<u32>>,
+        probe_duration: Duration,
+    }
+
+    impl CountingTipChain {
+        fn new(tip_calls: Arc<Mutex<u32>>) -> Self {
+            Self {
+                tip_calls,
+                probe_duration: Duration::ZERO,
+            }
+        }
+
+        fn slow(tip_calls: Arc<Mutex<u32>>, probe_duration: Duration) -> Self {
+            Self {
+                tip_calls,
+                probe_duration,
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -1247,6 +1290,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             _context: RpcRequestContext,
         ) -> Result<TipReading, RpcServerError> {
             *self.tip_calls.lock().await += 1;
+            if !self.probe_duration.is_zero() {
+                tokio::time::sleep(self.probe_duration).await;
+            }
             Ok(tip_reading(42))
         }
 
@@ -1393,9 +1439,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let tip_calls = Arc::new(Mutex::new(0));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
-            CountingTipChain {
-                tip_calls: tip_calls.clone(),
-            },
+            CountingTipChain::new(tip_calls.clone()),
             RpcServerConfig::default(),
             submitted.clone(),
         );
@@ -1427,9 +1471,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let tip_calls = Arc::new(Mutex::new(0));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
-            CountingTipChain {
-                tip_calls: tip_calls.clone(),
-            },
+            CountingTipChain::new(tip_calls.clone()),
             RpcServerConfig::default().with_tip_refresh_interval_ms(INTERVAL_MS),
             submitted.clone(),
         );
@@ -1467,9 +1509,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let tip_calls = Arc::new(Mutex::new(0));
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let server = expiry_check_server(
-            CountingTipChain {
-                tip_calls: tip_calls.clone(),
-            },
+            CountingTipChain::new(tip_calls.clone()),
             RpcServerConfig::default().with_tip_refresh_interval_ms(0),
             submitted.clone(),
         );
@@ -2071,6 +2111,57 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+    }
+
+    /// Refreshes must land on a fixed schedule, not an interval after the
+    /// last probe returned. Scheduling from the probe's end pushes every
+    /// later refresh out by the time that probe took, and the reading sits
+    /// expired for that long each cycle with a submit free to fetch its
+    /// own.
+    #[tokio::test(start_paused = true)]
+    async fn background_refresh_does_not_drift_by_the_time_a_probe_takes() {
+        const INTERVAL_MS: u64 = 10_000;
+        const PROBE: Duration = Duration::from_secs(1);
+
+        // Advancing a paused clock does not itself poll the spawned task;
+        // yielding afterwards lets it observe the tick.
+        async fn advance(by: Duration) {
+            tokio::time::advance(by).await;
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        let tip_calls = Arc::new(Mutex::new(0));
+        let _server = expiry_check_server(
+            CountingTipChain::slow(tip_calls.clone(), PROBE),
+            RpcServerConfig::default().with_tip_refresh_interval_ms(INTERVAL_MS),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        // Anchor the task's schedule at zero before moving the clock.
+        tokio::task::yield_now().await;
+
+        // First tick at 10s. The probe counts on entry, then takes a
+        // second to answer.
+        advance(Duration::from_millis(INTERVAL_MS)).await;
+        assert_eq!(
+            *tip_calls.lock().await,
+            1,
+            "the first refresh is due at 10s"
+        );
+        advance(PROBE).await;
+
+        // The second belongs at 20s. A schedule restarted when the first
+        // probe answered would place it at 21s instead.
+        advance(Duration::from_millis(8_900)).await;
+        assert_eq!(*tip_calls.lock().await, 1, "not due before 20s");
+
+        advance(Duration::from_millis(200)).await;
+        assert_eq!(
+            *tip_calls.lock().await,
+            2,
+            "the second refresh must land on the fixed schedule, not one probe later"
+        );
     }
 
     #[tokio::test]
