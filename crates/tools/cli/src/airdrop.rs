@@ -1587,6 +1587,7 @@ mod tests {
                 erc20_too_large_abort(),
             )),
             events: Vec::new(),
+            gas_used: 1_500,
         }
     }
 

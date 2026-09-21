@@ -308,6 +308,7 @@ impl ReadPlane for HogdDevReadBackend {
                         events,
                         return_data,
                         abort_data,
+                        gas_used: info.events.gas_consumed,
                     }))
                 }
                 // A recent nondeterministic failure is not a committed record;
@@ -885,6 +886,8 @@ mod tests {
     const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
     const CANNED_HEIGHT_A: i64 = 5;
     const CANNED_HEIGHT_B: i64 = 10;
+    const CANNED_GAS_USED_A: u64 = 1_500;
+    const CANNED_GAS_USED_B: u64 = 2_500;
     const CANNED_FAILURE_HEIGHT: i64 = 11;
     const CANNED_FAILURE_ADDRESS: [u8; 32] = [0x0Du8; 32];
     const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
@@ -1080,6 +1083,7 @@ mod tests {
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
                     },
+                    gas_consumed: CANNED_GAS_USED_A,
                     events: VecM(vec![]),
                 },
             };
@@ -1094,6 +1098,7 @@ mod tests {
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
                     },
+                    gas_consumed: CANNED_GAS_USED_B,
                     events: VecM(vec![]),
                 },
             };
@@ -1514,6 +1519,10 @@ mod tests {
         assert_eq!(
             *receipt.height, CANNED_HEIGHT_A,
             "receipt height should match CANNED_HEIGHT_A"
+        );
+        assert_eq!(
+            receipt.gas_used, CANNED_GAS_USED_A,
+            "receipt should carry the gas the event log committed"
         );
     }
 

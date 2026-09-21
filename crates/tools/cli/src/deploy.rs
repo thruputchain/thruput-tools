@@ -161,6 +161,7 @@ pub fn run(
             }
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
+            print.detail("gas used", receipt.gas_used);
         }
         other => {
             if insufficient_funding {
@@ -254,6 +255,7 @@ pub fn run(
         },
         "height": receipt.height,
         "status": receipt.status,
+        "gasUsed": receipt.gas_used,
         "transactionDetail": transaction_detail,
         "walletEntrypointId": prepared.wallet_entrypoint_id,
         "walletEntrypointSource": prepared.wallet_entrypoint_source,
@@ -902,6 +904,7 @@ mod tests {
             events: Vec::new(),
             return_data: None,
             abort_data,
+            gas_used: 1_500,
         }
     }
 

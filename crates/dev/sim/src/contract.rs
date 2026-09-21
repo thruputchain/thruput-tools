@@ -1510,6 +1510,7 @@ mod tests {
             events: Vec::new(),
             return_data: return_data.map(HexBytes),
             abort_data: None,
+            gas_used: 1_500,
         }
     }
 

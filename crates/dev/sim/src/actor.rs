@@ -530,6 +530,7 @@ mod tests {
             events: Vec::new(),
             return_data: None,
             abort_data: None,
+            gas_used: 1_500,
         });
 
         assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(2));

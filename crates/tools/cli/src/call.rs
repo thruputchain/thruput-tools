@@ -140,6 +140,7 @@ pub fn run(
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
+            print.detail("gas used", receipt.gas_used);
             if decoded_return.is_none()
                 && let Some(ref data) = receipt.return_data
                 && !data.0.is_empty()
@@ -178,6 +179,7 @@ pub fn run(
         "method": prepared.method,
         "height": receipt.height,
         "status": receipt.status,
+        "gasUsed": receipt.gas_used,
         "statusSummary": status_summary,
         "returnData": receipt.return_data,
         "abortData": receipt.abort_data,

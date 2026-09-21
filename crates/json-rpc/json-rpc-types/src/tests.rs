@@ -272,14 +272,19 @@ mod wire_format {
             events: vec![],
             return_data: None,
             abort_data: None,
+            gas_used: 123_456,
         };
         let v: Value = serde_json::to_value(&receipt).unwrap();
         assert!(v["txHash"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(v["gasUsed"], 123_456);
         assert_eq!(v["height"], 50);
         assert_eq!(v["status"]["result"], "ok");
         assert!(v["events"].as_array().unwrap().is_empty());
         // camelCase
         assert!(v.get("tx_hash").is_none());
+
+        let decoded: TransactionReceipt = serde_json::from_value(v).unwrap();
+        assert_eq!(decoded.gas_used, 123_456);
     }
 
     #[test]

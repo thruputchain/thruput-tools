@@ -48,6 +48,7 @@ pub struct TransferCommittedReport {
     pub height: BlockHeight,
     pub status: ExecStatus,
     pub events: Vec<EmittedEvent>,
+    pub gas_used: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_data: Option<HexBytes>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,6 +95,7 @@ mod tests {
             height: groundhog_json_rpc_types::BlockHeight::from(43),
             status: groundhog_json_rpc_types::receipt::ExecStatus::Reverted { message: None },
             events: vec![],
+            gas_used: 1_500,
             return_data: None,
             abort_data: Some(HexBytes(vec![0x01])),
             abort: AbortReport {
@@ -121,6 +123,7 @@ mod tests {
             height: groundhog_json_rpc_types::BlockHeight::from(43),
             status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
             events: vec![],
+            gas_used: 1_500,
             return_data: None,
             abort_data: None,
             abort: AbortReport::from_decode(None),
