@@ -16,7 +16,7 @@ use syn::{
     parse_macro_input,
 };
 
-/// Generates `code`, `hint`, `details_json`, and the `CODES` catalog from
+/// Generates `code`, `hint`, `details_json`, and the `METADATA` catalog from
 /// per-variant `#[code]`, `#[hint]`, and `#[details]` attributes.
 ///
 /// - `#[code("...")]` overrides the code, which defaults to the variant name
