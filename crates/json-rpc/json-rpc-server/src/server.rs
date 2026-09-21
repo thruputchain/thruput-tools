@@ -439,11 +439,9 @@ where
             .await
     }
 
-    /// How long a reading stays reusable: until the next background
-    /// refresh is due, plus the longest that refresh's probe may take to
-    /// publish. A reading older than that means the task is not keeping
-    /// up (not started, stopped, or a backend that cannot answer), so the
-    /// caller fetches its own. Zero when the interval disables refreshing.
+    /// One refresh interval plus the longest a probe may take to publish:
+    /// older than that means the task is not keeping up, so the caller
+    /// fetches its own. Zero when refreshing is disabled.
     fn tip_reuse_window(&self) -> Duration {
         if self.config.tip_refresh_interval_ms == 0 {
             return Duration::ZERO;
@@ -516,11 +514,9 @@ where
             let params = tip.state.and_then(|tip| tip.params).unwrap_or_default();
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
-                // A cached config can lag an upgrade block that raised the
-                // violated bound. Read the tip again before rejecting, so a
-                // stale bound never turns away a transaction the current
-                // config admits. A reading this request fetched itself is
-                // already current, and the rejection stands.
+                // A cached config can lag an upgrade that raised this
+                // bound, so re-read the tip before rejecting. One this
+                // request fetched itself is already current.
                 Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
                     tip = self.fresh_tip_state(context).await;
                     let params = tip.state.and_then(|tip| tip.params).unwrap_or(params);
