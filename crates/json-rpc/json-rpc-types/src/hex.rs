@@ -132,6 +132,7 @@ pub struct NetworkHashHexError;
 /// their buffer, so this streams bounded chunks instead of building a complete
 /// `hex::encode` string and a second allocation to prepend `0x`. It also
 /// serves `format_args!` callers that only need to print the value.
+#[derive(Debug)]
 pub struct HexDisplay<'a>(pub &'a [u8]);
 
 impl fmt::Display for HexDisplay<'_> {
