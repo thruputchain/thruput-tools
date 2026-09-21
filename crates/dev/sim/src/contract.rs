@@ -1,12 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
+use groundhog_json_rpc_client::poll_receipt;
 use groundhog_json_rpc_types::{
-    hex::HexBytes,
-    receipt::{ExecStatus, TransactionReceipt},
-    runtime_manifest::RuntimeManifest,
-    transaction::TxHash,
+    hex::HexBytes, receipt::ExecStatus, runtime_manifest::RuntimeManifest, transaction::TxHash,
 };
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
@@ -19,17 +16,18 @@ use groundhog_xdr::{
 use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
-use crate::actor::{ActorState, WalletKind};
+use crate::actor::{ActorError, ActorState, WalletKind};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
-use crate::executor::{
-    DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, SimRpcClient,
-};
+use crate::executor::DEFAULT_RECEIPT_DRAIN_TIMEOUT;
 use crate::manifest::{
     ContractArtifactSpec, EntrypointSpec, EventQueryAnchorSpec, EventQueryOrderSpec,
     SimulationManifest,
 };
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
+use crate::rpc::{
+    ReceiptWaitFailure, SimReceiptSource, SimRpcClient, SimRpcError, receipt_poll_config,
+};
 use crate::util::{json_string, sha256_hex};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
@@ -310,7 +308,7 @@ where
         }
         Err(error) => {
             record.status = ContractDeploymentStatus::Failed;
-            record.error = Some(error);
+            record.error = Some(error.to_string());
             event_writer
                 .write(&ResultEvent::ContractDeployFailed {
                     event: record.clone(),
@@ -461,7 +459,24 @@ struct DeployProgress {
 
 struct DeployAttempt {
     progress: DeployProgress,
-    result: Result<(), String>,
+    result: Result<(), DeployAttemptError>,
+}
+
+/// Why one contract deployment attempt did not complete.
+#[derive(Debug, thiserror::Error)]
+enum DeployAttemptError {
+    /// The deploy transaction was not accepted for submission.
+    #[error("contract deploy submit failed: {0}")]
+    Submit(#[from] SimRpcError),
+    /// The deploying actor could not advance its setup nonce.
+    #[error("{0}")]
+    Nonce(#[from] ActorError),
+    /// No committed receipt resolved, or its contents could not be read.
+    #[error("{0}")]
+    Resolve(#[from] SimError),
+    /// The receipt committed but reported a non-`Ok` execution status.
+    #[error("contract deploy receipt status {status}")]
+    ReceiptStatus { status: &'static str },
 }
 
 async fn submit_and_resolve_deploy<C>(
@@ -483,14 +498,14 @@ where
         Err(error) => {
             return DeployAttempt {
                 progress,
-                result: Err(format!("contract deploy submit failed: {error}")),
+                result: Err(error.into()),
             };
         }
     };
     if let Err(error) = actor.consume_setup_nonce() {
         return DeployAttempt {
             progress,
-            result: Err(error.to_string()),
+            result: Err(error.into()),
         };
     }
     progress.tx_hash = match json_string(&tx_hash, "txHash") {
@@ -498,16 +513,24 @@ where
         Err(error) => {
             return DeployAttempt {
                 progress,
-                result: Err(error.to_string()),
+                result: Err(error.into()),
             };
         }
     };
-    let receipt = match poll_receipt(client, tx_hash).await {
+    let receipt = match poll_receipt(
+        &SimReceiptSource(&client),
+        tx_hash,
+        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
+    )
+    .await
+    .map_err(|source| ReceiptWaitFailure::step("contract deploy", source))
+    .map_err(SimError::from)
+    {
         Ok(receipt) => receipt,
         Err(error) => {
             return DeployAttempt {
                 progress,
-                result: Err(error.to_string()),
+                result: Err(error.into()),
             };
         }
     };
@@ -515,10 +538,9 @@ where
     if !matches!(receipt.status, ExecStatus::Ok) {
         return DeployAttempt {
             progress,
-            result: Err(format!(
-                "contract deploy receipt status {}",
-                exec_status_name(&receipt.status)
-            )),
+            result: Err(DeployAttemptError::ReceiptStatus {
+                status: exec_status_name(&receipt.status),
+            }),
         };
     }
     let (address, address_source) =
@@ -527,7 +549,7 @@ where
             Err(error) => {
                 return DeployAttempt {
                     progress,
-                    result: Err(error.to_string()),
+                    result: Err(error.into()),
                 };
             }
         };
@@ -537,29 +559,6 @@ where
     DeployAttempt {
         progress,
         result: Ok(()),
-    }
-}
-
-async fn poll_receipt<C>(client: C, tx_hash: TxHash) -> Result<TransactionReceipt, SimError>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    let deadline = Instant::now()
-        .checked_add(DEFAULT_RECEIPT_DRAIN_TIMEOUT)
-        .unwrap_or_else(Instant::now);
-    loop {
-        if let Some(receipt) = client.transaction_receipt(tx_hash).await.map_err(|error| {
-            SimError::Executor(format!("contract deploy receipt poll failed: {error}"))
-        })? {
-            return Ok(receipt);
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(SimError::Executor(
-                "contract deploy receipt timed out".into(),
-            ));
-        }
-        tokio::time::sleep(DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL.min(remaining)).await;
     }
 }
 
@@ -644,12 +643,13 @@ where
         .collateral
         .as_mut()
         .ok_or_else(|| SimError::Executor("collateral record missing".into()))?;
-    let receipt =
-        tokio::time::timeout(DEFAULT_RECEIPT_DRAIN_TIMEOUT, poll_receipt(client, tx_hash))
-            .await
-            .map_err(|_| {
-                SimError::Executor("native deployment collateral receipt timed out".into())
-            })??;
+    let receipt = poll_receipt(
+        &SimReceiptSource(&client),
+        tx_hash,
+        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
+    )
+    .await
+    .map_err(|source| ReceiptWaitFailure::step("native deployment collateral", source))?;
     if receipt.tx_hash != tx_hash || !matches!(receipt.status, ExecStatus::Ok) {
         return Err(SimError::Executor(format!(
             "native deployment collateral did not commit successfully: {:?}",
@@ -865,6 +865,7 @@ mod tests {
         BlockHeight,
         block::ChainTip,
         hex::Hex0x,
+        receipt::TransactionReceipt,
         runtime_manifest::RuntimeManifest,
         view::{ViewRequest, ViewResponse},
     };
@@ -872,6 +873,8 @@ mod tests {
     use groundhog_xdr::transaction::SignedTransaction;
     use serde_json::json;
     use tempfile::NamedTempFile;
+
+    use crate::rpc::SimRpcError;
 
     use crate::event::EventWriter;
     use crate::manifest::{
@@ -895,7 +898,7 @@ mod tests {
 
     impl SimRpcClient for DeployClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             let tip_height = self.tip_height;
             async move {
                 Ok(ChainTip {
@@ -909,7 +912,7 @@ mod tests {
         fn send_raw_transaction(
             &self,
             tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             let submitted = self.submitted.clone();
             let tx_hash = self.tx_hash;
             async move {
@@ -925,7 +928,7 @@ mod tests {
         fn transaction_receipt(
             &self,
             _tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let receipt = self.receipt.clone();
             async move { Ok(receipt) }
         }
@@ -934,8 +937,8 @@ mod tests {
         fn view(
             &self,
             _request: ViewRequest,
-        ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
-            async { Err("view should not be called".into()) }
+        ) -> impl Future<Output = Result<ViewResponse, SimRpcError>> + Send {
+            async { Err(SimRpcError::detail("view", "view should not be called")) }
         }
     }
 
@@ -1160,17 +1163,24 @@ mod tests {
         event_path: Option<std::path::PathBuf>,
     }
     impl SimRpcClient for NativeDeployClient {
-        async fn chain_tip(&self) -> Result<groundhog_json_rpc_types::block::ChainTip, String> {
+        async fn chain_tip(
+            &self,
+        ) -> Result<groundhog_json_rpc_types::block::ChainTip, SimRpcError> {
             Ok(groundhog_json_rpc_types::block::ChainTip {
                 height: 1.into(),
                 block_hash: Hex0x(SHA256Hash::from([0; 32])),
             })
         }
-        async fn send_raw_transaction(&self, tx_hex: String) -> Result<TxHash, String> {
-            let bytes = hex::decode(tx_hex.trim_start_matches("0x")).map_err(|e| e.to_string())?;
-            let signed: SignedTransaction = xdrs::txs::decode(&bytes).map_err(|e| e.to_string())?;
+        async fn send_raw_transaction(&self, tx_hex: String) -> Result<TxHash, SimRpcError> {
+            let decode_failed = |error: &dyn std::fmt::Display| {
+                SimRpcError::detail("sendRawTransaction", error.to_string())
+            };
+            let bytes =
+                hex::decode(tx_hex.trim_start_matches("0x")).map_err(|e| decode_failed(&e))?;
+            let signed: SignedTransaction =
+                xdrs::txs::decode(&bytes).map_err(|e| decode_failed(&e))?;
             let hash =
-                groundhog_signing::transaction_hash(&signed.tx).map_err(|e| e.to_string())?;
+                groundhog_signing::transaction_hash(&signed.tx).map_err(|e| decode_failed(&e))?;
             self.submitted
                 .lock()
                 .expect("submitted tx lock")
@@ -1180,7 +1190,10 @@ mod tests {
                 assert!(events.contains(&hex::encode(hash.as_ref())));
             }
             match self.submit_failure {
-                Some(false) => Err("ambiguous transport failure".into()),
+                Some(false) => Err(SimRpcError::detail(
+                    "sendRawTransaction",
+                    "ambiguous transport failure",
+                )),
                 Some(true) => Ok(TxHash(Hex0x(SHA256Hash::from([7; 32])))),
                 None => Ok(TxHash(Hex0x(hash))),
             }
@@ -1188,7 +1201,7 @@ mod tests {
         async fn transaction_receipt(
             &self,
             hash: TxHash,
-        ) -> Result<Option<TransactionReceipt>, String> {
+        ) -> Result<Option<TransactionReceipt>, SimRpcError> {
             Ok(Some(deploy_receipt(
                 hash,
                 if self.fail_collateral {

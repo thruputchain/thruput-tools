@@ -210,6 +210,21 @@ mod linux {
         Ok(count)
     }
 
+    /// Why a `/proc` record could not be read into a sample.
+    #[derive(Debug, thiserror::Error)]
+    enum ProcParseError {
+        /// The record did not carry a field the sample needs.
+        #[error("/proc record missing {field}")]
+        Missing { field: &'static str },
+        /// A field held something other than the number it should.
+        #[error("/proc field {field} is not a number: {source}")]
+        InvalidNumber {
+            field: &'static str,
+            #[source]
+            source: std::num::ParseIntError,
+        },
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ProcStat {
         pid: u32,
@@ -220,17 +235,23 @@ mod linux {
         threads: Option<u64>,
     }
 
-    fn parse_stat(value: &str, page_size: u64, ticks_per_second: u64) -> Result<ProcStat, String> {
-        let open = value
-            .find('(')
-            .ok_or_else(|| "stat missing comm open paren".to_string())?;
-        let close = value
-            .rfind(')')
-            .ok_or_else(|| "stat missing comm close paren".to_string())?;
-        let pid = value[..open]
-            .trim()
-            .parse::<u32>()
-            .map_err(|error| format!("invalid stat pid: {error}"))?;
+    fn parse_stat(
+        value: &str,
+        page_size: u64,
+        ticks_per_second: u64,
+    ) -> Result<ProcStat, ProcParseError> {
+        let open = value.find('(').ok_or(ProcParseError::Missing {
+            field: "stat comm open paren",
+        })?;
+        let close = value.rfind(')').ok_or(ProcParseError::Missing {
+            field: "stat comm close paren",
+        })?;
+        let pid = value[..open].trim().parse::<u32>().map_err(|source| {
+            ProcParseError::InvalidNumber {
+                field: "stat pid",
+                source,
+            }
+        })?;
         let fields: Vec<_> = value[close + 1..].split_whitespace().collect();
         let process_group_id = parse_field::<u32>(&fields, 2, "pgrp")?;
         let utime_ticks = parse_field::<u64>(&fields, 11, "utime").ok();
@@ -250,19 +271,19 @@ mod linux {
         })
     }
 
-    fn parse_field<T: std::str::FromStr>(
+    fn parse_field<T>(
         fields: &[&str],
         index: usize,
-        name: &str,
-    ) -> Result<T, String>
+        field: &'static str,
+    ) -> Result<T, ProcParseError>
     where
-        T::Err: std::fmt::Display,
+        T: std::str::FromStr<Err = std::num::ParseIntError>,
     {
         fields
             .get(index)
-            .ok_or_else(|| format!("stat missing {name}"))?
+            .ok_or(ProcParseError::Missing { field })?
             .parse::<T>()
-            .map_err(|error| format!("invalid stat {name}: {error}"))
+            .map_err(|source| ProcParseError::InvalidNumber { field, source })
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,7 +292,7 @@ mod linux {
         threads: Option<u64>,
     }
 
-    fn parse_status(value: &str) -> Result<ProcStatus, String> {
+    fn parse_status(value: &str) -> Result<ProcStatus, ProcParseError> {
         let mut rss_bytes = None;
         let mut threads = None;
         for line in value.lines() {
@@ -279,16 +300,20 @@ mod linux {
                 let kb = rest
                     .split_whitespace()
                     .next()
-                    .ok_or_else(|| "VmRSS missing value".to_string())?
+                    .ok_or(ProcParseError::Missing { field: "VmRSS" })?
                     .parse::<u64>()
-                    .map_err(|error| format!("invalid VmRSS: {error}"))?;
+                    .map_err(|source| ProcParseError::InvalidNumber {
+                        field: "VmRSS",
+                        source,
+                    })?;
                 rss_bytes = kb.checked_mul(1024);
             } else if let Some(rest) = line.strip_prefix("Threads:") {
-                threads = Some(
-                    rest.trim()
-                        .parse::<u64>()
-                        .map_err(|error| format!("invalid Threads: {error}"))?,
-                );
+                threads = Some(rest.trim().parse::<u64>().map_err(|source| {
+                    ProcParseError::InvalidNumber {
+                        field: "Threads",
+                        source,
+                    }
+                })?);
             }
         }
         Ok(ProcStatus { rss_bytes, threads })

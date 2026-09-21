@@ -13,6 +13,7 @@ pub mod nonce;
 pub mod provision;
 pub mod resource;
 pub mod result;
+pub mod rpc;
 pub mod run;
 pub mod runtime;
 pub mod scheduler;
@@ -26,6 +27,7 @@ pub use error::SimError;
 pub use manifest::{ClientSpec, SimulationManifest, WorkloadKind};
 pub use nonce::NonceNamespace;
 pub use result::{BaselineDiff, ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
+pub use rpc::{SimRpcClient, SimRpcError};
 pub use run::{ExistingRunOptions, RunOptions, RunSummary, RunSummaryCounts, run_target};
 pub use sweep::{SweepEntry, SweepEntryState, SweepReport, sweep_runs};
 pub use target::{
