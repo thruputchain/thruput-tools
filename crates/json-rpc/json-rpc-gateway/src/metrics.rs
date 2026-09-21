@@ -571,11 +571,15 @@ impl GatewayMetrics {
         self.inner.view_timeouts_total.inc();
     }
 
-    pub(crate) fn observe_malformed_event_dropped(&self, reason: &'static str) {
+    /// Count `dropped` malformed events, which may be zero.
+    pub(crate) fn observe_malformed_events_dropped(&self, reason: &'static str, dropped: usize) {
+        if dropped == 0 {
+            return;
+        }
         self.inner
             .malformed_events_dropped_total
             .with_label_values(&[reason])
-            .inc();
+            .inc_by(dropped as u64);
     }
 
     /// How many malformed events have been dropped for `reason`.
@@ -931,7 +935,8 @@ mod tests {
             Duration::from_millis(25),
         );
         metrics.observe_view_timeout();
-        metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
+        metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, 3);
+        metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, 0);
         let guard = metrics.internal_batch_in_flight_guard("storage_batcher");
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
@@ -960,7 +965,7 @@ mod tests {
         ));
         assert!(body.contains("groundhog_gateway_view_timeouts_total 1"));
         assert!(body.contains(
-            "groundhog_gateway_malformed_events_dropped_total{reason=\"parse_failed\"} 1"
+            "groundhog_gateway_malformed_events_dropped_total{reason=\"parse_failed\"} 3"
         ));
 
         for bucket in [1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0] {

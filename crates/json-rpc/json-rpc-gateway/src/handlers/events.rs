@@ -1,11 +1,9 @@
 //! `groundhog_getEvents` handler.
 
-use groundhog_hogd_backend::{event as shared_event, indexer as shared_indexer};
+use groundhog_hogd_backend::indexer as shared_indexer;
 use groundhog_indexer::EventPageResult;
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::events::{EventPage, EventQuery, IdentifiedEvent};
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_json_rpc_types::events::{EventPage, EventQuery};
 use std::time::Instant;
 
 use crate::config::HealthBackend;
@@ -53,32 +51,16 @@ pub async fn get_events(
         .map_err(|_| GatewayError::BackendTimeout)?
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
     let page = shared_indexer::event_page(INDEXER, result)?;
-
-    let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
-    for identified in page.events.0 {
-        if let Some(event) = shared_event::parse_emitted_event(identified.emitted_event) {
-            events.push(IdentifiedEvent {
-                tx_hash: TxHash(Hex0x(identified.tx_hash)),
-                block_height: identified.block_height,
-                sequence_number: identified.sequence_number,
-                event,
-            });
-        } else {
-            ctx.metrics
-                .observe_malformed_event_dropped(REASON_PARSE_FAILED);
-            tracing::warn!(
-                tx_hash = ?identified.tx_hash,
-                block_height = ?identified.block_height,
-                sequence_number = identified.sequence_number,
-                "dropped malformed event from indexer",
-            );
-        }
+    let decoded = shared_indexer::public_event_page(page);
+    ctx.metrics
+        .observe_malformed_events_dropped(REASON_PARSE_FAILED, decoded.dropped.len());
+    for dropped in &decoded.dropped {
+        tracing::warn!(
+            tx_hash = ?dropped.tx_hash,
+            block_height = ?dropped.block_height,
+            sequence_number = dropped.sequence_number,
+            "dropped malformed event from indexer",
+        );
     }
-
-    Ok(EventPage {
-        events,
-        cursor: page.cursor.into(),
-        latest_block: page.latest_block,
-        oldest_block: page.oldest_block,
-    })
+    Ok(decoded.page)
 }

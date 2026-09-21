@@ -4,8 +4,7 @@
 use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
 use groundhog_hogd_backend::{
-    event as shared_event, indexer as shared_indexer, receipt as shared_receipt,
-    scheduler as shared_scheduler,
+    indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
 };
 use groundhog_indexer::indexer::TxInfo;
 use groundhog_json_rpc_server::RpcRequestContext;
@@ -119,21 +118,10 @@ pub async fn get_transaction_receipt(
 
 /// Build a public receipt from the indexer's committed record.
 fn receipt(ctx: &GatewayContext, tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
-    let parsed = shared_event::parse_emitted_events(info.events.events);
-    for _ in 0..parsed.dropped {
-        ctx.metrics
-            .observe_malformed_event_dropped(REASON_PARSE_FAILED);
-    }
-    let (return_data, abort_data) = shared_receipt::root_output_buffers(info.events.root_output);
-    TransactionReceipt {
-        tx_hash,
-        height: info.height,
-        status: shared_receipt::exec_status(info.events.exec_result),
-        events: parsed.events,
-        return_data,
-        abort_data,
-        gas_used: info.events.gas_consumed,
-    }
+    let decoded = shared_receipt::transaction_receipt(tx_hash, info.height, info.events);
+    ctx.metrics
+        .observe_malformed_events_dropped(REASON_PARSE_FAILED, decoded.dropped_events);
+    decoded.receipt
 }
 
 async fn acquire_lookup_permits(
@@ -302,17 +290,12 @@ async fn indexed_transaction_status(
             started_at.elapsed(),
         );
         match rpc_result {
-            Ok(Ok(result)) => match shared_indexer::tx_lookup(INDEXER, result)? {
-                shared_indexer::TxLookup::Found(info) => {
-                    return Ok(Some(TransactionStatus::Committed {
-                        height: info.height,
-                    }));
+            Ok(Ok(result)) => {
+                let lookup = shared_indexer::tx_lookup(INDEXER, result)?;
+                if let Some(status) = shared_indexer::committed_status(lookup) {
+                    return Ok(Some(status));
                 }
-                shared_indexer::TxLookup::RecentFailure(recent_failure) => {
-                    return Ok(Some(TransactionStatus::from(&recent_failure)));
-                }
-                shared_indexer::TxLookup::NotFound => {}
-            },
+            }
             Ok(Err(e)) => {
                 return Err(GatewayError::BackendUnavailable(format!("indexer: {e}")));
             }

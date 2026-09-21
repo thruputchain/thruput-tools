@@ -173,9 +173,7 @@ impl BatchProcessor for StorageReadProcessor {
                                 response,
                             )
                             .map_err(GatewayError::from),
-                            None => Err(GatewayError::BackendUnavailable(format!(
-                                "{DB_GATEWAY} response had fewer items than the batch"
-                            ))),
+                            None => Err(shared_db_gateway::missing_item_error(DB_GATEWAY).into()),
                         };
                         let _ = item.reply.send(mapped);
                     }

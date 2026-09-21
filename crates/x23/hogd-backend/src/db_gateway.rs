@@ -54,6 +54,27 @@ pub fn payload(service: &str, result: DbGatewayResult) -> Result<DbGatewayPayloa
     }
 }
 
+/// The error for a batch answer that carries fewer items than the batch
+/// asked for, which leaves a requested key unaccounted for.
+pub fn missing_item_error(service: &str) -> RpcServerError {
+    RpcServerError::BackendUnavailable(format!("{service} response had fewer items than the batch"))
+}
+
+/// Fold a one-key batch payload into its single storage read.
+pub fn single_item_read(
+    service: &str,
+    payload: DbGatewayPayload,
+) -> Result<StorageItemRead, RpcServerError> {
+    let block_height = payload.block_height;
+    let item = payload
+        .items
+        .0
+        .into_iter()
+        .next()
+        .ok_or_else(|| missing_item_error(service))?;
+    storage_item_read(service, block_height, item)
+}
+
 /// Fold one per-item result and the batch's snapshot height into a public
 /// storage read.
 ///
