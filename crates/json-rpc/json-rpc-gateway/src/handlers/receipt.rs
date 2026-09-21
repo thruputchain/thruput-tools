@@ -19,8 +19,8 @@ use xdr_common::VecM;
 
 use crate::config::HealthBackend;
 use crate::context::{GatewayContext, clear_scheduler_if_current};
-use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
+use groundhog_json_rpc_server::RpcServerError;
 
 use super::{INDEXER, backend_deadline};
 
@@ -80,13 +80,13 @@ pub async fn get_transaction_receipt(
     ctx: &GatewayContext,
     context: RpcRequestContext,
     tx_hash: TxHash,
-) -> Result<Option<TransactionReceipt>, GatewayError> {
+) -> Result<Option<TransactionReceipt>, RpcServerError> {
     let client = ctx
         .indexer
         .read()
         .await
         .clone()
-        .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
+        .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
 
     let hash = shared_receipt::tx_hash_to_wire(tx_hash);
     let started_at = Instant::now();
@@ -104,8 +104,8 @@ pub async fn get_transaction_receipt(
         started_at.elapsed(),
     );
     let result = rpc_result
-        .map_err(|_| GatewayError::BackendTimeout)?
-        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+        .map_err(|_| RpcServerError::BackendTimeout)?
+        .map_err(|e| RpcServerError::BackendUnavailable(format!("indexer: {e}")))?;
 
     match shared_indexer::tx_lookup(INDEXER, result)? {
         shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(ctx, tx_hash, *info))),
@@ -132,7 +132,7 @@ async fn acquire_lookup_permits(
         tokio::sync::OwnedSemaphorePermit,
         tokio::sync::OwnedSemaphorePermit,
     ),
-    GatewayError,
+    RpcServerError,
 > {
     let admission = ctx
         .scheduler_lookup_admission
@@ -149,7 +149,7 @@ async fn acquire_lookup_permits(
                 BackendRequestOutcome::Rejected,
                 std::time::Duration::ZERO,
             );
-            GatewayError::Overloaded(
+            RpcServerError::Overloaded(
                 "scheduler transaction-status lookup capacity exhausted".into(),
             )
         })?;
@@ -171,9 +171,9 @@ async fn acquire_lookup_permits(
         Err(_) => LookupWaitOutcome::Timeout,
     });
     let permit = permit
-        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|_| RpcServerError::BackendTimeout)?
         .map_err(|_| {
-            GatewayError::BackendUnavailable("scheduler lookup execution closed".into())
+            RpcServerError::BackendUnavailable("scheduler lookup execution closed".into())
         })?;
     Ok((admission, permit))
 }
@@ -182,7 +182,7 @@ async fn transaction_is_pending(
     ctx: &GatewayContext,
     deadline: Instant,
     tx_hash: TxHash,
-) -> Result<bool, GatewayError> {
+) -> Result<bool, RpcServerError> {
     let (admission, permit) = acquire_lookup_permits(ctx, deadline).await?;
     let execution = ctx.metrics.scheduler_lookup().executing();
     // Queued requests must use the current generation, not a pre-wait snapshot.
@@ -196,13 +196,13 @@ async fn transaction_is_pending(
     } else {
         LookupWaitOutcome::Timeout
     });
-    let scheduler = scheduler.map_err(|_| GatewayError::BackendTimeout)?;
+    let scheduler = scheduler.map_err(|_| RpcServerError::BackendTimeout)?;
     if Instant::now() >= deadline {
-        return Err(GatewayError::BackendTimeout);
+        return Err(RpcServerError::BackendTimeout);
     }
     let client = scheduler
         .as_ref()
-        .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
+        .ok_or_else(|| RpcServerError::BackendUnavailable("scheduler not connected".into()))?;
     let generation = client.generation();
     let lookup_client = client.lookup_client().clone();
     let hash = shared_receipt::tx_hash_to_wire(tx_hash);
@@ -249,15 +249,15 @@ async fn transaction_is_pending(
         // unaccounted for, which cannot support a `false`.
         Ok(Ok(results)) => match shared_scheduler::mempool_holds_tx(&results) {
             Some(pending) => Ok(pending),
-            None => Err(GatewayError::BackendUnavailable(format!(
+            None => Err(RpcServerError::BackendUnavailable(format!(
                 "scheduler returned {} lookup results for one transaction",
                 results.0.len()
             ))),
         },
-        Ok(Err(error)) => Err(GatewayError::BackendUnavailable(format!(
+        Ok(Err(error)) => Err(RpcServerError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
-        Err(()) => Err(GatewayError::BackendTimeout),
+        Err(()) => Err(RpcServerError::BackendTimeout),
     }
 }
 
@@ -265,14 +265,14 @@ async fn indexed_transaction_status(
     ctx: &GatewayContext,
     deadline: Instant,
     tx_hash: TxHash,
-) -> Result<Option<TransactionStatus>, GatewayError> {
+) -> Result<Option<TransactionStatus>, RpcServerError> {
     let maybe_indexer = tokio::time::timeout_at(deadline.into(), ctx.indexer.read())
         .await
-        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|_| RpcServerError::BackendTimeout)?
         .clone();
     // timeout polls its future even when already expired; do not dispatch a late fallback.
     if Instant::now() >= deadline {
-        return Err(GatewayError::BackendTimeout);
+        return Err(RpcServerError::BackendTimeout);
     }
     if let Some(client) = maybe_indexer.as_ref() {
         let hash = shared_receipt::tx_hash_to_wire(tx_hash);
@@ -297,12 +297,12 @@ async fn indexed_transaction_status(
                 }
             }
             Ok(Err(e)) => {
-                return Err(GatewayError::BackendUnavailable(format!("indexer: {e}")));
+                return Err(RpcServerError::BackendUnavailable(format!("indexer: {e}")));
             }
-            Err(_) => return Err(GatewayError::BackendTimeout),
+            Err(_) => return Err(RpcServerError::BackendTimeout),
         }
     } else {
-        return Err(GatewayError::BackendUnavailable(
+        return Err(RpcServerError::BackendUnavailable(
             "indexer not connected".into(),
         ));
     }
@@ -320,7 +320,7 @@ pub async fn get_transaction_status(
     ctx: &GatewayContext,
     context: RpcRequestContext,
     tx_hash: TxHash,
-) -> Result<TransactionStatus, GatewayError> {
+) -> Result<TransactionStatus, RpcServerError> {
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     let indexed = indexed_transaction_status(ctx, deadline, tx_hash).await;
     if let Ok(Some(TransactionStatus::Committed { height })) = indexed {
@@ -911,7 +911,7 @@ mod tests {
                 test_hash()
             ))
             .await,
-            Err(GatewayError::Overloaded(_))
+            Err(RpcServerError::Overloaded(_))
         ));
         callers.truncate(4);
         let metrics = gathered_metrics(&ctx).await;
@@ -972,7 +972,7 @@ mod tests {
         );
         assert!(matches!(
             watchdog(lookup).await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         drop(slots);
         let metrics = gathered_metrics(&ctx).await;
@@ -990,7 +990,7 @@ mod tests {
         // An expired request must not dispatch even when execution is immediately available.
         assert!(matches!(
             watchdog(transaction_is_pending(&ctx, deadline, test_hash())).await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
@@ -1043,7 +1043,7 @@ mod tests {
         tokio::time::resume();
         assert!(matches!(
             watchdog(lookup).await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
 
         assert_eq!(
@@ -1300,7 +1300,7 @@ mod tests {
                     TransactionStatus::RecentFailure { .. }
                 ));
             } else {
-                assert!(matches!(result, Err(GatewayError::BackendUnavailable(_))));
+                assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
             }
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
@@ -1333,7 +1333,7 @@ mod tests {
                 } else if expected_unknown {
                     assert!(matches!(result.unwrap(), TransactionStatus::Unknown));
                 } else {
-                    assert!(matches!(result, Err(GatewayError::BackendUnavailable(_))));
+                    assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
                 }
                 assert_eq!(calls.load(Ordering::SeqCst), 2);
             }
@@ -1352,7 +1352,7 @@ mod tests {
         let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(20)));
         assert!(matches!(
             watchdog(get_transaction_status(&ctx, context, test_hash())).await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
@@ -1368,7 +1368,7 @@ mod tests {
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
         let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(100)));
         let result = watchdog(get_transaction_status(&ctx, context, test_hash())).await;
-        assert!(matches!(result, Err(GatewayError::BackendTimeout)));
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
         assert!(ctx.scheduler.read().await.is_some());
@@ -1434,7 +1434,7 @@ mod tests {
             .await
             .expect_err("bug: unconsulted mempool must not produce a definite status");
 
-        assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+        assert!(matches!(err, RpcServerError::BackendUnavailable(_)));
         let metrics = gathered_metrics(&ctx).await;
         assert_lookup_gauges(&metrics, 0, 0);
         // Acquiring an empty client lock is ready, not a healthy backend call.
@@ -1453,7 +1453,7 @@ mod tests {
         assert_lookup_gauges(&gathered_metrics(&ctx).await, 0, 1);
         assert!(matches!(
             watchdog(lookup).await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         drop(write_lock);
         let metrics = gathered_metrics(&ctx).await;
@@ -1479,7 +1479,7 @@ mod tests {
             .await
             .expect_err("bug: failed mempool lookup must not produce a definite status");
 
-        assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+        assert!(matches!(err, RpcServerError::BackendUnavailable(_)));
         assert!(
             ctx.scheduler.read().await.is_none(),
             "transport failure should clear the matching scheduler generation"
@@ -1497,7 +1497,7 @@ mod tests {
             .await
             .expect_err("bug: a lookup with no per-tx answer must not produce a definite status");
 
-        assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+        assert!(matches!(err, RpcServerError::BackendUnavailable(_)));
     }
 
     #[tokio::test]
@@ -1510,7 +1510,7 @@ mod tests {
             .await
             .expect_err("bug: extra per-tx answers must not produce a definite status");
 
-        assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+        assert!(matches!(err, RpcServerError::BackendUnavailable(_)));
     }
 
     #[tokio::test]
@@ -1547,7 +1547,7 @@ mod tests {
             .await
             .expect_err("saturated lookup admission should not claim an unknown status");
 
-        assert!(matches!(error, GatewayError::Overloaded(_)));
+        assert!(matches!(error, RpcServerError::Overloaded(_)));
         assert!(
             ctx.scheduler.read().await.is_some(),
             "local admission saturation must not clear a healthy scheduler"
@@ -1615,7 +1615,7 @@ mod tests {
 
         assert!(matches!(
             lookup.await.expect("lookup task should join"),
-            Err(GatewayError::BackendUnavailable(_))
+            Err(RpcServerError::BackendUnavailable(_))
         ));
         assert_eq!(
             ctx.scheduler

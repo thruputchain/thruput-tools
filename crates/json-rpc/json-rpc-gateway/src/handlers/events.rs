@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use crate::config::HealthBackend;
 use crate::context::GatewayContext;
-use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
+use groundhog_json_rpc_server::RpcServerError;
 
 use super::{INDEXER, backend_deadline};
 
@@ -25,13 +25,13 @@ pub async fn get_events(
     ctx: &GatewayContext,
     context: RpcRequestContext,
     query: EventQuery,
-) -> Result<EventPage, GatewayError> {
+) -> Result<EventPage, RpcServerError> {
     let client = ctx
         .indexer
         .read()
         .await
         .clone()
-        .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
+        .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
 
     let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
     let started_at = Instant::now();
@@ -48,8 +48,8 @@ pub async fn get_events(
         started_at.elapsed(),
     );
     let result = rpc_result
-        .map_err(|_| GatewayError::BackendTimeout)?
-        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+        .map_err(|_| RpcServerError::BackendTimeout)?
+        .map_err(|e| RpcServerError::BackendUnavailable(format!("indexer: {e}")))?;
     let page = shared_indexer::event_page(INDEXER, result)?;
     let decoded = shared_indexer::public_event_page(page);
     ctx.metrics

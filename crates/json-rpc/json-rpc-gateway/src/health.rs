@@ -1622,6 +1622,7 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, TransactionPageResult,
         TransactionQuery, TransactionRefPageResult, TxInfoOutcome, TxInfoResult,
     };
+    use groundhog_json_rpc_server::RpcServerError;
     use groundhog_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
     use groundhog_json_rpc_types::{
         ContractAddress as RpcContractAddress,
@@ -1670,7 +1671,6 @@ mod tests {
 
     use crate::{
         backend::GatewayBackend,
-        error::GatewayError,
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
         tip_coalescer::{SchedulerTipSink, TipSink},
@@ -2961,7 +2961,7 @@ mod tests {
         assert!(matches!(
             sink.get_tip(std::time::Instant::now() + Duration::from_millis(25))
                 .await,
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert!(scheduler.read().await.is_none());
         assert_eq!(calls.tip.load(Ordering::SeqCst), 1);
@@ -3009,7 +3009,7 @@ mod tests {
 
         assert!(matches!(
             call.await.unwrap(),
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(
             scheduler

@@ -28,9 +28,9 @@ use crate::adaptive_batch::{
 };
 use crate::config::{AdaptiveBatchConfig, HealthBackend};
 use crate::context::DbGatewayClient;
-use crate::error::GatewayError;
 use crate::handlers::DB_GATEWAY;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
+use groundhog_json_rpc_server::RpcServerError;
 
 /// Backend for batched storage reads.  In production this wraps the
 /// `DbGateway1` client; tests substitute a mock.
@@ -40,7 +40,7 @@ pub trait StorageReadSink: Send + Sync + 'static {
         &self,
         batch: AddressAndKeyBatch,
         deadline: Instant,
-    ) -> Result<DbGatewayPayload, GatewayError>;
+    ) -> Result<DbGatewayPayload, RpcServerError>;
 }
 
 /// Production sink: forwards to hogd's `dbgateway_get_items` RPC and
@@ -74,16 +74,16 @@ impl StorageReadSink for DbGatewaySink {
         &self,
         batch: AddressAndKeyBatch,
         deadline: Instant,
-    ) -> Result<DbGatewayPayload, GatewayError> {
+    ) -> Result<DbGatewayPayload, RpcServerError> {
         let client = self.db_gateway.read().await.clone();
         let client = client
-            .ok_or_else(|| GatewayError::BackendUnavailable("db_gateway not connected".into()))?;
+            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
         let started_at = Instant::now();
         let timeout = self
             .timeout
             .min(deadline.saturating_duration_since(started_at));
         if timeout.is_zero() {
-            return Err(GatewayError::BackendTimeout);
+            return Err(RpcServerError::BackendTimeout);
         }
         let outer_result = tokio::time::timeout(timeout, client.dbgateway_get_items(&batch)).await;
         self.metrics.observe_backend_request(
@@ -98,8 +98,8 @@ impl StorageReadSink for DbGatewaySink {
             started_at.elapsed(),
         );
         let outer = outer_result
-            .map_err(|_| GatewayError::BackendTimeout)?
-            .map_err(|e| GatewayError::BackendUnavailable(format!("db_gateway: {e}")))?;
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(|e| RpcServerError::BackendUnavailable(format!("db_gateway: {e}")))?;
         Ok(shared_db_gateway::payload(DB_GATEWAY, outer)?)
     }
 }
@@ -107,7 +107,7 @@ impl StorageReadSink for DbGatewaySink {
 /// A single queued client read.
 struct Item {
     request: AddressAndKey,
-    reply: oneshot::Sender<Result<StorageItemRead, GatewayError>>,
+    reply: oneshot::Sender<Result<StorageItemRead, RpcServerError>>,
     backend_deadline: Instant,
 }
 
@@ -131,7 +131,7 @@ impl BatchProcessor for StorageReadProcessor {
                 continue;
             }
             if item.backend_deadline <= now {
-                let _ = item.reply.send(Err(GatewayError::BackendTimeout));
+                let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
             } else {
                 live.push(item);
             }
@@ -147,7 +147,7 @@ impl BatchProcessor for StorageReadProcessor {
             let deadline = cohort[0].backend_deadline;
             if deadline <= now {
                 for item in cohort {
-                    let _ = item.reply.send(Err(GatewayError::BackendTimeout));
+                    let _ = item.reply.send(Err(RpcServerError::BackendTimeout));
                 }
                 continue;
             }
@@ -171,9 +171,8 @@ impl BatchProcessor for StorageReadProcessor {
                                 DB_GATEWAY,
                                 block_height.clone(),
                                 response,
-                            )
-                            .map_err(GatewayError::from),
-                            None => Err(shared_db_gateway::missing_item_error(DB_GATEWAY).into()),
+                            ),
+                            None => Err(shared_db_gateway::missing_item_error(DB_GATEWAY)),
                         };
                         let _ = item.reply.send(mapped);
                     }
@@ -253,7 +252,7 @@ impl StorageReadBatcher {
         context: RpcRequestContext,
         address: ContractAddress,
         key: [u8; 32],
-    ) -> Result<StorageItemRead, GatewayError> {
+    ) -> Result<StorageItemRead, RpcServerError> {
         self.read_key(
             context,
             address,
@@ -269,7 +268,7 @@ impl StorageReadBatcher {
         &self,
         context: RpcRequestContext,
         address: ContractAddress,
-    ) -> Result<StorageItemRead, GatewayError> {
+    ) -> Result<StorageItemRead, RpcServerError> {
         self.read_key(
             context,
             address,
@@ -288,7 +287,7 @@ impl StorageReadBatcher {
         address: ContractAddress,
         storage_key: StorageKey,
         routing_key: &[u8],
-    ) -> Result<StorageItemRead, GatewayError> {
+    ) -> Result<StorageItemRead, RpcServerError> {
         let shard_idx = shard_index_by_routing_key(routing_key, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let request = AddressAndKey {
@@ -305,7 +304,7 @@ impl StorageReadBatcher {
             .deadline()
             .expect("backend timeout should bound storage read");
         if backend_deadline <= Instant::now() {
-            return Err(GatewayError::BackendTimeout);
+            return Err(RpcServerError::BackendTimeout);
         }
         self.inner.try_send(
             Item {
@@ -317,8 +316,10 @@ impl StorageReadBatcher {
         )?;
         tokio::time::timeout_at(request_deadline.into(), reply_rx)
             .await
-            .map_err(|_| GatewayError::BackendTimeout)?
-            .map_err(|_| GatewayError::BackendUnavailable("storage batcher dropped reply".into()))?
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(|_| {
+                RpcServerError::BackendUnavailable("storage batcher dropped reply".into())
+            })?
     }
 }
 
@@ -350,7 +351,7 @@ mod tests {
         seen: Mutex<Vec<usize>>,
         batches: Mutex<Vec<AddressAndKeyBatch>>,
         deadlines: Mutex<Vec<Instant>>,
-        pending: Mutex<VecDeque<oneshot::Receiver<Result<DbGatewayPayload, GatewayError>>>>,
+        pending: Mutex<VecDeque<oneshot::Receiver<Result<DbGatewayPayload, RpcServerError>>>>,
     }
 
     impl MockSink {
@@ -358,7 +359,7 @@ mod tests {
             Arc::new(Self::default())
         }
 
-        fn queue_gate(&self) -> oneshot::Sender<Result<DbGatewayPayload, GatewayError>> {
+        fn queue_gate(&self) -> oneshot::Sender<Result<DbGatewayPayload, RpcServerError>> {
             let (tx, rx) = oneshot::channel();
             self.pending.lock().unwrap().push_back(rx);
             tx
@@ -383,16 +384,20 @@ mod tests {
             &self,
             batch: AddressAndKeyBatch,
             deadline: Instant,
-        ) -> Result<DbGatewayPayload, GatewayError> {
+        ) -> Result<DbGatewayPayload, RpcServerError> {
             let size = batch.0.len();
             self.seen.lock().unwrap().push(size);
             self.batches.lock().unwrap().push(batch);
             self.deadlines.lock().unwrap().push(deadline);
             let gate = self.pending.lock().unwrap().pop_front();
             match gate {
-                None => Err(GatewayError::BackendUnavailable("test gate missing".into())),
+                None => Err(RpcServerError::BackendUnavailable(
+                    "test gate missing".into(),
+                )),
                 Some(rx) => rx.await.unwrap_or_else(|_| {
-                    Err(GatewayError::BackendUnavailable("test gate dropped".into()))
+                    Err(RpcServerError::BackendUnavailable(
+                        "test gate dropped".into(),
+                    ))
                 }),
             }
         }
@@ -532,7 +537,7 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, Err(GatewayError::BackendTimeout)));
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
         assert!(mock.seen().is_empty());
     }
 
@@ -628,7 +633,7 @@ mod tests {
             .unwrap()
             .expect_err("r2 should be a per-item error");
         assert!(
-            matches!(err2, GatewayError::BackendUnavailable(_)),
+            matches!(err2, RpcServerError::BackendUnavailable(_)),
             "r2 expected BackendUnavailable, got {err2:?}"
         );
 
@@ -692,11 +697,11 @@ mod tests {
         first.await.unwrap().unwrap();
         settle().await;
         old_gate
-            .send(Err(GatewayError::BackendTimeout))
+            .send(Err(RpcServerError::BackendTimeout))
             .expect("old cohort gate should be open");
         assert!(matches!(
             old.await.unwrap(),
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         newer_gate
             .send(Ok(payload_at_height(2, vec![not_found_item()])))
@@ -729,11 +734,11 @@ mod tests {
         }
         settle().await;
 
-        let _ = err_gate.send(Err(GatewayError::BackendUnavailable("mock".into())));
+        let _ = err_gate.send(Err(RpcServerError::BackendUnavailable("mock".into())));
         for (i, w) in waiters.into_iter().enumerate() {
             let r = w.await.unwrap();
             assert!(
-                matches!(r, Err(GatewayError::BackendUnavailable(_))),
+                matches!(r, Err(RpcServerError::BackendUnavailable(_))),
                 "waiter {i}: expected BackendUnavailable, got {r:?}"
             );
         }

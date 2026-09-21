@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use groundhog_json_rpc_server::RpcRequestContext;
 
-use crate::error::GatewayError;
+use groundhog_json_rpc_server::RpcServerError;
 
 /// How the gateway names hogd's services in diagnostics.
 pub(crate) const INDEXER: &str = "indexer";
@@ -19,13 +19,13 @@ pub(crate) const VIEW_GATEWAY: &str = "view_gateway";
 fn backend_deadline(
     context: RpcRequestContext,
     timeout: Duration,
-) -> Result<Instant, GatewayError> {
+) -> Result<Instant, RpcServerError> {
     let deadline = context
         .capped_from_start(timeout)
         .deadline()
         .expect("bug: backend timeout should establish a deadline");
     if deadline <= Instant::now() {
-        Err(GatewayError::BackendTimeout)
+        Err(RpcServerError::BackendTimeout)
     } else {
         Ok(deadline)
     }

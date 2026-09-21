@@ -48,24 +48,29 @@ pub enum RpcServerError {
     NotImplemented(String),
 }
 
+impl RpcServerError {
+    /// The JSON-RPC error code this error is reported under.
+    pub fn code(&self) -> i32 {
+        match self {
+            Self::TxInvalid(_) | Self::TxInvalidDetailed(_) => codes::TX_INVALID,
+            Self::TxRejected(_) => codes::TX_REJECTED,
+            Self::TxNotFound => codes::TX_NOT_FOUND,
+            Self::BlockNotFound => codes::BLOCK_NOT_FOUND,
+            Self::InvalidParam(_) => codes::INVALID_PARAMS,
+            Self::BackendUnavailable(_) => codes::BACKEND_UNAVAILABLE,
+            Self::BackendTimeout => codes::BACKEND_TIMEOUT,
+            Self::Overloaded(_) => codes::OVERLOADED,
+            Self::NotImplemented(_) => codes::NOT_IMPLEMENTED,
+        }
+    }
+}
+
 impl From<RpcServerError> for ErrorObjectOwned {
     fn from(err: RpcServerError) -> Self {
+        let code = err.code();
         if let RpcServerError::TxInvalidDetailed(detail) = &err {
-            return ErrorObjectOwned::owned(codes::TX_INVALID, err.to_string(), Some(detail));
+            return ErrorObjectOwned::owned(code, err.to_string(), Some(detail));
         }
-        let (code, msg) = match &err {
-            RpcServerError::TxInvalid(_) | RpcServerError::TxInvalidDetailed(_) => {
-                (codes::TX_INVALID, err.to_string())
-            }
-            RpcServerError::TxRejected(_) => (codes::TX_REJECTED, err.to_string()),
-            RpcServerError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
-            RpcServerError::BlockNotFound => (codes::BLOCK_NOT_FOUND, err.to_string()),
-            RpcServerError::InvalidParam(_) => (codes::INVALID_PARAMS, err.to_string()),
-            RpcServerError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
-            RpcServerError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
-            RpcServerError::Overloaded(_) => (codes::OVERLOADED, err.to_string()),
-            RpcServerError::NotImplemented(_) => (codes::NOT_IMPLEMENTED, err.to_string()),
-        };
-        ErrorObjectOwned::owned(code, msg, None::<()>)
+        ErrorObjectOwned::owned(code, err.to_string(), None::<()>)
     }
 }
