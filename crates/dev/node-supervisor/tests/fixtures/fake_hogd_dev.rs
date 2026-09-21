@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::{
     collections::HashMap,
     env, fs,
@@ -662,7 +663,7 @@ fn readiness_pointer(endpoints: &Value) -> String {
     let manifest = runtime_manifest(endpoints, &config);
     let manifest_bytes =
         serde_json::to_vec_pretty(&manifest).expect("bug: runtime manifest should serialize");
-    let manifest_hash = sha256_hex(&manifest_bytes);
+    let manifest_hash = sha256_prefixed_hex(&manifest_bytes);
     let manifest_path = write_runtime_manifest(&manifest_bytes);
     format!(
         r#"{{"schemaVersion":2,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
@@ -800,10 +801,6 @@ fn write_runtime_manifest(bytes: &[u8]) -> PathBuf {
             .expect("bug: fake runtime manifest permissions should be set");
     }
     path
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn dead_loopback_addr() -> SocketAddr {

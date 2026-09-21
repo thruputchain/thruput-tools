@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, decode_prefixed_hex, prefixed_hex};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -1236,8 +1237,8 @@ fn load_or_create_remote_wallet_create_attempt(
     descriptor: &NetworkDescriptor,
 ) -> Result<LoadedRemoteWalletCreateAttempt, CliError> {
     let network_id = descriptor.network_id.clone();
-    let genesis_hash = format_sha256_hash(&descriptor.genesis_hash.0);
-    let wallet_contract_hash = format_sha256_hash(&descriptor.wallet_create.wallet_contract_hash.0);
+    let genesis_hash = prefixed_hex(descriptor.genesis_hash.0);
+    let wallet_contract_hash = prefixed_hex(descriptor.wallet_create.wallet_contract_hash.0);
     let path = remote_wallet_create_attempt_path(
         profile_name,
         key_name,
@@ -1283,7 +1284,7 @@ fn load_or_create_remote_wallet_create_attempt(
         network_id,
         genesis_hash,
         owner_public_key: owner_public_key.to_owned(),
-        deploy_nonce: format_sha256_hash(&deploy_nonce),
+        deploy_nonce: prefixed_hex(deploy_nonce),
         client_nonce: format!("0x{}", hex::encode(client_nonce)),
         wallet_contract_hash,
         wallet_address: format_contract_address(&wallet_address),
@@ -1341,7 +1342,8 @@ fn finalize_wallet_create_plan(plan: WalletCreatePlan) -> Result<PreparedWalletC
             )?;
             let attempt = loaded_attempt.attempt;
             let deploy_nonce = parse_sha256_hash(&attempt.deploy_nonce)?;
-            let client_nonce = parse_hex_bytes(&attempt.client_nonce)?;
+            let client_nonce = decode_prefixed_hex(&attempt.client_nonce)
+                .map_err(|error| CliError::Other(error.to_string()))?;
             let wallet_address = parse_contract_address(&attempt.wallet_address)?;
             let proof_message = wallet_create_proof_message_v2(&WalletCreateProofV2 {
                 network_id: &attempt.network_id,
@@ -1494,22 +1496,10 @@ fn remote_wallet_create_attempt_path(
         .join(format!("{}.json", hex::encode(hash))))
 }
 
-fn format_sha256_hash(hash: &SHA256Hash) -> String {
-    format!("0x{}", hex::encode(hash.as_ref()))
-}
-
 fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, CliError> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex::decode(value).map_err(|error| CliError::Other(error.to_string()))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| CliError::Other("expected 32-byte SHA256 hash".into()))?;
-    Ok(SHA256Hash::from(bytes))
-}
-
-fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, CliError> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    hex::decode(value).map_err(|error| CliError::Other(error.to_string()))
+    decode_fixed_hex(value)
+        .map(SHA256Hash::from)
+        .map_err(|error| CliError::Other(error.to_string()))
 }
 
 struct WalletPrefundTransaction {

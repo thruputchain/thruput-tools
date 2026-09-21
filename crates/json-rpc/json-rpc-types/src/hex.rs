@@ -15,6 +15,7 @@ use std::ops::{Deref, DerefMut};
 use groundhog_xdr::types::{NetworkHash, SHA256Hash};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 
 /// A canonical lowercase, unprefixed 32-byte network hash.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -124,10 +125,14 @@ impl JsonSchema for NetworkHashHex {
 #[error("networkHash must be exactly 64 lowercase hexadecimal characters without a 0x prefix")]
 pub struct NetworkHashHexError;
 
-// Stream bounded chunks to serializers such as serde_json, whose collect_str
-// implementation writes directly into the output buffer. Avoid both a complete
-// hex::encode String and the second allocation used to prepend "0x".
-struct HexDisplay<'a>(&'a [u8]);
+/// Formats bytes as `0x`-prefixed lowercase hex without an intermediate
+/// `String`.
+///
+/// Serializers such as `serde_json` write `collect_str` output straight into
+/// their buffer, so this streams bounded chunks instead of building a complete
+/// `hex::encode` string and a second allocation to prepend `0x`. It also
+/// serves `format_args!` callers that only need to print the value.
+pub struct HexDisplay<'a>(pub &'a [u8]);
 
 impl fmt::Display for HexDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -153,6 +158,69 @@ impl fmt::Display for HexDisplay<'_> {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared 0x-prefixed hex helpers
+// ---------------------------------------------------------------------------
+
+/// Encode bytes as a `0x`-prefixed lowercase hex string.
+///
+/// This is the one spelling of the wire convention for callers that need an
+/// owned `String` (log lines, CLI output, JSON built with `json!`). Types that
+/// serialize through serde should use [`HexBytes`], [`Hex0x`], or
+/// [`HexDisplay`] instead, which never allocate the intermediate string.
+pub fn prefixed_hex(bytes: impl AsRef<[u8]>) -> String {
+    let bytes = bytes.as_ref();
+    let mut out = String::with_capacity(2 + bytes.len() * 2);
+    // Writing to a String cannot fail.
+    let _ = fmt::Write::write_fmt(&mut out, format_args!("{}", HexDisplay(bytes)));
+    out
+}
+
+/// Strip an optional `0x` or `0X` prefix from a hex string.
+pub fn strip_hex_prefix(text: &str) -> &str {
+    text.strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text)
+}
+
+/// Decode a hex string with an optional `0x` or `0X` prefix.
+pub fn decode_prefixed_hex(text: &str) -> Result<Vec<u8>, hex::FromHexError> {
+    hex::decode(strip_hex_prefix(text))
+}
+
+/// Decode a hex string with an optional `0x` or `0X` prefix into exactly
+/// `N` bytes.
+pub fn decode_fixed_hex<const N: usize>(text: &str) -> Result<[u8; N], FixedHexError> {
+    let bytes = decode_prefixed_hex(text)?;
+    let len = bytes.len();
+    bytes
+        .try_into()
+        .map_err(|_| FixedHexError::InvalidLength { len, expected: N })
+}
+
+/// Error returned when a hex string does not decode to the expected byte length.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum FixedHexError {
+    /// The text is not valid hex.
+    #[error("invalid hex: {0}")]
+    InvalidHex(#[from] hex::FromHexError),
+    /// The text decoded to the wrong number of bytes.
+    #[error("invalid length {len}, expected {expected} bytes ({} hex characters)", .expected * 2)]
+    InvalidLength {
+        /// Decoded byte length.
+        len: usize,
+        /// Required byte length.
+        expected: usize,
+    },
+}
+
+/// Encode the SHA-256 digest of `bytes` as a `0x`-prefixed lowercase hex string.
+///
+/// Manifest and artifact hashes cross the wire in this form.
+pub fn sha256_prefixed_hex(bytes: &[u8]) -> String {
+    prefixed_hex(Sha256::digest(bytes))
 }
 
 // ---------------------------------------------------------------------------
@@ -184,11 +252,7 @@ where
 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let s = s
-            .strip_prefix("0x")
-            .or_else(|| s.strip_prefix("0X"))
-            .unwrap_or(&s);
-        let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
+        let bytes = decode_prefixed_hex(&s).map_err(serde::de::Error::custom)?;
         let inner = T::try_from_slice(&bytes).map_err(serde::de::Error::custom)?;
         Ok(Hex0x(inner))
     }
@@ -300,11 +364,7 @@ impl Serialize for HexBytes {
 impl<'de> Deserialize<'de> for HexBytes {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let s = s
-            .strip_prefix("0x")
-            .or_else(|| s.strip_prefix("0X"))
-            .unwrap_or(&s);
-        hex::decode(s)
+        decode_prefixed_hex(&s)
             .map(HexBytes)
             .map_err(serde::de::Error::custom)
     }
@@ -382,14 +442,8 @@ impl Serialize for Topic {
 impl<'de> Deserialize<'de> for Topic {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let s = s
-            .strip_prefix("0x")
-            .or_else(|| s.strip_prefix("0X"))
-            .unwrap_or(&s);
-        let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
-        let arr: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("topic must be exactly 32 bytes"))?;
-        Ok(Topic(arr))
+        decode_fixed_hex(&s)
+            .map(Topic)
+            .map_err(serde::de::Error::custom)
     }
 }

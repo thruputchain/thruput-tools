@@ -33,7 +33,7 @@ impl ClientNonce {
 
 impl Serialize for ClientNonce {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!("0x{}", hex::encode(&self.0)))
+        serializer.collect_str(&crate::hex::HexDisplay(&self.0))
     }
 }
 

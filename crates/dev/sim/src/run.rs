@@ -1046,7 +1046,8 @@ mod tests {
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
-    use crate::util::{sha256_hex, simulation_config_sha256};
+    use crate::util::simulation_config_sha256;
+    use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 
     #[derive(Clone)]
     struct MockClient {
@@ -1144,7 +1145,7 @@ mod tests {
         let loaded_sim = LoadedSimulationManifest {
             config_sha256: None,
             manifest,
-            sha256: sha256_hex(&bytes),
+            sha256: sha256_prefixed_hex(&bytes),
             bytes,
         };
         let runtime_manifest = runtime_manifest();
@@ -1232,7 +1233,7 @@ mod tests {
         let loaded = LoadedSimulationManifest {
             config_sha256: Some(simulation_config_sha256(&manifest).expect("config hash")),
             manifest,
-            sha256: sha256_hex(&bytes),
+            sha256: sha256_prefixed_hex(&bytes),
             bytes,
         };
         let schedule = generate_schedule(&loaded.manifest).expect("schedule");
@@ -1303,7 +1304,7 @@ mod tests {
                 simulation_config_sha256(&manifest).expect("config hash should encode"),
             ),
             manifest,
-            sha256: sha256_hex(&bytes),
+            sha256: sha256_prefixed_hex(&bytes),
             bytes,
         };
         let runtime_manifest = runtime_manifest();
@@ -1396,7 +1397,7 @@ mod tests {
                 simulation_config_sha256(&manifest).expect("config hash should encode"),
             ),
             manifest,
-            sha256: sha256_hex(&bytes),
+            sha256: sha256_prefixed_hex(&bytes),
             bytes,
         };
         let runtime_manifest = runtime_manifest();

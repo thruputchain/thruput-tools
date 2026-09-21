@@ -1,4 +1,5 @@
 use groundhog_json_rpc_client::GroundhogApiClient;
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use groundhog_json_rpc_types::network_descriptor::{
     AirdropDescriptor, NETWORK_DESCRIPTOR_KIND, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
     NetworkDescriptor,
@@ -151,7 +152,7 @@ fn remote_airdrop_descriptor(
 
     Ok(RemoteAirdropDescriptor {
         network_id: descriptor.network_id,
-        genesis_hash: format_hex(descriptor.genesis_hash.0.as_ref()),
+        genesis_hash: prefixed_hex(descriptor.genesis_hash.0.as_ref()),
         policy,
         amount_hog: crate::hog::format_amount(raw_amount),
     })
@@ -257,19 +258,19 @@ fn validate_descriptor(
     matches_expected("protocol", &manifest.protocol, &descriptor.protocol)?;
     matches_expected(
         "networkHash",
-        &format_hex(
+        &prefixed_hex(
             manifest
                 .network_hash
                 .to_network_hash()
                 .into_inner()
                 .as_ref(),
         ),
-        &format_hex(descriptor.network_hash.0.as_ref()),
+        &prefixed_hex(descriptor.network_hash.0.as_ref()),
     )?;
     matches_expected(
         "walletCreate.walletContractHash",
-        &format_hex(manifest.bootstrap.dev_wallet.content_hash.as_ref()),
-        &format_hex(descriptor.wallet_create.wallet_contract_hash.0.as_ref()),
+        &prefixed_hex(manifest.bootstrap.dev_wallet.content_hash.as_ref()),
+        &prefixed_hex(descriptor.wallet_create.wallet_contract_hash.0.as_ref()),
     )?;
     let runtime_deploy = manifest
         .bootstrap
@@ -291,13 +292,13 @@ fn validate_descriptor(
         })?;
     matches_expected(
         "devWallet.deployEntrypoint",
-        &format_hex(runtime_deploy.as_ref()),
-        &format_hex(descriptor_deploy.as_ref()),
+        &prefixed_hex(runtime_deploy.as_ref()),
+        &prefixed_hex(descriptor_deploy.as_ref()),
     )?;
     matches_expected(
         "devWallet.doActionEntrypoint",
-        &format_hex(runtime_do_action.as_ref()),
-        &format_hex(descriptor_do_action.as_ref()),
+        &prefixed_hex(runtime_do_action.as_ref()),
+        &prefixed_hex(descriptor_do_action.as_ref()),
     )?;
     Ok(())
 }
@@ -357,8 +358,8 @@ fn validate_network_info(
 ) -> Result<(), CliError> {
     matches_expected(
         "networkHash",
-        &format_hex(network_info.network_hash.0.as_ref()),
-        &format_hex(descriptor.network_hash.0.as_ref()),
+        &prefixed_hex(network_info.network_hash.0.as_ref()),
+        &prefixed_hex(descriptor.network_hash.0.as_ref()),
     )
 }
 
@@ -368,8 +369,8 @@ fn validated_signing_network_hash(
 ) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
     matches_expected(
         "networkHash",
-        &format_hex(configured.as_ref()),
-        &format_hex(network_info.network_hash.0.as_ref()),
+        &prefixed_hex(configured.as_ref()),
+        &prefixed_hex(network_info.network_hash.0.as_ref()),
     )?;
     Ok(groundhog_xdr::types::NetworkHash::from(
         network_info.network_hash.0,
@@ -397,10 +398,6 @@ fn canonical_rpc_url(field: &'static str, url: &str) -> Result<String, CliError>
     reqwest::Url::parse(url)
         .map(|url| url.to_string())
         .map_err(|error| descriptor_invalid(field, format!("invalid URL: {error}")))
-}
-
-fn format_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
 }
 
 fn matches_expected(field: &'static str, expected: &str, actual: &str) -> Result<(), CliError> {

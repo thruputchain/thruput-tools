@@ -28,8 +28,9 @@ use crate::{
     manifest::{ActorProvisioningSpec, ContractArtifactKind, SimulationManifest},
     rpc::{ReceiptWaitFailure, SimReceiptSource, SimRpcClient, receipt_poll_config},
     runtime::{SimAccount, derive_provisioned_account_signer},
-    util::{json_string, sha256_hex},
+    util::json_string,
 };
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 const HOG_TOKEN_ADDRESS: [u8; 32] = {
@@ -601,7 +602,7 @@ fn push_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
 
 fn load_dev_wallet_contract(path: &Path, expected_sha256: &str) -> Result<Contract, SimError> {
     let bytes = std::fs::read(path)?;
-    let actual_sha256 = sha256_hex(&bytes);
+    let actual_sha256 = sha256_prefixed_hex(&bytes);
     if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
         return Err(SimError::Executor(format!(
             "dev-wallet artifact `{}` SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}",
@@ -739,7 +740,7 @@ mod tests {
     use crate::manifest::{ActorProvisioningSpec, ContractArtifactKind};
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
-    use crate::util::sha256_hex;
+    use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 
     #[test]
     fn parses_airdrop_hog_amounts() {
@@ -816,7 +817,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let artifact = temp.path().join("dev_wallet.rv32a");
         std::fs::write(&artifact, b"rv32 wallet").expect("artifact should write");
-        let expected_sha256 = sha256_hex(b"rv32 wallet");
+        let expected_sha256 = sha256_prefixed_hex(b"rv32 wallet");
 
         let contract = load_dev_wallet_contract(&artifact, &expected_sha256)
             .expect("rv32 artifact should load");
@@ -871,7 +872,7 @@ mod tests {
         let artifact = temp.path().join("dev_wallet.rv32a");
         std::fs::write(&artifact, b"different wallet").expect("artifact should write");
 
-        let error = load_dev_wallet_contract(&artifact, &sha256_hex(b"advertised wallet"))
+        let error = load_dev_wallet_contract(&artifact, &sha256_prefixed_hex(b"advertised wallet"))
             .expect_err("mismatched artifact should fail");
 
         assert!(error.to_string().contains("SHA-256 mismatch"));

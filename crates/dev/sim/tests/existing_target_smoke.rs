@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use groundhog_sim::compare::COMPARE_DIFF_SCHEMA_VERSION;
-use groundhog_sim::util::sha256_hex;
 
 #[test]
 #[ignore = "requires GROUNDHOG_SIM_RPC_URL and GROUNDHOG_SIM_RUNTIME_MANIFEST"]
@@ -115,7 +115,7 @@ fn assert_common_existing_artifacts(run_dir: &std::path::Path) {
     .expect("result should parse");
     assert_eq!(
         result["manifestHashes"]["simulationManifestSha256"],
-        sha256_hex(&simulation)
+        sha256_prefixed_hex(&simulation)
     );
     assert!(
         result["manifestHashes"]["simulationConfigSha256"]

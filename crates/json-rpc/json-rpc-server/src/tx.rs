@@ -29,12 +29,8 @@ pub fn validate_raw_transaction(
     tx_hex: &str,
     params: &NetworkConfigParams,
 ) -> Result<ValidatedTransaction, RpcServerError> {
-    let hex_str = tx_hex
-        .strip_prefix("0x")
-        .or_else(|| tx_hex.strip_prefix("0X"))
-        .unwrap_or(tx_hex);
-    let tx_bytes =
-        hex::decode(hex_str).map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))?;
+    let tx_bytes = groundhog_json_rpc_types::hex::decode_prefixed_hex(tx_hex)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid hex: {e}")))?;
 
     validate_raw_transaction_bytes(tx_bytes, params)
 }

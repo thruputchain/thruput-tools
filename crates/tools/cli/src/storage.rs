@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::Path;
 
 use groundhog_json_rpc_client::GroundhogApiClient;
@@ -32,8 +33,8 @@ pub fn run(
 
     let address = ContractAddress::from(resolve_contract_target(&resolved_profile, address)?);
     let key = parse_storage_key(key)?;
-    let key_hex = format_storage_key(&key);
-    let address_hex = format_contract_address(&address);
+    let key_hex = prefixed_hex(&key);
+    let address_hex = prefixed_hex(address.0);
 
     let task = print.start_task("Reading storage");
 
@@ -107,14 +108,6 @@ fn parse_storage_key(raw: &str) -> Result<HexBytes, CliError> {
         )));
     }
     Ok(HexBytes(bytes))
-}
-
-fn format_contract_address(address: &ContractAddress) -> String {
-    format!("0x{}", hex::encode(address.0.as_ref()))
-}
-
-fn format_storage_key(key: &HexBytes) -> String {
-    format!("0x{}", hex::encode(&key.0))
 }
 
 #[cfg(test)]

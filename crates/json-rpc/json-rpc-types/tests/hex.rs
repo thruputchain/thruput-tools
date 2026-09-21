@@ -102,3 +102,50 @@ fn hex0x_wrong_length_fails() {
     let result: Result<Hex0x<SHA256Hash>, _> = serde_json::from_str(r#""0xcafe""#);
     assert!(result.is_err());
 }
+
+#[test]
+fn prefixed_hex_matches_serde_projection() {
+    let bytes: Vec<u8> = (0..=255).collect();
+    assert_eq!(
+        format!("\"{}\"", prefixed_hex(&bytes)),
+        serde_json::to_string(&HexBytes(bytes.clone())).unwrap()
+    );
+    assert_eq!(prefixed_hex([]), "0x");
+    assert_eq!(prefixed_hex([0xab, 0x01]), "0xab01");
+}
+
+#[test]
+fn decode_prefixed_hex_accepts_either_prefix_or_none() {
+    for text in ["0xab01", "0XAB01", "ab01"] {
+        assert_eq!(decode_prefixed_hex(text).unwrap(), vec![0xab, 0x01]);
+    }
+    assert!(decode_prefixed_hex("0xzz").is_err());
+}
+
+#[test]
+fn decode_fixed_hex_reports_hex_and_length_errors_distinctly() {
+    assert_eq!(decode_fixed_hex::<2>("0xab01").unwrap(), [0xab, 0x01]);
+    assert!(matches!(
+        decode_fixed_hex::<2>("0xab"),
+        Err(FixedHexError::InvalidLength {
+            len: 1,
+            expected: 2
+        })
+    ));
+    assert!(matches!(
+        decode_fixed_hex::<2>("0xab0g"),
+        Err(FixedHexError::InvalidHex(_))
+    ));
+    assert_eq!(
+        decode_fixed_hex::<32>("0x00").unwrap_err().to_string(),
+        "invalid length 1, expected 32 bytes (64 hex characters)"
+    );
+}
+
+#[test]
+fn sha256_prefixed_hex_matches_reference_digest() {
+    assert_eq!(
+        sha256_prefixed_hex(b"abc"),
+        "0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}
