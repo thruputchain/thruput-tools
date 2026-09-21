@@ -425,8 +425,8 @@ groundhog-bench --url http://127.0.0.1:9546 \
   count and per-contract size from the tip's network config, duplicate
   attachments, and each attached RV32 artifact's declared guest memory and
   code size against the config's `max_rv32_memory_bytes` and
-  `max_rv32_code_bytes`) mirror what hogd's executor rejects before running a
-  transaction. The bound logic lives in `groundhog-tx-validation`;
+  `max_rv32_code_bytes`) mirror what hogd's executor rejects before running
+  a transaction. The bound logic lives in `groundhog-tx-validation`;
   `json-rpc-server` applies it from one cached db-tip reading
   (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
   that every tip fetch refreshes: a submit that finds it stale, the public
@@ -437,16 +437,15 @@ groundhog-bench --url http://127.0.0.1:9546 \
   before the reading it renews goes stale and a submit reads what the task
   published rather than fetching on its own latency path. An interval of
   zero starts no task and makes every pre-check fetch its own reading. The
-  public `chainConfig` method reads through that same cache, so it costs
-  the backend at most one fetch per interval however often it is called,
-  and reports only the parameters the config states. A bound violation
-  found against a cached reading is re-checked against a freshly fetched
-  tip before it is returned, so a reading that lags a config upgrade never
+  public `chainConfig` method reads through that same cache, so it costs the
+  backend at most one fetch per interval however often it is called, and
+  reports only the parameters the config states. A bound violation found
+  against a cached reading is re-checked against a freshly fetched tip
+  before it is returned, so a reading that lags a config upgrade never
   rejects what the current config admits. The checks are advisory, not a
   trust boundary: a missing reading never blocks submission. A bound is
-  enforced
-  only with a value the protocol defines: the one the tip's config states,
-  or a constant the protocol fixes for the unstated case (today
+  enforced only with a value the protocol defines: the one the tip's config
+  states, or a constant the protocol fixes for the unstated case (today
   `kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`, and
   `kDefaultMaxRv32MemoryBytes`). Never copy hogd's own fallbacks for
   parameters the protocol leaves unstated.

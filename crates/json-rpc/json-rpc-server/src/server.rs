@@ -87,16 +87,15 @@ impl TipState {
 /// `sendRawTransaction` pre-checks on this server.
 ///
 /// A submit asks the backend at most once per reuse window; submits
-/// inside the window reuse the last reading. The background task
-/// republishes well inside that window, so on a server running it a
-/// submit never reaches the backend itself. The submit that finds the
-/// window expired claims the refresh before awaiting it, so concurrent
-/// submits keep using the stale reading rather than queuing behind the
-/// probe. Failed or
-/// timed-out probes keep the previous reading: the tip only grows, so a
-/// stale height can only under-detect expiry, and the config changes only
-/// at explicit upgrade blocks. Fetches that overlap may complete out of
-/// order; the reading with the higher tip is the later one and is kept.
+/// inside it reuse the last reading, and the background task republishes
+/// well before the window closes, so on a server running it a submit
+/// never reaches the backend itself. The submit that finds the window
+/// expired claims the refresh before awaiting it, so concurrent submits
+/// keep using the stale reading rather than queuing behind the probe. A
+/// failed or timed-out probe keeps the previous reading: the tip only
+/// grows, so a stale height can only under-detect expiry, and the config
+/// changes only at explicit upgrade blocks. Overlapping fetches may
+/// complete out of order; the reading with the higher tip is kept.
 ///
 /// The one time a caller does queue behind a probe is a cold cache: with
 /// no reading at all, a caller inside the window waits for the in-flight
