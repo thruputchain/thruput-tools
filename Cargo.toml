@@ -13,6 +13,7 @@ members = [
     "crates/json-rpc/open-rpc-macros",
     "crates/json-rpc/open-rpc-spec",
     "crates/x23/x23-transport",
+    "crates/x23/hogd-backend",
     "crates/tools/agent-knowledge",
     "crates/tools/toolchain",
     "crates/tools/cli",
@@ -64,6 +65,7 @@ groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version 
 groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.18.0", registry = "groundhog" }
 groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.18.0", registry = "groundhog" }
 groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.18.0", registry = "groundhog" }
+groundhog-hogd-backend = { path = "crates/x23/hogd-backend", version = "=0.18.0", registry = "groundhog" }
 groundhog-signing = { path = "crates/tools/signing", version = "=0.18.0", registry = "groundhog" }
 groundhog-tx-validation = { path = "crates/tools/tx-validation", version = "=0.18.0", registry = "groundhog" }
 groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.18.0", registry = "groundhog" }

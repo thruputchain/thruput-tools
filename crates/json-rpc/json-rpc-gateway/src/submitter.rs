@@ -13,14 +13,12 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
+use groundhog_hogd_backend::{scheduler as shared_scheduler, submit as shared_submit};
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_scheduler::SchedGatewaySubmitOutcomeBatch;
 use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
-use groundhog_scheduler::{
-    ParallelBatch, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
-};
 use tokio::sync::{RwLock, oneshot};
-use xdr_common::{BytesM, VecM};
 
 use crate::adaptive_batch::{
     AdaptiveBatcher, BatchProcessor, deadline_cohorts, shard_index_by_routing_key,
@@ -182,7 +180,17 @@ impl BatchProcessor for SubmitProcessor {
             }
             self.metrics
                 .observe_internal_batch_size("submit_batcher", cohort.len());
-            let packed = pack(&cohort);
+            let packed = match pack(&cohort) {
+                Ok(packed) => packed,
+                Err(error) => {
+                    let outcome = outcome_for_submit_error(&error);
+                    for item in cohort {
+                        self.metrics.observe_submitted_transaction(outcome);
+                        let _ = item.reply.send(Err(error.clone()));
+                    }
+                    continue;
+                }
+            };
             match self.sink.submit(packed, deadline).await {
                 Err(error) => {
                     let outcome = outcome_for_submit_error(&error);
@@ -205,7 +213,8 @@ impl BatchProcessor for SubmitProcessor {
                 }
                 Ok(outcomes) => {
                     for (item, scheduler_outcome) in cohort.into_iter().zip(outcomes.0) {
-                        let result = result_for_scheduler_outcome(scheduler_outcome);
+                        let result = shared_scheduler::submit_result(scheduler_outcome)
+                            .map_err(GatewayError::from);
                         self.metrics
                             .observe_submitted_transaction(outcome_for_submit_result(&result));
                         let _ = item.reply.send(result);
@@ -219,27 +228,9 @@ impl BatchProcessor for SubmitProcessor {
 /// Pack N client tx-byte blobs into one `ParallelSignedTransactionBatch`.
 ///
 /// One segment per tx — same shape as today's single-tx handler, scaled up.
-fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
-    let n = items.len();
-    let mut segment_tokens = Vec::with_capacity(n);
-    let mut segment_bytes = Vec::with_capacity(n);
-    let total_bytes: usize = items.iter().map(|i| i.tx_bytes.len()).sum();
-    let mut xdr = Vec::with_capacity(total_bytes);
-    for item in items {
-        segment_tokens.push(1u32);
-        // Bounded by `max_size` and the handler's own size check
-        // (`send_raw_transaction` rejects inputs larger than u32::MAX
-        // before handing them to the submitter).
-        let tx_len = u32::try_from(item.tx_bytes.len())
-            .expect("bug: tx_bytes > u32::MAX reached the submitter");
-        segment_bytes.push(tx_len);
-        xdr.extend_from_slice(&item.tx_bytes);
-    }
-    ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(segment_tokens),
-        segment_bytes: VecM(segment_bytes),
-        xdr: BytesM(xdr),
-    })
+fn pack(items: &[Item]) -> Result<ParallelSignedTransactionBatch, GatewayError> {
+    shared_submit::pack(items.iter().map(|item| item.tx_bytes.as_slice()))
+        .map_err(GatewayError::from)
 }
 
 /// Handle returned to the rest of the gateway.  Clone-friendly; each
@@ -369,27 +360,6 @@ fn outcome_for_submit_result(result: &Result<(), GatewayError>) -> &'static str 
     }
 }
 
-fn result_for_scheduler_outcome(outcome: SchedGatewaySubmitOutcome) -> Result<(), GatewayError> {
-    match outcome {
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected => {
-            Err(GatewayError::TxRejected(
-                "scheduler rejected authentication for the signed transaction".into(),
-            ))
-        }
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(GatewayError::Overloaded(
-            "scheduler could not admit the transaction; retry with backoff".into(),
-        )),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => Err(
-            GatewayError::BackendUnavailable("scheduler admission dependency failed".into()),
-        ),
-        unknown => Err(GatewayError::BackendUnavailable(format!(
-            "scheduler returned unknown submission outcome {}",
-            unknown.0
-        ))),
-    }
-}
-
 fn outcome_for_submit_error(err: &GatewayError) -> &'static str {
     match err {
         GatewayError::Overloaded(_) => "overloaded",
@@ -409,6 +379,9 @@ fn outcome_for_submit_error(err: &GatewayError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use groundhog_scheduler::SchedGatewaySubmitOutcome;
+    use xdr_common::VecM;
+
     use super::*;
     use crate::health::{GatewayHealthSnapshot, HealthStatus};
     use std::collections::VecDeque;
@@ -1147,14 +1120,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unknown_scheduler_outcome_is_a_backend_error() {
-        assert!(matches!(
-            result_for_scheduler_outcome(SchedGatewaySubmitOutcome(99)),
-            Err(GatewayError::BackendUnavailable(_))
-        ));
-    }
-
     #[tokio::test]
     async fn shards_distribute_across_hashes() {
         let n_shards = 4;
@@ -1218,7 +1183,7 @@ mod tests {
                 }
             })
             .collect();
-        let packed = pack(&items);
+        let packed = pack(&items).expect("test transactions should pack");
         assert_eq!(packed.segment_tokens.0, vec![1, 1, 1]);
         assert_eq!(packed.segment_bytes.0, vec![3, 5, 2]);
         let mut expected = Vec::new();

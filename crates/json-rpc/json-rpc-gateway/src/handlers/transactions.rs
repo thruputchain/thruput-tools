@@ -1,5 +1,6 @@
 //! `groundhog_getTransactionsByAddress` handler.
 
+use groundhog_hogd_backend::indexer as shared_indexer;
 use groundhog_indexer::TransactionRefPageResult;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::transaction::{AddressTransactionQuery, TransactionRefPage};
@@ -10,7 +11,7 @@ use crate::context::GatewayContext;
 use crate::error::GatewayError;
 use crate::metrics::BackendRequestOutcome;
 
-use super::{backend_deadline, transaction_ref_page_from_result};
+use super::{INDEXER, backend_deadline};
 
 /// Implementation of the `groundhog_getTransactionsByAddress` JSON-RPC
 /// method.  Forwards the paginated `AddressTransactionQuery` to the
@@ -49,7 +50,7 @@ pub async fn get_transactions_by_address(
     let result = rpc_result
         .map_err(|_| GatewayError::BackendTimeout)?
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
-    let page = transaction_ref_page_from_result(result)?;
+    let page = shared_indexer::transaction_ref_page(INDEXER, result)?;
 
     Ok(page.into())
 }

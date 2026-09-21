@@ -578,6 +578,15 @@ impl GatewayMetrics {
             .inc();
     }
 
+    /// How many malformed events have been dropped for `reason`.
+    #[cfg(test)]
+    pub(crate) fn malformed_events_dropped(&self, reason: &'static str) -> u64 {
+        self.inner
+            .malformed_events_dropped_total
+            .with_label_values(&[reason])
+            .get()
+    }
+
     /// Render Prometheus text exposition after refreshing snapshot-backed gauges.
     pub fn gather(&self, snapshot: &GatewayHealthSnapshot) -> prometheus::Result<String> {
         let _guard = self

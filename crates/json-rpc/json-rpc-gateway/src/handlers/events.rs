@@ -1,5 +1,6 @@
 //! `groundhog_getEvents` handler.
 
+use groundhog_hogd_backend::{event as shared_event, indexer as shared_indexer};
 use groundhog_indexer::EventPageResult;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::events::{EventPage, EventQuery, IdentifiedEvent};
@@ -12,8 +13,7 @@ use crate::context::GatewayContext;
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
-use super::parse_event::parse_emitted_event;
-use super::{backend_deadline, event_page_from_result};
+use super::{INDEXER, backend_deadline};
 
 /// Implementation of the `groundhog_getEvents` JSON-RPC method.
 /// Forwards the paginated `EventQuery` to the hogd indexer and
@@ -52,11 +52,11 @@ pub async fn get_events(
     let result = rpc_result
         .map_err(|_| GatewayError::BackendTimeout)?
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
-    let page = event_page_from_result(result)?;
+    let page = shared_indexer::event_page(INDEXER, result)?;
 
     let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
     for identified in page.events.0 {
-        if let Some(event) = parse_emitted_event(identified.emitted_event) {
+        if let Some(event) = shared_event::parse_emitted_event(identified.emitted_event) {
             events.push(IdentifiedEvent {
                 tx_hash: TxHash(Hex0x(identified.tx_hash)),
                 block_height: identified.block_height,

@@ -8,6 +8,7 @@ use std::{
 };
 
 use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayIntroOutcome};
+use groundhog_hogd_backend::{IntroOutcome, intro};
 use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
 };
@@ -468,11 +469,11 @@ pub(crate) async fn connect_optional_scheduler(
         );
     }
     match intro_result {
-        Ok(SchedGatewayIntroOutcome::SchedGatewayIntroSuccess) => Ok(Some(client)),
+        Ok(outcome) if intro::sched_gateway(outcome).accepted() => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "scheduler_gateway",
             addr: address.to_string(),
-            reason: scheduler_gateway_intro_rejection_reason(outcome, &protocol_version),
+            reason: intro_rejection_reason(intro::sched_gateway(outcome), &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
@@ -486,21 +487,24 @@ pub(crate) async fn connect_optional_scheduler(
     }
 }
 
-fn scheduler_gateway_intro_rejection_reason(
-    outcome: SchedGatewayIntroOutcome,
-    protocol_version: &str,
-) -> String {
-    if outcome == SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol {
+/// Explain why a hogd service rejected the protocol this gateway speaks.
+///
+/// A mismatch is the one rejection an operator can fix without touching the
+/// backend, so it names both the override flag and the rebuild path.
+fn intro_rejection_reason(outcome: IntroOutcome, protocol_version: &str) -> String {
+    let service = outcome.service();
+    let name = outcome.name();
+    if outcome.mismatched_protocol() {
         return format!(
-            "SchedGateway intro mismatch: gateway speaks protocol {protocol_version}, \
-             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
+            "{service} intro mismatch: gateway speaks protocol {protocol_version}, \
+             but the backend rejected it ({name}); pass `--hogd-protocol`/\
              `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
              against a matching groundhog-xdr"
         );
     }
 
     format!(
-        "SchedGateway intro rejected with outcome {outcome}; gateway speaks protocol \
+        "{service} intro rejected with outcome {name}; gateway speaks protocol \
          {protocol_version}"
     )
 }
@@ -628,11 +632,14 @@ pub(crate) async fn connect_optional_indexer(
     };
 
     match intro_outcome {
-        Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess) => Ok(Some(client)),
+        Ok(outcome) if intro::indexer_block_explorer(outcome).accepted() => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "indexer",
             addr: address.to_string(),
-            reason: indexer_intro_rejection_reason(outcome, &protocol_version),
+            reason: intro_rejection_reason(
+                intro::indexer_block_explorer(outcome),
+                &protocol_version,
+            ),
         }),
         Err(source) => {
             tracing::warn!(
@@ -724,11 +731,11 @@ pub(crate) async fn connect_optional_db_gateway(
     };
 
     match intro_outcome {
-        Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess) => Ok(Some(client)),
+        Ok(outcome) if intro::db_gateway(outcome).accepted() => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "db_gateway",
             addr: address.to_string(),
-            reason: db_gateway_intro_rejection_reason(outcome, &protocol_version),
+            reason: intro_rejection_reason(intro::db_gateway(outcome), &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
@@ -819,11 +826,11 @@ pub(crate) async fn connect_optional_view_gateway(
     };
 
     match intro_outcome {
-        Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess) => Ok(Some(client)),
+        Ok(outcome) if intro::view_gateway(outcome).accepted() => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "view_gateway",
             addr: address.to_string(),
-            reason: view_gateway_intro_rejection_reason(outcome, &protocol_version),
+            reason: intro_rejection_reason(intro::view_gateway(outcome), &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
@@ -835,63 +842,6 @@ pub(crate) async fn connect_optional_view_gateway(
             Ok(None)
         }
     }
-}
-
-fn indexer_intro_rejection_reason(
-    outcome: IndexerBlockExplorerIntroOutcome,
-    protocol_version: &str,
-) -> String {
-    if outcome == IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol {
-        return format!(
-            "IndexerBlockExplorer intro mismatch: gateway speaks protocol {protocol_version}, \
-             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
-             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
-             against a matching groundhog-xdr"
-        );
-    }
-
-    format!(
-        "IndexerBlockExplorer intro rejected with outcome {outcome}; gateway speaks protocol \
-         {protocol_version}"
-    )
-}
-
-fn db_gateway_intro_rejection_reason(
-    outcome: DbGatewayIntroOutcome,
-    protocol_version: &str,
-) -> String {
-    if outcome == DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol {
-        return format!(
-            "DbGateway intro mismatch: gateway speaks protocol {protocol_version}, \
-             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
-             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
-             against a matching groundhog-xdr"
-        );
-    }
-
-    format!(
-        "DbGateway intro rejected with outcome {outcome}; gateway speaks protocol \
-         {protocol_version}"
-    )
-}
-
-fn view_gateway_intro_rejection_reason(
-    outcome: ViewGatewayIntroOutcome,
-    protocol_version: &str,
-) -> String {
-    if outcome == ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol {
-        return format!(
-            "ViewGateway intro mismatch: gateway speaks protocol {protocol_version}, \
-             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
-             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
-             against a matching groundhog-xdr"
-        );
-    }
-
-    format!(
-        "ViewGateway intro rejected with outcome {outcome}; gateway speaks protocol \
-         {protocol_version}"
-    )
 }
 
 /// Pick a scheduler pool size that covers every concurrent RPC the gateway

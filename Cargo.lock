@@ -1654,6 +1654,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-hogd-backend"
+version = "0.18.0"
+dependencies = [
+ "groundhog-json-rpc-server",
+ "groundhog-json-rpc-types",
+ "groundhog-trace",
+ "groundhog-xdr",
+ "groundhog_db_gateway",
+ "groundhog_indexer",
+ "groundhog_scheduler",
+ "groundhog_view",
+ "tokio",
+ "tracing",
+ "xdr-common",
+]
+
+[[package]]
 name = "groundhog-json-rpc-api"
 version = "0.18.0"
 dependencies = [
@@ -1691,6 +1708,7 @@ dependencies = [
  "clap",
  "groundhog-build-info",
  "groundhog-bundle-identity",
+ "groundhog-hogd-backend",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
@@ -1788,6 +1806,7 @@ version = "0.18.0"
 dependencies = [
  "async-trait",
  "groundhog-bundle-identity",
+ "groundhog-hogd-backend",
  "groundhog-json-rpc-api",
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",

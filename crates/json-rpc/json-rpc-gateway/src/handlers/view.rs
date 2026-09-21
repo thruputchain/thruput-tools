@@ -2,20 +2,11 @@
 
 use std::time::{Duration, Instant};
 
+use groundhog_hogd_backend::view as shared_view;
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::{
-    hex::HexBytes,
-    view::{RootInvocationOutput, ViewRequest, ViewResponse},
-};
+use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
 use groundhog_view::ViewGatewayResult;
-use groundhog_xdr::{
-    auth_claim::{AuthClaim, AuthClaim_source_address_claim},
-    contract::ContractEntrypointID,
-    invoke_flag::InvokeFlag,
-    transaction::{Invocation, InvocationFrameOutput},
-    view::TransactionViewQuery,
-};
-use xdr_common::{BytesM, VecM};
+use groundhog_xdr::view::TransactionViewQuery;
 
 use crate::{
     config::HealthBackend,
@@ -24,8 +15,7 @@ use crate::{
     metrics::{BackendRequestOutcome, GatewayMetrics, REASON_PARSE_FAILED},
 };
 
-use super::backend_deadline;
-use super::parse_event::parse_emitted_event;
+use super::{VIEW_GATEWAY, backend_deadline};
 
 /// Execute a sandboxed contract simulation through hogd `ViewGateway`.
 #[tracing::instrument(
@@ -54,7 +44,7 @@ pub async fn view(
         }
     })?;
 
-    let query = view_query_from_request(request, gas_limit)?;
+    let query = shared_view::view_query(request, gas_limit)?;
     let timeout =
         Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     let deadline = backend_deadline(context, timeout)?;
@@ -90,106 +80,16 @@ async fn view_response_from_client(
     view_response_from_gateway_result(result, metrics)
 }
 
-fn view_query_from_request(
-    request: ViewRequest,
-    gas_limit: u64,
-) -> Result<TransactionViewQuery, GatewayError> {
-    let entrypoint: [u8; 8] = request.entrypoint.0.as_slice().try_into().map_err(|_| {
-        GatewayError::InvalidParam("view entrypoint must be exactly 8 bytes".into())
-    })?;
-
-    Ok(TransactionViewQuery {
-        invocation: Invocation {
-            invoked_address: request.contract.0,
-            entrypoint: ContractEntrypointID::from(entrypoint),
-            gas_limit,
-            calldata: BytesM(request.calldata.0),
-        },
-        parent_address: request.caller.map(|caller| caller.0),
-        auth_claim: public_view_auth_claim(),
-        forwarded_tokens: VecM(vec![]),
-        // Root invocations carry no flags (`invoke_flag.x:9-10`). Hogd's
-        // `ViewingModeData` is what sandboxes the run — writes don't commit,
-        // and `log_event` is permitted so wallet-preview callers can see what
-        // events a real submit would produce.
-        invoke_flags: InvokeFlag::None.0,
-    })
-}
-
-fn public_view_auth_claim() -> AuthClaim {
-    AuthClaim::kSourceAddressAuthData {
-        source_address_claim: AuthClaim_source_address_claim {
-            allowed_keys: 0,
-            required_weight: 0,
-        },
-    }
-}
-
+/// Decode the `ViewGateway` result and meter any events dropped as malformed.
 fn view_response_from_gateway_result(
     result: ViewGatewayResult,
     metrics: &GatewayMetrics,
 ) -> Result<ViewResponse, GatewayError> {
-    match result {
-        ViewGatewayResult::ViewGatewayOk { payload } => {
-            let mut events = Vec::with_capacity(payload.events.0.len());
-            for raw in payload.events.0 {
-                if let Some(event) = parse_emitted_event(raw) {
-                    events.push(event);
-                } else {
-                    metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
-                }
-            }
-
-            Ok(ViewResponse {
-                output: root_output_from_invocation_output(payload.output)?,
-                events,
-                height: payload.height,
-            })
-        }
-        ViewGatewayResult::ViewGatewayAbandoned => Err(GatewayError::BackendUnavailable(
-            "view_gateway abandoned the view after retrying; retry later".into(),
-        )),
-        ViewGatewayResult::ViewGatewayInternalError => Err(GatewayError::BackendUnavailable(
-            "view_gateway reported an internal error".into(),
-        )),
-        ViewGatewayResult::Default { outcome } => {
-            tracing::warn!(outcome, "unexpected ViewGatewayResult outcome");
-            Err(GatewayError::BackendUnavailable(format!(
-                "view_gateway returned unexpected outcome: {outcome}"
-            )))
-        }
-        // `Default` handles unknown wire discriminants. This arm is still kept
-        // for source-level forward compatibility because the generated enum is
-        // non-exhaustive and a future protocol crate may add a named variant.
-        other => {
-            tracing::warn!(result = ?other, "unknown ViewGatewayResult variant");
-            Err(GatewayError::BackendUnavailable(
-                "view_gateway returned an unsupported result variant; regenerate the \
-                 ViewGateway client for this protocol"
-                    .into(),
-            ))
-        }
+    let outcome = shared_view::view_outcome(VIEW_GATEWAY, result)?;
+    for _ in 0..outcome.dropped_events {
+        metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
     }
-}
-
-fn root_output_from_invocation_output(
-    output: InvocationFrameOutput,
-) -> Result<RootInvocationOutput, GatewayError> {
-    match output {
-        InvocationFrameOutput::Return { return_buffer } => Ok(RootInvocationOutput::Return {
-            return_data: HexBytes(return_buffer.0),
-        }),
-        InvocationFrameOutput::Abort { abort_buffer } => Ok(RootInvocationOutput::Abort {
-            abort_data: HexBytes(abort_buffer.0),
-        }),
-        InvocationFrameOutput::Fault => Ok(RootInvocationOutput::Fault),
-        // The generated XDR enum is non-exhaustive across protocol updates.
-        _ => Err(GatewayError::BackendUnavailable(
-            "view_gateway returned an unsupported output variant; regenerate the ViewGateway \
-             client for this protocol"
-                .into(),
-        )),
-    }
+    Ok(outcome.response)
 }
 
 #[cfg(test)]
@@ -198,15 +98,19 @@ mod tests {
 
     use async_trait::async_trait;
     use groundhog_json_rpc_types::ContractAddress;
+    use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_json_rpc_types::view::RootInvocationOutput;
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Client,
         ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome, ViewGatewayPayload,
     };
     use groundhog_xdr::event::TxEmittedEvent;
+    use groundhog_xdr::transaction::InvocationFrameOutput;
     use groundhog_xdr::types::ContractAddress as XdrContractAddress;
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
+    use xdr_common::{BytesM, VecM};
 
     use super::*;
 
@@ -279,37 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn view_query_maps_public_request_shape() {
-        let caller = ContractAddress::from(XdrContractAddress::from([9; 32]));
-        let query = view_query_from_request(request(Some(caller)), 123).expect("query maps");
-
-        assert_eq!(query.invocation.invoked_address.as_ref(), &[7; 32]);
-        assert_eq!(query.invocation.entrypoint.as_ref(), &[8; 8]);
-        assert_eq!(query.invocation.gas_limit, 123);
-        assert_eq!(query.invocation.calldata.0, vec![1, 2, 3]);
-        assert_eq!(query.parent_address.as_ref(), Some(&caller.0));
-        assert_eq!(query.forwarded_tokens.0.len(), 0);
-        assert_eq!(query.invoke_flags, InvokeFlag::None.0);
-        assert_eq!(
-            query.auth_claim,
-            AuthClaim::kSourceAddressAuthData {
-                source_address_claim: AuthClaim_source_address_claim {
-                    allowed_keys: 0,
-                    required_weight: 0,
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn view_query_preserves_missing_caller() {
-        let query = view_query_from_request(request(None), 456).expect("query maps");
-
-        assert_eq!(query.parent_address, None);
-        assert_eq!(query.invocation.gas_limit, 456);
-    }
-
-    #[test]
     fn gateway_return_maps_to_public_view_response() {
         let metrics = GatewayMetrics::for_tests();
         let topic0 = [10; 32];
@@ -350,20 +223,27 @@ mod tests {
     }
 
     #[test]
-    fn gateway_abort_and_fault_map_to_success_outputs() {
-        let abort = root_output_from_invocation_output(InvocationFrameOutput::Abort {
-            abort_buffer: BytesM(vec![4, 5]),
-        })
-        .expect("abort maps");
-        match abort {
-            RootInvocationOutput::Abort { abort_data } => assert_eq!(abort_data.0, vec![4, 5]),
-            other => panic!("unexpected output: {other:?}"),
-        }
+    fn malformed_view_events_are_dropped_and_metered() {
+        let metrics = GatewayMetrics::for_tests();
+        let result = ViewGatewayResult::ViewGatewayOk {
+            payload: ViewGatewayPayload {
+                height: 7.into(),
+                output: InvocationFrameOutput::Return {
+                    return_buffer: BytesM(vec![]),
+                },
+                events: VecM(vec![TxEmittedEvent {
+                    contract_address: XdrContractAddress::from([1; 32]),
+                    // Declares three topics but carries one topic's worth of bytes.
+                    num_topics: 3,
+                    serialized_event: BytesM(vec![0; 32]),
+                }]),
+            },
+        };
 
-        assert!(matches!(
-            root_output_from_invocation_output(InvocationFrameOutput::Fault),
-            Ok(RootInvocationOutput::Fault)
-        ));
+        let response = view_response_from_gateway_result(result, &metrics).expect("ok response");
+
+        assert!(response.events.is_empty());
+        assert_eq!(metrics.malformed_events_dropped(REASON_PARSE_FAILED), 1);
     }
 
     #[test]
@@ -393,7 +273,7 @@ mod tests {
             .await
             .expect("bug: fake ViewGateway should connect");
         let client = ViewGateway_ViewGateway1_Client::new(std::sync::Arc::new(socket));
-        let query = view_query_from_request(request(None), 123).expect("query maps");
+        let query = shared_view::view_query(request(None), 123).expect("query maps");
         let metrics = GatewayMetrics::for_tests();
 
         let result = view_response_from_client(

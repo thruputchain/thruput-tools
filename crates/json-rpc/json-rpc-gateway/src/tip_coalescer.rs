@@ -13,9 +13,10 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
+use groundhog_hogd_backend::scheduler as shared_scheduler;
 use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
-use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
-use groundhog_scheduler::{ExpectedDBTip, RPCError};
+use groundhog_json_rpc_types::block::ChainTip;
+use groundhog_scheduler::ExpectedDBTip;
 use groundhog_xdr::network_config::NetworkConfig;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
@@ -24,6 +25,7 @@ use crate::adaptive_batch::deadline_cohorts;
 use crate::config::{HealthBackend, TipConfig};
 use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
 use crate::error::GatewayError;
+use crate::handlers::SCHEDULER;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
 
 const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
@@ -108,27 +110,14 @@ impl TipSink for SchedulerTipSink {
         let result = rpc_result
             .map_err(|()| GatewayError::BackendTimeout)?
             .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
-        match result {
-            ExpectedDBTip::kRPCNone { db_tip } => {
-                let block_hash = consensus_value_hash(&db_tip.value).map_err(|error| {
-                    GatewayError::BackendUnavailable(format!(
-                        "scheduler returned an unencodable consensus value: {error}"
-                    ))
-                })?;
-                Ok(TipSnapshot {
-                    tip: ChainTip {
-                        height: db_tip.value.proposal_header.block_height.clone(),
-                        block_hash,
-                    },
-                    network_config: db_tip.network_config,
-                })
-            }
-            ExpectedDBTip::Default { error } if RPCError(error) == RPCError::kRPCNotFound => Err(
-                GatewayError::BackendUnavailable("no committed blocks yet".into()),
-            ),
-            other => Err(GatewayError::BackendUnavailable(format!(
-                "unexpected scheduler tip result: {other:?}"
-            ))),
+        match shared_scheduler::tip_answer(SCHEDULER, result)? {
+            shared_scheduler::TipAnswer::Tip(db_tip) => Ok(TipSnapshot {
+                tip: shared_scheduler::chain_tip(SCHEDULER, &db_tip.value)?,
+                network_config: db_tip.network_config,
+            }),
+            shared_scheduler::TipAnswer::NoCommittedBlock => Err(GatewayError::BackendUnavailable(
+                "no committed blocks yet".into(),
+            )),
         }
     }
 }

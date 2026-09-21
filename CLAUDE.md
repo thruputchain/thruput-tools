@@ -59,10 +59,20 @@ Workspace crates are grouped by boundary:
   artifact pipeline. Snapshot:
   `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`.
 
-`crates/x23/` owns internal transport helpers:
+`crates/x23/` owns the internal hogd-facing layer:
 
 - **x23-transport** — connection pools, address parsing, and typed connect
   errors for gateway and node-supervisor. Internal; not the public JSON-RPC API.
+- **hogd-backend** — shared hogd x23 backend adapters: intro-handshake
+  classification and the XDR-to-JSON-RPC mapping for `SchedGateway`,
+  `IndexerBlockExplorer`, `DbGateway`, and `ViewGateway` results, plus submit
+  batch packing and deadline cohorting. Gateway and node-supervisor both
+  decode hogd through it, so a wire result has one meaning across both
+  binaries. It owns no connections, timeouts, retry policy, or metrics —
+  those stay with each consumer, which is where the two genuinely differ.
+  Its mapping functions take a `service` label because the gateway and the
+  supervisor name the same backend differently ("indexer" vs "hogd-dev
+  indexer"). Add new hogd result decoding here, not in a binary.
 
 `crates/tools/` and `crates/rv32/` own developer tooling:
 
@@ -401,8 +411,14 @@ groundhog-bench --url http://127.0.0.1:9546 \
   live in `groundhog_json_rpc_server::tx`; do not duplicate that logic in
   gateway or node-supervisor adapters.
 - Gateway handler modules are production backend helpers grouped by
-  subsystem (receipt, blocks, events, parsing). Do not add new public
+  subsystem (receipt, blocks, events, view). Do not add new public
   JSON-RPC handler implementations there.
+- Decoding a hogd x23 result into a public payload belongs in
+  `groundhog-hogd-backend`, not in a handler or a supervisor adapter: the
+  gateway and node-supervisor serve the same RPC surface from the same
+  services, and a second copy is how their answers drift apart. Handlers
+  keep what is theirs alone — client acquisition, timeouts, metrics,
+  degraded-mode policy — and call the shared decoder for the mapping.
 - `json-rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.

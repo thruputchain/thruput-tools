@@ -1,23 +1,42 @@
-//! Parse hogd's `TxEmittedEvent` into the gateway's `EmittedEvent`.
+//! Split hogd's flat event payload into the public topics-and-data shape.
 //!
 //! hogd stores events as `TxEmittedEvent { contract_address, num_topics,
-//! serialized_event }` where `serialized_event` is:
+//! serialized_event }` where `serialized_event` is
 //! `topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.
-//!
-//! `num_topics` (0–3) determines the split point. Max total 1024 bytes.
+//! `num_topics` (0–3) is the split point; the total payload is at most
+//! 1024 bytes.
 
-use groundhog_json_rpc_types::events::EmittedEvent;
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
-
+use groundhog_json_rpc_types::{
+    events::EmittedEvent,
+    hex::{Hex0x, HexBytes, Topic},
+};
 use groundhog_xdr::event::TxEmittedEvent;
+use xdr_common::VecM;
 
-const TOPIC_SIZE: usize = 32;
-const MAX_TOPICS: u32 = 3;
+/// Width of one event topic.
+pub const TOPIC_SIZE: usize = 32;
 
-/// Parse a `TxEmittedEvent` into an `EmittedEvent` with split topics + data.
+/// Most topics an event may declare.
+pub const MAX_TOPICS: u32 = 3;
+
+/// Events parsed from one hogd payload, with the malformed ones counted.
 ///
-/// Returns `None` if the event is malformed (`num_topics` > 3, or
-/// `serialized_event` too short for the declared number of topics).
+/// A malformed event is dropped rather than failing the whole response, so
+/// one bad record cannot hide a page of good ones. `dropped` lets a caller
+/// that meters parse failures report them without re-walking the input.
+#[derive(Debug, Default)]
+pub struct ParsedEvents {
+    /// Events that parsed cleanly, in wire order.
+    pub events: Vec<EmittedEvent>,
+    /// How many events were dropped as malformed.
+    pub dropped: usize,
+}
+
+/// Parse a `TxEmittedEvent` into an `EmittedEvent` with split topics and data.
+///
+/// Returns `None` if the event is malformed — `num_topics` above
+/// [`MAX_TOPICS`], or a `serialized_event` too short for the topics it
+/// declares — and logs a warning naming the reason.
 pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
     let num_topics = raw.num_topics;
     if num_topics > MAX_TOPICS {
@@ -55,10 +74,29 @@ pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
     })
 }
 
+/// Parse every event in a hogd payload, counting the malformed ones.
+///
+/// The const bound is the payload's own cap — receipts and view results
+/// declare different ones — so callers pass their wire vector as it comes.
+pub fn parse_emitted_events<const MAX: u32>(raw: VecM<TxEmittedEvent, MAX>) -> ParsedEvents {
+    let mut parsed = ParsedEvents {
+        events: Vec::with_capacity(raw.0.len()),
+        dropped: 0,
+    };
+    for event in raw.0 {
+        match parse_emitted_event(event) {
+            Some(event) => parsed.events.push(event),
+            None => parsed.dropped += 1,
+        }
+    }
+    parsed
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use xdr_common::BytesM;
+
+    use super::*;
 
     #[test]
     fn event_payload_reuses_the_wire_buffer_for_every_topic_count() {
@@ -108,5 +146,26 @@ mod tests {
             assert!(event.data.0.is_empty());
             assert_eq!(event.topics.len(), num_topics as usize);
         }
+    }
+
+    #[test]
+    fn malformed_events_are_counted_without_dropping_the_good_ones() {
+        let good = TxEmittedEvent {
+            contract_address: [1; 32].into(),
+            num_topics: 1,
+            serialized_event: BytesM(vec![9; TOPIC_SIZE + 4]),
+        };
+        let malformed = TxEmittedEvent {
+            contract_address: [2; 32].into(),
+            num_topics: 3,
+            serialized_event: BytesM(vec![0; TOPIC_SIZE]),
+        };
+
+        let parsed = parse_emitted_events(VecM::<_>(vec![good, malformed]));
+
+        assert_eq!(parsed.events.len(), 1);
+        assert_eq!(parsed.dropped, 1);
+        assert_eq!(parsed.events[0].contract_address.0, [1; 32].into());
+        assert_eq!(parsed.events[0].data.0, vec![9; 4]);
     }
 }

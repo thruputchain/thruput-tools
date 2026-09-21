@@ -20,11 +20,12 @@
 //! (`inflight < max_inflight`).
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
+
+pub(crate) use groundhog_hogd_backend::submit::deadline_cohorts;
 
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
@@ -103,30 +104,6 @@ impl<P: BatchProcessor> Shard<P> {
         }
         workers.shutdown().await;
     }
-}
-
-pub(crate) fn deadline_cohorts<I>(
-    mut items: Vec<I>,
-    max_skew: Duration,
-    deadline: impl Fn(&I) -> Instant,
-) -> Vec<Vec<I>> {
-    items.sort_unstable_by_key(&deadline);
-    let mut cohorts: Vec<Vec<I>> = Vec::new();
-    for item in items {
-        let item_deadline = deadline(&item);
-        let joins_current = cohorts.last().is_some_and(|cohort| {
-            item_deadline.saturating_duration_since(deadline(&cohort[0])) <= max_skew
-        });
-        if joins_current {
-            cohorts
-                .last_mut()
-                .expect("bug: current cohort should exist")
-                .push(item);
-        } else {
-            cohorts.push(vec![item]);
-        }
-    }
-    cohorts
 }
 
 /// Shared, clone-friendly handle to a fleet of adaptive-batching shards.
