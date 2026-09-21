@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_json_rpc_types::{
@@ -24,8 +24,9 @@ use crate::{
     actor::{ActorState, required_actor_count},
     error::SimError,
     event::{ActorProvisionEvent, EventWriter, ResultEvent},
-    executor::{DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, SimRpcClient},
+    executor::DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
     manifest::{ActorProvisioningSpec, ContractArtifactKind, SimulationManifest},
+    rpc::{SimRpcClient, receipt_wait_detail, wait_for_receipt},
     runtime::{SimAccount, derive_provisioned_account_signer},
     util::{json_string, sha256_hex},
 };
@@ -412,9 +413,16 @@ where
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = poll_receipt(client, tx_hash, "wallet create")
-        .await
-        .map_err(|message| ProvisionTxError::with_hash(tx_hash, message))?;
+    let receipt = wait_for_receipt(
+        &client,
+        tx_hash,
+        PROVISION_RECEIPT_TIMEOUT,
+        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
+    )
+    .await
+    .map_err(|error| {
+        ProvisionTxError::with_hash(tx_hash, receipt_wait_detail("wallet create", &error))
+    })?;
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,
@@ -475,9 +483,16 @@ where
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = poll_receipt(client, tx_hash, "airdrop")
-        .await
-        .map_err(|message| ProvisionTxError::with_hash(tx_hash, message))?;
+    let receipt = wait_for_receipt(
+        &client,
+        tx_hash,
+        PROVISION_RECEIPT_TIMEOUT,
+        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
+    )
+    .await
+    .map_err(|error| {
+        ProvisionTxError::with_hash(tx_hash, receipt_wait_detail("airdrop", &error))
+    })?;
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,
@@ -532,33 +547,6 @@ where
         SimError::Executor(format!("actor provisioning chain tip failed: {error}"))
     })?;
     Ok((*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET))
-}
-
-async fn poll_receipt<C>(
-    client: C,
-    tx_hash: TxHash,
-    label: &'static str,
-) -> Result<TransactionReceipt, String>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    let deadline = Instant::now()
-        .checked_add(PROVISION_RECEIPT_TIMEOUT)
-        .unwrap_or_else(Instant::now);
-    loop {
-        if let Some(receipt) = client
-            .transaction_receipt(tx_hash)
-            .await
-            .map_err(|error| format!("{label} receipt poll failed: {error}"))?
-        {
-            return Ok(receipt);
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(format!("{label} receipt timed out"));
-        }
-        tokio::time::sleep(DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL.min(remaining)).await;
-    }
 }
 
 fn resolve_dev_wallet_artifact(

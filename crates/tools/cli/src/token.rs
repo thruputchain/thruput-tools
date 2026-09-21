@@ -222,25 +222,47 @@ fn decode_transfer_record(event: IdentifiedEvent) -> TokenTransferRecordReport {
             raw,
             decode_status: TokenTransferDecodeStatus::Malformed,
             transfer: None,
-            decode_error: Some(terminal_safe(&error)),
+            decode_error: Some(terminal_safe(&error.to_string())),
         },
     }
 }
 
-fn decode_transfer(raw: &RawEventReport) -> Result<DecodedTokenTransferReport, String> {
+/// Why a raw event could not be read as a canonical token transfer.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+enum TokenTransferDecodeError {
+    /// Topic 0 does not name a transfer, mint, or burn.
+    #[error("topic 0 is not a canonical token event signature")]
+    UnknownSignature,
+    /// The event carries a different topic count than its kind defines.
+    #[error("expected {expected} topics, got {actual}")]
+    TopicCount { expected: usize, actual: usize },
+    /// The data section is not an XDR amount.
+    #[error("failed to decode transfer amount: {0}")]
+    Amount(String),
+    /// The data section holds more than the amount.
+    #[error("{remaining} unread byte(s) remain after decoding transfer amount")]
+    TrailingData { remaining: usize },
+    /// The amount decoded but a transfer cannot move a negative quantity.
+    #[error("transfer amount must be nonnegative")]
+    NegativeAmount,
+}
+
+fn decode_transfer(
+    raw: &RawEventReport,
+) -> Result<DecodedTokenTransferReport, TokenTransferDecodeError> {
     let (kind, expected_topics) = match raw.topics.first().map(|topic| topic.0) {
         Some(signature) if signature == *TransferEvent::SIGNATURE => {
             (TokenTransferKind::Transfer, 3)
         }
         Some(signature) if signature == *MintEvent::SIGNATURE => (TokenTransferKind::Mint, 2),
         Some(signature) if signature == *BurnEvent::SIGNATURE => (TokenTransferKind::Burn, 2),
-        _ => return Err("topic 0 is not a canonical token event signature".into()),
+        _ => return Err(TokenTransferDecodeError::UnknownSignature),
     };
     if raw.topics.len() != expected_topics {
-        return Err(format!(
-            "expected {expected_topics} topics, got {}",
-            raw.topics.len()
-        ));
+        return Err(TokenTransferDecodeError::TopicCount {
+            expected: expected_topics,
+            actual: raw.topics.len(),
+        });
     }
     let participant = |index: usize| {
         ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
@@ -254,15 +276,14 @@ fn decode_transfer(raw: &RawEventReport) -> Result<DecodedTokenTransferReport, S
     };
     let mut reader = xdrs::cxs::buf_reader::BufReader::new(&raw.data.0);
     let amount: i128 = xdrs::read_xdr(&mut reader)
-        .map_err(|error| format!("failed to decode transfer amount: {error}"))?;
+        .map_err(|error| TokenTransferDecodeError::Amount(error.to_string()))?;
     if reader.remaining() != 0 {
-        return Err(format!(
-            "{} unread byte(s) remain after decoding transfer amount",
-            reader.remaining()
-        ));
+        return Err(TokenTransferDecodeError::TrailingData {
+            remaining: reader.remaining(),
+        });
     }
     if amount < 0 {
-        return Err("transfer amount must be nonnegative".into());
+        return Err(TokenTransferDecodeError::NegativeAmount);
     }
     Ok(DecodedTokenTransferReport {
         kind,

@@ -33,7 +33,7 @@ use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
 use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, ScheduleExecution,
-    SimRpcClient, StreamingScheduleExecution, drain_pending_receipt_polls, run_schedule_with_chaos,
+    StreamingScheduleExecution, drain_pending_receipt_polls, run_schedule_with_chaos,
     run_streaming_schedule_with_chaos,
 };
 use crate::manifest::{ClientSpec, ResolvedRunSpec, SimulationManifest, WorkloadKind};
@@ -46,6 +46,7 @@ use crate::result::{
     RuntimeIdentity, SIM_RESULT_SCHEMA_VERSION, SimMetricAvailability, SimResult, SimRunOutcome,
     TargetIdentity, WorkloadCounts,
 };
+use crate::rpc::{SimRpcClient, SimRpcError};
 use crate::runtime::{
     derive_accounts, derive_provisioning_sponsor, load_runtime_manifest, preflight_chain_identity,
 };
@@ -116,13 +117,13 @@ impl SimHttpClientPool {
         })
     }
 
-    async fn acquire_client(&self) -> Result<(OwnedSemaphorePermit, HttpClient), String> {
+    async fn acquire_client(&self) -> Result<(OwnedSemaphorePermit, HttpClient), SimRpcError> {
         let permit = self
             .request_limit
             .clone()
             .acquire_owned()
             .await
-            .map_err(|_| "simulator RPC client limiter closed".to_string())?;
+            .map_err(|_| SimRpcError::LimiterClosed)?;
         let index = self.next_client.fetch_add(1, Ordering::Relaxed) % self.clients.len();
         Ok((permit, self.clients[index].clone()))
     }
@@ -130,13 +131,13 @@ impl SimHttpClientPool {
 
 impl SimRpcClient for SimHttpClientPool {
     #[allow(clippy::manual_async_fn)]
-    fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+    fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
             GroundhogApiClient::chain_tip(&client)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|source| SimRpcError::rpc("chainTip", source))
         }
     }
 
@@ -144,13 +145,13 @@ impl SimRpcClient for SimHttpClientPool {
     fn send_raw_transaction(
         &self,
         tx_hex: String,
-    ) -> impl Future<Output = Result<TxHash, String>> + Send {
+    ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
             GroundhogApiClient::send_raw_transaction(&client, tx_hex)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|source| SimRpcError::rpc("sendRawTransaction", source))
         }
     }
 
@@ -158,13 +159,13 @@ impl SimRpcClient for SimHttpClientPool {
     fn transaction_receipt(
         &self,
         tx_hash: TxHash,
-    ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+    ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
             GroundhogApiClient::get_transaction_receipt(&client, tx_hash)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|source| SimRpcError::rpc("getTransactionReceipt", source))
         }
     }
 
@@ -172,13 +173,13 @@ impl SimRpcClient for SimHttpClientPool {
     fn view(
         &self,
         request: ViewRequest,
-    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+    ) -> impl Future<Output = Result<ViewResponse, SimRpcError>> + Send {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
             GroundhogApiClient::view(&client, request)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|source| SimRpcError::rpc("view", source))
         }
     }
 
@@ -187,13 +188,13 @@ impl SimRpcClient for SimHttpClientPool {
         &self,
         address: ContractAddress,
         key: HexBytes,
-    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+    ) -> impl Future<Output = Result<StorageItemRead, SimRpcError>> + Send {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
             GroundhogApiClient::get_storage_at(&client, address, key)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|source| SimRpcError::rpc("getStorageAt", source))
         }
     }
 
@@ -201,13 +202,13 @@ impl SimRpcClient for SimHttpClientPool {
     fn events_query(
         &self,
         query: EventQuery,
-    ) -> impl Future<Output = Result<EventPage, String>> + Send {
+    ) -> impl Future<Output = Result<EventPage, SimRpcError>> + Send {
         let pool = self.clone();
         async move {
             let (_permit, client) = pool.acquire_client().await?;
             GroundhogApiClient::get_events(&client, query)
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|source| SimRpcError::rpc("getEvents", source))
         }
     }
 }
@@ -1040,8 +1041,8 @@ mod tests {
 
     use super::*;
     use crate::event::EventWriter;
-    use crate::executor::SimRpcClient;
     use crate::manifest::ChaosEventSpec;
+    use crate::rpc::{SimRpcClient, SimRpcError};
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
@@ -1054,7 +1055,9 @@ mod tests {
 
     impl SimRpcClient for MockClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl std::future::Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(
+            &self,
+        ) -> impl std::future::Future<Output = Result<ChainTip, SimRpcError>> + Send {
             let tip = self.tip.clone();
             async move { Ok(tip) }
         }
@@ -1063,7 +1066,7 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl std::future::Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl std::future::Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
         }
     }
@@ -1199,16 +1202,16 @@ mod tests {
     struct ExpiryFailureClient;
 
     impl SimRpcClient for ExpiryFailureClient {
-        async fn chain_tip(&self) -> Result<ChainTip, String> {
-            Err("injected tip failure".into())
+        async fn chain_tip(&self) -> Result<ChainTip, SimRpcError> {
+            Err(SimRpcError::detail("chainTip", "injected tip failure"))
         }
-        async fn send_raw_transaction(&self, _: String) -> Result<TxHash, String> {
+        async fn send_raw_transaction(&self, _: String) -> Result<TxHash, SimRpcError> {
             panic!("failed expiry must stop new submits")
         }
         async fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> Result<Option<TransactionReceipt>, String> {
+        ) -> Result<Option<TransactionReceipt>, SimRpcError> {
             Ok(Some(TransactionReceipt {
                 tx_hash,
                 height: 42.into(),

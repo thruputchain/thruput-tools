@@ -1,12 +1,9 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{
-    BlockHeight, ContractAddress,
-    block::ChainTip,
+    BlockHeight,
     events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
         EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
@@ -42,6 +39,7 @@ use crate::manifest::{
 use crate::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
 use crate::resource::{ResourceSample, ResourceSampleRequest, TargetResourceSampler};
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState, ResourceSamplePoint};
+use crate::rpc::{SimRpcClient, receipt_wait_detail, wait_for_receipt};
 use crate::scheduler::{
     PhaseStart, ScheduleCursor, ScheduledActorTick, ScheduledSimulationEvent,
     select_workload_for_tick,
@@ -65,116 +63,6 @@ pub const DEFAULT_RECEIPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_TIMEOUT: Duration = Duration::from_secs(1);
 const READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_INTERVAL: Duration = Duration::from_millis(100);
-
-/// Minimal RPC surface used by the Phase 1 simulator executor.
-pub trait SimRpcClient {
-    fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send;
-    fn send_raw_transaction(
-        &self,
-        tx_hex: String,
-    ) -> impl Future<Output = Result<TxHash, String>> + Send;
-    /// Return the committed receipt for a transaction hash, or `None` when it is not indexed yet.
-    fn transaction_receipt(
-        &self,
-        _tx_hash: TxHash,
-    ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
-        async { Err("transaction receipt RPC is not implemented by this client".into()) }
-    }
-    fn view(
-        &self,
-        _request: ViewRequest,
-    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
-        async { Err("view RPC is not implemented by this client".into()) }
-    }
-    fn storage_read(
-        &self,
-        _address: ContractAddress,
-        _key: HexBytes,
-    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
-        async { Err("storage read RPC is not implemented by this client".into()) }
-    }
-    fn events_query(
-        &self,
-        _query: EventQuery,
-    ) -> impl Future<Output = Result<EventPage, String>> + Send {
-        async { Err("events query RPC is not implemented by this client".into()) }
-    }
-}
-
-impl<T> SimRpcClient for T
-where
-    T: GroundhogApiClient + Send + Sync,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-        async {
-            GroundhogApiClient::chain_tip(self)
-                .await
-                .map_err(|error| error.to_string())
-        }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn send_raw_transaction(
-        &self,
-        tx_hex: String,
-    ) -> impl Future<Output = Result<TxHash, String>> + Send {
-        async {
-            GroundhogApiClient::send_raw_transaction(self, tx_hex)
-                .await
-                .map_err(|error| error.to_string())
-        }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn transaction_receipt(
-        &self,
-        tx_hash: TxHash,
-    ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
-        async move {
-            GroundhogApiClient::get_transaction_receipt(self, tx_hash)
-                .await
-                .map_err(|error| error.to_string())
-        }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn view(
-        &self,
-        request: ViewRequest,
-    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
-        async move {
-            GroundhogApiClient::view(self, request)
-                .await
-                .map_err(|error| error.to_string())
-        }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn storage_read(
-        &self,
-        address: ContractAddress,
-        key: HexBytes,
-    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
-        async move {
-            GroundhogApiClient::get_storage_at(self, address, key)
-                .await
-                .map_err(|error| error.to_string())
-        }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn events_query(
-        &self,
-        query: EventQuery,
-    ) -> impl Future<Output = Result<EventPage, String>> + Send {
-        async move {
-            GroundhogApiClient::get_events(self, query)
-                .await
-                .map_err(|error| error.to_string())
-        }
-    }
-}
 
 /// Inputs for executing a generated schedule.
 pub struct ScheduleExecution<'a> {
@@ -2129,7 +2017,7 @@ where
                     event_latest_block: None,
                     event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
-                    error: Some(error),
+                    error: Some(error.to_string()),
                     read_after_write_name: None,
                     read_after_write_contract: None,
                     read_after_write_expected: None,
@@ -2273,7 +2161,7 @@ where
                     event_latest_block: None,
                     event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
-                    error: Some(error),
+                    error: Some(error.to_string()),
                     read_after_write_name: None,
                     read_after_write_contract: None,
                     read_after_write_expected: None,
@@ -2327,7 +2215,7 @@ where
             tx_hash,
             tx_hash_json,
             &times,
-            error,
+            error.to_string(),
         )),
     }
 }
@@ -2503,7 +2391,7 @@ where
                     completed_at_unix_ms,
                     latency_ms,
                 )
-                .with_error("view-rpc-error", error),
+                .with_error("view-rpc-error", error.to_string()),
             },
             skipped: false,
             submitted_transaction: None,
@@ -2702,7 +2590,7 @@ where
                     None,
                     tx_nonce,
                 )
-                .with_error("contract-call-submit-rpc-error", error),
+                .with_error("contract-call-submit-rpc-error", error.to_string()),
                 latency_ms,
                 "contract-call-submit-rpc-error",
                 None,
@@ -2819,7 +2707,7 @@ where
         .await
         .map_err(|error| ReadAfterWriteReadFailure {
             class: "view-rpc-error",
-            message: error,
+            message: error.to_string(),
         })?;
     match response.output {
         RootInvocationOutput::Return { return_data } => xdrs::cxs::decode::<u64>(&return_data.0)
@@ -3106,7 +2994,7 @@ where
                 Some(expected),
                 rebased,
             )
-            .with_error("rpc-error", error);
+            .with_error("rpc-error", error.to_string());
             return Ok(read_after_write_completion(
                 event,
                 false,
@@ -3305,23 +3193,14 @@ async fn poll_workload_receipt<C>(
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
-    let deadline = Instant::now()
-        .checked_add(DEFAULT_RECEIPT_DRAIN_TIMEOUT)
-        .unwrap_or_else(Instant::now);
-    loop {
-        if let Some(receipt) = client.transaction_receipt(tx_hash).await.map_err(|error| {
-            SimError::Executor(format!("{workload} receipt poll failed: {error}"))
-        })? {
-            return Ok(receipt);
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(SimError::Executor(format!(
-                "{workload} receipt poll timed out"
-            )));
-        }
-        tokio::time::sleep(DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL.min(remaining)).await;
-    }
+    wait_for_receipt(
+        &client,
+        tx_hash,
+        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
+    )
+    .await
+    .map_err(|error| SimError::Executor(receipt_wait_detail(workload, &error)))
 }
 
 fn contract_call_failure_completion(
@@ -3438,7 +3317,7 @@ where
             ),
             latency_ms,
             "storage-read-rpc-error",
-            error,
+            error.to_string(),
         )),
     }
 }
@@ -3623,7 +3502,7 @@ where
             ),
             latency_ms,
             "events-query-rpc-error",
-            error,
+            error.to_string(),
         )),
     }
 }
@@ -4103,6 +3982,8 @@ mod tests {
     };
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+
+    use crate::rpc::SimRpcError;
     use serde_json::json;
     use std::sync::{
         Mutex,
@@ -4204,19 +4085,42 @@ mod tests {
 
     struct FailingChaosController;
 
+    /// A canned RPC outcome a mock replays on every call.
+    ///
+    /// [`SimRpcError`] wraps a transport error and so is not `Clone`; a failure
+    /// is stored as its detail and rebuilt per call.
+    #[derive(Clone)]
+    enum Canned<T> {
+        Ok(T),
+        Failed(&'static str),
+    }
+
+    impl<T: Clone> Canned<T> {
+        fn replay(&self, method: &'static str) -> Result<T, SimRpcError> {
+            match self {
+                Self::Ok(value) => Ok(value.clone()),
+                Self::Failed(detail) => Err(SimRpcError::detail(method, *detail)),
+            }
+        }
+    }
+
     #[derive(Clone)]
     struct NativeExpiryClient {
         calls: Arc<std::sync::atomic::AtomicUsize>,
-        response: Arc<std::sync::Mutex<Result<i64, String>>>,
+        response: Arc<std::sync::Mutex<Canned<i64>>>,
     }
 
     impl SimRpcClient for NativeExpiryClient {
-        async fn send_raw_transaction(&self, _: String) -> Result<TxHash, String> {
+        async fn send_raw_transaction(&self, _: String) -> Result<TxHash, SimRpcError> {
             panic!("expiry refresh must not submit transactions")
         }
-        async fn chain_tip(&self) -> Result<ChainTip, String> {
+        async fn chain_tip(&self) -> Result<ChainTip, SimRpcError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let height = self.response.lock().expect("tip response").clone()?;
+            let height = self
+                .response
+                .lock()
+                .expect("tip response")
+                .replay("chainTip")?;
             Ok(ChainTip {
                 height: height.into(),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
@@ -4228,7 +4132,7 @@ mod tests {
     async fn native_schedule_stops_before_submit_when_expiry_tip_is_unavailable() {
         let client = NativeExpiryClient {
             calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            response: Arc::new(std::sync::Mutex::new(Err("unavailable".into()))),
+            response: Arc::new(std::sync::Mutex::new(Canned::Failed("unavailable"))),
         };
         let manifest = wallet_manifest();
         let schedule = generate_schedule(&manifest).expect("schedule");
@@ -4275,7 +4179,7 @@ mod tests {
     async fn native_expiry_cache_reuses_then_refreshes_tip_and_rejects_failures() {
         let client = NativeExpiryClient {
             calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            response: Arc::new(std::sync::Mutex::new(Ok(10_000_100))),
+            response: Arc::new(std::sync::Mutex::new(Canned::Ok(10_000_100))),
         };
         let mut actors = actor_states();
         actors[0].use_native_wallet();
@@ -4298,7 +4202,7 @@ mod tests {
         cache.as_mut().expect("cache").observed_at = Instant::now()
             .checked_sub(NATIVE_TIP_REFRESH_INTERVAL)
             .expect("test clock age");
-        *client.response.lock().expect("response") = Ok(10_000_200);
+        *client.response.lock().expect("response") = Canned::Ok(10_000_200);
         refresh_native_chain_tip(&client, &mut cache, &mut actors)
             .await
             .expect("refresh tip");
@@ -4312,10 +4216,10 @@ mod tests {
             10_001_200
         );
         for response in [
-            Err("unavailable".into()),
-            Ok(10_000_199),
-            Ok(i64::MAX),
-            Ok(-1),
+            Canned::Failed("unavailable"),
+            Canned::Ok(10_000_199),
+            Canned::Ok(i64::MAX),
+            Canned::Ok(-1),
         ] {
             cache.as_mut().expect("cache").observed_at = Instant::now()
                 .checked_sub(NATIVE_TIP_REFRESH_INTERVAL)
@@ -4334,7 +4238,7 @@ mod tests {
                 10_000_200
             );
         }
-        *client.response.lock().expect("response") = Err("initial failure".into());
+        *client.response.lock().expect("response") = Canned::Failed("initial failure");
         assert!(
             refresh_native_chain_tip(&client, &mut None, &mut actors)
                 .await
@@ -4393,7 +4297,7 @@ mod tests {
 
     impl SimRpcClient for PanickingClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async { panic!("simulated chain-tip panic") }
         }
 
@@ -4401,14 +4305,14 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { panic!("simulated submit panic") }
         }
     }
 
     impl SimRpcClient for DelayedClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
                 tokio::time::sleep(Duration::from_millis(5)).await;
                 Ok(ChainTip {
@@ -4422,14 +4326,14 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
         }
     }
 
     impl SimRpcClient for ViewClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async { panic!("chain_tip should not be called") }
         }
 
@@ -4437,7 +4341,7 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { panic!("send_raw_transaction should not be called") }
         }
 
@@ -4445,7 +4349,7 @@ mod tests {
         fn view(
             &self,
             _request: ViewRequest,
-        ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        ) -> impl Future<Output = Result<ViewResponse, SimRpcError>> + Send {
             let response = self.response.clone();
             async move { Ok(response) }
         }
@@ -4453,7 +4357,7 @@ mod tests {
 
     impl SimRpcClient for StorageReadClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async { panic!("chain_tip should not be called") }
         }
 
@@ -4461,7 +4365,7 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { panic!("send_raw_transaction should not be called") }
         }
 
@@ -4470,7 +4374,7 @@ mod tests {
             &self,
             address: Hex0x<ContractAddress>,
             key: HexBytes,
-        ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+        ) -> impl Future<Output = Result<StorageItemRead, SimRpcError>> + Send {
             let response = self.response.clone();
             let requested = self.requested.clone();
             async move {
@@ -4485,7 +4389,7 @@ mod tests {
 
     impl SimRpcClient for EventsQueryClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async { panic!("chain_tip should not be called") }
         }
 
@@ -4493,7 +4397,7 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { panic!("send_raw_transaction should not be called") }
         }
 
@@ -4501,7 +4405,7 @@ mod tests {
         fn events_query(
             &self,
             query: EventQuery,
-        ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        ) -> impl Future<Output = Result<EventPage, SimRpcError>> + Send {
             let response = self.response.clone();
             let requested = self.requested.clone();
             async move {
@@ -4516,7 +4420,7 @@ mod tests {
 
     impl SimRpcClient for FailingEventsQueryClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async { panic!("chain_tip should not be called") }
         }
 
@@ -4524,7 +4428,7 @@ mod tests {
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             async { panic!("send_raw_transaction should not be called") }
         }
 
@@ -4532,29 +4436,37 @@ mod tests {
         fn events_query(
             &self,
             query: EventQuery,
-        ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        ) -> impl Future<Output = Result<EventPage, SimRpcError>> + Send {
             let requested = self.requested.clone();
             async move {
                 requested
                     .lock()
                     .expect("event query request list should lock")
                     .push(query);
-                Err("simulated events query failure".into())
+                Err(SimRpcError::detail(
+                    "getEvents",
+                    "simulated events query failure",
+                ))
             }
         }
     }
 
     impl SimRpcClient for SubmitClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             let submitted = self.submitted.clone();
             async move {
                 submitted
@@ -4568,37 +4480,47 @@ mod tests {
 
     impl SimRpcClient for FailingSubmitClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             let submitted = self.submitted.clone();
             async move {
                 submitted
                     .lock()
                     .expect("submitted transaction list should lock")
                     .push(tx_hex);
-                Err("submit failed".into())
+                Err(SimRpcError::detail("sendRawTransaction", "submit failed"))
             }
         }
     }
 
     impl SimRpcClient for ContractCallClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             let submitted = self.submitted.clone();
             async move {
                 submitted
@@ -4613,7 +4535,7 @@ mod tests {
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let receipts = self.receipts.clone();
             let status = self.status.clone();
             async move {
@@ -4628,15 +4550,20 @@ mod tests {
 
     impl SimRpcClient for FailingContractCallReceiptClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             let submitted = self.submitted.clone();
             async move {
                 submitted
@@ -4651,37 +4578,50 @@ mod tests {
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let receipts = self.receipts.clone();
             async move {
                 receipts
                     .lock()
                     .expect("receipt request list should lock")
                     .push(tx_hash);
-                Err("contract-call receipt failed".into())
+                Err(SimRpcError::detail(
+                    "getTransactionReceipt",
+                    "contract-call receipt failed",
+                ))
             }
         }
     }
 
     impl SimRpcClient for ReceiptClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
-            async { Err("submit should not be called".into()) }
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "sendRawTransaction",
+                    "submit should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let requested = self.requested.clone();
             let receipt = self.receipt.clone();
             async move {
@@ -4696,23 +4636,33 @@ mod tests {
 
     impl SimRpcClient for EchoReceiptClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
-            async { Err("submit should not be called".into()) }
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "sendRawTransaction",
+                    "submit should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let requested = self.requested.clone();
             async move {
                 requested
@@ -4726,23 +4676,33 @@ mod tests {
 
     impl SimRpcClient for EventuallyReceiptClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
-            async { Err("submit should not be called".into()) }
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "sendRawTransaction",
+                    "submit should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let requested = self.requested.clone();
             let absent_before_present = self.absent_before_present.clone();
             async move {
@@ -4765,53 +4725,76 @@ mod tests {
 
     impl SimRpcClient for FailingReceiptClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
-            async { Err("submit should not be called".into()) }
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "sendRawTransaction",
+                    "submit should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let requested = self.requested.clone();
             async move {
                 requested
                     .lock()
                     .expect("requested receipt list should lock")
                     .push(tx_hash);
-                Err("receipt rpc failed".into())
+                Err(SimRpcError::detail(
+                    "getTransactionReceipt",
+                    "receipt rpc failed",
+                ))
             }
         }
     }
 
     impl SimRpcClient for SlowReceiptClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
-            async { Err("submit should not be called".into()) }
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "sendRawTransaction",
+                    "submit should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn transaction_receipt(
             &self,
             tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
             let requested = self.requested.clone();
             async move {
                 requested
@@ -6426,7 +6409,10 @@ mod tests {
         let event = find_event(&events, "workload-failed");
         assert_eq!(event["kind"], "workload-failed");
         assert_eq!(event["errorClass"], "rpc-error");
-        assert_eq!(event["error"], "receipt rpc failed");
+        assert_eq!(
+            event["error"],
+            "getTransactionReceipt failed: Custom error: receipt rpc failed"
+        );
         assert_eq!(event["receiptPresent"], serde_json::Value::Null);
     }
 
@@ -7294,26 +7280,31 @@ mod tests {
     #[derive(Clone)]
     struct ReadAfterWriteClient {
         reads: ReadAfterWriteReadQueue,
-        submit: Result<TxHash, String>,
-        receipt: Result<Option<TransactionReceipt>, String>,
+        submit: Canned<TxHash>,
+        receipt: Canned<Option<TransactionReceipt>>,
         view_calls: Arc<Mutex<u32>>,
     }
 
     type ReadAfterWriteReadQueue =
-        Arc<Mutex<std::collections::VecDeque<Result<ViewResponse, String>>>>;
+        Arc<Mutex<std::collections::VecDeque<Result<ViewResponse, SimRpcError>>>>;
 
     impl SimRpcClient for ReadAfterWriteClient {
         #[allow(clippy::manual_async_fn)]
-        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
-            async { Err("chain tip should not be called".into()) }
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
+            async {
+                Err(SimRpcError::detail(
+                    "chainTip",
+                    "chain tip should not be called",
+                ))
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
         fn send_raw_transaction(
             &self,
             _tx_hex: String,
-        ) -> impl Future<Output = Result<TxHash, String>> + Send {
-            let submit = self.submit.clone();
+        ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
+            let submit = self.submit.replay("sendRawTransaction");
             async move { submit }
         }
 
@@ -7321,8 +7312,8 @@ mod tests {
         fn transaction_receipt(
             &self,
             _tx_hash: TxHash,
-        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
-            let receipt = self.receipt.clone();
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
+            let receipt = self.receipt.replay("getTransactionReceipt");
             async move { receipt }
         }
 
@@ -7330,7 +7321,7 @@ mod tests {
         fn view(
             &self,
             _request: ViewRequest,
-        ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        ) -> impl Future<Output = Result<ViewResponse, SimRpcError>> + Send {
             let reads = self.reads.clone();
             let view_calls = self.view_calls.clone();
             async move {
@@ -7358,7 +7349,7 @@ mod tests {
         }
     }
 
-    fn read_after_write_reads(values: Vec<Result<u64, String>>) -> ReadAfterWriteReadQueue {
+    fn read_after_write_reads(values: Vec<Result<u64, SimRpcError>>) -> ReadAfterWriteReadQueue {
         read_after_write_response_reads(
             values
                 .into_iter()
@@ -7368,7 +7359,7 @@ mod tests {
     }
 
     fn read_after_write_response_reads(
-        values: Vec<Result<ViewResponse, String>>,
+        values: Vec<Result<ViewResponse, SimRpcError>>,
     ) -> ReadAfterWriteReadQueue {
         Arc::new(Mutex::new(values.into_iter().collect()))
     }
@@ -7670,8 +7661,8 @@ mod tests {
         let view_calls = Arc::new(Mutex::new(0));
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(0), Ok(1)]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: view_calls.clone(),
         };
 
@@ -7704,8 +7695,8 @@ mod tests {
         let view_calls = Arc::new(Mutex::new(0));
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(5), Ok(6)]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: view_calls.clone(),
         };
 
@@ -7734,8 +7725,8 @@ mod tests {
         let view_calls = Arc::new(Mutex::new(0));
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(6)]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: view_calls.clone(),
         };
 
@@ -7760,9 +7751,9 @@ mod tests {
     async fn read_after_write_reconcile_read_failure_is_not_rebased() {
         let view_calls = Arc::new(Mutex::new(0));
         let client = ReadAfterWriteClient {
-            reads: read_after_write_reads(vec![Err("read boom".into())]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            reads: read_after_write_reads(vec![Err(SimRpcError::detail("view", "read boom"))]),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: view_calls.clone(),
         };
 
@@ -7782,8 +7773,8 @@ mod tests {
     async fn read_after_write_mismatch_invalidates_actor() {
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(9)]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: Arc::new(Mutex::new(0)),
         };
 
@@ -7804,9 +7795,9 @@ mod tests {
     #[tokio::test]
     async fn read_after_write_keeps_known_on_post_commit_read_failure() {
         let client = ReadAfterWriteClient {
-            reads: read_after_write_reads(vec![Err("read boom".into())]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            reads: read_after_write_reads(vec![Err(SimRpcError::detail("view", "read boom"))]),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: Arc::new(Mutex::new(0)),
         };
 
@@ -7853,8 +7844,8 @@ mod tests {
         for (error_class, response) in cases {
             let client = ReadAfterWriteClient {
                 reads: read_after_write_response_reads(vec![Ok(response)]),
-                submit: Ok(tx_hash(0x6c)),
-                receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+                submit: Canned::Ok(tx_hash(0x6c)),
+                receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
                 view_calls: Arc::new(Mutex::new(0)),
             };
 
@@ -7881,8 +7872,8 @@ mod tests {
         let view_calls = Arc::new(Mutex::new(0));
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(Vec::new()),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: view_calls.clone(),
         };
 
@@ -7908,8 +7899,8 @@ mod tests {
         let view_calls = Arc::new(Mutex::new(0));
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(u64::MAX)]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt(tx_hash(0x6c)))),
             view_calls: view_calls.clone(),
         };
 
@@ -7929,8 +7920,8 @@ mod tests {
     async fn read_after_write_submit_failure_leaves_state_unchanged() {
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(3)]),
-            submit: Err("submit boom".into()),
-            receipt: Ok(None),
+            submit: Canned::Failed("submit boom"),
+            receipt: Canned::Ok(None),
             view_calls: Arc::new(Mutex::new(0)),
         };
 
@@ -7948,8 +7939,8 @@ mod tests {
     async fn read_after_write_receipt_rpc_failure_invalidates_actor() {
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(vec![Ok(3)]),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Err("receipt boom".into()),
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Failed("receipt boom"),
             view_calls: Arc::new(Mutex::new(0)),
         };
 
@@ -7967,8 +7958,8 @@ mod tests {
     async fn read_after_write_non_ok_receipt_does_not_advance() {
         let client = ReadAfterWriteClient {
             reads: read_after_write_reads(Vec::new()),
-            submit: Ok(tx_hash(0x6c)),
-            receipt: Ok(Some(receipt_with_status(
+            submit: Canned::Ok(tx_hash(0x6c)),
+            receipt: Canned::Ok(Some(receipt_with_status(
                 tx_hash(0x6c),
                 ExecStatus::Reverted { message: None },
             ))),
