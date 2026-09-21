@@ -103,6 +103,10 @@ export const ERC20 = {
     ERC20TransferResult,
     ERC20DeclaredException
   >({
+    interfaceName: "ERC20",
+    interfaceVersion: "0.1.0",
+    abiName: "transfer",
+    publicName: "transfer",
     entrypoint: entrypoints.ERC20.transfer,
     args: [
       {
@@ -131,6 +135,10 @@ export const ERC20 = {
     ERC20GetBalanceResult,
     ERC20DeclaredException
   >({
+    interfaceName: "ERC20",
+    interfaceVersion: "0.1.0",
+    abiName: "get_balance",
+    publicName: "getBalance",
     entrypoint: entrypoints.ERC20.getBalance,
     args: [
     ],
@@ -149,6 +157,10 @@ export const ERC20 = {
     ERC20GetBalanceOfResult,
     ERC20DeclaredException
   >({
+    interfaceName: "ERC20",
+    interfaceVersion: "0.1.0",
+    abiName: "get_balance_of",
+    publicName: "getBalanceOf",
     entrypoint: entrypoints.ERC20.getBalanceOf,
     args: [
       {

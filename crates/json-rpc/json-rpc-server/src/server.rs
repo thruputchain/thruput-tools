@@ -66,18 +66,19 @@ struct ChainTipSource<C> {
 #[derive(Debug, Clone, Copy)]
 struct TipState {
     height: i64,
-    /// Every field unset when the tip's network config is a version this
-    /// build cannot interpret; chain-configured checks are then skipped.
-    params: NetworkConfigParams,
+    /// `None` when the tip's network config is a version this build cannot
+    /// interpret: chain-configured pre-checks are then skipped and
+    /// `chainConfig` reports the config as unreadable rather than empty.
+    params: Option<NetworkConfigParams>,
 }
 
 impl TipState {
     fn from_reading(reading: &TipReading) -> Self {
         let params = match NetworkConfigParams::from_network_config(&reading.network_config) {
-            Ok(params) => params,
+            Ok(params) => Some(params),
             Err(error) => {
                 tracing::warn!(%error, "tip network config unreadable, chain-configured pre-checks skipped");
-                NetworkConfigParams::default()
+                None
             }
         };
         Self {
@@ -99,6 +100,11 @@ struct TipParams {
     /// Set by the first poll that lands. Until then every field below
     /// reads as unset and the chain-dependent pre-checks are skipped.
     loaded: AtomicBool,
+    /// Whether the last poll's config was a version this build interprets.
+    /// Clear means the parameters below are all unset because the config
+    /// could not be read, which `chainConfig` reports as unreadable rather
+    /// than as a config that states nothing.
+    config_readable: AtomicBool,
     height: AtomicI64,
     max_sha256_buffers: AtomicOptionU32,
     max_cross_invoke_depth: AtomicOptionU32,
@@ -106,7 +112,6 @@ struct TipParams {
     max_bytestring_len: AtomicOptionU32,
     max_contract_size_bytes: AtomicOptionU32,
     max_savepoint_depth: AtomicOptionU32,
-    max_sha256_buffer_bytes: AtomicOptionU32,
     max_auth_token_depth: AtomicOptionU32,
     max_rv32_code_bytes: AtomicOptionU32,
     max_rv32_memory_bytes: AtomicOptionU32,
@@ -144,13 +149,16 @@ impl TipParams {
     /// An uninterpretable config version publishes no parameters, skipping
     /// the chain-configured checks rather than guessing at bounds.
     fn store(&self, reading: &TipReading) {
-        let params = match NetworkConfigParams::from_network_config(&reading.network_config) {
-            Ok(params) => params,
+        let readable = match NetworkConfigParams::from_network_config(&reading.network_config) {
+            Ok(params) => Some(params),
             Err(error) => {
                 tracing::warn!(%error, "tip network config unreadable, chain-configured pre-checks skipped");
-                NetworkConfigParams::default()
+                None
             }
         };
+        let params = readable.unwrap_or_default();
+        self.config_readable
+            .store(readable.is_some(), Ordering::Relaxed);
         self.height.store(*reading.tip.height, Ordering::Relaxed);
         self.max_sha256_buffers.store(params.max_sha256_buffers);
         self.max_cross_invoke_depth
@@ -161,8 +169,6 @@ impl TipParams {
         self.max_contract_size_bytes
             .store(params.max_contract_size_bytes);
         self.max_savepoint_depth.store(params.max_savepoint_depth);
-        self.max_sha256_buffer_bytes
-            .store(params.max_sha256_buffer_bytes);
         self.max_auth_token_depth.store(params.max_auth_token_depth);
         self.max_rv32_code_bytes.store(params.max_rv32_code_bytes);
         self.max_rv32_memory_bytes
@@ -175,20 +181,23 @@ impl TipParams {
         if !self.loaded.load(Ordering::Acquire) {
             return None;
         }
+        let params = NetworkConfigParams {
+            max_sha256_buffers: self.max_sha256_buffers.load(),
+            max_cross_invoke_depth: self.max_cross_invoke_depth.load(),
+            max_new_contracts_per_tx: self.max_new_contracts_per_tx.load(),
+            max_bytestring_len: self.max_bytestring_len.load(),
+            max_contract_size_bytes: self.max_contract_size_bytes.load(),
+            max_savepoint_depth: self.max_savepoint_depth.load(),
+            max_auth_token_depth: self.max_auth_token_depth.load(),
+            max_rv32_code_bytes: self.max_rv32_code_bytes.load(),
+            max_rv32_memory_bytes: self.max_rv32_memory_bytes.load(),
+        };
         Some(TipState {
             height: self.height.load(Ordering::Relaxed),
-            params: NetworkConfigParams {
-                max_sha256_buffers: self.max_sha256_buffers.load(),
-                max_cross_invoke_depth: self.max_cross_invoke_depth.load(),
-                max_new_contracts_per_tx: self.max_new_contracts_per_tx.load(),
-                max_bytestring_len: self.max_bytestring_len.load(),
-                max_contract_size_bytes: self.max_contract_size_bytes.load(),
-                max_savepoint_depth: self.max_savepoint_depth.load(),
-                max_sha256_buffer_bytes: self.max_sha256_buffer_bytes.load(),
-                max_auth_token_depth: self.max_auth_token_depth.load(),
-                max_rv32_code_bytes: self.max_rv32_code_bytes.load(),
-                max_rv32_memory_bytes: self.max_rv32_memory_bytes.load(),
-            },
+            params: self
+                .config_readable
+                .load(Ordering::Relaxed)
+                .then_some(params),
         })
     }
 }
@@ -436,7 +445,7 @@ where
             // executor enforce authoritatively: an unavailable tip reading
             // skips the chain-dependent checks rather than blocking submission.
             let mut tip = self.submit_tip_state();
-            let params = tip.map(|tip| tip.params).unwrap_or_default();
+            let params = tip.and_then(|tip| tip.params).unwrap_or_default();
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
                 // A polled config can lag an upgrade that raised this bound,
@@ -446,7 +455,7 @@ where
                     if let Some(fresh) = self.fresh_tip_state(context).await {
                         tip = Some(fresh);
                     }
-                    let params = tip.map_or(params, |tip| tip.params);
+                    let params = tip.and_then(|tip| tip.params).unwrap_or(params);
                     validate_raw_transaction(&tx_hex, &params)?
                 }
                 Err(error) => return Err(error.into()),
@@ -502,6 +511,35 @@ where
         self.within_request_deadline(context, async {
             let reading = self.chain.plane.chain_tip(context).await?;
             Ok(reading.tip)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn chain_config(&self) -> RpcResult<NetworkConfigParams> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            // The same reading the submit pre-checks use, published by the
+            // refresh task. Before the first poll lands there is nothing to
+            // serve, so a caller that arrives then probes for itself rather
+            // than being told the config is unavailable on a healthy chain.
+            let reading = match self.submit_tip_state() {
+                Some(state) => Some(state),
+                None => self.fresh_tip_state(context).await,
+            };
+            let Some(state) = reading else {
+                return Err(RpcServerError::BackendUnavailable(
+                    "no chain tip reading is available".into(),
+                )
+                .into());
+            };
+            let Some(params) = state.params else {
+                return Err(RpcServerError::BackendUnavailable(
+                    "tip network config is a version this server cannot read".into(),
+                )
+                .into());
+            };
+            Ok(params)
         })
         .await
     }
@@ -1592,6 +1630,220 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
+    async fn chain_tip_rpc_reads_through_without_publishing() {
+        // chainTip answers from the backend so it is never stale, and does
+        // not store what it reads: the refresh task stays the only writer.
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(chain.clone(), poll_once_config(), submitted);
+        await_tip_reading(&server).await;
+        let after_poll = *chain.tip_calls.lock().await;
+
+        server
+            .chain_tip()
+            .await
+            .expect("bug: tip should be readable");
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within the polled cap");
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            after_poll + 1,
+            "chainTip should fetch for itself, and the submit should add nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_reports_exactly_what_the_tip_config_states() {
+        let chain = ConfigChain::new(3);
+        let server =
+            expiry_check_server(chain, poll_once_config(), Arc::new(Mutex::new(Vec::new())));
+        await_tip_reading(&server).await;
+
+        let config = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+
+        assert_eq!(config.max_new_contracts_per_tx, Some(3));
+        assert_eq!(
+            config,
+            NetworkConfigParams {
+                max_new_contracts_per_tx: Some(3),
+                ..NetworkConfigParams::default()
+            },
+            "unstated parameters are absent, not defaulted"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_serves_the_polled_reading_without_fetching() {
+        // There is no cache for chainConfig to warm and no TTL window to sit
+        // inside: the refresh task publishes and chainConfig reads the atomics,
+        // so repeated calls and a submit all cost the backend nothing.
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(chain.clone(), poll_once_config(), submitted);
+        await_tip_reading(&server).await;
+        let after_poll = *chain.tip_calls.lock().await;
+
+        for _ in 0..3 {
+            let config = server
+                .chain_config()
+                .await
+                .expect("bug: config should be readable");
+            assert_eq!(config.max_new_contracts_per_tx, Some(1));
+        }
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within the polled cap");
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            after_poll,
+            "a published reading should serve every caller without a fetch"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_reports_a_later_polls_config() {
+        // An upgrade reaches chainConfig when the refresh task publishes it,
+        // rather than when a caller finds a TTL window expired.
+        let chain = ConfigChain::new(1);
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default().with_tip_refresh_interval_ms(5),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        await_tip_reading(&server).await;
+        let first = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+
+        chain.set_params(max_contracts_params(2)).await;
+        let started = std::time::Instant::now();
+        loop {
+            let config = server
+                .chain_config()
+                .await
+                .expect("bug: config should be readable");
+            if config.max_new_contracts_per_tx == Some(2) {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "bug: a later poll should have published the upgraded config"
+            );
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+
+        assert_eq!(
+            first.max_new_contracts_per_tx,
+            Some(1),
+            "the call before the upgrade reports the config in force then"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_fails_when_no_tip_reading_is_available() {
+        let server = expiry_check_server(
+            UnavailableChain,
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let error = server
+            .chain_config()
+            .await
+            .expect_err("bug: nothing to report without a reading");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    /// Chain plane that fails until allowed to answer, so a test can be sure
+    /// the startup poll published nothing before the call under test.
+    #[derive(Clone)]
+    struct FailUntilAllowed {
+        inner: ConfigChain,
+        allowed: Arc<Mutex<bool>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChainPlane for FailUntilAllowed {
+        async fn chain_tip(
+            &self,
+            context: RpcRequestContext,
+        ) -> Result<TipReading, RpcServerError> {
+            if !*self.allowed.lock().await {
+                *self.inner.tip_calls.lock().await += 1;
+                return Err(RpcServerError::BackendUnavailable(
+                    "tip not yet available".into(),
+                ));
+            }
+            self.inner.chain_tip(context).await
+        }
+
+        async fn get_block_by_number(
+            &self,
+            context: RpcRequestContext,
+            height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            self.inner.get_block_by_number(context, height).await
+        }
+
+        async fn pending_transaction_count(
+            &self,
+            context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
+            self.inner.pending_transaction_count(context).await
+        }
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_probes_when_nothing_has_been_published() {
+        // The startup poll failed, so the atomics are unset. A call then
+        // fetches for itself rather than reporting the config unavailable on a
+        // chain that has since recovered. Concurrent callers in this window
+        // each probe: nothing coordinates them, which is the cost of having no
+        // shared cache, and the window is one refresh interval at startup.
+        let inner = ConfigChain::new(3);
+        let chain = FailUntilAllowed {
+            inner: inner.clone(),
+            allowed: Arc::new(Mutex::new(false)),
+        };
+        let server = expiry_check_server(
+            chain.clone(),
+            poll_once_config(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let started = std::time::Instant::now();
+        while *inner.tip_calls.lock().await == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "bug: the startup poll should have attempted a fetch by now"
+            );
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert!(
+            server.chain.params.load().is_none(),
+            "a failed poll should publish nothing"
+        );
+        *chain.allowed.lock().await = true;
+
+        let config = server
+            .chain_config()
+            .await
+            .expect("bug: a call with nothing published should probe rather than fail");
+
+        assert_eq!(config.max_new_contracts_per_tx, Some(3));
+    }
+
+    #[tokio::test]
     async fn bound_violation_is_rechecked_against_a_fresh_tip_before_rejecting() {
         // The polled config caps attachments at one; an upgrade then raises
         // it to two. A submit landing before the next poll must not reject on
@@ -1646,10 +1898,11 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         params.store(&tip_reading_with_params(7, max_contracts_params(3)));
         let state = params.load().expect("a stored reading should read back");
 
+        let params = state.params.expect("a readable config should read back");
         assert_eq!(state.height, 7);
-        assert_eq!(state.params.max_new_contracts_per_tx, Some(3));
+        assert_eq!(params.max_new_contracts_per_tx, Some(3));
         assert_eq!(
-            state.params.max_rv32_code_bytes, None,
+            params.max_rv32_code_bytes, None,
             "a parameter the config does not state should stay unstated"
         );
     }
@@ -1665,7 +1918,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let state = params.load().expect("a stored reading should read back");
 
         assert_eq!(state.height, 9);
-        assert_eq!(state.params.max_new_contracts_per_tx, None);
+        assert_eq!(
+            state
+                .params
+                .expect("a readable config should read back")
+                .max_new_contracts_per_tx,
+            None
+        );
     }
 
     #[tokio::test]

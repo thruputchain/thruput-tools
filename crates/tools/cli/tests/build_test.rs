@@ -48,12 +48,14 @@ fn resolve_package_with_explicit_name() {
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
                 metadata: None,
+                targets: Vec::new(),
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
                 metadata: None,
+                targets: Vec::new(),
             },
         ],
     };
@@ -72,6 +74,7 @@ fn resolve_package_explicit_name_not_found() {
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
             metadata: None,
+            targets: Vec::new(),
         }],
     };
     let err = groundhog_cli::build::resolve_package(&meta, Some("nope"), &PathBuf::from("/ws"))
@@ -90,12 +93,14 @@ fn resolve_package_from_member_dir() {
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
                 metadata: None,
+                targets: Vec::new(),
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
                 metadata: None,
+                targets: Vec::new(),
             },
         ],
     };
@@ -115,12 +120,14 @@ fn resolve_package_from_workspace_root_errors() {
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
                 metadata: None,
+                targets: Vec::new(),
             },
             groundhog_cli::build::MetadataPackage {
                 name: "beta".into(),
                 version: "0.1.0".into(),
                 manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
                 metadata: None,
+                targets: Vec::new(),
             },
         ],
     };
@@ -139,6 +146,7 @@ fn resolve_package_standalone_project() {
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
             metadata: None,
+            targets: Vec::new(),
         }],
     };
     let name =
@@ -156,6 +164,7 @@ fn resolve_package_standalone_from_root() {
             version: "0.1.0".into(),
             manifest_path: PathBuf::from("/proj/Cargo.toml"),
             metadata: None,
+            targets: Vec::new(),
         }],
     };
     let name = groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj")).unwrap();

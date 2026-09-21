@@ -7,7 +7,7 @@ description: >
   contains Groundhog configuration, SDK dependencies, or generated artifacts.
 ---
 
-<!-- groundhog-cli-version: 0.17.7 -->
+<!-- groundhog-cli-version: 0.18.0 -->
 
 # Groundhog
 
@@ -122,7 +122,9 @@ RV32 artifact. They exercise different paths and neither substitutes for the
 other. The scaffolded SDK downloads its test executor from public storage; no
 FFI download credentials are required. Cargo registry authentication follows
 the early-access setup instructions. Use `groundhog test --integration` for
-RPC tests against an ephemeral local node.
+RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
+`groundhog test --workspace` runs the RV32 tests of every member that has a
+`tests/test_rv32.rs` target and reports them together.
 
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
@@ -136,14 +138,13 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-CLI 0.17 uses SDK 0.34.4, protocol-rs 0.36.0, and XDR 0.10.1. Update
-these dependencies together when migrating an existing Rust project. SDK
-0.34.4 moves to protocol-rs 0.36.0, whose generated x23 clients require
-rpc_driver 0.11; its public XDR types are unchanged from 0.34.3, which,
-despite its patch number, changed them. Standard interfaces `=0.1.31` use
-this family while preserving the native token contract ABI; projects
-retaining SDK `=0.34.3` should retain interfaces `=0.1.30`, and SDK `=0.34.2`
-interfaces `=0.1.29`.
+This CLI uses SDK 0.36.0, standard interfaces 0.1.33, protocol-rs 0.36.0,
+and XDR 0.10.1. Update the SDK and interface dependencies together when
+migrating an existing Rust project. SDK 0.36.0 removes the implicit `Clone`
+derive from contract exceptions and encodes supported scalar event topics
+directly as padded 32-byte big-endian values. Rebuild contracts and regenerate
+TypeScript bindings together to adopt that topic encoding; event signatures
+alone do not distinguish it from the previous hashed representation.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or
@@ -219,6 +220,7 @@ Do not hand-maintain a TypeScript ABI beside the Rust contract spec.
 Generated method descriptors provide typed operations such as:
 
 - `invocation(...)` to encode an application call;
+- `call(...)` in the client DX runtime to retain typed result/exception decoders;
 - `view(...)` and `viewOutcome(...)` for read-only execution;
 - `decodeReturn(...)` and `decodeException(...)` for raw call data;
 - `decodeReceipt(...)` and `decodeReceiptOutcome(...)` for a receipt whose root
@@ -229,6 +231,23 @@ Generated event descriptors such as `PingEvent` provide `decode(...)`,
 
 Use those generated codecs. Do not create a low-level XDR reader when a binding
 already knows the method or event type.
+
+Bindings emit canonical interface/version and ABI/public method names for runtime
+diagnostics. They require a client runtime accepting this method metadata. The
+client DX runtime implements typed calls, execution and receipt observation;
+codegen does not embed wallet or transport behavior. Hashed event topics contain
+only the digest, not the original value; generated comments describe their
+filtering restriction. Regenerate bindings together with the reviewed client
+runtime before adopting the new descriptors.
+
+With the scalar-topic encoding in SDK 0.36.0, `u32`, `u64`, `u128`,
+`i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are directly decoded and
+filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
+extension, not compact XDR scalar encodings. Strings and byte slices remain
+hash-only. Rebuild contracts and regenerate their bindings together when adopting
+this encoding; an older artifact's event bytes are not changed by regeneration.
+The workspace SDK dependencies and newly scaffolded contracts are pinned to
+SDK 0.36.0 so they emit the representation these bindings describe.
 
 ## TypeScript Application Path
 

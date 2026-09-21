@@ -109,6 +109,10 @@ export const ExampleContract = {
     ExampleContractGetValuesResult,
     ExampleContractDeclaredException
   >({
+    interfaceName: "ExampleContract",
+    interfaceVersion: "0.1.0",
+    abiName: "get_values",
+    publicName: "getValues",
     entrypoint: entrypoints.ExampleContract.getValues,
     args: [
     ],
@@ -127,6 +131,10 @@ export const ExampleContract = {
     ExampleContractUpdateResult,
     ExampleContractDeclaredException
   >({
+    interfaceName: "ExampleContract",
+    interfaceVersion: "0.1.0",
+    abiName: "update",
+    publicName: "update",
     entrypoint: entrypoints.ExampleContract.update,
     args: [
       {
