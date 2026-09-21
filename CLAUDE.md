@@ -70,6 +70,11 @@ Workspace crates are grouped by boundary:
   agent knowledge records, the embedded skill, and normalized bundle metadata.
 - **cli** — `groundhog` binary. Build/test/deploy/call/local-node workflow.
   Keep logic in the library crate; `main.rs` should be dispatch only.
+- **cli-macros** — `ErrorMeta`, the derive that reads each `CliError`
+  variant's `#[code]`, `#[hint]`, and `#[details]` attributes and generates
+  `code`, `hint`, `details_json`, and the `METADATA` catalog a snapshot test
+  pins. It exists so error metadata lives beside the variant instead of in
+  parallel match ladders.
 - **toolchain** — embedded trusted devnode catalog, bounded acquisition and
   extraction, and versioned cache management. Cache lookup remains local and
   non-mutating; only explicit acquisition receives an HTTP source.
@@ -493,11 +498,37 @@ that build matches a validated installed bundle manifest.
 
 ### Adding a new error variant
 
-1. Add the variant to `CliError` in `src/error.rs`.
-2. Add a `code()` arm.
-3. Add a `hint()` arm.
-4. Use the variant at call sites. Avoid `CliError::Other` for common
-   user-facing failures.
+Add the variant to `CliError` in `src/error.rs` and declare its metadata in
+attributes beside the `#[error(...)]` message; `ErrorMeta` generates `code`,
+`hint`, and `details_json` from them, so there is no match arm to update.
+
+```rust
+#[error("invalid `{argument}`: {message}")]
+#[hint("pass a value `groundhog config get {argument}` accepts")]
+#[details]
+InvalidArgument { argument: String, message: String },
+```
+
+- The code defaults to the variant name in `snake_case`. Add
+  `#[code("...")]` only when the stable code has to differ, and record a code
+  deliberately shared with another variant in `SHARED_CODES` in
+  `tests/error_metadata.rs`.
+- `#[hint(...)]` takes a format string over the variant's fields, the same
+  shape `#[error(...)]` takes; `#[hint(text = CONST)]` reuses a hint several
+  variants share, and `#[hint(expr = ...)]` calls a helper for a hint that
+  depends on a field's value. Leave `#[hint]` off when the message already
+  states the fix.
+- `#[details]` puts every named field in the `--json` payload under its
+  `camelCase` key, `#[details(a, b)]` selects a subset, and
+  `#[details(expr = ...)]` builds a payload that renames or nests fields.
+- Run `UPDATE_SNAPSHOTS=1 cargo test -p groundhog-cli --test error_metadata`
+  to record the new metadata. The snapshot carries every variant's code, hint,
+  and `camelCase` details keys, so it is what turns a variant rename, a
+  reworded hint, or a dropped details field into a failing test rather than a
+  silently changed contract. A hint or payload built by `expr` depends on the
+  error's field values and reads `computed` there; give it a test of its own.
+- Use the variant at call sites. Avoid `CliError::Other` for common
+  user-facing failures.
 
 ### Adding machine-readable output to a CLI command
 
