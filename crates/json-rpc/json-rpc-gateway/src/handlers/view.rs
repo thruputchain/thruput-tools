@@ -86,9 +86,7 @@ fn view_response_from_gateway_result(
     metrics: &GatewayMetrics,
 ) -> Result<ViewResponse, GatewayError> {
     let outcome = shared_view::view_outcome(VIEW_GATEWAY, result)?;
-    for _ in 0..outcome.dropped_events {
-        metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
-    }
+    metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, outcome.dropped_events);
     Ok(outcome.response)
 }
 

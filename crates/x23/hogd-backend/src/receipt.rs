@@ -1,14 +1,53 @@
 //! Map hogd's execution result and root-frame output onto receipt fields.
 
 use groundhog_json_rpc_types::{
+    BlockHeight,
     hex::HexBytes,
-    receipt::{DETERMINISTIC_ERROR_KIND_FAULT, ExecStatus},
+    receipt::{DETERMINISTIC_ERROR_KIND_FAULT, ExecStatus, TransactionReceipt},
     transaction::TxHash,
 };
 use groundhog_xdr::{
+    event::TxEventLog,
     exec_result::ExecResult,
     transaction::{InvocationFrameOutput, TransactionHash},
 };
+
+use crate::event::parse_emitted_events;
+
+/// A public receipt decoded from a committed record, with the count of
+/// malformed events dropped so the caller can meter or log them.
+#[derive(Debug)]
+pub struct DecodedReceipt {
+    /// The receipt to return to the client.
+    pub receipt: TransactionReceipt,
+    /// Events dropped as malformed; they are absent from `receipt.events`.
+    pub dropped_events: usize,
+}
+
+/// Build the public receipt for a transaction committed at `height`.
+///
+/// A malformed event is dropped rather than failing the receipt, so one bad
+/// record cannot hide a committed transaction's outcome.
+pub fn transaction_receipt(
+    tx_hash: TxHash,
+    height: BlockHeight,
+    log: TxEventLog,
+) -> DecodedReceipt {
+    let parsed = parse_emitted_events(log.events);
+    let (return_data, abort_data) = root_output_buffers(log.root_output);
+    DecodedReceipt {
+        receipt: TransactionReceipt {
+            tx_hash,
+            height,
+            status: exec_status(log.exec_result),
+            events: parsed.events,
+            return_data,
+            abort_data,
+            gas_used: log.gas_consumed,
+        },
+        dropped_events: parsed.dropped,
+    }
+}
 
 /// Map hogd's `ExecResult` int enum onto the public `ExecStatus`.
 ///

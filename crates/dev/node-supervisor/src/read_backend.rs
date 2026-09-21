@@ -15,16 +15,15 @@ use std::{fmt, net::SocketAddr};
 use async_trait::async_trait;
 use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_hogd_backend::{
-    db_gateway as shared_db_gateway, event as shared_event, indexer as shared_indexer, intro,
-    receipt as shared_receipt, scheduler as shared_scheduler,
+    db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
+    scheduler as shared_scheduler,
 };
 use groundhog_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     ContractAddress,
-    events::{EventPage, EventQuery, IdentifiedEvent},
-    hex::Hex0x,
+    events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{
@@ -305,16 +304,8 @@ impl ReadPlane for HogdDevReadBackend {
                 };
 
             // 2. Check the indexer (authoritative for committed state).
-            match self.tx_lookup(tx_hash).await? {
-                shared_indexer::TxLookup::Found(info) => {
-                    return Ok(TransactionStatus::Committed {
-                        height: info.height,
-                    });
-                }
-                shared_indexer::TxLookup::RecentFailure(recent_failure) => {
-                    return Ok(TransactionStatus::from(&recent_failure));
-                }
-                shared_indexer::TxLookup::NotFound => {}
+            if let Some(status) = shared_indexer::committed_status(self.tx_lookup(tx_hash).await?) {
+                return Ok(status);
             }
 
             if mempool_checked {
@@ -354,35 +345,16 @@ impl ReadPlane for HogdDevReadBackend {
                     RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
                 })?;
             let page = shared_indexer::event_page(INDEXER, result)?;
-
-            let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
-            for identified in page.events.0 {
-                let tx_hash = identified.tx_hash;
-                let block_height = identified.block_height;
-                let sequence_number = identified.sequence_number;
-                if let Some(event) = shared_event::parse_emitted_event(identified.emitted_event) {
-                    events.push(IdentifiedEvent {
-                        tx_hash: TxHash(Hex0x(tx_hash)),
-                        block_height,
-                        sequence_number,
-                        event,
-                    });
-                } else {
-                    tracing::warn!(
-                        ?tx_hash,
-                        ?block_height,
-                        sequence_number,
-                        "dropped malformed event from hogd-dev indexer",
-                    );
-                }
+            let decoded = shared_indexer::public_event_page(page);
+            for dropped in &decoded.dropped {
+                tracing::warn!(
+                    tx_hash = ?dropped.tx_hash,
+                    block_height = ?dropped.block_height,
+                    sequence_number = dropped.sequence_number,
+                    "dropped malformed event from hogd-dev indexer",
+                );
             }
-
-            Ok(EventPage {
-                events,
-                cursor: page.cursor.into(),
-                latest_block: page.latest_block,
-                oldest_block: page.oldest_block,
-            })
+            Ok(decoded.page)
         })
         .await
     }
@@ -516,13 +488,7 @@ async fn get_item_from_db_gateway(
         .await
         .map_err(|source| RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {source}")))?;
     let payload = shared_db_gateway::payload(DB_GATEWAY, outer)?;
-    let block_height = payload.block_height;
-    let item = payload.items.0.into_iter().next().ok_or_else(|| {
-        RpcServerError::BackendUnavailable(format!(
-            "{DB_GATEWAY} response had fewer items than the batch"
-        ))
-    })?;
-    shared_db_gateway::storage_item_read(DB_GATEWAY, block_height, item)
+    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -531,24 +497,15 @@ async fn get_item_from_db_gateway(
 
 /// Build a public receipt from the indexer's committed record.
 fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
-    let parsed = shared_event::parse_emitted_events(info.events.events);
-    if parsed.dropped > 0 {
+    let decoded = shared_receipt::transaction_receipt(tx_hash, info.height, info.events);
+    if decoded.dropped_events > 0 {
         tracing::warn!(
-            dropped = parsed.dropped,
+            dropped = decoded.dropped_events,
             ?tx_hash,
             "dropped malformed events from hogd-dev indexer receipt",
         );
     }
-    let (return_data, abort_data) = shared_receipt::root_output_buffers(info.events.root_output);
-    TransactionReceipt {
-        tx_hash,
-        height: info.height,
-        status: shared_receipt::exec_status(info.events.exec_result),
-        events: parsed.events,
-        return_data,
-        abort_data,
-        gas_used: info.events.gas_consumed,
-    }
+    decoded.receipt
 }
 
 // ---------------------------------------------------------------------------
