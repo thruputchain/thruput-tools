@@ -550,14 +550,42 @@ where
     }
 }
 
-/// How one optional backend is named, pooled, and introduced.
-struct OptionalBackend<F> {
-    backend: HealthBackend,
-    /// Pool label; also the `service` a connect error names.
-    service: &'static str,
-    probe_service: &'static str,
+/// How one optional backend is named across connect, health, and metrics.
+#[derive(Debug)]
+pub(crate) struct OptionalBackendNames {
+    pub(crate) backend: HealthBackend,
+    /// Pool label; also the `service` a connect error names and the word
+    /// health messages use for the backend.
+    pub(crate) service: &'static str,
+    pub(crate) probe_service: &'static str,
     /// Intro RPC name, as metrics and logs report it.
-    intro_service: &'static str,
+    pub(crate) intro_service: &'static str,
+}
+
+pub(crate) const INDEXER_NAMES: OptionalBackendNames = OptionalBackendNames {
+    backend: HealthBackend::Indexer,
+    service: "indexer",
+    probe_service: "indexer_health",
+    intro_service: "indexer_block_explorer_intro",
+};
+
+pub(crate) const DB_GATEWAY_NAMES: OptionalBackendNames = OptionalBackendNames {
+    backend: HealthBackend::DbGateway,
+    service: "db_gateway",
+    probe_service: "db_gateway_health",
+    intro_service: "dbgateway_intro",
+};
+
+pub(crate) const VIEW_GATEWAY_NAMES: OptionalBackendNames = OptionalBackendNames {
+    backend: HealthBackend::ViewGateway,
+    service: "view_gateway",
+    probe_service: "view_gateway_health",
+    intro_service: "viewgateway_intro",
+};
+
+/// How one optional backend is pooled and introduced.
+struct OptionalBackend<F> {
+    names: &'static OptionalBackendNames,
     pool_size: usize,
     connection_config: ConnectionConfig,
     build: F,
@@ -585,10 +613,11 @@ where
         return Ok(None);
     };
 
+    let names = spec.names;
     let connect_started_at = Instant::now();
     let Some(client) = connect_backend_pair(
-        spec.service,
-        spec.probe_service,
+        names.service,
+        names.probe_service,
         address,
         spec.pool_size,
         spec.connection_config,
@@ -600,14 +629,14 @@ where
         return Ok(None);
     };
     let timed_out = || ConnectError::StartupProbeTimedOut {
-        service: spec.service,
+        service: names.service,
         addr: address.to_string(),
         timeout: startup_timeout,
     };
     let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
         tracing::warn!(
             addr = address,
-            service = spec.intro_service,
+            service = names.intro_service,
             timeout = ?startup_timeout,
             "optional backend connect consumed startup timeout, starting in degraded mode"
         );
@@ -630,8 +659,8 @@ where
             Ok(Err(_)) => BackendRequestOutcome::Error,
         };
         metrics.observe_backend_request(
-            spec.backend,
-            spec.intro_service,
+            names.backend,
+            names.intro_service,
             outcome,
             started_at.elapsed(),
         );
@@ -639,7 +668,7 @@ where
     let Ok(intro_outcome) = intro_result else {
         tracing::warn!(
             addr = address,
-            service = spec.intro_service,
+            service = names.intro_service,
             timeout = ?startup_timeout,
             "optional backend intro timed out, starting in degraded mode"
         );
@@ -649,14 +678,14 @@ where
     match intro_outcome {
         Ok(outcome) if outcome.accepted() => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
-            service: spec.service,
+            service: names.service,
             addr: address.to_string(),
             reason: intro_rejection_reason(outcome, &protocol_version),
         }),
         Err(source) => {
             tracing::warn!(
                 addr = address,
-                service = spec.intro_service,
+                service = names.intro_service,
                 error = %source,
                 "optional backend intro failed, starting in degraded mode"
             );
@@ -674,10 +703,7 @@ pub(crate) async fn connect_optional_indexer(
 ) -> Result<Option<IndexerClient>, ConnectError> {
     connect_optional_backend(
         OptionalBackend {
-            backend: HealthBackend::Indexer,
-            service: "indexer",
-            probe_service: "indexer_health",
-            intro_service: "indexer_block_explorer_intro",
+            names: &INDEXER_NAMES,
             pool_size,
             connection_config: hogd_large_message_config(),
             build: IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
@@ -701,10 +727,7 @@ pub(crate) async fn connect_optional_db_gateway(
 ) -> Result<Option<DbGatewayClient>, ConnectError> {
     connect_optional_backend(
         OptionalBackend {
-            backend: HealthBackend::DbGateway,
-            service: "db_gateway",
-            probe_service: "db_gateway_health",
-            intro_service: "dbgateway_intro",
+            names: &DB_GATEWAY_NAMES,
             pool_size,
             connection_config: ConnectionConfig::default(),
             build: DbGateway_DbGateway1_Client::new,
@@ -727,10 +750,7 @@ pub(crate) async fn connect_optional_view_gateway(
 ) -> Result<Option<ViewGatewayClient>, ConnectError> {
     connect_optional_backend(
         OptionalBackend {
-            backend: HealthBackend::ViewGateway,
-            service: "view_gateway",
-            probe_service: "view_gateway_health",
-            intro_service: "viewgateway_intro",
+            names: &VIEW_GATEWAY_NAMES,
             pool_size: view_gateway_pool_size(),
             connection_config: ConnectionConfig::default(),
             build: ViewGateway_ViewGateway1_Client::new,
