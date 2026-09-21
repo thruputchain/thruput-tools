@@ -11,10 +11,10 @@ use groundhog_xdr::view::TransactionViewQuery;
 use crate::{
     config::HealthBackend,
     context::GatewayContext,
-    metrics::{BackendRequestOutcome, GatewayMetrics, REASON_PARSE_FAILED},
+    metrics::{GatewayMetrics, REASON_PARSE_FAILED},
 };
 
-use super::{VIEW_GATEWAY, backend_deadline};
+use super::{VIEW_GATEWAY, backend_deadline, timed_backend_call};
 
 /// Execute a sandboxed contract simulation through hogd `ViewGateway`.
 #[tracing::instrument(
@@ -56,27 +56,20 @@ async fn view_response_from_client(
     query: &TransactionViewQuery,
     deadline: Instant,
 ) -> Result<ViewResponse, RpcServerError> {
-    let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout_at(deadline.into(), client.viewgateway_view(query)).await;
-    let outcome = match &rpc_result {
-        Err(_) => BackendRequestOutcome::Timeout,
-        Ok(Ok(ViewGatewayResult::ViewGatewayOk { .. })) => BackendRequestOutcome::Ok,
-        Ok(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
-    };
-    metrics.observe_backend_request(
+    let result = timed_backend_call(
+        metrics,
         HealthBackend::ViewGateway,
         "viewgateway_view",
-        outcome,
-        started_at.elapsed(),
-    );
-    if rpc_result.is_err() {
+        VIEW_GATEWAY,
+        deadline,
+        client.viewgateway_view(query),
+        |result| matches!(result, ViewGatewayResult::ViewGatewayOk { .. }),
+    )
+    .await;
+    if matches!(result, Err(RpcServerError::BackendTimeout)) {
         metrics.observe_view_timeout();
     }
-    let result = rpc_result
-        .map_err(|_| RpcServerError::BackendTimeout)?
-        .map_err(|source| RpcServerError::BackendUnavailable(format!("view_gateway: {source}")))?;
-
-    view_response_from_gateway_result(result, metrics)
+    view_response_from_gateway_result(result?, metrics)
 }
 
 /// Decode the `ViewGateway` result and meter any events dropped as malformed.

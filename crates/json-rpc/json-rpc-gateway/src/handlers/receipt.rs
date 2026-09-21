@@ -6,7 +6,10 @@ use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 use groundhog_hogd_backend::{
     indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
 };
-use groundhog_indexer::indexer::TxInfo;
+use groundhog_indexer::{
+    IndexerBlockExplorer_IndexerBlockExplorer1_Client,
+    indexer::{TxInfo, TxInfoResult},
+};
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
     receipt::TransactionReceipt,
@@ -22,7 +25,7 @@ use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 use groundhog_json_rpc_server::RpcServerError;
 
-use super::{INDEXER, backend_deadline};
+use super::{INDEXER, backend_deadline, timed_backend_call};
 
 struct SchedulerLookupGuard<T: Send + 'static> {
     worker: Option<JoinHandle<T>>,
@@ -88,24 +91,8 @@ pub async fn get_transaction_receipt(
         .clone()
         .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
 
-    let hash = shared_receipt::tx_hash_to_wire(tx_hash);
-    let started_at = Instant::now();
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    let rpc_result =
-        tokio::time::timeout_at(deadline.into(), client.get_transaction_info(&hash)).await;
-    ctx.metrics.observe_backend_request(
-        HealthBackend::Indexer,
-        "get_transaction_info",
-        match &rpc_result {
-            Ok(Ok(_)) => BackendRequestOutcome::Ok,
-            Ok(Err(_)) => BackendRequestOutcome::Error,
-            Err(_) => BackendRequestOutcome::Timeout,
-        },
-        started_at.elapsed(),
-    );
-    let result = rpc_result
-        .map_err(|_| RpcServerError::BackendTimeout)?
-        .map_err(|e| RpcServerError::BackendUnavailable(format!("indexer: {e}")))?;
+    let result = lookup_transaction_info(ctx, &client, deadline, tx_hash).await?;
 
     match shared_indexer::tx_lookup(INDEXER, result)? {
         shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(ctx, tx_hash, *info))),
@@ -274,40 +261,34 @@ async fn indexed_transaction_status(
     if Instant::now() >= deadline {
         return Err(RpcServerError::BackendTimeout);
     }
-    if let Some(client) = maybe_indexer.as_ref() {
-        let hash = shared_receipt::tx_hash_to_wire(tx_hash);
-        let started_at = Instant::now();
-        let rpc_result =
-            tokio::time::timeout_at(deadline.into(), client.get_transaction_info(&hash)).await;
-        ctx.metrics.observe_backend_request(
-            HealthBackend::Indexer,
-            "get_transaction_info",
-            match &rpc_result {
-                Ok(Ok(_)) => BackendRequestOutcome::Ok,
-                Ok(Err(_)) => BackendRequestOutcome::Error,
-                Err(_) => BackendRequestOutcome::Timeout,
-            },
-            started_at.elapsed(),
-        );
-        match rpc_result {
-            Ok(Ok(result)) => {
-                let lookup = shared_indexer::tx_lookup(INDEXER, result)?;
-                if let Some(status) = shared_indexer::committed_status(lookup) {
-                    return Ok(Some(status));
-                }
-            }
-            Ok(Err(e)) => {
-                return Err(RpcServerError::BackendUnavailable(format!("indexer: {e}")));
-            }
-            Err(_) => return Err(RpcServerError::BackendTimeout),
-        }
-    } else {
+    let Some(client) = maybe_indexer.as_ref() else {
         return Err(RpcServerError::BackendUnavailable(
             "indexer not connected".into(),
         ));
-    }
+    };
+    let result = lookup_transaction_info(ctx, client, deadline, tx_hash).await?;
+    let lookup = shared_indexer::tx_lookup(INDEXER, result)?;
+    Ok(shared_indexer::committed_status(lookup))
+}
 
-    Ok(None)
+/// Ask the indexer for its record of `tx_hash`, metered as one request.
+async fn lookup_transaction_info(
+    ctx: &GatewayContext,
+    client: &IndexerBlockExplorer_IndexerBlockExplorer1_Client,
+    deadline: Instant,
+    tx_hash: TxHash,
+) -> Result<TxInfoResult, RpcServerError> {
+    let hash = shared_receipt::tx_hash_to_wire(tx_hash);
+    timed_backend_call(
+        &ctx.metrics,
+        HealthBackend::Indexer,
+        "get_transaction_info",
+        INDEXER,
+        deadline,
+        client.get_transaction_info(&hash),
+        |_| true,
+    )
+    .await
 }
 
 /// Check the indexer first so committed reads do not occupy the scheduler lane.
