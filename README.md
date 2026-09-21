@@ -336,6 +336,7 @@ Workspace crates are grouped by boundary:
 | JSON-RPC | [`open-rpc-spec`](crates/json-rpc/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
 | x23 | [`x23-transport`](crates/x23/x23-transport/) | Shared x23 connection-pool helpers used by gateway and node-supervisor |
 | Tools | [`cli`](crates/tools/cli/) | `groundhog` CLI for the contract dev workflow |
+| Tools | [`cli-macros`](crates/tools/cli-macros/) | `ErrorMeta` derive generating each CLI error's code, hint, and JSON details from per-variant attributes |
 | Tools | [`signing`](crates/tools/signing/) | Off-chain transaction signing and construction |
 | RV32 | [`artifact`](crates/rv32/artifact/) | Canonical RV32 artifact format and validation |
 | RV32 | [`lower`](crates/rv32/lower/) | ELF-to-RV32 artifact lowerer and `rv32-lower` binary |
