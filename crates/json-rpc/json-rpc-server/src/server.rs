@@ -34,10 +34,9 @@ use crate::{
 ///
 /// Holds a cached reading of the db tip (height plus the resolved network
 /// config) that every `sendRawTransaction` pre-check consults. The
-/// background task started by [`Self::new`] refreshes it once per
-/// `tip_refresh_interval_ms`, which is also how long a reading is reused,
-/// so a submit reads what that task published rather than fetching on its
-/// own latency path. `chainTip` and a bound re-check still fetch directly.
+/// background task started by [`Self::new`] keeps it current, so a submit
+/// reads what that task published; `chainTip` and a bound re-check still
+/// fetch for themselves.
 #[derive(Debug)]
 pub struct GroundhogRpcServer<S, C, R, V> {
     submit: S,
@@ -52,7 +51,6 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     tip_cache: TipCache,
     /// Aborts the background refresh when the server is dropped, which
     /// for a served one is when jsonrpsee drops the module holding it.
-    /// Held only for that drop; never read.
     _tip_refresh: Option<AbortOnDrop>,
 }
 
@@ -266,8 +264,8 @@ impl Drop for AbortOnDrop {
 
 /// Start the task that keeps `cache` fresh, on a fixed schedule so a slow
 /// probe cannot push later refreshes out. Each tick probes
-/// unconditionally. `None` outside a Tokio runtime, and for a zero
-/// interval, which disables reuse too.
+/// unconditionally. Returns `None` outside a Tokio runtime, or when the
+/// interval is zero, which also disables reuse.
 fn spawn_tip_refresh<C: ChainPlane>(
     chain: Arc<C>,
     cache: TipCache,

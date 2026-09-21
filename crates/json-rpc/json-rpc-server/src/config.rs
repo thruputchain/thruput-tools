@@ -116,8 +116,8 @@ impl RpcServerConfig {
         self
     }
 
-    /// Override how long a tip reading is reused, and with it how often
-    /// the background task refreshes one.
+    /// Override how often the background task refreshes the tip reading.
+    /// The reuse window follows it, plus `tip_probe_timeout_ms`.
     #[must_use]
     pub fn with_tip_refresh_interval_ms(mut self, interval_ms: u64) -> Self {
         self.tip_refresh_interval_ms = interval_ms;
