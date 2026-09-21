@@ -283,11 +283,11 @@ published instead of fetching on its own latency path; an interval of zero
 starts no task and makes every pre-check fetch its own reading. The public
 `chainConfig` method reads through that same cache, so however often it is
 called it costs the backend at most one fetch per interval; on a cold
-cache a caller waits for the in-flight probe rather than answering empty. It reports exactly the stated params and fails
-rather than answering when there is no reading or the config version is
-unreadable. For the pre-checks, a
-parameter the config does not state is `None` and its check is
-skipped, except where the protocol itself fixes the value in force for an
+cache a caller waits for the in-flight probe rather than answering empty.
+It reports exactly the stated params and fails rather than answering when
+there is no reading or the config version is unreadable. For the
+pre-checks, a parameter the config does not state is `None` and its check
+is skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
 parameter ran under, and `maxRv32MemoryBytes` and `maxRv32CodeBytes` fall

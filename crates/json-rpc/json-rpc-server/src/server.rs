@@ -50,9 +50,9 @@ pub struct GroundhogRpcServer<S, C, R, V> {
     release_version: Option<String>,
     bundle_manifest_digest: Option<String>,
     tip_cache: TipCache,
-    /// Aborts the background refresh when the last clone of the server
-    /// (typically the one jsonrpsee holds) is dropped. Held only for that
-    /// drop; never read.
+    /// Aborts the background refresh when the server is dropped, which
+    /// for a served one is when jsonrpsee drops the module holding it.
+    /// Held only for that drop; never read.
     _tip_refresh: Option<AbortOnDrop>,
 }
 
@@ -90,8 +90,9 @@ impl TipState {
 /// inside the window reuse the last reading. The window is
 /// `tip_refresh_interval_ms`, which is also how often the background task
 /// refreshes, so on a server with that task running the refresh renews a
-/// reading as its window closes and submits stay off the backend. The submit that finds the window expired
-/// claims the refresh before awaiting it, so concurrent submits keep using
+/// reading as its window closes and submits stay off the backend. The
+/// submit that finds the window expired claims the refresh before
+/// awaiting it, so concurrent submits keep using
 /// the stale reading instead of queuing behind the probe. Failed or
 /// timed-out probes keep the previous reading: the tip only grows, so a
 /// stale height can only under-detect expiry, and the config changes only
