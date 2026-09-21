@@ -119,10 +119,43 @@ enum ProcessValidation {
     Skipped(String),
 }
 
+/// Why a run directory's ownership record could not be loaded.
+#[derive(Debug, thiserror::Error)]
+enum OwnershipReadError {
+    #[error("{0}")]
+    Read(#[from] io::Error),
+    #[error("not a valid ownership record: {0}")]
+    Parse(#[from] serde_json::Error),
+}
+
+/// Why the sweeper could not inspect or reclaim a recorded process.
+#[derive(Debug, thiserror::Error)]
+enum SweepOpError {
+    /// `ps` could not be run.
+    #[error("failed to run `ps`: {0}")]
+    Ps(#[source] io::Error),
+    /// `ps` ran but its output did not carry what validation compares.
+    #[error("ps output did not include {field}")]
+    PsOutputMissing { field: &'static str },
+    /// A recorded or reported process group is not a group this can signal.
+    #[error("invalid process group `{value}`")]
+    ProcessGroup { value: String },
+    /// Signalling the process group failed for a reason other than "already gone".
+    #[error("failed to signal process group: {0}")]
+    Signal(#[source] io::Error),
+    /// The group outlived `SIGKILL` plus the drain window.
+    #[error("process group {pgid} still alive after SIGKILL")]
+    SurvivedKill { pgid: u32 },
+    /// Process reclamation has no implementation on this platform.
+    #[cfg(not(unix))]
+    #[error("sweep is only supported on Unix targets")]
+    UnsupportedPlatform,
+}
+
 trait SweepOps {
     fn ps_available(&self) -> bool;
-    fn inspect_process(&self, pid: u32) -> Result<Option<LiveProcess>, String>;
-    fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), String>;
+    fn inspect_process(&self, pid: u32) -> Result<Option<LiveProcess>, SweepOpError>;
+    fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), SweepOpError>;
 }
 
 struct RealSweepOps;
@@ -207,9 +240,11 @@ fn sweep_runs_with_ops(
                 Ok(()) => report
                     .entries
                     .push(SweepEntry::reclaimed(&run_dir, process)),
-                Err(error) => report
-                    .entries
-                    .push(SweepEntry::failed(&run_dir, process, error)),
+                Err(error) => {
+                    report
+                        .entries
+                        .push(SweepEntry::failed(&run_dir, process, error.to_string()));
+                }
             },
             Ok(ProcessValidation::Skipped(reason)) => {
                 report.entries.push(SweepEntry::skipped(&run_dir, reason));
@@ -226,9 +261,8 @@ fn sweep_runs_with_ops(
     Ok(report)
 }
 
-fn read_ownership(path: &Path) -> Result<TargetOwnership, String> {
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+fn read_ownership(path: &Path) -> Result<TargetOwnership, OwnershipReadError> {
+    Ok(serde_json::from_slice(&fs::read(path)?)?)
 }
 
 fn reclaimable_process(ownership: &TargetOwnership) -> Option<&OwnedProcess> {
@@ -261,7 +295,7 @@ fn validate_recorded_process(
 fn validate_process(
     recorded: &OwnedProcess,
     ops: &dyn SweepOps,
-) -> Result<ProcessValidation, String> {
+) -> Result<ProcessValidation, SweepOpError> {
     let live = ops.inspect_process(recorded.pid)?;
     Ok(validate_recorded_process(recorded, live.as_ref()))
 }
@@ -271,20 +305,20 @@ impl SweepOps for RealSweepOps {
         command_on_path("ps")
     }
 
-    fn inspect_process(&self, process_id: u32) -> Result<Option<LiveProcess>, String> {
+    fn inspect_process(&self, process_id: u32) -> Result<Option<LiveProcess>, SweepOpError> {
         read_ps_snapshot(process_id)
     }
 
-    fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), String> {
+    fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), SweepOpError> {
         terminate_process_group(process, SWEEP_CLEANUP_GRACE)
     }
 }
 
-fn read_ps_snapshot(pid: u32) -> Result<Option<LiveProcess>, String> {
+fn read_ps_snapshot(pid: u32) -> Result<Option<LiveProcess>, SweepOpError> {
     let output = std::process::Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "lstart=,pgid=,command="])
         .output()
-        .map_err(|error| error.to_string())?;
+        .map_err(SweepOpError::Ps)?;
     if !output.status.success() {
         // A non-zero `ps` exit is treated as "gone". That may hide a `ps`
         // malfunction as a skip, but it keeps sweep firmly in the no-wrong-kill
@@ -295,24 +329,28 @@ fn read_ps_snapshot(pid: u32) -> Result<Option<LiveProcess>, String> {
     parse_ps_snapshot_line(line.lines().next().unwrap_or_default()).map(Some)
 }
 
-fn parse_ps_snapshot_line(line: &str) -> Result<LiveProcess, String> {
+fn parse_ps_snapshot_line(line: &str) -> Result<LiveProcess, SweepOpError> {
     let mut parts = line.split_whitespace();
     let mut start_tokens = Vec::with_capacity(5);
     for _ in 0..5 {
         let Some(token) = parts.next() else {
-            return Err("ps output did not include a full lstart token".into());
+            return Err(SweepOpError::PsOutputMissing {
+                field: "a full lstart token",
+            });
         };
         start_tokens.push(token);
     }
-    let process_group = parts
-        .next()
-        .ok_or_else(|| "ps output did not include a process group".to_string())?;
+    let process_group = parts.next().ok_or(SweepOpError::PsOutputMissing {
+        field: "a process group",
+    })?;
     let pgid = process_group
         .parse::<u32>()
-        .map_err(|error| format!("invalid process group `{process_group}`: {error}"))?;
+        .map_err(|_| SweepOpError::ProcessGroup {
+            value: process_group.to_owned(),
+        })?;
     let command = parts.collect::<Vec<_>>().join(" ");
     if command.is_empty() {
-        return Err("ps output did not include a command".into());
+        return Err(SweepOpError::PsOutputMissing { field: "a command" });
     }
     Ok(LiveProcess {
         start_time: start_tokens.join(" "),
@@ -322,7 +360,7 @@ fn parse_ps_snapshot_line(line: &str) -> Result<LiveProcess, String> {
 }
 
 #[cfg(unix)]
-fn terminate_process_group(process: &OwnedProcess, grace: Duration) -> Result<(), String> {
+fn terminate_process_group(process: &OwnedProcess, grace: Duration) -> Result<(), SweepOpError> {
     signal_process_group(process.pgid, libc::SIGTERM)?;
     let deadline = Instant::now() + grace;
     loop {
@@ -342,28 +380,26 @@ fn terminate_process_group(process: &OwnedProcess, grace: Duration) -> Result<()
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err(format!(
-                "process group {} still alive after SIGKILL",
-                process.pgid
-            ));
+            return Err(SweepOpError::SurvivedKill { pgid: process.pgid });
         }
         thread::sleep(Duration::from_millis(50));
     }
 }
 
 #[cfg(not(unix))]
-fn terminate_process_group(_process: &OwnedProcess, _grace: Duration) -> Result<(), String> {
-    Err("sweep is only supported on Unix targets".into())
+fn terminate_process_group(_process: &OwnedProcess, _grace: Duration) -> Result<(), SweepOpError> {
+    Err(SweepOpError::UnsupportedPlatform)
 }
 
 #[cfg(unix)]
-fn signal_process_group(pgid: u32, signal: libc::c_int) -> Result<(), String> {
-    let pgid = i32::try_from(pgid)
+fn signal_process_group(pgid: u32, signal: libc::c_int) -> Result<(), SweepOpError> {
+    let group = i32::try_from(pgid)
         .ok()
-        .filter(|pgid| *pgid > 0)
-        .ok_or_else(|| format!("invalid process group {pgid}"))?;
-    let target = -pgid;
-    let rc = unsafe { libc::kill(target, signal) };
+        .filter(|group| *group > 0)
+        .ok_or_else(|| SweepOpError::ProcessGroup {
+            value: pgid.to_string(),
+        })?;
+    let rc = unsafe { libc::kill(-group, signal) };
     if rc == 0 {
         Ok(())
     } else {
@@ -371,7 +407,7 @@ fn signal_process_group(pgid: u32, signal: libc::c_int) -> Result<(), String> {
         if source.raw_os_error() == Some(libc::ESRCH) {
             Ok(())
         } else {
-            Err(source.to_string())
+            Err(SweepOpError::Signal(source))
         }
     }
 }
@@ -517,7 +553,7 @@ mod tests {
                 },
             )]),
             terminated: RefCell::new(Vec::new()),
-            terminate_error: None,
+            survives_kill: None,
         };
 
         let report = sweep_runs_with_ops(root, false, &ops).expect("sweep should scan");
@@ -567,7 +603,7 @@ mod tests {
             ps_available: false,
             processes: BTreeMap::new(),
             terminated: RefCell::new(Vec::new()),
-            terminate_error: None,
+            survives_kill: None,
         };
 
         let report = sweep_runs_with_ops(temp.path(), false, &ops).expect("sweep should classify");
@@ -599,14 +635,17 @@ mod tests {
                 },
             )]),
             terminated: RefCell::new(Vec::new()),
-            terminate_error: Some("still alive".into()),
+            survives_kill: Some(process.pgid),
         };
 
         let report = sweep_runs_with_ops(temp.path(), false, &ops).expect("sweep should classify");
 
         assert!(report.has_failures());
         assert_eq!(report.entries[0].state, SweepEntryState::Failed);
-        assert_eq!(report.entries[0].error.as_deref(), Some("still alive"));
+        assert_eq!(
+            report.entries[0].error.as_deref(),
+            Some(format!("process group {} still alive after SIGKILL", process.pgid).as_str())
+        );
     }
 
     fn write_ownership(run_dir: &Path, process: OwnedProcess) {
@@ -641,7 +680,8 @@ mod tests {
         ps_available: bool,
         processes: BTreeMap<u32, LiveProcess>,
         terminated: RefCell<Vec<u32>>,
-        terminate_error: Option<String>,
+        /// Process group the fake reports as surviving `SIGKILL`.
+        survives_kill: Option<u32>,
     }
 
     impl SweepOps for FakeSweepOps {
@@ -649,14 +689,14 @@ mod tests {
             self.ps_available
         }
 
-        fn inspect_process(&self, pid: u32) -> Result<Option<LiveProcess>, String> {
+        fn inspect_process(&self, pid: u32) -> Result<Option<LiveProcess>, SweepOpError> {
             Ok(self.processes.get(&pid).cloned())
         }
 
-        fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), String> {
+        fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), SweepOpError> {
             self.terminated.borrow_mut().push(process.pid);
-            match &self.terminate_error {
-                Some(error) => Err(error.clone()),
+            match self.survives_kill {
+                Some(pgid) => Err(SweepOpError::SurvivedKill { pgid }),
                 None => Ok(()),
             }
         }

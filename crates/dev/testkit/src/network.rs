@@ -8,7 +8,10 @@ use std::time::Duration;
 
 use groundhog_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
 
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
+use groundhog_json_rpc_client::{
+    GroundhogApiClient, HttpClient, HttpClientBuilder, ReceiptPollConfig, ReceiptPollError,
+    ReceiptSource, poll_receipt,
+};
 use groundhog_json_rpc_types::block::ChainTip;
 use groundhog_json_rpc_types::events::{EventPage, EventQuery};
 use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
@@ -185,16 +188,20 @@ impl Network {
     /// two-phase-commit conflict such as a balance that could not cover its own
     /// storage cost) rather than leaving the caller with a bare timeout.
     pub async fn await_receipt(&self, tx_hash: TxHash) -> Result<TransactionReceipt> {
-        for _ in 0..RECEIPT_POLL_ATTEMPTS {
-            if let Some(receipt) = self.receipt(tx_hash).await? {
-                return Ok(receipt);
-            }
-            tokio::time::sleep(RECEIPT_POLL_INTERVAL).await;
+        match poll_receipt(
+            &NetworkReceipts(self),
+            tx_hash,
+            ReceiptPollConfig::attempts(RECEIPT_POLL_ATTEMPTS, RECEIPT_POLL_INTERVAL),
+        )
+        .await
+        {
+            Ok(receipt) => Ok(receipt),
+            Err(ReceiptPollError::Lookup { source, .. }) => Err(source),
+            Err(_) => Err(TestkitError::ReceiptTimeout {
+                tx_hash: format!("{tx_hash:?}"),
+                status: self.describe_status(tx_hash).await,
+            }),
         }
-        Err(TestkitError::ReceiptTimeout {
-            tx_hash: format!("{tx_hash:?}"),
-            status: self.describe_status(tx_hash).await,
-        })
     }
 
     /// Fetch a transaction's status.
@@ -351,6 +358,20 @@ impl Network {
             .client
             .as_ref()
             .ok_or(TestkitError::Offline { operation })
+    }
+}
+
+/// Drives the shared receipt poll over a [`Network`].
+///
+/// Status is deliberately left out: `await_receipt` summarizes it once, when
+/// the budget runs out, instead of spending a status request per attempt.
+struct NetworkReceipts<'a>(&'a Network);
+
+impl ReceiptSource for NetworkReceipts<'_> {
+    type Error = TestkitError;
+
+    async fn transaction_receipt(&self, tx_hash: TxHash) -> Result<Option<TransactionReceipt>> {
+        self.0.receipt(tx_hash).await
     }
 }
 

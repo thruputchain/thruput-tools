@@ -283,9 +283,9 @@ pub fn restore(
             path: input.display().to_string(),
             message: error.to_string(),
         })?;
-    validate_required_entries(&stats).map_err(|message| CliError::ChainArchiveInvalid {
+    validate_required_entries(&stats).map_err(|error| CliError::ChainArchiveInvalid {
         path: input.display().to_string(),
-        message,
+        message: error.to_string(),
     })?;
     // Flush file contents during decoding and directory entries here before the
     // staged replacement below.
@@ -919,19 +919,39 @@ impl<'de> Visitor<'de> for ChunksVisitor {
     }
 }
 
+// Rejects an archive entry that a restore must not write or must not lack.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+enum ArchiveContentError {
+    // A path a restore refuses to join with the target root.
+    #[error("unsafe archive path '{path}'")]
+    UnsafePath { path: String },
+    // A path outside the namespace a restore owns.
+    #[error("archive path '{path}' is outside persistent state")]
+    OutsidePersistentState { path: String },
+    // The archive lacks the metadata a node reads at startup.
+    #[error("archive is missing {DATA_DIR_METADATA}")]
+    MissingMetadata,
+    // The archive carries no chain state at all.
+    #[error("archive contains no RAMDB files")]
+    MissingRamdb,
+}
+
 // Restricts an archive entry to the known persistent-state namespace.
-fn validate_archive_path(path: &str) -> Result<(), String> {
+fn validate_archive_path(path: &str) -> Result<(), ArchiveContentError> {
+    let unsafe_path = || ArchiveContentError::UnsafePath {
+        path: path.to_owned(),
+    };
     // Accept only portable relative paths. This blocks absolute paths,
     // traversal components, and Windows separators before joining with root.
     if path.is_empty() || path.len() > 4096 || path.contains('\\') {
-        return Err(format!("unsafe archive path '{path}'"));
+        return Err(unsafe_path());
     }
     let parsed = Path::new(path);
     if parsed
         .components()
         .any(|component| !matches!(component, Component::Normal(_)))
     {
-        return Err(format!("unsafe archive path '{path}'"));
+        return Err(unsafe_path());
     }
     if path == DATA_DIR_METADATA {
         return Ok(());
@@ -942,16 +962,18 @@ fn validate_archive_path(path: &str) -> Result<(), String> {
     {
         return Ok(());
     }
-    Err(format!("archive path '{path}' is outside persistent state"))
+    Err(ArchiveContentError::OutsidePersistentState {
+        path: path.to_owned(),
+    })
 }
 
 // Confirms that the minimum state needed to start a node was restored.
-fn validate_required_entries(stats: &ArchiveStats) -> Result<(), String> {
+fn validate_required_entries(stats: &ArchiveStats) -> Result<(), ArchiveContentError> {
     if !stats.paths.contains(DATA_DIR_METADATA) {
-        return Err(format!("archive is missing {DATA_DIR_METADATA}"));
+        return Err(ArchiveContentError::MissingMetadata);
     }
     if !stats.paths.iter().any(|path| path.starts_with("ramdb/")) {
-        return Err("archive contains no RAMDB files".to_owned());
+        return Err(ArchiveContentError::MissingRamdb);
     }
     Ok(())
 }

@@ -175,13 +175,18 @@ pub fn load_project_profiles(
 /// only the local bookkeeping can fail. Rejecting it in the argument parser
 /// fails before the transaction is spent. The value is trimmed so that what
 /// the CLI reports matches the key actually written.
-pub fn parse_contract_alias(value: &str) -> Result<String, String> {
+pub fn parse_contract_alias(value: &str) -> Result<String, EmptyContractAlias> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err("contract alias cannot be empty".to_string());
+        return Err(EmptyContractAlias);
     }
     Ok(trimmed.to_string())
 }
+
+/// A `--alias` value that is blank once trimmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("contract alias cannot be empty")]
+pub struct EmptyContractAlias;
 
 pub fn save_profile_contract_alias(
     project_root: &Path,
