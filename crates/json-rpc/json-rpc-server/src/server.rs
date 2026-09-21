@@ -87,13 +87,12 @@ impl TipState {
 /// `sendRawTransaction` pre-checks on this server.
 ///
 /// A submit asks the backend at most once per reuse window; submits
-/// inside the window reuse the last reading. The window is
-/// `tip_refresh_interval_ms`, which is also how often the background task
-/// refreshes, so on a server with that task running the refresh renews a
-/// reading as its window closes and submits stay off the backend. The
-/// submit that finds the window expired claims the refresh before
-/// awaiting it, so concurrent submits keep using
-/// the stale reading instead of queuing behind the probe. Failed or
+/// inside the window reuse the last reading. The background task
+/// republishes well inside that window, so on a server running it a
+/// submit never reaches the backend itself. The submit that finds the
+/// window expired claims the refresh before awaiting it, so concurrent
+/// submits keep using the stale reading rather than queuing behind the
+/// probe. Failed or
 /// timed-out probes keep the previous reading: the tip only grows, so a
 /// stale height can only under-detect expiry, and the config changes only
 /// at explicit upgrade blocks. Fetches that overlap may complete out of
@@ -277,16 +276,13 @@ impl Drop for AbortOnDrop {
 
 /// Start the task that keeps `cache` fresh.
 ///
-/// Ticks land on a fixed schedule rather than an interval after the last
-/// probe returned: scheduling from the probe's end would push every later
-/// refresh out by the time that probe took, leaving the reading expired
-/// for as long between the two, which is exactly the stretch a submit
-/// would fill by fetching for itself. Each tick probes unconditionally,
-/// since this task is what the reuse window is measured against.
+/// Ticks on a fixed schedule, so a slow probe cannot push later refreshes
+/// out and open a stretch a submit would fill by fetching for itself.
+/// Each tick probes unconditionally: this task is what the reuse window
+/// is measured against.
 ///
-/// Returns `None` outside a Tokio runtime, where no background work can
-/// run, and for a zero interval, which disables reuse so that every
-/// pre-check fetches its own reading.
+/// Returns `None` outside a Tokio runtime, and for a zero interval, which
+/// disables reuse so every pre-check fetches its own reading.
 fn spawn_tip_refresh<C: ChainPlane>(
     chain: Arc<C>,
     cache: TipCache,
@@ -536,11 +532,10 @@ where
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
                 // A cached config can lag an upgrade block that raised the
-                // violated bound, by up to a refresh interval. Read the tip
-                // again before
-                // rejecting, so a stale bound never turns away a transaction
-                // the current config admits. A reading this request fetched
-                // itself is already current, and the rejection stands.
+                // violated bound. Read the tip again before rejecting, so a
+                // stale bound never turns away a transaction the current
+                // config admits. A reading this request fetched itself is
+                // already current, and the rejection stands.
                 Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
                     tip = self.fresh_tip_state(context).await;
                     let params = tip.state.and_then(|tip| tip.params).unwrap_or(params);
@@ -1459,11 +1454,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(submitted.lock().await.len(), 3);
     }
 
-    /// The window a pre-check reuses a reading for must never be shorter
-    /// than the interval that refreshes it. When it was (`tip_cache_ttl_ms`
-    /// defaulted to 3s against a 5s refresh) every cycle held a stretch
-    /// where the reading had expired but the refresh had not yet run, and
-    /// the first submit to arrive in it fetched on its own latency path.
+    /// The reuse window must never be shorter than the interval that
+    /// refreshes it: `tip_cache_ttl_ms` used to default to 3s against a 5s
+    /// refresh, leaving a stretch each cycle for a submit to fetch in.
     #[tokio::test(start_paused = true)]
     async fn submit_inside_the_refresh_interval_does_not_fetch_its_own_tip() {
         const INTERVAL_MS: u64 = 10_000;
@@ -1486,10 +1479,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "the first submit warms the reading"
         );
 
-        // The last instant still inside the interval. Any reuse window
-        // shorter than it (a hardcoded constant, or a fraction of it as
-        // the 3s-against-5s defaults were) has lapsed by here, and the
-        // refresh task's first tick has not yet run.
+        // Last instant inside the interval: any shorter window has
+        // lapsed, and the first refresh tick has not run.
         tokio::time::advance(Duration::from_millis(INTERVAL_MS - 1)).await;
 
         server
@@ -2113,11 +2104,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         }
     }
 
-    /// Refreshes must land on a fixed schedule, not an interval after the
-    /// last probe returned. Scheduling from the probe's end pushes every
-    /// later refresh out by the time that probe took, and the reading sits
-    /// expired for that long each cycle with a submit free to fetch its
-    /// own.
+    /// Refreshes must land on a fixed schedule: scheduling from the end of
+    /// each probe pushes every later one out by the time that probe took.
     #[tokio::test(start_paused = true)]
     async fn background_refresh_does_not_drift_by_the_time_a_probe_takes() {
         const INTERVAL_MS: u64 = 10_000;

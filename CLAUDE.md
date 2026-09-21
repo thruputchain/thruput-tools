@@ -431,18 +431,20 @@ groundhog-bench --url http://127.0.0.1:9546 \
   (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
   that every tip fetch refreshes: a submit that finds it stale, the public
   `chainTip` method, and a background task `GroundhogRpcServer::new` starts
-  on `tip_refresh_interval_ms`. That one interval is both how long a
-  reading is reused and how often it is refreshed, so the refresh renews a
-  reading as its window closes and a submit reads what the task published
-  rather than fetching on its own latency path; an interval of zero starts
-  no task and makes every pre-check fetch its own reading. The public
-  `chainConfig` method reads through that same cache, so it costs the
-  backend at most one fetch per interval however often it is called, and
-  reports only the parameters the config states. A bound violation found against a cached
-  reading is re-checked against a freshly fetched tip before it is
-  returned, so a reading that lags a config upgrade never rejects what the
-  current config admits. The checks are advisory, not a trust
-  boundary: a missing reading never blocks submission. A bound is enforced
+  on `tip_refresh_interval_ms`. That task ticks on a fixed schedule, and a
+  reading stays reusable for the interval plus `tip_probe_timeout_ms`, the
+  longest a tick's probe may take to publish, so a refresh always lands
+  before the reading it renews goes stale and a submit reads what the task
+  published rather than fetching on its own latency path. An interval of
+  zero starts no task and makes every pre-check fetch its own reading. The
+  public `chainConfig` method reads through that same cache, so it costs
+  the backend at most one fetch per interval however often it is called,
+  and reports only the parameters the config states. A bound violation
+  found against a cached reading is re-checked against a freshly fetched
+  tip before it is returned, so a reading that lags a config upgrade never
+  rejects what the current config admits. The checks are advisory, not a
+  trust boundary: a missing reading never blocks submission. A bound is
+  enforced
   only with a value the protocol defines: the one the tip's config states,
   or a constant the protocol fixes for the unstated case (today
   `kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`, and
