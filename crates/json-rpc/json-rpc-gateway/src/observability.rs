@@ -104,34 +104,34 @@ async fn readiness_endpoint(state: ObservabilityState, endpoint: &'static str) -
 async fn metrics_endpoint(State(state): State<ObservabilityState>) -> Response {
     let started_at = Instant::now();
     let snapshot = state.health.snapshot().await;
-    // Record this request before rendering so the scrape includes its own
-    // sample without encoding the registry a second time.
+    // The registry is gathered and encoded once per scrape. This request's
+    // own sample is recorded afterwards, so it appears on the next scrape.
+    let (status, response) = match state.metrics.gather(&snapshot) {
+        Ok(body) => (
+            StatusCode::OK,
+            ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response(),
+        ),
+        Err(err) => {
+            tracing::error!(error = %err, "failed to encode gateway metrics");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            )
+        }
+    };
     let duration = started_at.elapsed();
     state.metrics.observe_http_request(
         "metrics",
-        crate::metrics::status_class(StatusCode::OK.as_u16()),
+        crate::metrics::status_class(status.as_u16()),
         duration,
     );
-    match state.metrics.gather(&snapshot) {
-        Ok(body) => {
-            tracing::debug!(
-                endpoint = "metrics",
-                status = StatusCode::OK.as_u16(),
-                duration_ms = duration.as_millis(),
-                "gateway metrics endpoint completed",
-            );
-            ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
-        }
-        Err(err) => {
-            tracing::error!(error = %err, "failed to encode gateway metrics");
-            state.metrics.observe_http_request(
-                "metrics",
-                crate::metrics::status_class(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
-                started_at.elapsed(),
-            );
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+    tracing::debug!(
+        endpoint = "metrics",
+        status = status.as_u16(),
+        duration_ms = duration.as_millis(),
+        "gateway metrics endpoint completed",
+    );
+    response
 }
 
 async fn unknown_endpoint(State(state): State<ObservabilityState>) -> Response {
@@ -202,6 +202,9 @@ mod tests {
             "{health}"
         );
 
+        // A scrape's own sample is recorded after encoding, so it shows up
+        // on the following scrape.
+        request(server.local_addr, "/metrics").await;
         let metrics = request(server.local_addr, "/metrics").await;
         assert!(metrics.starts_with("HTTP/1.1 200 OK"), "{metrics}");
         assert!(
