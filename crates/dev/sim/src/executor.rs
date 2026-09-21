@@ -1,3 +1,4 @@
+use groundhog_json_rpc_client::poll_receipt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -39,7 +40,7 @@ use crate::manifest::{
 use crate::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
 use crate::resource::{ResourceSample, ResourceSampleRequest, TargetResourceSampler};
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState, ResourceSamplePoint};
-use crate::rpc::{SimRpcClient, wait_for_receipt};
+use crate::rpc::{ReceiptWaitFailure, SimReceiptSource, SimRpcClient, receipt_poll_config};
 use crate::scheduler::{
     PhaseStart, ScheduleCursor, ScheduledActorTick, ScheduledSimulationEvent,
     select_workload_for_tick,
@@ -2600,13 +2601,13 @@ where
     };
 
     let tx_hash_json = json_string(&tx_hash, "txHash")?;
-    let receipt = wait_for_receipt(
-        &client,
+    let receipt = poll_receipt(
+        &SimReceiptSource(&client),
         tx_hash,
-        "contract-call",
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
     )
     .await
+    .map_err(|source| ReceiptWaitFailure::step("contract-call", source))
     .map_err(SimError::from);
     let completed_at = Instant::now();
     let latency_ms = duration_ms(completed_at.duration_since(started));
@@ -3016,13 +3017,13 @@ where
     };
 
     // 4. Await receipt.
-    let receipt = wait_for_receipt(
-        &client,
+    let receipt = poll_receipt(
+        &SimReceiptSource(&client),
         tx_hash,
-        "read-after-write",
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
     )
     .await
+    .map_err(|source| ReceiptWaitFailure::step("read-after-write", source))
     .map_err(SimError::from);
     let completed_at = Instant::now();
     let submit_to_receipt_latency_ms = Some(duration_ms(

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use groundhog_json_rpc_client::poll_receipt;
 use groundhog_json_rpc_types::{
     hex::HexBytes, receipt::ExecStatus, runtime_manifest::RuntimeManifest, transaction::TxHash,
 };
@@ -24,7 +25,9 @@ use crate::manifest::{
     SimulationManifest,
 };
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
-use crate::rpc::{SimRpcClient, SimRpcError, wait_for_receipt};
+use crate::rpc::{
+    ReceiptWaitFailure, SimReceiptSource, SimRpcClient, SimRpcError, receipt_poll_config,
+};
 use crate::util::{json_string, sha256_hex};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
@@ -514,13 +517,13 @@ where
             };
         }
     };
-    let receipt = match wait_for_receipt(
-        &client,
+    let receipt = match poll_receipt(
+        &SimReceiptSource(&client),
         tx_hash,
-        "contract deploy",
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
     )
     .await
+    .map_err(|source| ReceiptWaitFailure::step("contract deploy", source))
     .map_err(SimError::from)
     {
         Ok(receipt) => receipt,
@@ -640,13 +643,13 @@ where
         .collateral
         .as_mut()
         .ok_or_else(|| SimError::Executor("collateral record missing".into()))?;
-    let receipt = wait_for_receipt(
-        &client,
+    let receipt = poll_receipt(
+        &SimReceiptSource(&client),
         tx_hash,
-        "native deployment collateral",
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
     )
-    .await?;
+    .await
+    .map_err(|source| ReceiptWaitFailure::step("native deployment collateral", source))?;
     if receipt.tx_hash != tx_hash || !matches!(receipt.status, ExecStatus::Ok) {
         return Err(SimError::Executor(format!(
             "native deployment collateral did not commit successfully: {:?}",

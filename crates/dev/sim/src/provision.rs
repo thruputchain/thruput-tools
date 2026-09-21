@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+use groundhog_json_rpc_client::poll_receipt;
 use groundhog_json_rpc_types::{
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
@@ -25,7 +26,7 @@ use crate::{
     error::SimError,
     event::{ActorProvisionEvent, EventWriter, ResultEvent},
     manifest::{ActorProvisioningSpec, ContractArtifactKind, SimulationManifest},
-    rpc::{SimRpcClient, wait_for_receipt},
+    rpc::{ReceiptWaitFailure, SimReceiptSource, SimRpcClient, receipt_poll_config},
     runtime::{SimAccount, derive_provisioned_account_signer},
     util::{json_string, sha256_hex},
 };
@@ -412,9 +413,14 @@ where
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = wait_for_receipt(&client, tx_hash, "wallet create", PROVISION_RECEIPT_TIMEOUT)
-        .await
-        .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
+    let receipt = poll_receipt(
+        &SimReceiptSource(&client),
+        tx_hash,
+        receipt_poll_config(PROVISION_RECEIPT_TIMEOUT),
+    )
+    .await
+    .map_err(|source| ReceiptWaitFailure::step("wallet create", source))
+    .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,
@@ -475,9 +481,14 @@ where
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = wait_for_receipt(&client, tx_hash, "airdrop", PROVISION_RECEIPT_TIMEOUT)
-        .await
-        .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
+    let receipt = poll_receipt(
+        &SimReceiptSource(&client),
+        tx_hash,
+        receipt_poll_config(PROVISION_RECEIPT_TIMEOUT),
+    )
+    .await
+    .map_err(|source| ReceiptWaitFailure::step("airdrop", source))
+    .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,

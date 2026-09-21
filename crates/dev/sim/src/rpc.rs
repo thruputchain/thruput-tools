@@ -10,7 +10,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use groundhog_json_rpc_client::{
-    GroundhogApiClient, ReceiptPollConfig, ReceiptPollError, ReceiptSource, poll_receipt,
+    GroundhogApiClient, ReceiptPollConfig, ReceiptPollError, ReceiptSource,
 };
 use groundhog_json_rpc_types::{
     ContractAddress,
@@ -208,6 +208,22 @@ pub enum ReceiptWaitFailure {
     },
 }
 
+impl ReceiptWaitFailure {
+    /// Name the workload step a finished receipt poll was waiting on.
+    pub fn step(step: &str, source: ReceiptWaitError) -> Self {
+        match source {
+            ReceiptPollError::Timeout { attempts, .. } => ReceiptWaitFailure::Timeout {
+                step: step.to_owned(),
+                attempts,
+            },
+            source => ReceiptWaitFailure::Failed {
+                step: step.to_owned(),
+                source,
+            },
+        }
+    }
+}
+
 impl From<ReceiptWaitFailure> for SimError {
     fn from(error: ReceiptWaitFailure) -> Self {
         SimError::Executor(error.to_string())
@@ -218,8 +234,9 @@ impl From<ReceiptWaitFailure> for SimError {
 ///
 /// The simulator meters every request through its client pool, so polling has
 /// to go back through [`SimRpcClient`] per attempt rather than borrow one
-/// connection for the whole wait.
-struct SimReceiptSource<'a, C: ?Sized>(&'a C);
+/// connection for the whole wait. Pass one to the shared `poll_receipt`
+/// simulator has no receipt wait of its own.
+pub struct SimReceiptSource<'a, C: ?Sized>(pub &'a C);
 
 impl<C> ReceiptSource for SimReceiptSource<'_, C>
 where
@@ -236,35 +253,11 @@ where
     }
 }
 
-/// Wait for `tx_hash`'s receipt, retrying for at most `budget`.
+/// The retry schedule the simulator polls receipts on.
 ///
-/// This is the simulator's only receipt wait; `step` names the workload step so
-/// a failure says which one stalled. The simulator polls receipts only: it
-/// records what a client observes, so an advisory status lookup would add a
-/// request per attempt without changing the outcome it measures.
-pub async fn wait_for_receipt<C>(
-    client: &C,
-    tx_hash: TxHash,
-    step: &str,
-    budget: Duration,
-) -> Result<TransactionReceipt, ReceiptWaitFailure>
-where
-    C: SimRpcClient + Sync + ?Sized,
-{
-    poll_receipt(
-        &SimReceiptSource(client),
-        tx_hash,
-        ReceiptPollConfig::within(budget, DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL),
-    )
-    .await
-    .map_err(|source| match source {
-        ReceiptPollError::Timeout { attempts, .. } => ReceiptWaitFailure::Timeout {
-            step: step.to_owned(),
-            attempts,
-        },
-        source => ReceiptWaitFailure::Failed {
-            step: step.to_owned(),
-            source,
-        },
-    })
+/// The simulator polls receipts only: it records what a client observes, so an
+/// advisory status lookup would add a request per attempt without changing the
+/// outcome it measures.
+pub fn receipt_poll_config(budget: Duration) -> ReceiptPollConfig {
+    ReceiptPollConfig::within(budget, DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL)
 }
