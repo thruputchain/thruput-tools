@@ -17,6 +17,7 @@ members = [
     "crates/tools/agent-knowledge",
     "crates/tools/toolchain",
     "crates/tools/cli",
+    "crates/tools/cli-macros",
     "crates/tools/signing",
     "crates/tools/tx-validation",
     "crates/rv32/artifact",
@@ -73,30 +74,31 @@ groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.18.0", 
 groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.18.0", registry = "groundhog" }
 
 groundhog-toolchain = { path = "crates/tools/toolchain", version = "=0.18.0", registry = "groundhog" }
+groundhog-cli-macros = { path = "crates/tools/cli-macros", version = "=0.18.0", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 # These crates define or encode the protocol schema. Keep them exact and update
 # them as one qualified release family so published binaries cannot float to an
 # incompatible patch release.
-groundhog-xdr = { version = "=0.36.0", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = "=0.36.0", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.36.0", registry = "groundhog" }
-groundhog_db_gateway = { version = "=0.36.0", registry = "groundhog" }
-groundhog_view = { version = "=0.36.0", registry = "groundhog" }
-groundhog_scp = { version = "=0.36.0", registry = "groundhog" }
-groundhog_coordinator = { version = "=0.36.0", registry = "groundhog" }
-groundhog-trace = { version = "=0.36.0", registry = "groundhog" }
+groundhog-xdr = { version = "=0.38.0", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "=0.38.0", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.38.0", registry = "groundhog" }
+groundhog_db_gateway = { version = "=0.38.0", registry = "groundhog" }
+groundhog_view = { version = "=0.38.0", registry = "groundhog" }
+groundhog_scp = { version = "=0.38.0", registry = "groundhog" }
+groundhog_coordinator = { version = "=0.38.0", registry = "groundhog" }
+groundhog-trace = { version = "=0.38.0", registry = "groundhog" }
 xdrs = { version = "=0.10.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "=0.10.1", registry = "groundhog" }
 rpc_driver = { version = "=0.12.0", registry = "groundhog" }
 # from the sdk crate:
-groundhog-spec-tool = { version = "=0.36.0", registry = "groundhog" }
-groundhog-contract-util = { version = "=0.36.0", registry = "groundhog" }
-groundhog-domain-separator = { version = "=0.36.0", registry = "groundhog" }
-groundhog-contract-spec = { version = "=0.36.0", registry = "groundhog" }
-groundhog-u256 = { version = "=0.36.0", registry = "groundhog" }
-groundhog-erc20-if = { version = "=0.1.33", registry = "groundhog" }
-sdk = { version = "=0.36.0", registry = "groundhog" }
+groundhog-spec-tool = { version = "=0.36.1", registry = "groundhog" }
+groundhog-contract-util = { version = "=0.36.1", registry = "groundhog" }
+groundhog-domain-separator = { version = "=0.36.1", registry = "groundhog" }
+groundhog-contract-spec = { version = "=0.36.1", registry = "groundhog" }
+groundhog-u256 = { version = "=0.36.1", registry = "groundhog" }
+groundhog-erc20-if = { version = "=0.1.34", registry = "groundhog" }
+sdk = { version = "=0.36.1", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

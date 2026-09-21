@@ -41,6 +41,7 @@ async fn poll(
                         events: vec![],
                         return_data: None,
                         abort_data: None,
+                        gas_used: 1_500,
                     });
             state.1 += 1;
             receipt

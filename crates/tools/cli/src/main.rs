@@ -1,9 +1,9 @@
 use clap::{Arg, ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use groundhog_cli::Print;
 use groundhog_cli::result::CommandResult;
+use groundhog_cli::{CliError, Print};
 use serde_json::json;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -35,11 +35,35 @@ struct GlobalArgs {
     offline: bool,
 }
 
+/// Everything a subcommand needs beyond its own arguments.
+///
+/// Built once from the global flags and the parsed subcommand, then passed to
+/// every `run` so the per-command signatures stay down to their own arguments.
+struct Ctx {
+    print: Print,
+    /// Canonical command name for JSON envelopes, from [`Command::command_name`].
+    cmd_name: &'static str,
+    /// `--offline` or `GROUNDHOG_OFFLINE=1`.
+    offline: bool,
+    bundle_identity: groundhog_bundle_identity::BundleIdentity,
+}
+
+/// Invocation directory the project-relative commands resolve against.
+fn invocation_cwd() -> Result<PathBuf, CliError> {
+    std::env::current_dir().map_err(CliError::Io)
+}
+
 #[derive(Parser, Debug, Clone)]
 struct ArtifactArgs {
     /// Directory for cargo build artifacts
     #[arg(long)]
     target_dir: Option<PathBuf>,
+}
+
+impl ArtifactArgs {
+    fn options(self, cwd: &Path) -> groundhog_cli::artifacts::ArtifactOptions {
+        groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(self.target_dir, cwd)
+    }
 }
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -86,26 +110,9 @@ impl From<NodeBlockDriverArg> for groundhog_cli::node::LocalNodeBlockDriverMode 
 #[derive(Subcommand)]
 enum Command {
     /// Create a new Groundhog contract project
-    New {
-        /// Project name
-        name: String,
-        /// Project template
-        #[arg(
-            long,
-            default_value = "counter",
-            value_parser = ["counter", "stub"]
-        )]
-        template: String,
-    },
+    New(NewArgs),
     /// Serve the bundled developer documentation on localhost
-    Docs {
-        /// Override the bundled docs with a trusted local snapshot directory
-        #[arg(long, value_name = "DIRECTORY")]
-        dir: Option<PathBuf>,
-        /// Loopback port (0 chooses an available port)
-        #[arg(long, default_value_t = 4321)]
-        port: u16,
-    },
+    Docs(DocsArgs),
     /// Interactive first-run setup wizard
     #[command(long_about = "Guided setup for new users: checks tools, \
                       generates a signing key, \
@@ -123,11 +130,7 @@ enum Command {
                       Exit code 0 means everything looks good; \
                       exit code 1 means at least one warning-level \
                       finding exists.")]
-    Status {
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-    },
+    Status(StatusArgs),
     /// Manage persisted Groundhog configuration
     #[command(
         long_about = "Inspect and manage persisted global and project profiles. Inspection \
@@ -149,28 +152,7 @@ enum Command {
                       riscv32im-unknown-none-elf via cargo, then lower the ELF \
                       to a Groundhog RV32 artifact. Must be run inside a \
                       Groundhog project.")]
-    Build {
-        /// Package to build (required in workspaces)
-        #[arg(short, long)]
-        package: Option<String>,
-        /// Generate typed bindings after build (e.g. `ts`)
-        #[arg(long)]
-        bindings: Vec<String>,
-        /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
-        /// multiple of 16, below the guest data memory). RV32 only; sets the
-        /// SDK linker script's `__stack_size`. The data memory itself is the
-        /// package's `[package.metadata.groundhog] initial_memory_bytes`.
-        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
-        stack_size: Option<u32>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        artifacts: ArtifactArgs,
-        /// Extra arguments passed to cargo
-        #[arg(last = true)]
-        cargo_args: Vec<String>,
-    },
+    Build(BuildArgs),
     /// Build and test the contract under RV32 or local-node execution
     #[command(
         long_about = "Builds the contract to RV32, then runs test_rv32 on the host. With \
@@ -188,212 +170,29 @@ enum Command {
                         for example \
                         RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug."
     )]
-    Test {
-        /// Package to test (required in workspaces unless --workspace is set)
-        #[arg(short, long, conflicts_with = "workspace")]
-        package: Option<String>,
-        /// Test every workspace member that declares a `test_rv32` target
-        ///
-        /// Members run one at a time in name order. A failing package does
-        /// not stop the rest unless --fail-fast is set. Not yet supported
-        /// with --integration.
-        #[arg(long)]
-        workspace: bool,
-        /// Run only tests whose names contain this substring
-        #[arg(long = "match-test")]
-        match_test: Option<String>,
-        /// Stop the selected local test harness after the first test failure
-        #[arg(long)]
-        fail_fast: bool,
-        /// Show captured stdout for successful tests
-        #[arg(long)]
-        show_output: bool,
-        /// Do not capture stdout/stderr from tests
-        #[arg(long = "no-capture", alias = "nocapture")]
-        no_capture: bool,
-        /// Number of local test harness threads to use
-        #[arg(long = "test-threads")]
-        test_threads: Option<usize>,
-        /// Skip tests whose names contain this substring
-        #[arg(long)]
-        skip: Vec<String>,
-        /// Rerun tests that failed in the previous selected-target test run
-        #[arg(long)]
-        rerun: bool,
-        /// Rerun selected-target tests when project files change.
-        ///
-        /// With --json, emits one newline-delimited JSON record per run.
-        #[arg(long)]
-        watch: bool,
-        /// Run tests/integration.rs against an ephemeral hog-devnode local node
-        #[arg(long)]
-        integration: bool,
-        /// Show local-node supervisor and forwarded hog-devnode diagnostics
-        ///
-        /// Only used with --integration. Logs are written to stderr.
-        #[arg(long, short = 'v', requires = "integration")]
-        verbose: bool,
-        /// Override the x23 protocol token for the ephemeral integration node
-        ///
-        /// (Only used with --integration)
-        /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
-        #[arg(long = "hogd-protocol", requires = "integration")]
-        hogd_protocol: Option<String>,
-        /// Use one exact managed hog-devnode version for the integration node
-        #[arg(long, requires = "integration")]
-        hog_devnode_version: Option<String>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        artifacts: ArtifactArgs,
-        /// Extra arguments forwarded to the test harness (after --)
-        #[arg(last = true)]
-        cargo_args: Vec<String>,
-    },
+    Test(TestArgs),
     /// Deploy a contract
-    Deploy {
-        /// Package to deploy (required at a workspace root)
-        #[arg(short, long, conflicts_with = "artifact")]
-        package: Option<String>,
-        /// Path to compiled .rv32a (default: auto-detect)
-        #[arg(long)]
-        artifact: Option<PathBuf>,
-        /// Name to record the deployed address under in groundhog.toml
-        /// (defaults to the package name; with --artifact there is no package,
-        /// so without this no alias is recorded)
-        #[arg(long, value_parser = groundhog_cli::config::parse_contract_alias)]
-        alias: Option<String>,
-        /// Build and sign the deploy transaction without submitting it
-        #[arg(long)]
-        dry_run: bool,
-        /// Saved wallet to deploy from
-        #[arg(long)]
-        wallet: Option<String>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-        #[command(flatten)]
-        artifacts: ArtifactArgs,
-        #[command(flatten)]
-        confirmation: ConfirmationArgs,
-    },
+    Deploy(DeployArgs),
     /// Submit a transaction that calls a deployed contract method
     #[command(long_about = "Submit a signed transaction that calls a deployed \
                       contract method. Named methods use local or built \
                       contract-spec metadata when available. Without metadata, \
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and one raw hex calldata argument.")]
-    Call {
-        /// Contract alias or direct 0x-prefixed address
-        contract: String,
-        /// Method name or 0x-prefixed 8-byte entrypoint ID
-        method: String,
-        /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
-        args: Vec<String>,
-        /// Package whose contract metadata resolves the method (required in workspaces)
-        #[arg(short, long)]
-        package: Option<String>,
-        /// Resolve, encode, and sign the transaction without submitting it
-        #[arg(long)]
-        dry_run: bool,
-        /// Gas budget for the transaction and its inner contract invocation
-        #[arg(long, default_value_t = groundhog_signing::DEFAULT_TX_GAS_LIMIT,
-              value_parser = clap::value_parser!(u64).range(1..))]
-        gas_limit: u64,
-        /// Saved wallet to call from
-        #[arg(long)]
-        wallet: Option<String>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-        #[command(flatten)]
-        artifacts: ArtifactArgs,
-        #[command(flatten)]
-        confirmation: ConfirmationArgs,
-    },
+    Call(CallArgs),
     /// Transfer native HOG from the effective profile wallet
-    Transfer {
-        /// Wallet name, contract alias, dev-N account, or direct address
-        recipient: String,
-        /// Amount in HOG, with up to 7 decimal places
-        amount: String,
-        /// Build and sign the transfer without submitting it
-        #[arg(long)]
-        dry_run: bool,
-        /// Saved source wallet owned by the effective signing key
-        #[arg(long = "from")]
-        from: Option<String>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-        #[command(flatten)]
-        confirmation: ConfirmationArgs,
-    },
+    Transfer(TransferArgs),
     /// Request HOG funding for a wallet
-    Airdrop {
-        /// Wallet name, dev-N wallet, or direct address (default: effective wallet)
-        recipient: Option<String>,
-        /// Amount in HOG, with up to 7 decimal places
-        #[arg(long)]
-        amount: Option<String>,
-        /// Build and sign the airdrop transaction without submitting it
-        #[arg(long)]
-        dry_run: bool,
-        #[command(flatten)]
-        confirmation: ConfirmationArgs,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-    },
+    Airdrop(AirdropArgs),
     /// Read native HOG balance for an address, wallet, contract, or dev account
-    Balance {
-        /// Wallet name, contract alias, dev-N account, or address (default: effective wallet)
-        target: Option<String>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-    },
+    Balance(BalanceArgs),
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
                       groundhog_view. Named methods use local or built \
                       contract-spec metadata when available. Without metadata, \
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
                       and raw calldata.")]
-    View {
-        /// Contract alias or direct 0x-prefixed address
-        contract: String,
-        /// Method name or 0x-prefixed 8-byte entrypoint ID
-        method: String,
-        /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
-        args: Vec<String>,
-        /// Raw calldata for explicit-entrypoint calls
-        #[arg(long)]
-        calldata: Option<String>,
-        /// Simulated caller address, or dev-N on local dev endpoints
-        #[arg(long = "from")]
-        from: Option<String>,
-        /// Package whose contract metadata resolves the method (required in workspaces)
-        #[arg(short, long)]
-        package: Option<String>,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-        #[command(flatten)]
-        artifacts: ArtifactArgs,
-    },
+    View(ViewArgs),
     /// Read latest committed raw contract storage
     #[command(long_about = "Read one latest committed raw storage item via \
                       groundhog_getStorageAt. This is a low-level state \
@@ -401,80 +200,14 @@ enum Command {
                       `groundhog call` for signed transaction invocation \
                       and `groundhog view` for sandboxed contract \
                       simulation.")]
-    Storage {
-        /// Contract alias or direct 0x-prefixed address
-        address: String,
-        /// 32-byte storage key as 0x-prefixed hex
-        key: String,
-        /// Config profile to use
-        #[arg(long = "profile")]
-        profile: Option<String>,
-        #[command(flatten)]
-        target_args: RpcTargetArgs,
-    },
+    Storage(StorageArgs),
     /// Start a local development node
     #[command(
         long_about = "Start a local development node \
                       backed by a supervised hog-devnode process.",
         after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
-    Node {
-        /// Host/interface for the public JSON-RPC listener
-        #[arg(long, default_value = "127.0.0.1", value_name = "ADDRESS")]
-        host: std::net::IpAddr,
-        /// Port to listen on
-        #[arg(long, default_value = "9545")]
-        port: u16,
-        /// Show forwarded hog-devnode info logs in addition to supervisor status
-        #[arg(long, short = 'v')]
-        verbose: bool,
-        /// Number of dev-1+ user accounts to bootstrap; dev-0 faucet is always present
-        #[arg(long)]
-        dev_account_count: Option<usize>,
-        /// Initial HOG allocated to each dev-1+ user account (default: 100; up to 7 decimals)
-        #[arg(long, value_name = "HOG", value_parser = groundhog_cli::node::parse_dev_account_hog)]
-        dev_account_hog: Option<u64>,
-        /// Explicit hog-devnode binary path
-        #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
-        hogd_dev_binary: Option<std::path::PathBuf>,
-        /// Contract artifact directory passed to hog-devnode; may be repeated
-        #[arg(long = "contract-artifacts-dir", value_name = "DIR")]
-        contract_artifact_directories: Vec<PathBuf>,
-        /// Use one exact managed hog-devnode version for this invocation
-        #[arg(long, conflicts_with = "hogd_dev_binary")]
-        hog_devnode_version: Option<String>,
-        /// Directory for persistent hog-devnode state; omit for an ephemeral node
-        #[arg(long, value_name = "DIR")]
-        data_dir: Option<PathBuf>,
-        /// Override hog-devnode x23 intro protocol token
-        #[arg(long)]
-        hogd_protocol: Option<String>,
-        /// Override hog-devnode readiness timeout for smoke tests
-        #[arg(long, hide = true)]
-        startup_timeout_secs: Option<u64>,
-        /// Local block production mode
-        #[arg(long, value_enum)]
-        block_driver: Option<NodeBlockDriverArg>,
-        /// Timer interval for --block-driver interval
-        #[arg(long)]
-        block_interval_ms: Option<u64>,
-        /// Maximum simultaneous public JSON-RPC connections
-        #[arg(long)]
-        rpc_max_connections: Option<u32>,
-
-        /// Concurrent entries per JSON-RPC array (1..=1024, default 128)
-        #[arg(long)]
-        rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
-        /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
-        /// suffix such as 2G); omit for the devnode default
-        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
-        ramdb_bytes: Option<u64>,
-        /// Override a genesis network parameter (repeatable; decimal, hex, or K/M/G values).
-        /// Existing data directories must use the same overrides they were created with.
-        #[arg(long = "network-config", value_name = "NAME=VALUE",
-              value_parser = groundhog_cli::node::parse_network_config_override)]
-        network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
-    },
+    Node(NodeArgs),
     /// Dump or restore persistent local-chain state
     Chain {
         #[command(subcommand)]
@@ -516,11 +249,667 @@ enum Command {
         command: TokenCommand,
     },
     /// Generate shell completions
-    Completion {
-        /// Shell to generate completions for
-        #[arg(value_enum)]
-        shell: Shell,
-    },
+    Completion(CompletionArgs),
+}
+
+impl Command {
+    /// Canonical command name for JSON envelopes.
+    ///
+    /// Used by both success and error JSON output so they
+    /// always agree. Init returns "status" because
+    /// `init --json` delegates to `status --json`.
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::New(..) => "new",
+            Self::Init | Self::Status(..) => "status",
+            Self::Build(..) => "build",
+            Self::Test(..) => "test",
+            Self::Deploy(..) => "deploy",
+            Self::Call(..) => "call",
+            Self::Transfer(..) => "transfer",
+            Self::Airdrop(..) => "airdrop",
+            Self::Balance(..) => "balance",
+            Self::View(..) => "view",
+            Self::Storage(..) => "storage",
+            Self::Node(..) => "node",
+            Self::Docs(..) => "docs",
+            Self::Chain { command } => command.command_name(),
+            Self::Config { command } => command.command_name(),
+            Self::Toolchain { command } => command.command_name(),
+            Self::Keys { command } => command.command_name(),
+            Self::Wallet { command } => command.command_name(),
+            Self::Codegen { command } => command.command_name(),
+            Self::Tx { command } => command.command_name(),
+            Self::Events { command } => command.command_name(),
+            Self::Token { command } => command.command_name(),
+            Self::Completion(..) => "completion",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        match self {
+            Self::New(args) => args.run(ctx),
+            Self::Docs(args) => args.run(ctx),
+            Self::Init => groundhog_cli::init::run(&invocation_cwd()?, ctx.cmd_name, &ctx.print),
+            Self::Status(args) => args.run(ctx),
+            Self::Config { command } => command.run(ctx),
+            Self::Toolchain { command } => command.run(ctx),
+            Self::Build(args) => args.run(ctx),
+            Self::Test(args) => args.run(ctx),
+            Self::Deploy(args) => args.run(ctx),
+            Self::Call(args) => args.run(ctx),
+            Self::Transfer(args) => args.run(ctx),
+            Self::Airdrop(args) => args.run(ctx),
+            Self::Balance(args) => args.run(ctx),
+            Self::View(args) => args.run(ctx),
+            Self::Storage(args) => args.run(ctx),
+            Self::Node(args) => args.run(ctx),
+            Self::Chain { command } => command.run(ctx),
+            Self::Keys { command } => command.run(ctx),
+            Self::Wallet { command } => command.run(ctx),
+            Self::Codegen { command } => command.run(ctx),
+            Self::Tx { command } => command.run(ctx),
+            Self::Events { command } => command.run(ctx),
+            Self::Token { command } => command.run(ctx),
+            Self::Completion(args) => args.run(ctx),
+        }
+    }
+}
+
+#[derive(Args)]
+struct NewArgs {
+    /// Project name
+    name: String,
+    /// Project template
+    #[arg(
+        long,
+        default_value = "counter",
+        value_parser = ["counter", "stub"]
+    )]
+    template: String,
+}
+
+impl NewArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::new::run(&self.name, &self.template, ctx.cmd_name, &ctx.print)
+    }
+}
+
+#[derive(Args)]
+struct DocsArgs {
+    /// Override the bundled docs with a trusted local snapshot directory
+    #[arg(long, value_name = "DIRECTORY")]
+    dir: Option<PathBuf>,
+    /// Loopback port (0 chooses an available port)
+    #[arg(long, default_value_t = 4321)]
+    port: u16,
+}
+
+impl DocsArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::docs::run(self.dir.as_deref(), self.port, ctx.cmd_name, &ctx.print)
+    }
+}
+
+#[derive(Args)]
+struct StatusArgs {
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+}
+
+impl StatusArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::status::run(
+            &invocation_cwd()?,
+            self.profile.as_deref(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct BuildArgs {
+    /// Package to build (required in workspaces)
+    #[arg(short, long)]
+    package: Option<String>,
+    /// Generate typed bindings after build (e.g. `ts`)
+    #[arg(long)]
+    bindings: Vec<String>,
+    /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
+    /// multiple of 16, below the guest data memory). RV32 only; sets the
+    /// SDK linker script's `__stack_size`. The data memory itself is the
+    /// package's `[package.metadata.groundhog] initial_memory_bytes`.
+    #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
+    stack_size: Option<u32>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    artifacts: ArtifactArgs,
+    /// Extra arguments passed to cargo
+    #[arg(last = true)]
+    cargo_args: Vec<String>,
+}
+
+impl BuildArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        groundhog_cli::build::run(
+            self.package.as_deref(),
+            &self.bindings,
+            self.stack_size,
+            &self.cargo_args,
+            &self.artifacts.options(&cwd),
+            self.profile.as_deref(),
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+#[allow(clippy::struct_excessive_bools)]
+struct TestArgs {
+    /// Package to test (required in workspaces unless --workspace is set)
+    #[arg(short, long, conflicts_with = "workspace")]
+    package: Option<String>,
+    /// Test every workspace member that declares a `test_rv32` target
+    ///
+    /// Members run one at a time in name order. A failing package does
+    /// not stop the rest unless --fail-fast is set. Not yet supported
+    /// with --integration.
+    #[arg(long)]
+    workspace: bool,
+    /// Run only tests whose names contain this substring
+    #[arg(long = "match-test")]
+    match_test: Option<String>,
+    /// Stop the selected local test harness after the first test failure
+    #[arg(long)]
+    fail_fast: bool,
+    /// Show captured stdout for successful tests
+    #[arg(long)]
+    show_output: bool,
+    /// Do not capture stdout/stderr from tests
+    #[arg(long = "no-capture", alias = "nocapture")]
+    no_capture: bool,
+    /// Number of local test harness threads to use
+    #[arg(long = "test-threads")]
+    test_threads: Option<usize>,
+    /// Skip tests whose names contain this substring
+    #[arg(long)]
+    skip: Vec<String>,
+    /// Rerun tests that failed in the previous selected-target test run
+    #[arg(long)]
+    rerun: bool,
+    /// Rerun selected-target tests when project files change.
+    ///
+    /// With --json, emits one newline-delimited JSON record per run.
+    #[arg(long)]
+    watch: bool,
+    /// Run tests/integration.rs against an ephemeral hog-devnode local node
+    #[arg(long)]
+    integration: bool,
+    /// Show local-node supervisor and forwarded hog-devnode diagnostics
+    ///
+    /// Only used with --integration. Logs are written to stderr.
+    #[arg(long, short = 'v', requires = "integration")]
+    verbose: bool,
+    /// Override the x23 protocol token for the ephemeral integration node
+    ///
+    /// (Only used with --integration)
+    /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
+    #[arg(long = "hogd-protocol", requires = "integration")]
+    hogd_protocol: Option<String>,
+    /// Use one exact managed hog-devnode version for the integration node
+    #[arg(long, requires = "integration")]
+    hog_devnode_version: Option<String>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    artifacts: ArtifactArgs,
+    /// Extra arguments forwarded to the test harness (after --)
+    #[arg(last = true)]
+    cargo_args: Vec<String>,
+}
+
+impl TestArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        let artifacts = self.artifacts.options(&cwd);
+        let options = groundhog_cli::test_cmd::TestOptions {
+            match_test: self.match_test,
+            test_threads: self.test_threads,
+            skip: self.skip,
+            rerun: self.rerun,
+            watch: self.watch,
+            workspace: self.workspace,
+            harness: groundhog_cli::test_cmd::TestHarnessOptions {
+                fail_fast: self.fail_fast,
+                show_output: self.show_output,
+                no_capture: self.no_capture,
+            },
+        };
+        if self.integration {
+            groundhog_cli::test_cmd::run_integration_with_options(
+                self.package.as_deref(),
+                &options,
+                &groundhog_cli::test_cmd::IntegrationTestOptions {
+                    hogd_protocol: self.hogd_protocol,
+                    hog_devnode_version: self.hog_devnode_version,
+                    offline: ctx.offline,
+                    verbose: self.verbose,
+                },
+                &self.cargo_args,
+                &artifacts,
+                self.profile.as_deref(),
+                ctx.cmd_name,
+                &ctx.print,
+            )
+        } else {
+            groundhog_cli::test_cmd::run_with_options(
+                self.package.as_deref(),
+                &options,
+                &self.cargo_args,
+                &artifacts,
+                self.profile.as_deref(),
+                ctx.cmd_name,
+                &ctx.print,
+            )
+        }
+    }
+}
+
+#[derive(Args)]
+struct DeployArgs {
+    /// Package to deploy (required at a workspace root)
+    #[arg(short, long, conflicts_with = "artifact")]
+    package: Option<String>,
+    /// Path to compiled .rv32a (default: auto-detect)
+    #[arg(long)]
+    artifact: Option<PathBuf>,
+    /// Name to record the deployed address under in groundhog.toml
+    /// (defaults to the package name; with --artifact there is no package,
+    /// so without this no alias is recorded)
+    #[arg(long, value_parser = groundhog_cli::config::parse_contract_alias)]
+    alias: Option<String>,
+    /// Build and sign the deploy transaction without submitting it
+    #[arg(long)]
+    dry_run: bool,
+    /// Saved wallet to deploy from
+    #[arg(long)]
+    wallet: Option<String>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+    #[command(flatten)]
+    artifacts: ArtifactArgs,
+    #[command(flatten)]
+    confirmation: ConfirmationArgs,
+}
+
+impl DeployArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        groundhog_cli::deploy::run(
+            self.artifact.as_deref(),
+            self.package.as_deref(),
+            self.alias.as_deref(),
+            self.dry_run,
+            self.confirmation.force,
+            self.wallet.as_deref(),
+            &self.artifacts.options(&cwd),
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct CallArgs {
+    /// Contract alias or direct 0x-prefixed address
+    contract: String,
+    /// Method name or 0x-prefixed 8-byte entrypoint ID
+    method: String,
+    /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
+    args: Vec<String>,
+    /// Package whose contract metadata resolves the method (required in workspaces)
+    #[arg(short, long)]
+    package: Option<String>,
+    /// Resolve, encode, and sign the transaction without submitting it
+    #[arg(long)]
+    dry_run: bool,
+    /// Gas budget for the transaction and its inner contract invocation
+    #[arg(long, default_value_t = groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    gas_limit: u64,
+    /// Saved wallet to call from
+    #[arg(long)]
+    wallet: Option<String>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+    #[command(flatten)]
+    artifacts: ArtifactArgs,
+    #[command(flatten)]
+    confirmation: ConfirmationArgs,
+}
+
+impl CallArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        groundhog_cli::call::run(
+            &self.contract,
+            &self.method,
+            &self.args,
+            self.package.as_deref(),
+            self.dry_run,
+            self.gas_limit,
+            self.confirmation.force,
+            self.wallet.as_deref(),
+            &self.artifacts.options(&cwd),
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct TransferArgs {
+    /// Wallet name, contract alias, dev-N account, or direct address
+    recipient: String,
+    /// Amount in HOG, with up to 7 decimal places
+    amount: String,
+    /// Build and sign the transfer without submitting it
+    #[arg(long)]
+    dry_run: bool,
+    /// Saved source wallet owned by the effective signing key
+    #[arg(long = "from")]
+    from: Option<String>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+    #[command(flatten)]
+    confirmation: ConfirmationArgs,
+}
+
+impl TransferArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::transfer::run(
+            &self.recipient,
+            &self.amount,
+            self.from.as_deref(),
+            self.dry_run,
+            self.confirmation.force,
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct AirdropArgs {
+    /// Wallet name, dev-N wallet, or direct address (default: effective wallet)
+    recipient: Option<String>,
+    /// Amount in HOG, with up to 7 decimal places
+    #[arg(long)]
+    amount: Option<String>,
+    /// Build and sign the airdrop transaction without submitting it
+    #[arg(long)]
+    dry_run: bool,
+    #[command(flatten)]
+    confirmation: ConfirmationArgs,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+}
+
+impl AirdropArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::airdrop::run(
+            self.recipient.as_deref(),
+            self.amount.as_deref(),
+            self.dry_run,
+            self.confirmation.force,
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct BalanceArgs {
+    /// Wallet name, contract alias, dev-N account, or address (default: effective wallet)
+    target: Option<String>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+}
+
+impl BalanceArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::balance::run(
+            self.target.as_deref(),
+            &invocation_cwd()?,
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct ViewArgs {
+    /// Contract alias or direct 0x-prefixed address
+    contract: String,
+    /// Method name or 0x-prefixed 8-byte entrypoint ID
+    method: String,
+    /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
+    args: Vec<String>,
+    /// Raw calldata for explicit-entrypoint calls
+    #[arg(long)]
+    calldata: Option<String>,
+    /// Simulated caller address, or dev-N on local dev endpoints
+    #[arg(long = "from")]
+    from: Option<String>,
+    /// Package whose contract metadata resolves the method (required in workspaces)
+    #[arg(short, long)]
+    package: Option<String>,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+    #[command(flatten)]
+    artifacts: ArtifactArgs,
+}
+
+impl ViewArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        groundhog_cli::view::run(
+            &self.contract,
+            &self.method,
+            &self.args,
+            self.calldata.as_deref(),
+            self.from.as_deref(),
+            self.package.as_deref(),
+            &self.artifacts.options(&cwd),
+            &cwd,
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct StorageArgs {
+    /// Contract alias or direct 0x-prefixed address
+    address: String,
+    /// 32-byte storage key as 0x-prefixed hex
+    key: String,
+    /// Config profile to use
+    #[arg(long = "profile")]
+    profile: Option<String>,
+    #[command(flatten)]
+    target_args: RpcTargetArgs,
+}
+
+impl StorageArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::storage::run(
+            &self.address,
+            &self.key,
+            &invocation_cwd()?,
+            self.profile.as_deref(),
+            &self.target_args.into(),
+            ctx.cmd_name,
+            &ctx.print,
+        )
+    }
+}
+
+#[derive(Args)]
+struct NodeArgs {
+    /// Host/interface for the public JSON-RPC listener
+    #[arg(long, default_value = "127.0.0.1", value_name = "ADDRESS")]
+    host: std::net::IpAddr,
+    /// Port to listen on
+    #[arg(long, default_value = "9545")]
+    port: u16,
+    /// Show forwarded hog-devnode info logs in addition to supervisor status
+    #[arg(long, short = 'v')]
+    verbose: bool,
+    /// Number of dev-1+ user accounts to bootstrap; dev-0 faucet is always present
+    #[arg(long)]
+    dev_account_count: Option<usize>,
+    /// Initial HOG allocated to each dev-1+ user account (default: 100; up to 7 decimals)
+    #[arg(long, value_name = "HOG", value_parser = groundhog_cli::node::parse_dev_account_hog)]
+    dev_account_hog: Option<u64>,
+    /// Explicit hog-devnode binary path
+    #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
+    hogd_dev_binary: Option<std::path::PathBuf>,
+    /// Contract artifact directory passed to hog-devnode; may be repeated
+    #[arg(long = "contract-artifacts-dir", value_name = "DIR")]
+    contract_artifact_directories: Vec<PathBuf>,
+    /// Use one exact managed hog-devnode version for this invocation
+    #[arg(long, conflicts_with = "hogd_dev_binary")]
+    hog_devnode_version: Option<String>,
+    /// Directory for persistent hog-devnode state; omit for an ephemeral node
+    #[arg(long, value_name = "DIR")]
+    data_dir: Option<PathBuf>,
+    /// Override hog-devnode x23 intro protocol token
+    #[arg(long)]
+    hogd_protocol: Option<String>,
+    /// Override hog-devnode readiness timeout for smoke tests
+    #[arg(long, hide = true)]
+    startup_timeout_secs: Option<u64>,
+    /// Local block production mode
+    #[arg(long, value_enum)]
+    block_driver: Option<NodeBlockDriverArg>,
+    /// Timer interval for --block-driver interval
+    #[arg(long)]
+    block_interval_ms: Option<u64>,
+    /// Maximum simultaneous public JSON-RPC connections
+    #[arg(long)]
+    rpc_max_connections: Option<u32>,
+
+    /// Concurrent entries per JSON-RPC array (1..=1024, default 128)
+    #[arg(long)]
+    rpc_batch_concurrency: Option<groundhog_node_supervisor::RpcBatchConcurrency>,
+    /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
+    /// suffix such as 2G); omit for the devnode default
+    #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
+    ramdb_bytes: Option<u64>,
+    /// Override a genesis network parameter (repeatable; decimal, hex, or K/M/G values).
+    /// Existing data directories must use the same overrides they were created with.
+    #[arg(long = "network-config", value_name = "NAME=VALUE",
+          value_parser = groundhog_cli::node::parse_network_config_override)]
+    network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
+}
+
+impl NodeArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        // LocalNodeOptions is #[non_exhaustive], so it is filled field by field
+        // rather than with a struct literal.
+        let mut options = groundhog_cli::node::LocalNodeOptions::default();
+        options.host = Some(self.host);
+        options.port = self.port;
+        options.hogd_dev_binary = self.hogd_dev_binary;
+        options.contract_artifact_directories = self.contract_artifact_directories;
+        options.hogd_dev_version = self.hog_devnode_version;
+        options.offline = ctx.offline;
+        options.data_dir = self.data_dir;
+        options.hogd_protocol = self.hogd_protocol;
+        options.startup_timeout = self
+            .startup_timeout_secs
+            .map(std::time::Duration::from_secs);
+        options.dev_account_count = self.dev_account_count;
+        options.dev_account_tokens = self.dev_account_hog;
+        options.block_driver = self.block_driver.map(Into::into);
+        options.block_interval = self.block_interval_ms.map(std::time::Duration::from_millis);
+        options.rpc_max_connections = self.rpc_max_connections;
+        options.rpc_batch_concurrency = self.rpc_batch_concurrency;
+        options.ramdb_bytes = self.ramdb_bytes;
+        options.network_config_overrides = self.network_config;
+        options.bundle_identity = Some(ctx.bundle_identity.clone());
+        groundhog_cli::node::run_with_options(options, self.verbose, ctx.cmd_name, &ctx.print)
+    }
+}
+
+#[derive(Args)]
+struct CompletionArgs {
+    /// Shell to generate completions for
+    #[arg(value_enum)]
+    shell: Shell,
+}
+
+impl CompletionArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let mut output = Vec::new();
+        let shell_name = self.shell.to_string();
+        clap_complete::generate(
+            self.shell,
+            &mut cli_command(&ctx.bundle_identity),
+            "groundhog",
+            &mut output,
+        );
+
+        if ctx.print.is_json() {
+            ctx.print.json(&CommandResult::new(
+                ctx.cmd_name,
+                json!({
+                    "shell": shell_name,
+                    "script": String::from_utf8_lossy(&output),
+                }),
+            ))
+        } else {
+            print!("{}", String::from_utf8_lossy(&output));
+            Ok(())
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -557,6 +946,33 @@ enum KeysCommand {
         #[command(flatten)]
         confirmation: ConfirmationArgs,
     },
+}
+
+impl KeysCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Generate { .. } => "keys.generate",
+            Self::Ls => "keys.ls",
+            Self::Export { .. } => "keys.export",
+            Self::Use { .. } => "keys.use",
+            Self::Rm { .. } => "keys.rm",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let (cmd, print) = (ctx.cmd_name, &ctx.print);
+        match self {
+            Self::Generate { name, fund } => groundhog_cli::keys::generate(&name, fund, cmd, print),
+            Self::Ls => groundhog_cli::keys::list(cmd, print),
+            Self::Export { name, confirmation } => {
+                groundhog_cli::keys::export(&name, confirmation.force, cmd, print)
+            }
+            Self::Use { name } => groundhog_cli::keys::use_key(&name, cmd, print),
+            Self::Rm { name, confirmation } => {
+                groundhog_cli::keys::remove(&name, confirmation.force, cmd, print)
+            }
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -688,6 +1104,95 @@ enum ConfigCommand {
     },
 }
 
+impl ConfigCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Get { .. } => "config.get",
+            Self::Profiles => "config.profiles",
+            Self::New { .. } => "config.new",
+            Self::Rm { .. } => "config.rm",
+            Self::Set { .. } => "config.set",
+            Self::Unset { .. } => "config.unset",
+            Self::Use { .. } => "config.use",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        let (cmd, print) = (ctx.cmd_name, &ctx.print);
+        match self {
+            Self::Get { profile, sources } => {
+                groundhog_cli::config_cmd::get(&cwd, profile.as_deref(), sources, cmd, print)
+            }
+            Self::Profiles => groundhog_cli::config_cmd::profiles(&cwd, cmd, print),
+            Self::New {
+                profile,
+                network,
+                rpc_url,
+                network_hash,
+                faucet_url,
+                default_key,
+                select,
+                global,
+                project,
+            } => groundhog_cli::config_cmd::new_profile(
+                &cwd,
+                &profile,
+                &groundhog_cli::config::NewProfileOptions {
+                    network,
+                    rpc_url,
+                    network_hash,
+                    faucet_url,
+                    default_key,
+                    select,
+                },
+                global,
+                project,
+                cmd,
+                print,
+            ),
+            Self::Rm {
+                profile,
+                confirmation,
+                global,
+                project,
+            } => groundhog_cli::config_cmd::remove(
+                &cwd,
+                &profile,
+                confirmation.force,
+                global,
+                project,
+                cmd,
+                print,
+            ),
+            Self::Set {
+                field,
+                value,
+                profile,
+                global,
+                project,
+            } => groundhog_cli::config_cmd::set(
+                &cwd, &profile, &field, &value, global, project, cmd, print,
+            ),
+            Self::Unset {
+                field,
+                profile,
+                global,
+                project,
+            } => groundhog_cli::config_cmd::unset(
+                &cwd, &profile, &field, global, project, cmd, print,
+            ),
+            Self::Use {
+                profile,
+                global,
+                project,
+            } => {
+                groundhog_cli::config_cmd::use_default(&cwd, &profile, global, project, cmd, print)
+            }
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum ToolchainCommand {
     /// Install an exact catalog version for this host
@@ -709,6 +1214,35 @@ enum ToolchainCommand {
     },
     /// Print the active installed hog-devnode path without downloading
     Which,
+}
+
+impl ToolchainCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Install { .. } => "toolchain.install",
+            Self::List => "toolchain.list",
+            Self::Use { .. } => "toolchain.use",
+            Self::Clean { .. } => "toolchain.clean",
+            Self::Which => "toolchain.which",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let (cmd, print) = (ctx.cmd_name, &ctx.print);
+        match self {
+            Self::Install { version } => {
+                groundhog_cli::toolchain_cmd::install(version.as_deref(), ctx.offline, cmd, print)
+            }
+            Self::List => groundhog_cli::toolchain_cmd::list(cmd, print),
+            Self::Use { version } => {
+                groundhog_cli::toolchain_cmd::use_version(&version, cmd, print)
+            }
+            Self::Clean { version } => {
+                groundhog_cli::toolchain_cmd::clean(version.as_deref(), cmd, print)
+            }
+            Self::Which => groundhog_cli::toolchain_cmd::which(cmd, print),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -761,6 +1295,57 @@ enum WalletCommand {
     },
 }
 
+impl WalletCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Ls { .. } => "wallet.ls",
+            Self::Use { .. } => "wallet.use",
+            Self::Create { .. } => "wallet.create",
+            Self::Rm { .. } => "wallet.rm",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let (cmd, print) = (ctx.cmd_name, &ctx.print);
+        match self {
+            Self::Ls { profile } => groundhog_cli::wallet::list(profile.as_deref(), cmd, print),
+            Self::Use { name, profile } => {
+                groundhog_cli::wallet::use_wallet(&name, profile.as_deref(), cmd, print)
+            }
+            Self::Create {
+                key,
+                name,
+                dry_run,
+                prefund,
+                confirmation,
+                profile,
+                target_args,
+            } => groundhog_cli::wallet::create(
+                key.as_deref(),
+                name.as_deref(),
+                dry_run,
+                prefund.as_deref(),
+                confirmation.force,
+                profile.as_deref(),
+                &target_args.into(),
+                cmd,
+                print,
+            ),
+            Self::Rm {
+                name,
+                profile,
+                confirmation,
+            } => groundhog_cli::wallet::remove(
+                &name,
+                profile.as_deref(),
+                confirmation.force,
+                cmd,
+                print,
+            ),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum CodegenCommand {
     /// Generate TypeScript bindings
@@ -771,6 +1356,25 @@ enum CodegenCommand {
         #[arg(long, short)]
         output: Option<std::path::PathBuf>,
     },
+}
+
+impl CodegenCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Ts { .. } => "codegen.ts",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        match self {
+            Self::Ts { source, output } => groundhog_cli::codegen_cmd::run(
+                &source,
+                output.as_deref(),
+                ctx.cmd_name,
+                &ctx.print,
+            ),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -804,6 +1408,22 @@ impl ChainCommand {
         match self {
             Self::Dump { .. } => "chain.dump",
             Self::Restore { .. } => "chain.restore",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let (cmd, print) = (ctx.cmd_name, &ctx.print);
+        match self {
+            Self::Dump {
+                data_dir,
+                output,
+                confirmation,
+            } => groundhog_cli::chain::dump(&data_dir, &output, confirmation.force, cmd, print),
+            Self::Restore {
+                data_dir,
+                input,
+                confirmation,
+            } => groundhog_cli::chain::restore(&data_dir, &input, confirmation.force, cmd, print),
         }
     }
 }
@@ -849,6 +1469,50 @@ enum TxCommand {
     },
 }
 
+impl TxCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Show { .. } => "tx.show",
+            Self::List { .. } => "tx.list",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        let cwd = invocation_cwd()?;
+        let (cmd, print) = (ctx.cmd_name, &ctx.print);
+        match self {
+            Self::Show {
+                tx_hash,
+                profile,
+                target_args,
+            } => groundhog_cli::tx::show(
+                &tx_hash,
+                &cwd,
+                profile.as_deref(),
+                &target_args.into(),
+                cmd,
+                print,
+            ),
+            Self::List {
+                target,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => groundhog_cli::tx::list(
+                target.as_deref(),
+                limit.as_deref(),
+                cursor.as_deref(),
+                &cwd,
+                profile.as_deref(),
+                &target_args.into(),
+                cmd,
+                print,
+            ),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum EventsCommand {
     /// List one page of raw events emitted by a contract
@@ -891,6 +1555,45 @@ enum EventsCommand {
     },
 }
 
+impl EventsCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::List { .. } => "events.list",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        match self {
+            Self::List {
+                contract,
+                topic0,
+                topic1,
+                topic2,
+                limit,
+                cursor,
+                spec,
+                event,
+                profile,
+                target_args,
+            } => groundhog_cli::events::list(
+                &contract,
+                &topic0,
+                &topic1,
+                &topic2,
+                limit.as_deref(),
+                cursor.as_deref(),
+                spec.as_deref(),
+                event.as_deref(),
+                &invocation_cwd()?,
+                profile.as_deref(),
+                &target_args.into(),
+                ctx.cmd_name,
+                &ctx.print,
+            ),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum TokenCommand {
     /// List one page of canonical ERC20 transfer history
@@ -929,119 +1632,37 @@ enum TokenCommand {
     },
 }
 
-impl CodegenCommand {
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::Ts { .. } => "codegen.ts",
-        }
-    }
-}
-
-impl TxCommand {
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::Show { .. } => "tx.show",
-            Self::List { .. } => "tx.list",
-        }
-    }
-}
-
-impl EventsCommand {
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::List { .. } => "events.list",
-        }
-    }
-}
-
 impl TokenCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Transfers { .. } => "token.transfers",
         }
     }
-}
 
-impl ConfigCommand {
-    fn command_name(&self) -> &'static str {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         match self {
-            Self::Get { .. } => "config.get",
-            Self::Profiles => "config.profiles",
-            Self::New { .. } => "config.new",
-            Self::Rm { .. } => "config.rm",
-            Self::Set { .. } => "config.set",
-            Self::Unset { .. } => "config.unset",
-            Self::Use { .. } => "config.use",
-        }
-    }
-}
-
-impl ToolchainCommand {
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::Install { .. } => "toolchain.install",
-            Self::List => "toolchain.list",
-            Self::Use { .. } => "toolchain.use",
-            Self::Clean { .. } => "toolchain.clean",
-            Self::Which => "toolchain.which",
-        }
-    }
-}
-
-impl Command {
-    /// Canonical command name for JSON envelopes.
-    ///
-    /// Used by both success and error JSON output so they
-    /// always agree. Init returns "status" because
-    /// `init --json` delegates to `status --json`.
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::New { .. } => "new",
-            Self::Init | Self::Status { .. } => "status",
-            Self::Build { .. } => "build",
-            Self::Test { .. } => "test",
-            Self::Deploy { .. } => "deploy",
-            Self::Call { .. } => "call",
-            Self::Transfer { .. } => "transfer",
-            Self::Airdrop { .. } => "airdrop",
-            Self::Balance { .. } => "balance",
-            Self::View { .. } => "view",
-            Self::Storage { .. } => "storage",
-            Self::Node { .. } => "node",
-            Self::Docs { .. } => "docs",
-            Self::Chain { command } => command.command_name(),
-            Self::Config { command } => command.command_name(),
-            Self::Toolchain { command } => command.command_name(),
-            Self::Keys { command } => command.command_name(),
-            Self::Wallet { command } => command.command_name(),
-            Self::Codegen { command } => command.command_name(),
-            Self::Tx { command } => command.command_name(),
-            Self::Events { command } => command.command_name(),
-            Self::Token { command } => command.command_name(),
-            Self::Completion { .. } => "completion",
-        }
-    }
-}
-
-impl KeysCommand {
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::Generate { .. } => "keys.generate",
-            Self::Ls => "keys.ls",
-            Self::Export { .. } => "keys.export",
-            Self::Use { .. } => "keys.use",
-            Self::Rm { .. } => "keys.rm",
-        }
-    }
-}
-
-impl WalletCommand {
-    fn command_name(&self) -> &'static str {
-        match self {
-            Self::Ls { .. } => "wallet.ls",
-            Self::Use { .. } => "wallet.use",
-            Self::Create { .. } => "wallet.create",
-            Self::Rm { .. } => "wallet.rm",
+            Self::Transfers {
+                token,
+                from,
+                to,
+                account,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => groundhog_cli::token::transfers(
+                &token,
+                from.as_deref(),
+                to.as_deref(),
+                account.as_deref(),
+                limit.as_deref(),
+                cursor.as_deref(),
+                &invocation_cwd()?,
+                profile.as_deref(),
+                &target_args.into(),
+                ctx.cmd_name,
+                &ctx.print,
+            ),
         }
     }
 }
@@ -1097,7 +1718,6 @@ fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Par
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn main() {
     let bundle_identity = groundhog_cli::bundle_identity();
     let cli = match parse_cli(&bundle_identity) {
@@ -1107,621 +1727,23 @@ fn main() {
         }
         ParsedCli::Command(cli) => *cli,
     };
-    let print = Print::new(cli.global.quiet, cli.global.json)
-        .with_command_trace(cli.global.show_cargo_commands);
-    let offline =
-        cli.global.offline || std::env::var("GROUNDHOG_OFFLINE").is_ok_and(|value| value == "1");
-    let cmd_name = cli.command.command_name();
-
-    let result = match cli.command {
-        Command::New { name, template } => {
-            groundhog_cli::new::run(&name, &template, cmd_name, &print)
-        }
-        Command::Docs { dir, port } => {
-            groundhog_cli::docs::run(dir.as_deref(), port, cmd_name, &print)
-        }
-        Command::Init => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| groundhog_cli::init::run(&cwd, cmd_name, &print)),
-        Command::Status { profile } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| groundhog_cli::status::run(&cwd, profile.as_deref(), cmd_name, &print)),
-        Command::Config { command } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| match command {
-                ConfigCommand::Get { profile, sources } => groundhog_cli::config_cmd::get(
-                    &cwd,
-                    profile.as_deref(),
-                    sources,
-                    cmd_name,
-                    &print,
-                ),
-                ConfigCommand::Profiles => {
-                    groundhog_cli::config_cmd::profiles(&cwd, cmd_name, &print)
-                }
-                ConfigCommand::New {
-                    profile,
-                    network,
-                    rpc_url,
-                    network_hash,
-                    faucet_url,
-                    default_key,
-                    select,
-                    global,
-                    project,
-                } => groundhog_cli::config_cmd::new_profile(
-                    &cwd,
-                    &profile,
-                    &groundhog_cli::config::NewProfileOptions {
-                        network,
-                        rpc_url,
-                        network_hash,
-                        faucet_url,
-                        default_key,
-                        select,
-                    },
-                    global,
-                    project,
-                    cmd_name,
-                    &print,
-                ),
-                ConfigCommand::Rm {
-                    profile,
-                    confirmation,
-                    global,
-                    project,
-                } => groundhog_cli::config_cmd::remove(
-                    &cwd,
-                    &profile,
-                    confirmation.force,
-                    global,
-                    project,
-                    cmd_name,
-                    &print,
-                ),
-                ConfigCommand::Set {
-                    field,
-                    value,
-                    profile,
-                    global,
-                    project,
-                } => groundhog_cli::config_cmd::set(
-                    &cwd, &profile, &field, &value, global, project, cmd_name, &print,
-                ),
-                ConfigCommand::Unset {
-                    field,
-                    profile,
-                    global,
-                    project,
-                } => groundhog_cli::config_cmd::unset(
-                    &cwd, &profile, &field, global, project, cmd_name, &print,
-                ),
-                ConfigCommand::Use {
-                    profile,
-                    global,
-                    project,
-                } => groundhog_cli::config_cmd::use_default(
-                    &cwd, &profile, global, project, cmd_name, &print,
-                ),
-            }),
-        Command::Toolchain { command } => match command {
-            ToolchainCommand::Install { version } => {
-                groundhog_cli::toolchain_cmd::install(version.as_deref(), offline, cmd_name, &print)
-            }
-            ToolchainCommand::List => groundhog_cli::toolchain_cmd::list(cmd_name, &print),
-            ToolchainCommand::Use { version } => {
-                groundhog_cli::toolchain_cmd::use_version(&version, cmd_name, &print)
-            }
-            ToolchainCommand::Clean { version } => {
-                groundhog_cli::toolchain_cmd::clean(version.as_deref(), cmd_name, &print)
-            }
-            ToolchainCommand::Which => groundhog_cli::toolchain_cmd::which(cmd_name, &print),
-        },
-        Command::Build {
-            package,
-            bindings,
-            stack_size,
-            profile,
-            artifacts,
-            cargo_args,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
-                    artifacts.target_dir,
-                    &cwd,
-                );
-                groundhog_cli::build::run(
-                    package.as_deref(),
-                    &bindings,
-                    stack_size,
-                    &cargo_args,
-                    &artifacts,
-                    profile.as_deref(),
-                    &print,
-                )
-            }),
-        Command::Test {
-            package,
-            workspace,
-            match_test,
-            fail_fast,
-            show_output,
-            no_capture,
-            test_threads,
-            skip,
-            rerun,
-            watch,
-            integration,
-            verbose,
-            hogd_protocol,
-            hog_devnode_version,
-            profile,
-            artifacts,
-            cargo_args,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
-                    artifacts.target_dir,
-                    &cwd,
-                );
-                let options = groundhog_cli::test_cmd::TestOptions {
-                    match_test,
-                    test_threads,
-                    skip,
-                    rerun,
-                    watch,
-                    workspace,
-                    harness: groundhog_cli::test_cmd::TestHarnessOptions {
-                        fail_fast,
-                        show_output,
-                        no_capture,
-                    },
-                };
-                if integration {
-                    groundhog_cli::test_cmd::run_integration_with_options(
-                        package.as_deref(),
-                        &options,
-                        &groundhog_cli::test_cmd::IntegrationTestOptions {
-                            hogd_protocol,
-                            hog_devnode_version,
-                            offline,
-                            verbose,
-                        },
-                        &cargo_args,
-                        &artifacts,
-                        profile.as_deref(),
-                        cmd_name,
-                        &print,
-                    )
-                } else {
-                    groundhog_cli::test_cmd::run_with_options(
-                        package.as_deref(),
-                        &options,
-                        &cargo_args,
-                        &artifacts,
-                        profile.as_deref(),
-                        cmd_name,
-                        &print,
-                    )
-                }
-            }),
-        Command::Deploy {
-            package,
-            artifact,
-            alias,
-            dry_run,
-            wallet,
-            profile,
-            target_args,
-            artifacts,
-            confirmation,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
-                    artifacts.target_dir,
-                    &cwd,
-                );
-                groundhog_cli::deploy::run(
-                    artifact.as_deref(),
-                    package.as_deref(),
-                    alias.as_deref(),
-                    dry_run,
-                    confirmation.force,
-                    wallet.as_deref(),
-                    &artifacts,
-                    profile.as_deref(),
-                    &target_args.into(),
-                    cmd_name,
-                    &print,
-                )
-            }),
-        Command::Call {
-            contract,
-            method,
-            args,
-            package,
-            dry_run,
-            gas_limit,
-            wallet,
-            profile,
-            target_args,
-            artifacts,
-            confirmation,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
-                    artifacts.target_dir,
-                    &cwd,
-                );
-                groundhog_cli::call::run(
-                    &contract,
-                    &method,
-                    &args,
-                    package.as_deref(),
-                    dry_run,
-                    gas_limit,
-                    confirmation.force,
-                    wallet.as_deref(),
-                    &artifacts,
-                    profile.as_deref(),
-                    &target_args.into(),
-                    cmd_name,
-                    &print,
-                )
-            }),
-        Command::Transfer {
-            recipient,
-            amount,
-            dry_run,
-            from,
-            profile,
-            target_args,
-            confirmation,
-        } => groundhog_cli::transfer::run(
-            &recipient,
-            &amount,
-            from.as_deref(),
-            dry_run,
-            confirmation.force,
-            profile.as_deref(),
-            &target_args.into(),
-            cmd_name,
-            &print,
-        ),
-        Command::Airdrop {
-            recipient,
-            amount,
-            dry_run,
-            confirmation,
-            profile,
-            target_args,
-        } => groundhog_cli::airdrop::run(
-            recipient.as_deref(),
-            amount.as_deref(),
-            dry_run,
-            confirmation.force,
-            profile.as_deref(),
-            &target_args.into(),
-            cmd_name,
-            &print,
-        ),
-        Command::Balance {
-            target,
-            profile,
-            target_args,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                groundhog_cli::balance::run(
-                    target.as_deref(),
-                    &cwd,
-                    profile.as_deref(),
-                    &target_args.into(),
-                    cmd_name,
-                    &print,
-                )
-            }),
-        Command::View {
-            contract,
-            method,
-            args,
-            calldata,
-            from,
-            package,
-            profile,
-            target_args,
-            artifacts,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
-                    artifacts.target_dir,
-                    &cwd,
-                );
-                groundhog_cli::view::run(
-                    &contract,
-                    &method,
-                    &args,
-                    calldata.as_deref(),
-                    from.as_deref(),
-                    package.as_deref(),
-                    &artifacts,
-                    &cwd,
-                    profile.as_deref(),
-                    &target_args.into(),
-                    cmd_name,
-                    &print,
-                )
-            }),
-        Command::Storage {
-            address,
-            key,
-            profile,
-            target_args,
-        } => std::env::current_dir()
-            .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| {
-                groundhog_cli::storage::run(
-                    &address,
-                    &key,
-                    &cwd,
-                    profile.as_deref(),
-                    &target_args.into(),
-                    cmd_name,
-                    &print,
-                )
-            }),
-        Command::Node {
-            host,
-            port,
-            verbose,
-            dev_account_count,
-            dev_account_hog,
-            hogd_dev_binary,
-            contract_artifact_directories,
-            hog_devnode_version,
-            data_dir,
-            hogd_protocol,
-            startup_timeout_secs,
-            block_driver,
-            block_interval_ms,
-            rpc_max_connections,
-            rpc_batch_concurrency,
-            ramdb_bytes,
-            network_config,
-        } => {
-            let mut options = groundhog_cli::node::LocalNodeOptions::default();
-            options.host = Some(host);
-            options.port = port;
-            options.hogd_dev_binary = hogd_dev_binary;
-            options.contract_artifact_directories = contract_artifact_directories;
-            options.hogd_dev_version = hog_devnode_version;
-            options.offline = offline;
-            options.data_dir = data_dir;
-            options.hogd_protocol = hogd_protocol;
-            options.startup_timeout = startup_timeout_secs.map(std::time::Duration::from_secs);
-            options.dev_account_count = dev_account_count;
-            options.dev_account_tokens = dev_account_hog;
-            options.block_driver = block_driver.map(Into::into);
-            options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
-            options.rpc_max_connections = rpc_max_connections;
-            options.rpc_batch_concurrency = rpc_batch_concurrency;
-            options.ramdb_bytes = ramdb_bytes;
-            options.network_config_overrides = network_config;
-            options.bundle_identity = Some(bundle_identity.clone());
-            groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
-        }
-        Command::Chain { command } => match command {
-            ChainCommand::Dump {
-                data_dir,
-                output,
-                confirmation,
-            } => {
-                groundhog_cli::chain::dump(&data_dir, &output, confirmation.force, cmd_name, &print)
-            }
-            ChainCommand::Restore {
-                data_dir,
-                input,
-                confirmation,
-            } => groundhog_cli::chain::restore(
-                &data_dir,
-                &input,
-                confirmation.force,
-                cmd_name,
-                &print,
-            ),
-        },
-        Command::Keys { command } => match command {
-            KeysCommand::Generate { name, fund } => {
-                groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
-            }
-            KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
-            KeysCommand::Export { name, confirmation } => {
-                groundhog_cli::keys::export(&name, confirmation.force, cmd_name, &print)
-            }
-            KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
-            KeysCommand::Rm { name, confirmation } => {
-                groundhog_cli::keys::remove(&name, confirmation.force, cmd_name, &print)
-            }
-        },
-        Command::Wallet { command } => match command {
-            WalletCommand::Ls { profile } => {
-                groundhog_cli::wallet::list(profile.as_deref(), cmd_name, &print)
-            }
-            WalletCommand::Use { name, profile } => {
-                groundhog_cli::wallet::use_wallet(&name, profile.as_deref(), cmd_name, &print)
-            }
-            WalletCommand::Create {
-                key,
-                name,
-                dry_run,
-                prefund,
-                confirmation,
-                profile,
-                target_args,
-            } => groundhog_cli::wallet::create(
-                key.as_deref(),
-                name.as_deref(),
-                dry_run,
-                prefund.as_deref(),
-                confirmation.force,
-                profile.as_deref(),
-                &target_args.into(),
-                cmd_name,
-                &print,
-            ),
-            WalletCommand::Rm {
-                name,
-                profile,
-                confirmation,
-            } => groundhog_cli::wallet::remove(
-                &name,
-                profile.as_deref(),
-                confirmation.force,
-                cmd_name,
-                &print,
-            ),
-        },
-        Command::Codegen { command } => match command {
-            CodegenCommand::Ts { source, output } => {
-                groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
-            }
-        },
-        Command::Tx { command } => match command {
-            TxCommand::Show {
-                tx_hash,
-                profile,
-                target_args,
-            } => std::env::current_dir()
-                .map_err(groundhog_cli::CliError::Io)
-                .and_then(|cwd| {
-                    groundhog_cli::tx::show(
-                        &tx_hash,
-                        &cwd,
-                        profile.as_deref(),
-                        &target_args.into(),
-                        cmd_name,
-                        &print,
-                    )
-                }),
-            TxCommand::List {
-                target,
-                limit,
-                cursor,
-                profile,
-                target_args,
-            } => std::env::current_dir()
-                .map_err(groundhog_cli::CliError::Io)
-                .and_then(|cwd| {
-                    groundhog_cli::tx::list(
-                        target.as_deref(),
-                        limit.as_deref(),
-                        cursor.as_deref(),
-                        &cwd,
-                        profile.as_deref(),
-                        &target_args.into(),
-                        cmd_name,
-                        &print,
-                    )
-                }),
-        },
-        Command::Events { command } => match command {
-            EventsCommand::List {
-                contract,
-                topic0,
-                topic1,
-                topic2,
-                limit,
-                cursor,
-                spec,
-                event,
-                profile,
-                target_args,
-            } => std::env::current_dir()
-                .map_err(groundhog_cli::CliError::Io)
-                .and_then(|cwd| {
-                    groundhog_cli::events::list(
-                        &contract,
-                        &topic0,
-                        &topic1,
-                        &topic2,
-                        limit.as_deref(),
-                        cursor.as_deref(),
-                        spec.as_deref(),
-                        event.as_deref(),
-                        &cwd,
-                        profile.as_deref(),
-                        &target_args.into(),
-                        cmd_name,
-                        &print,
-                    )
-                }),
-        },
-        Command::Token { command } => match command {
-            TokenCommand::Transfers {
-                token,
-                from,
-                to,
-                account,
-                limit,
-                cursor,
-                profile,
-                target_args,
-            } => std::env::current_dir()
-                .map_err(groundhog_cli::CliError::Io)
-                .and_then(|cwd| {
-                    groundhog_cli::token::transfers(
-                        &token,
-                        from.as_deref(),
-                        to.as_deref(),
-                        account.as_deref(),
-                        limit.as_deref(),
-                        cursor.as_deref(),
-                        &cwd,
-                        profile.as_deref(),
-                        &target_args.into(),
-                        cmd_name,
-                        &print,
-                    )
-                }),
-        },
-        Command::Completion { shell } => {
-            let mut output = Vec::new();
-            let shell_name = shell.to_string();
-            clap_complete::generate(
-                shell,
-                &mut cli_command(&bundle_identity),
-                "groundhog",
-                &mut output,
-            );
-
-            if print.is_json() {
-                print.json(&CommandResult::new(
-                    cmd_name,
-                    json!({
-                        "shell": shell_name,
-                        "script": String::from_utf8_lossy(&output),
-                    }),
-                ))
-            } else {
-                print!("{}", String::from_utf8_lossy(&output));
-                Ok(())
-            }
-        }
+    let ctx = Ctx {
+        print: Print::new(cli.global.quiet, cli.global.json)
+            .with_command_trace(cli.global.show_cargo_commands),
+        cmd_name: cli.command.command_name(),
+        offline: cli.global.offline
+            || std::env::var("GROUNDHOG_OFFLINE").is_ok_and(|value| value == "1"),
+        bundle_identity,
     };
-    if let Err(e) = result {
+
+    if let Err(e) = cli.command.run(&ctx) {
         if matches!(
             e,
-            groundhog_cli::CliError::StatusHasWarnings
-                | groundhog_cli::CliError::CommandReportedFailure
+            CliError::StatusHasWarnings | CliError::CommandReportedFailure
         ) {
             std::process::exit(1);
         }
-        if let Err(print_error) = print.command_error(cmd_name, &e) {
+        if let Err(print_error) = ctx.print.command_error(ctx.cmd_name, &e) {
             eprintln!("error: {print_error}");
         }
         std::process::exit(1);
@@ -1760,7 +1782,7 @@ mod tests {
             "counter-v2",
         ]);
         match with_alias.command {
-            Command::Deploy { package, alias, .. } => {
+            Command::Deploy(DeployArgs { package, alias, .. }) => {
                 assert_eq!(package.as_deref(), Some("my-counter"));
                 assert_eq!(alias.as_deref(), Some("counter-v2"));
             }
@@ -1771,7 +1793,7 @@ mod tests {
         // stays absent rather than being defaulted here.
         let without_alias = Cli::parse_from(["groundhog", "deploy", "--package", "my-counter"]);
         match without_alias.command {
-            Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            Command::Deploy(DeployArgs { alias, .. }) => assert_eq!(alias, None),
             _ => panic!("expected deploy command"),
         }
     }
@@ -1813,7 +1835,9 @@ mod tests {
             panic!("a padded alias should parse");
         };
         match padded.command {
-            Command::Deploy { alias, .. } => assert_eq!(alias.as_deref(), Some("token")),
+            Command::Deploy(DeployArgs { alias, .. }) => {
+                assert_eq!(alias.as_deref(), Some("token"));
+            }
             _ => panic!("expected deploy command"),
         }
     }
@@ -1835,7 +1859,7 @@ mod tests {
             panic!("--artifact alone should still parse");
         };
         match alone.command {
-            Command::Deploy { alias, .. } => assert_eq!(alias, None),
+            Command::Deploy(DeployArgs { alias, .. }) => assert_eq!(alias, None),
             _ => panic!("expected deploy command"),
         }
 
@@ -1850,9 +1874,9 @@ mod tests {
             panic!("--artifact with --alias should parse");
         };
         match paired.command {
-            Command::Deploy {
+            Command::Deploy(DeployArgs {
                 artifact, alias, ..
-            } => {
+            }) => {
                 assert_eq!(
                     artifact,
                     Some(PathBuf::from("target/groundhog/token.rv32a"))
@@ -1973,9 +1997,9 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "node", "--dev-account-count", "3"]);
 
         match cli.command {
-            Command::Node {
+            Command::Node(NodeArgs {
                 dev_account_count, ..
-            } => assert_eq!(dev_account_count, Some(3)),
+            }) => assert_eq!(dev_account_count, Some(3)),
             _ => panic!("expected node command"),
         }
     }
@@ -1985,7 +2009,7 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "node", "--host", "0.0.0.0"]);
 
         match cli.command {
-            Command::Node { host, .. } => {
+            Command::Node(NodeArgs { host, .. }) => {
                 assert_eq!(host, std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
             }
             _ => panic!("expected node command"),
@@ -1997,7 +2021,7 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "node"]);
 
         match cli.command {
-            Command::Node { host, .. } => {
+            Command::Node(NodeArgs { host, .. }) => {
                 assert_eq!(host, std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
             }
             _ => panic!("expected node command"),
@@ -2019,9 +2043,9 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "node", "--dev-account-hog", "25.0000001"]);
 
         match cli.command {
-            Command::Node {
+            Command::Node(NodeArgs {
                 dev_account_hog, ..
-            } => assert_eq!(dev_account_hog, Some(250_000_001)),
+            }) => assert_eq!(dev_account_hog, Some(250_000_001)),
             _ => panic!("expected node command"),
         }
     }
@@ -2031,7 +2055,7 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "node", "--data-dir", "/tmp/groundhog"]);
 
         match cli.command {
-            Command::Node { data_dir, .. } => {
+            Command::Node(NodeArgs { data_dir, .. }) => {
                 assert_eq!(data_dir, Some(PathBuf::from("/tmp/groundhog")));
             }
             _ => panic!("expected node command"),
@@ -2050,10 +2074,10 @@ mod tests {
         ]);
 
         match cli.command {
-            Command::Node {
+            Command::Node(NodeArgs {
                 contract_artifact_directories,
                 ..
-            } => assert_eq!(
+            }) => assert_eq!(
                 contract_artifact_directories,
                 [
                     PathBuf::from("/tmp/contracts-a"),
@@ -2073,7 +2097,7 @@ mod tests {
             let mut args = vec!["groundhog", "call", "counter", "increment"];
             args.extend(extra);
             match Cli::parse_from(args).command {
-                Command::Call { gas_limit, .. } => assert_eq!(gas_limit, expected),
+                Command::Call(CallArgs { gas_limit, .. }) => assert_eq!(gas_limit, expected),
                 _ => panic!("expected call command"),
             }
         }
@@ -2102,7 +2126,7 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Node { network_config, .. } => assert_eq!(
+            Command::Node(NodeArgs { network_config, .. }) => assert_eq!(
                 network_config,
                 [
                     (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
@@ -2136,13 +2160,13 @@ mod tests {
         ]);
 
         match cli.command {
-            Command::Node {
+            Command::Node(NodeArgs {
                 block_driver,
                 block_interval_ms,
                 rpc_max_connections,
                 rpc_batch_concurrency,
                 ..
-            } => {
+            }) => {
                 assert!(matches!(block_driver, Some(NodeBlockDriverArg::Interval)));
                 assert_eq!(block_interval_ms, Some(250));
                 assert_eq!(rpc_max_connections, Some(512));
@@ -2350,13 +2374,13 @@ mod tests {
         ]);
 
         match cli.command {
-            Command::Airdrop {
+            Command::Airdrop(AirdropArgs {
                 recipient,
                 amount,
                 dry_run,
                 profile,
                 ..
-            } => {
+            }) => {
                 assert_eq!(recipient.as_deref(), Some("alice"));
                 assert_eq!(amount.as_deref(), Some("1.5"));
                 assert!(dry_run);
@@ -2386,7 +2410,7 @@ mod tests {
 
         assert_eq!(cli.command.command_name(), "transfer");
         match cli.command {
-            Command::Transfer {
+            Command::Transfer(TransferArgs {
                 recipient,
                 amount,
                 dry_run,
@@ -2394,7 +2418,7 @@ mod tests {
                 profile,
                 target_args,
                 confirmation,
-            } => {
+            }) => {
                 assert_eq!(recipient, "alice");
                 assert_eq!(amount, "1.5");
                 assert!(dry_run);
@@ -2422,10 +2446,10 @@ mod tests {
         ] {
             let cli = Cli::try_parse_from(args).expect("transaction command should accept --force");
             let force = match cli.command {
-                Command::Deploy { confirmation, .. }
-                | Command::Call { confirmation, .. }
-                | Command::Transfer { confirmation, .. }
-                | Command::Airdrop { confirmation, .. }
+                Command::Deploy(DeployArgs { confirmation, .. })
+                | Command::Call(CallArgs { confirmation, .. })
+                | Command::Transfer(TransferArgs { confirmation, .. })
+                | Command::Airdrop(AirdropArgs { confirmation, .. })
                 | Command::Wallet {
                     command: WalletCommand::Create { confirmation, .. },
                 } => confirmation.force,
@@ -2660,9 +2684,9 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "test", "--workspace"]);
 
         match cli.command {
-            Command::Test {
+            Command::Test(TestArgs {
                 workspace, package, ..
-            } => {
+            }) => {
                 assert!(workspace);
                 assert!(package.is_none());
             }
@@ -2685,11 +2709,11 @@ mod tests {
         let cli = Cli::parse_from(["groundhog", "test", "--integration", "-v"]);
 
         match cli.command {
-            Command::Test {
+            Command::Test(TestArgs {
                 integration,
                 verbose,
                 ..
-            } => {
+            }) => {
                 assert!(integration);
                 assert!(verbose);
             }

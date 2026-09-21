@@ -416,6 +416,7 @@ mod tests {
                 }],
                 return_data: Some(HexBytes(vec![0x55])),
                 abort_data: None,
+                gas_used: 12,
             },
             gas_consumed: 12,
             gas_limit: Some(99),

@@ -28,6 +28,7 @@ env:
     groundhog-node-supervisor
     groundhog-rv32-lower
     groundhog-toolchain
+    groundhog-cli-macros
     groundhog-cli
     groundhog-testkit
 

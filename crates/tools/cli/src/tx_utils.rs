@@ -65,7 +65,8 @@ pub(crate) fn decode_receipt_abort(
         .map(|data| decode_abort(data.0.as_slice(), metadata))
 }
 
-/// Print return and abort context retained on an unsuccessful receipt.
+/// Print return data, gas, and abort context retained on an unsuccessful
+/// receipt.
 ///
 /// A decoded abort prints as its exception type and value; the raw abort
 /// buffer prints only when decoding failed (with the reason) or was not
@@ -78,6 +79,7 @@ pub(crate) fn print_failed_receipt_data(
     if let Some(data) = receipt.return_data.as_ref() {
         print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
     }
+    print.detail("gas used", receipt.gas_used);
     print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
 }
 
@@ -181,6 +183,7 @@ pub(crate) fn print_receipt_data(
     if let Some(data) = &receipt.return_data {
         print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
     }
+    print.detail("gas used", receipt.gas_used);
     print_abort_context(receipt.abort_data.as_ref(), decoded_abort, print);
 }
 

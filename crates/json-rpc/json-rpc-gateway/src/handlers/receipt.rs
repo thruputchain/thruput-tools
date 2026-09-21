@@ -132,6 +132,7 @@ fn receipt(ctx: &GatewayContext, tx_hash: TxHash, info: TxInfo) -> TransactionRe
         events: parsed.events,
         return_data,
         abort_data,
+        gas_used: info.events.gas_consumed,
     }
 }
 
@@ -1135,6 +1136,9 @@ mod tests {
         );
     }
 
+    /// Gas the fake indexer's committed event log records.
+    const COMMITTED_GAS_CONSUMED: u64 = 4_242;
+
     fn committed_result() -> TxInfoResult {
         use groundhog_xdr::{
             auth_claim::{AuthClaim, AuthClaim_source_address_claim},
@@ -1181,6 +1185,7 @@ mod tests {
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
                     },
+                    gas_consumed: COMMITTED_GAS_CONSUMED,
                     events: VecM(vec![]),
                 },
             },
@@ -1205,6 +1210,24 @@ mod tests {
         TxInfoResult::Default {
             outcome: TxInfoOutcome::TxInfoNotFound.0,
         }
+    }
+
+    #[tokio::test]
+    async fn receipt_reports_the_committed_gas() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (indexer_addr, _indexer) = start_fake_indexer(committed_result(), calls.clone()).await;
+        let ctx = test_context(None, indexer_addr).await;
+        let receipt = watchdog(get_transaction_receipt(
+            &ctx,
+            RpcRequestContext::unbounded(),
+            test_hash(),
+        ))
+        .await
+        .unwrap()
+        .expect("committed transaction should have a receipt");
+        assert_eq!(receipt.height, 42.into());
+        assert_eq!(receipt.gas_used, COMMITTED_GAS_CONSUMED);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
