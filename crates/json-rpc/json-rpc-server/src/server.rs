@@ -86,21 +86,12 @@ impl TipState {
 /// Rate-limited, best-effort db-tip reading shared by all
 /// `sendRawTransaction` pre-checks on this server.
 ///
-/// A submit asks the backend at most once per reuse window; submits
-/// inside it reuse the last reading, and the background task republishes
-/// well before the window closes, so on a server running it a submit
-/// never reaches the backend itself. The submit that finds the window
-/// expired claims the refresh before awaiting it, so concurrent submits
-/// keep using the stale reading rather than queuing behind the probe. A
-/// failed or timed-out probe keeps the previous reading: the tip only
-/// grows, so a stale height can only under-detect expiry, and the config
-/// changes only at explicit upgrade blocks. Overlapping fetches may
-/// complete out of order; the reading with the higher tip is kept.
-///
-/// The one time a caller does queue behind a probe is a cold cache: with
-/// no reading at all, a caller inside the window waits for the in-flight
-/// probe instead of answering empty, so concurrent first callers after
-/// startup share one fetch rather than one of them failing.
+/// One caller per window claims the refresh and the rest reuse the last
+/// reading without waiting, so a slow probe never queues submits behind
+/// it. A failed probe keeps the previous reading and overlapping fetches
+/// keep the higher tip, both safe because the tip only grows and the
+/// config changes only at upgrade blocks. The exception is a cold cache,
+/// where callers do wait on the in-flight probe rather than answer empty.
 #[derive(Debug, Clone)]
 struct TipCache {
     inner: Arc<TipCacheInner>,
@@ -273,15 +264,10 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// Start the task that keeps `cache` fresh.
-///
-/// Ticks on a fixed schedule, so a slow probe cannot push later refreshes
-/// out and open a stretch a submit would fill by fetching for itself.
-/// Each tick probes unconditionally: this task is what the reuse window
-/// is measured against.
-///
-/// Returns `None` outside a Tokio runtime, and for a zero interval, which
-/// disables reuse so every pre-check fetches its own reading.
+/// Start the task that keeps `cache` fresh, on a fixed schedule so a slow
+/// probe cannot push later refreshes out. Each tick probes
+/// unconditionally. `None` outside a Tokio runtime, and for a zero
+/// interval, which disables reuse too.
 fn spawn_tip_refresh<C: ChainPlane>(
     chain: Arc<C>,
     cache: TipCache,
@@ -1454,8 +1440,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     /// The reuse window must never be shorter than the interval that
-    /// refreshes it: `tip_cache_ttl_ms` used to default to 3s against a 5s
-    /// refresh, leaving a stretch each cycle for a submit to fetch in.
+    /// refreshes it.
     #[tokio::test(start_paused = true)]
     async fn submit_inside_the_refresh_interval_does_not_fetch_its_own_tip() {
         const INTERVAL_MS: u64 = 10_000;

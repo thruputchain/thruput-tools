@@ -42,15 +42,12 @@ pub struct RpcServerConfig {
     /// stalled backend must not delay submission past this bound.
     pub tip_probe_timeout_ms: u64,
 
-    /// How long a chain-tip reading is reused by the `sendRawTransaction`
-    /// pre-checks, and the interval of the background task that refreshes
-    /// it. One value governs both so the refresh always lands before the
-    /// reading it renews goes stale: a submit therefore reuses the last
-    /// reading instead of fetching one on its own latency path.
-    ///
-    /// Stale readings are safe: the tip only grows, so staleness can only
-    /// under-detect expiry, and the network config the reading carries
-    /// changes only at explicit upgrade blocks.
+    /// How often the background task refreshes the chain-tip reading the
+    /// `sendRawTransaction` pre-checks read. A reading stays usable for
+    /// this plus `tip_probe_timeout_ms`, so a refresh always lands first
+    /// and a submit never fetches on its own latency path. Zero disables
+    /// both the task and reuse. Staleness is safe: the tip only grows, and
+    /// the config it carries changes only at upgrade blocks.
     pub tip_refresh_interval_ms: u64,
 }
 

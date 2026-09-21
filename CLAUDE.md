@@ -421,32 +421,19 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `json-rpc-types` (currently `TxInvalidDetail` for `TxInvalid`) and let
   `open-rpc-spec` project its schema onto the error component as
   `x-data-schema`; never hand-author the shape in the spec.
-- `sendRawTransaction` pre-checks (expiry against the tip, attached-contract
-  count and per-contract size from the tip's network config, duplicate
-  attachments, and each attached RV32 artifact's declared guest memory and
-  code size against the config's `max_rv32_memory_bytes` and
-  `max_rv32_code_bytes`) mirror what hogd's executor rejects before running
-  a transaction. The bound logic lives in `groundhog-tx-validation`;
-  `json-rpc-server` applies it from one cached db-tip reading
-  (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
-  that every tip fetch refreshes: a submit that finds it stale, the public
-  `chainTip` method, and a background task `GroundhogRpcServer::new` starts
-  on `tip_refresh_interval_ms`. That task ticks on a fixed schedule, and a
-  reading stays reusable for the interval plus `tip_probe_timeout_ms`, the
-  longest a tick's probe may take to publish, so a refresh always lands
-  before the reading it renews goes stale and a submit reads what the task
-  published rather than fetching on its own latency path. An interval of
-  zero starts no task and makes every pre-check fetch its own reading. The
-  public `chainConfig` method reads through that same cache, so it costs the
-  backend at most one fetch per interval however often it is called, and
-  reports only the parameters the config states. A bound violation found
-  against a cached reading is re-checked against a freshly fetched tip
-  before it is returned, so a reading that lags a config upgrade never
-  rejects what the current config admits. The checks are advisory, not a
-  trust boundary: a missing reading never blocks submission. A bound is
-  enforced only with a value the protocol defines: the one the tip's config
-  states, or a constant the protocol fixes for the unstated case (today
-  `kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`, and
+- `sendRawTransaction` pre-checks (expiry, attached-contract count and size,
+  duplicate attachments, and each RV32 artifact's declared memory and code
+  size) mirror what hogd's executor rejects before running a transaction.
+  The bound logic lives in `groundhog-tx-validation`; `json-rpc-server`
+  applies it from a cached db-tip reading (`ChainPlane::chain_tip` returns
+  `TipReading`, tip plus network config) that a background task refreshes on
+  `tip_refresh_interval_ms`. See `docs/gateway/system-design.md` for the
+  caching and re-check mechanics. Two rules hold regardless: the checks are
+  advisory, not a trust boundary, so a missing reading never blocks
+  submission; and a bound is enforced only with a value the protocol
+  defines, either the one the tip's config states or the constant the
+  protocol fixes for the unstated case (today
+  `kDefaultMaxContractSizeBytes`, `kDefaultMaxRv32CodeBytes`,
   `kDefaultMaxRv32MemoryBytes`). Never copy hogd's own fallbacks for
   parameters the protocol leaves unstated.
 - `groundhog build` enforces no chain bound: it is offline and does not know
