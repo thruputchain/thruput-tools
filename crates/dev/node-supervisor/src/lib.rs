@@ -24,6 +24,15 @@ mod view_backend;
 #[cfg(test)]
 mod test_support;
 
+/// How this crate names hogd-dev's x23 services in diagnostics, so a
+/// message always says which of the child's endpoints answered.
+mod service {
+    pub(crate) const INDEXER: &str = "hogd-dev indexer";
+    pub(crate) const DB_GATEWAY: &str = "hogd-dev DbGateway";
+    pub(crate) const VIEW_GATEWAY: &str = "hogd-dev ViewGateway";
+    pub(crate) const SCHEDULER_GATEWAY: &str = "hogd-dev scheduler gateway";
+}
+
 pub use block_driver::{BlockProductionError, ManualBlockProducer, ProducedBlock};
 pub use config::{
     BlockDriverConfig, BlockDriverMode, HogdDevConfig, LocalAirdropConfig, LogLevel,

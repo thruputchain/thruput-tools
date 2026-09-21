@@ -2,6 +2,7 @@
 
 use std::{fmt, io, path::PathBuf, process::ExitStatus, time::Duration};
 
+use groundhog_hogd_backend::IntroOutcome;
 use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_x23_transport::ConnectError;
 
@@ -656,6 +657,29 @@ pub enum NodeSupervisorError {
         #[source]
         source: io::Error,
     },
+}
+
+impl NodeSupervisorError {
+    /// Report an x23 service that did not accept the protocol this build
+    /// speaks.
+    ///
+    /// `expected_protocol` is what hogd-dev advertised in its readiness
+    /// payload, when the supervisor has it: naming both sides turns "intro
+    /// rejected" into an actionable version mismatch.
+    pub(crate) fn intro_rejected(
+        outcome: IntroOutcome,
+        protocol: &str,
+        expected_protocol: Option<&str>,
+    ) -> Self {
+        Self::ProtocolIntroRejected {
+            service: outcome.service(),
+            outcome: outcome.code(),
+            outcome_name: outcome.name(),
+            is_protocol_mismatch: outcome.mismatched_protocol(),
+            protocol: protocol.to_string(),
+            expected_protocol: expected_protocol.map(str::to_string),
+        }
+    }
 }
 
 fn intro_rejected_message(

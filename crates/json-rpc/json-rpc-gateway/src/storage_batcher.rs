@@ -15,14 +15,11 @@ use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_db_gateway::AddressAndKeyBatch;
-use groundhog_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
+use groundhog_db_gateway::{DbGatewayPayload, DbGatewayResult};
+use groundhog_hogd_backend::db_gateway as shared_db_gateway;
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::{
-    ContractAddress,
-    state::{StorageItemInfo, StorageItemRead},
-};
-use groundhog_scheduler::RPCError;
-use groundhog_xdr::types::{AddressAndKey, StorageKey, StorageKeyContractData};
+use groundhog_json_rpc_types::{ContractAddress, state::StorageItemRead};
+use groundhog_xdr::types::{AddressAndKey, StorageKey};
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::VecM;
 
@@ -32,6 +29,7 @@ use crate::adaptive_batch::{
 use crate::config::{AdaptiveBatchConfig, HealthBackend};
 use crate::context::DbGatewayClient;
 use crate::error::GatewayError;
+use crate::handlers::DB_GATEWAY;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
 /// Backend for batched storage reads.  In production this wraps the
@@ -102,24 +100,7 @@ impl StorageReadSink for DbGatewaySink {
         let outer = outer_result
             .map_err(|_| GatewayError::BackendTimeout)?
             .map_err(|e| GatewayError::BackendUnavailable(format!("db_gateway: {e}")))?;
-        match outer {
-            DbGatewayResult::kRPCNone { payload } => Ok(payload),
-            DbGatewayResult::Default { error } => Err(GatewayError::BackendUnavailable(format!(
-                "db_gateway: {}",
-                RPCError(error)
-            ))),
-            unexpected => {
-                tracing::warn!(
-                    ?unexpected,
-                    "db_gateway returned unsupported outer result variant"
-                );
-                Err(GatewayError::BackendUnavailable(
-                    "db_gateway returned an unsupported result variant; regenerate the \
-                     DbGateway client for this protocol"
-                        .into(),
-                ))
-            }
-        }
+        Ok(shared_db_gateway::payload(DB_GATEWAY, outer)?)
     }
 }
 
@@ -186,39 +167,15 @@ impl BatchProcessor for StorageReadProcessor {
                     let mut responses = payload.items.0.into_iter();
                     for item in cohort {
                         let mapped = match responses.next() {
-                            Some(DbGatewayItemResult::kRPCNone { item: wire }) => {
-                                Ok(StorageItemRead {
-                                    block_height: block_height.clone(),
-                                    item: Some(StorageItemInfo::from(wire)),
-                                })
-                            }
-                            Some(DbGatewayItemResult::Default { error }) => {
-                                let err = RPCError(error);
-                                if err == RPCError::kRPCNotFound {
-                                    Ok(StorageItemRead {
-                                        block_height: block_height.clone(),
-                                        item: None,
-                                    })
-                                } else {
-                                    Err(GatewayError::BackendUnavailable(format!(
-                                        "db_gateway item: {err}"
-                                    )))
-                                }
-                            }
-                            Some(unexpected) => {
-                                tracing::warn!(
-                                    ?unexpected,
-                                    "db_gateway returned unsupported per-item result variant"
-                                );
-                                Err(GatewayError::BackendUnavailable(
-                                    "db_gateway returned an unsupported per-item result variant; \
-                                     regenerate the DbGateway client for this protocol"
-                                        .into(),
-                                ))
-                            }
-                            None => Err(GatewayError::BackendUnavailable(
-                                "db_gateway response had fewer items than the batch".into(),
-                            )),
+                            Some(response) => shared_db_gateway::storage_item_read(
+                                DB_GATEWAY,
+                                block_height.clone(),
+                                response,
+                            )
+                            .map_err(GatewayError::from),
+                            None => Err(GatewayError::BackendUnavailable(format!(
+                                "{DB_GATEWAY} response had fewer items than the batch"
+                            ))),
                         };
                         let _ = item.reply.send(mapped);
                     }
@@ -302,9 +259,7 @@ impl StorageReadBatcher {
         self.read_key(
             context,
             address,
-            StorageKey::ContractData {
-                contract_data_key: StorageKeyContractData::from(key),
-            },
+            shared_db_gateway::contract_data_key(key),
             &key,
         )
         .await
@@ -375,6 +330,10 @@ impl StorageReadBatcher {
 
 #[cfg(test)]
 mod tests {
+    use groundhog_db_gateway::DbGatewayItemResult;
+    use groundhog_json_rpc_types::state::StorageItemInfo;
+    use groundhog_scheduler::RPCError;
+
     use super::*;
     use std::collections::VecDeque;
     use std::sync::Mutex;

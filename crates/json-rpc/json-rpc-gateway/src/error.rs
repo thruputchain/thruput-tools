@@ -1,6 +1,7 @@
 //! Gateway error types — maps internal errors to JSON-RPC `ErrorObject`.
 //! See json-rpc-types/src/error.rs for error code constants.
 
+use groundhog_json_rpc_server::RpcServerError;
 use groundhog_json_rpc_types::error::codes;
 use jsonrpsee::types::ErrorObjectOwned;
 
@@ -49,6 +50,29 @@ pub enum GatewayError {
     /// Method exists but is not yet implemented in this gateway version.
     #[error("not implemented: {0}")]
     NotImplemented(String),
+}
+
+impl From<RpcServerError> for GatewayError {
+    fn from(err: RpcServerError) -> Self {
+        match err {
+            RpcServerError::TxInvalid(msg) => Self::TxInvalid(msg),
+            // Flattened to the message: the structured pre-check payload is
+            // built by the server layer, above every backend helper that
+            // converts through here.
+            RpcServerError::TxInvalidDetailed(detail) => Self::TxInvalid(detail.to_string()),
+            RpcServerError::TxRejected(msg) => Self::TxRejected(msg),
+            RpcServerError::TxNotFound => Self::TxNotFound,
+            RpcServerError::BlockNotFound => Self::BlockNotFound,
+            RpcServerError::InvalidParam(msg) => Self::InvalidParam(msg),
+            RpcServerError::BackendUnavailable(msg) => Self::BackendUnavailable(msg),
+            RpcServerError::BackendTimeout => Self::BackendTimeout,
+            RpcServerError::Overloaded(msg) => Self::Overloaded(msg),
+            RpcServerError::NotImplemented(method) => Self::NotImplemented(method),
+            // `RpcServerError` is `#[non_exhaustive]`; a variant added after
+            // this build has no more specific mapping than a backend failure.
+            other => Self::BackendUnavailable(other.to_string()),
+        }
+    }
 }
 
 /// Return a "method not implemented" JSON-RPC error.

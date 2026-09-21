@@ -8,17 +8,15 @@
 //! x23 surface.
 
 use async_trait::async_trait;
+use groundhog_hogd_backend::{intro, scheduler as shared_scheduler};
 use groundhog_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading, ValidatedTransaction,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, NetworkHashHex,
-    block::{BlockInfo, ChainTip, consensus_value_hash},
-    protocol_token::protocol_from_text,
+    BlockHeight, NetworkHashHex, block::BlockInfo, protocol_token::protocol_from_text,
 };
 use groundhog_scheduler::{
-    DbTip, ExpectedDBTip, RPCError, SchedGatewayIntroOutcome,
-    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    DbTip, ExpectedDBTip, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
     sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use groundhog_x23_transport::{connect_with_config, hogd_large_message_config};
@@ -26,7 +24,8 @@ use std::{fmt, net::SocketAddr};
 
 use crate::{
     NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::require_dev_genesis,
-    request_deadline::within_request_deadline, submit_batcher::SubmitBatcher,
+    request_deadline::within_request_deadline, service::SCHEDULER_GATEWAY,
+    submit_batcher::SubmitBatcher,
 };
 
 const SCHEDULER_COORD_POOL_SIZE: usize = 1;
@@ -88,16 +87,13 @@ impl HogdDevSchedulerBackend {
                 op: "schedgateway_intro",
                 source,
             })?;
-        if intro_outcome != SchedGatewayIntroOutcome::SchedGatewayIntroSuccess {
-            return Err(NodeSupervisorError::ProtocolIntroRejected {
-                service: "SchedGateway",
-                outcome: intro_outcome.0,
-                outcome_name: scheduler_gateway_intro_outcome_name(intro_outcome),
-                is_protocol_mismatch: intro_outcome
-                    == SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol,
-                protocol: protocol_version.to_string(),
-                expected_protocol: expected_protocol.map(str::to_string),
-            });
+        let intro = intro::sched_gateway(intro_outcome);
+        if !intro.accepted() {
+            return Err(NodeSupervisorError::intro_rejected(
+                intro,
+                protocol_version,
+                expected_protocol,
+            ));
         }
         let submitter = SubmitBatcher::spawn(gateway.clone());
         Ok(Self {
@@ -159,18 +155,6 @@ impl HogdDevSchedulerBackend {
     }
 }
 
-fn scheduler_gateway_intro_outcome_name(outcome: SchedGatewayIntroOutcome) -> &'static str {
-    match outcome.0 {
-        value if value == SchedGatewayIntroOutcome::SchedGatewayIntroSuccess.0 => {
-            "SchedGatewayIntroSuccess"
-        }
-        value if value == SchedGatewayIntroOutcome::SchedGatewayIntroMismatchedProtocol.0 => {
-            "SchedGatewayIntroMismatchedProtocol"
-        }
-        _ => "UnknownSchedGatewayIntroOutcome",
-    }
-}
-
 fn validate_scheduler_network_hash(
     expected: &NetworkHashHex,
     db_tip: &DbTip,
@@ -209,25 +193,26 @@ impl SubmitPlane for HogdDevSchedulerBackend {
 
 impl HogdDevSchedulerBackend {
     /// Read the scheduler gateway's committed db tip.
+    ///
+    /// Startup bootstraps genesis before the RPC surface opens, so a missing
+    /// tip here means the child lost state rather than that the chain has
+    /// not started.
     async fn db_tip(&self) -> Result<DbTip, RpcServerError> {
         let result = self
             .gateway
             .schedgateway_get_tip()
             .await
             .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
-        match result {
-            ExpectedDBTip::kRPCNone { db_tip } => Ok(db_tip),
-            ExpectedDBTip::Default { error } if error == RPCError::kRPCNotFound.0 => {
+        match shared_scheduler::tip_answer(SCHEDULER_GATEWAY, result)? {
+            shared_scheduler::TipAnswer::Tip(db_tip) => Ok(*db_tip),
+            shared_scheduler::TipAnswer::NoCommittedBlock => {
                 tracing::error!(
                     "hogd-dev scheduler gateway reported no genesis after startup bootstrap"
                 );
-                Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev scheduler gateway has no genesis block".into(),
-                ))
+                Err(RpcServerError::BackendUnavailable(format!(
+                    "{SCHEDULER_GATEWAY} has no genesis block"
+                )))
             }
-            other => Err(RpcServerError::BackendUnavailable(format!(
-                "unexpected scheduler gateway tip result: {other:?}"
-            ))),
         }
     }
 }
@@ -237,7 +222,7 @@ impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         within_request_deadline(context, async {
-            tip_reading_from_db_tip(self.db_tip().await?)
+            shared_scheduler::tip_reading(SCHEDULER_GATEWAY, self.db_tip().await?)
         })
         .await
     }
@@ -263,36 +248,15 @@ impl ChainPlane for HogdDevSchedulerBackend {
                 .await
                 .map_err(|error| {
                     RpcServerError::BackendUnavailable(format!(
-                        "hogd-dev scheduler gateway pending count failed: {error}"
+                        "{SCHEDULER_GATEWAY} pending count failed: {error}"
                     ))
                 })?;
             u64::try_from(count).map_err(|_| {
                 RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev scheduler gateway returned negative pending count: {count}"
+                    "{SCHEDULER_GATEWAY} returned negative pending count: {count}"
                 ))
             })
         })
         .await
     }
-}
-
-fn tip_reading_from_db_tip(
-    DbTip {
-        value,
-        network_config,
-        ..
-    }: DbTip,
-) -> Result<TipReading, RpcServerError> {
-    let block_hash = consensus_value_hash(&value).map_err(|error| {
-        RpcServerError::BackendUnavailable(format!(
-            "hogd-dev scheduler returned an unencodable consensus value: {error}"
-        ))
-    })?;
-    Ok(TipReading::new(
-        ChainTip {
-            height: value.proposal_header.block_height.clone(),
-            block_hash,
-        },
-        network_config,
-    ))
 }

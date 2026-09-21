@@ -3,34 +3,19 @@
 use std::{fmt, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
+use groundhog_hogd_backend::{intro, view as shared_view};
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, ViewPlane};
 use groundhog_json_rpc_types::protocol_token::protocol_from_text;
-use groundhog_json_rpc_types::{
-    events::EmittedEvent,
-    hex::{Hex0x, HexBytes, Topic},
-    view::{RootInvocationOutput, ViewRequest, ViewResponse},
-};
-use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome, ViewGatewayResult};
+use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
+use groundhog_view::ViewGateway_ViewGateway1_Client;
 use groundhog_x23_transport::connect;
-use groundhog_xdr::{
-    auth_claim::{AuthClaim, AuthClaim_source_address_claim},
-    contract::ContractEntrypointID,
-    event::TxEmittedEvent,
-    invoke_flag::InvokeFlag,
-    transaction::{Invocation, InvocationFrameOutput},
-    view::TransactionViewQuery,
-};
-use xdr_common::{BytesM, VecM};
 
 use crate::{
-    NodeSupervisorError, request_deadline::within_request_deadline, stub_backend::StubBackend,
+    NodeSupervisorError, request_deadline::within_request_deadline, service::VIEW_GATEWAY,
+    stub_backend::StubBackend,
 };
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
-// Keep event parsing in sync with read_backend.rs until the shared helper is
-// worth extracting across read and view adapters.
-const TOPIC_SIZE: usize = 32;
-const MAX_TOPICS: u32 = 3;
 
 /// Local-node view plane, backed by hogd-dev's optional `ViewGateway`.
 #[derive(Clone)]
@@ -82,16 +67,13 @@ impl HogdDevViewBackend {
                 error: e.to_string(),
             }
         })?;
-        if intro_outcome != ViewGatewayIntroOutcome::ViewGatewayIntroSuccess {
-            return Err(NodeSupervisorError::ProtocolIntroRejected {
-                service: "ViewGateway",
-                outcome: intro_outcome.0,
-                outcome_name: view_gateway_intro_outcome_name(intro_outcome),
-                is_protocol_mismatch: intro_outcome
-                    == ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol,
-                protocol: protocol_version.to_string(),
-                expected_protocol: expected_protocol.map(str::to_string),
-            });
+        let intro = intro::view_gateway(intro_outcome);
+        if !intro.accepted() {
+            return Err(NodeSupervisorError::intro_rejected(
+                intro,
+                protocol_version,
+                expected_protocol,
+            ));
         }
 
         Ok(Self::Gateway {
@@ -105,18 +87,6 @@ impl HogdDevViewBackend {
             Self::Gateway { .. } => crate::server::PlaneStatus::ViewGateway,
             Self::Stub(_) => crate::server::PlaneStatus::Stub,
         }
-    }
-}
-
-fn view_gateway_intro_outcome_name(outcome: ViewGatewayIntroOutcome) -> &'static str {
-    match outcome.0 {
-        value if value == ViewGatewayIntroOutcome::ViewGatewayIntroSuccess.0 => {
-            "ViewGatewayIntroSuccess"
-        }
-        value if value == ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol.0 => {
-            "ViewGatewayIntroMismatchedProtocol"
-        }
-        _ => "UnknownViewGatewayIntroOutcome",
     }
 }
 
@@ -146,142 +116,23 @@ impl ViewPlane for HogdDevViewBackend {
             return Err(RpcServerError::NotImplemented("view".into()));
         };
 
-        let query = view_query_from_request(request, gas_limit)?;
+        let query = shared_view::view_query(request, gas_limit)?;
         let result = within_request_deadline(context.capped(*request_timeout), async {
             client.viewgateway_view(&query).await.map_err(|source| {
-                RpcServerError::BackendUnavailable(format!("hogd-dev ViewGateway: {source}"))
+                RpcServerError::BackendUnavailable(format!("{VIEW_GATEWAY}: {source}"))
             })
         })
         .await?;
 
-        view_response_from_gateway_result(result)
-    }
-}
-
-fn view_query_from_request(
-    request: ViewRequest,
-    gas_limit: u64,
-) -> Result<TransactionViewQuery, RpcServerError> {
-    let entrypoint: [u8; 8] = request.entrypoint.0.as_slice().try_into().map_err(|_| {
-        RpcServerError::InvalidParam("view entrypoint must be exactly 8 bytes".into())
-    })?;
-
-    Ok(TransactionViewQuery {
-        invocation: Invocation {
-            invoked_address: request.contract.0,
-            entrypoint: ContractEntrypointID::from(entrypoint),
-            gas_limit,
-            calldata: BytesM(request.calldata.0),
-        },
-        parent_address: request.caller.map(|caller| caller.0),
-        auth_claim: public_view_auth_claim(),
-        forwarded_tokens: VecM(vec![]),
-        // Root invocations carry no flags (`invoke_flag.x:9-10`). Hogd's
-        // `ViewingModeData` is what sandboxes the run — writes don't commit,
-        // and `log_event` is permitted so wallet-preview callers can see what
-        // events a real submit would produce.
-        invoke_flags: InvokeFlag::None.0,
-    })
-}
-
-fn public_view_auth_claim() -> AuthClaim {
-    AuthClaim::kSourceAddressAuthData {
-        source_address_claim: AuthClaim_source_address_claim {
-            allowed_keys: 0,
-            required_weight: 0,
-        },
-    }
-}
-
-fn view_response_from_gateway_result(
-    result: ViewGatewayResult,
-) -> Result<ViewResponse, RpcServerError> {
-    match result {
-        ViewGatewayResult::ViewGatewayOk { payload } => Ok(ViewResponse {
-            output: root_output_from_invocation_output(payload.output)?,
-            events: payload
-                .events
-                .iter()
-                .filter_map(parse_emitted_event)
-                .collect(),
-            height: payload.height,
-        }),
-        ViewGatewayResult::ViewGatewayAbandoned => Err(RpcServerError::BackendUnavailable(
-            "hogd-dev ViewGateway abandoned the view after retrying; retry later".into(),
-        )),
-        ViewGatewayResult::ViewGatewayInternalError => Err(RpcServerError::BackendUnavailable(
-            "hogd-dev ViewGateway reported an internal error".into(),
-        )),
-        ViewGatewayResult::Default { outcome } => {
-            tracing::warn!(outcome, "unexpected ViewGatewayResult outcome");
-            Err(RpcServerError::BackendUnavailable(format!(
-                "hogd-dev ViewGateway returned unexpected outcome: {outcome}"
-            )))
+        let outcome = shared_view::view_outcome(VIEW_GATEWAY, result)?;
+        if outcome.dropped_events > 0 {
+            tracing::warn!(
+                dropped = outcome.dropped_events,
+                "dropped malformed events from hogd-dev ViewGateway",
+            );
         }
-        // `Default` handles unknown wire discriminants. This arm is still kept
-        // for source-level forward compatibility because the generated enum is
-        // non-exhaustive and a future protocol crate may add a named variant.
-        other => {
-            tracing::warn!(result = ?other, "unknown ViewGatewayResult variant");
-            Err(RpcServerError::BackendUnavailable(
-                "hogd-dev ViewGateway returned an unsupported result variant; regenerate the \
-                 ViewGateway client for this protocol"
-                    .into(),
-            ))
-        }
+        Ok(outcome.response)
     }
-}
-
-fn root_output_from_invocation_output(
-    output: InvocationFrameOutput,
-) -> Result<RootInvocationOutput, RpcServerError> {
-    match output {
-        InvocationFrameOutput::Return { return_buffer } => Ok(RootInvocationOutput::Return {
-            return_data: HexBytes(return_buffer.0),
-        }),
-        InvocationFrameOutput::Abort { abort_buffer } => Ok(RootInvocationOutput::Abort {
-            abort_data: HexBytes(abort_buffer.0),
-        }),
-        InvocationFrameOutput::Fault => Ok(RootInvocationOutput::Fault),
-        _ => Err(RpcServerError::BackendUnavailable(
-            "hogd-dev ViewGateway returned an unsupported output variant; regenerate the \
-             ViewGateway client for this protocol"
-                .into(),
-        )),
-    }
-}
-
-fn parse_emitted_event(raw: &TxEmittedEvent) -> Option<EmittedEvent> {
-    let num_topics = raw.num_topics;
-    if num_topics > MAX_TOPICS {
-        tracing::warn!(num_topics, "view event has too many topics, skipping");
-        return None;
-    }
-
-    let bytes: &[u8] = raw.serialized_event.as_ref();
-    let topics_len = num_topics as usize * TOPIC_SIZE;
-    if bytes.len() < topics_len {
-        tracing::warn!(
-            num_topics,
-            event_len = bytes.len(),
-            "view event too short for declared topics, skipping"
-        );
-        return None;
-    }
-
-    let mut topics = Vec::with_capacity(num_topics as usize);
-    for i in 0..num_topics as usize {
-        let start = i * TOPIC_SIZE;
-        let mut topic = [0u8; TOPIC_SIZE];
-        topic.copy_from_slice(&bytes[start..start + TOPIC_SIZE]);
-        topics.push(Topic(topic));
-    }
-
-    Some(EmittedEvent {
-        contract_address: Hex0x(raw.contract_address),
-        topics,
-        data: HexBytes(bytes[topics_len..].to_vec()),
-    })
 }
 
 #[cfg(test)]
@@ -296,12 +147,15 @@ mod tests {
     use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_view::{
-        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
+        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome,
+        ViewGatewayPayload, ViewGatewayResult,
     };
     use groundhog_xdr::PROTOCOL_VERSION;
     use groundhog_xdr::transaction::InvocationFrameOutput;
+    use groundhog_xdr::view::TransactionViewQuery;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
+    use xdr_common::{BytesM, VecM};
 
     use super::*;
 
@@ -375,94 +229,6 @@ mod tests {
             calldata: HexBytes(vec![1, 2, 3]),
             caller,
         }
-    }
-
-    #[test]
-    fn view_query_maps_public_request_shape() {
-        let caller = ContractAddress::from(groundhog_xdr::types::ContractAddress::from([9; 32]));
-        let query = view_query_from_request(request(Some(caller)), 123).expect("query maps");
-
-        assert_eq!(query.invocation.invoked_address.as_ref(), &[7; 32]);
-        assert_eq!(query.invocation.entrypoint.as_ref(), &[8; 8]);
-        assert_eq!(query.invocation.gas_limit, 123);
-        assert_eq!(query.invocation.calldata.0, vec![1, 2, 3]);
-        assert_eq!(query.parent_address.as_ref(), Some(&caller.0));
-        assert_eq!(query.forwarded_tokens.0.len(), 0);
-        assert_eq!(query.invoke_flags, InvokeFlag::None.0);
-        assert_eq!(
-            query.auth_claim,
-            AuthClaim::kSourceAddressAuthData {
-                source_address_claim: AuthClaim_source_address_claim {
-                    allowed_keys: 0,
-                    required_weight: 0,
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn view_query_preserves_missing_caller() {
-        let query = view_query_from_request(request(None), 456).expect("query maps");
-
-        assert_eq!(query.parent_address, None);
-        assert_eq!(query.invocation.gas_limit, 456);
-    }
-
-    #[test]
-    fn gateway_return_maps_to_public_view_response() {
-        let result = ViewGatewayResult::ViewGatewayOk {
-            payload: ViewGatewayPayload {
-                height: 42.into(),
-                output: InvocationFrameOutput::Return {
-                    return_buffer: BytesM(vec![1, 2, 3]),
-                },
-                events: VecM(vec![]),
-            },
-        };
-
-        let response = view_response_from_gateway_result(result).expect("ok response");
-
-        assert_eq!(response.height, 42.into());
-        match response.output {
-            RootInvocationOutput::Return { return_data } => {
-                assert_eq!(return_data.0, vec![1, 2, 3]);
-            }
-            other => panic!("unexpected output: {other:?}"),
-        }
-        assert!(response.events.is_empty());
-    }
-
-    #[test]
-    fn gateway_abort_and_fault_map_to_success_outputs() {
-        let abort = root_output_from_invocation_output(InvocationFrameOutput::Abort {
-            abort_buffer: BytesM(vec![4, 5]),
-        })
-        .expect("abort maps");
-        match abort {
-            RootInvocationOutput::Abort { abort_data } => assert_eq!(abort_data.0, vec![4, 5]),
-            other => panic!("unexpected output: {other:?}"),
-        }
-
-        assert!(matches!(
-            root_output_from_invocation_output(InvocationFrameOutput::Fault),
-            Ok(RootInvocationOutput::Fault)
-        ));
-    }
-
-    #[test]
-    fn gateway_service_failures_map_to_backend_errors() {
-        assert!(matches!(
-            view_response_from_gateway_result(ViewGatewayResult::ViewGatewayAbandoned),
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-        assert!(matches!(
-            view_response_from_gateway_result(ViewGatewayResult::ViewGatewayInternalError),
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
-        assert!(matches!(
-            view_response_from_gateway_result(ViewGatewayResult::Default { outcome: 99 }),
-            Err(RpcServerError::BackendUnavailable(_))
-        ));
     }
 
     #[tokio::test]

@@ -3,15 +3,17 @@
 
 use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
-use groundhog_indexer::indexer::TxInfoResult;
+use groundhog_hogd_backend::{
+    event as shared_event, indexer as shared_indexer, receipt as shared_receipt,
+    scheduler as shared_scheduler,
+};
+use groundhog_indexer::indexer::TxInfo;
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
-    hex::HexBytes,
-    receipt::{DETERMINISTIC_ERROR_KIND_FAULT, ExecStatus, TransactionReceipt},
+    receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_xdr::exec_result::ExecResult;
-use groundhog_xdr::transaction::{InvocationFrameOutput, TransactionHash};
+use groundhog_xdr::transaction::TransactionHash;
 use std::time::Instant;
 use tokio::task::JoinHandle;
 use xdr_common::VecM;
@@ -21,8 +23,7 @@ use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
-use super::backend_deadline;
-use super::parse_event::parse_emitted_event;
+use super::{INDEXER, backend_deadline};
 
 struct SchedulerLookupGuard<T: Send + 'static> {
     worker: Option<JoinHandle<T>>,
@@ -68,28 +69,6 @@ impl<T: Send + 'static> Drop for SchedulerLookupGuard<T> {
     }
 }
 
-/// Map hogd's `ExecResult` (XDR int enum) to the gateway's `ExecStatus`.
-fn map_exec_result(r: ExecResult) -> ExecStatus {
-    if r == ExecResult::ExecResultOK {
-        ExecStatus::Ok
-    } else if r == ExecResult::ExecResultTxRootFrameReverted {
-        ExecStatus::Reverted { message: None }
-    } else if r == ExecResult::ExecResultTxDeterministicError {
-        // ExecResult's int-enum doesn't carry a sub-type; report the shared
-        // fault kind until the indexer exposes finer-grained error codes
-        // (e.g. "out_of_gas", "stack_overflow").
-        ExecStatus::DeterministicError {
-            kind: DETERMINISTIC_ERROR_KIND_FAULT.into(),
-        }
-    } else if r == ExecResult::ExecResultTxNonDeterministicError {
-        ExecStatus::NonDeterministicError
-    } else if r == ExecResult::ExecResultFailedGasSponsorship {
-        ExecStatus::FailedGasSponsorship
-    } else {
-        ExecStatus::Other
-    }
-}
-
 /// Full receipt for a committed transaction.
 ///
 /// Flow:
@@ -110,7 +89,7 @@ pub async fn get_transaction_receipt(
         .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
-    let hash = TransactionHash::from(tx_hash.0.0.into_inner());
+    let hash = shared_receipt::tx_hash_to_wire(tx_hash);
     let started_at = Instant::now();
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     let rpc_result =
@@ -129,41 +108,31 @@ pub async fn get_transaction_receipt(
         .map_err(|_| GatewayError::BackendTimeout)?
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
-    match result {
-        TxInfoResult::TxInfoFound { info } => {
-            let mut events = Vec::with_capacity(info.events.events.0.len());
-            for raw in info.events.events.0 {
-                if let Some(event) = parse_emitted_event(raw) {
-                    events.push(event);
-                } else {
-                    ctx.metrics
-                        .observe_malformed_event_dropped(REASON_PARSE_FAILED);
-                }
-            }
-            let (return_data, abort_data) = match info.events.root_output {
-                InvocationFrameOutput::Return { return_buffer } => {
-                    (Some(HexBytes(return_buffer.0)), None)
-                }
-                InvocationFrameOutput::Abort { abort_buffer } => {
-                    (None, Some(HexBytes(abort_buffer.0)))
-                }
-                _ => (None, None),
-            };
-
-            Ok(Some(TransactionReceipt {
-                tx_hash,
-                height: info.height,
-                status: map_exec_result(info.events.exec_result),
-                events,
-                return_data,
-                abort_data,
-                gas_used: info.events.gas_consumed,
-            }))
-        }
+    match shared_indexer::tx_lookup(INDEXER, result)? {
+        shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(ctx, tx_hash, *info))),
         // A recent nondeterministic failure is not a committed record;
         // receipts exist only for committed transactions. The diagnostic
         // surfaces through `getTransactionStatus`.
-        _ => Ok(None),
+        shared_indexer::TxLookup::RecentFailure(_) | shared_indexer::TxLookup::NotFound => Ok(None),
+    }
+}
+
+/// Build a public receipt from the indexer's committed record.
+fn receipt(ctx: &GatewayContext, tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
+    let parsed = shared_event::parse_emitted_events(info.events.events);
+    for _ in 0..parsed.dropped {
+        ctx.metrics
+            .observe_malformed_event_dropped(REASON_PARSE_FAILED);
+    }
+    let (return_data, abort_data) = shared_receipt::root_output_buffers(info.events.root_output);
+    TransactionReceipt {
+        tx_hash,
+        height: info.height,
+        status: shared_receipt::exec_status(info.events.exec_result),
+        events: parsed.events,
+        return_data,
+        abort_data,
+        gas_used: info.events.gas_consumed,
     }
 }
 
@@ -248,7 +217,7 @@ async fn transaction_is_pending(
         .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
     let generation = client.generation();
     let lookup_client = client.lookup_client().clone();
-    let hash = TransactionHash::from(tx_hash.0.0.into_inner());
+    let hash = shared_receipt::tx_hash_to_wire(tx_hash);
     let batch: VecM<TransactionHash> = VecM(vec![hash]);
     let started_at = Instant::now();
     let worker = tokio::spawn(async move {
@@ -288,15 +257,15 @@ async fn transaction_is_pending(
         started_at.elapsed(),
     );
     match rpc_result {
-        Ok(Ok(results)) if results.0.len() == 1 => match results.iter().next() {
-            Some(Some(_)) => Ok(true),
-            Some(None) => Ok(false),
-            None => unreachable!("exactly one scheduler result was checked above"),
+        // Any cardinality other than one leaves the queried transaction
+        // unaccounted for, which cannot support a `false`.
+        Ok(Ok(results)) => match shared_scheduler::mempool_holds_tx(&results) {
+            Some(pending) => Ok(pending),
+            None => Err(GatewayError::BackendUnavailable(format!(
+                "scheduler returned {} lookup results for one transaction",
+                results.0.len()
+            ))),
         },
-        Ok(Ok(results)) => Err(GatewayError::BackendUnavailable(format!(
-            "scheduler returned {} lookup results for one transaction",
-            results.0.len()
-        ))),
         Ok(Err(error)) => Err(GatewayError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
@@ -318,7 +287,7 @@ async fn indexed_transaction_status(
         return Err(GatewayError::BackendTimeout);
     }
     if let Some(client) = maybe_indexer.as_ref() {
-        let hash = TransactionHash::from(tx_hash.0.0.into_inner());
+        let hash = shared_receipt::tx_hash_to_wire(tx_hash);
         let started_at = Instant::now();
         let rpc_result =
             tokio::time::timeout_at(deadline.into(), client.get_transaction_info(&hash)).await;
@@ -333,15 +302,17 @@ async fn indexed_transaction_status(
             started_at.elapsed(),
         );
         match rpc_result {
-            Ok(Ok(TxInfoResult::TxInfoFound { info })) => {
-                return Ok(Some(TransactionStatus::Committed {
-                    height: info.height,
-                }));
-            }
-            Ok(Ok(TxInfoResult::TxInfoRecentFailure { recent_failure })) => {
-                return Ok(Some(TransactionStatus::from(&recent_failure)));
-            }
-            Ok(Ok(_)) => {}
+            Ok(Ok(result)) => match shared_indexer::tx_lookup(INDEXER, result)? {
+                shared_indexer::TxLookup::Found(info) => {
+                    return Ok(Some(TransactionStatus::Committed {
+                        height: info.height,
+                    }));
+                }
+                shared_indexer::TxLookup::RecentFailure(recent_failure) => {
+                    return Ok(Some(TransactionStatus::from(&recent_failure)));
+                }
+                shared_indexer::TxLookup::NotFound => {}
+            },
             Ok(Err(e)) => {
                 return Err(GatewayError::BackendUnavailable(format!("indexer: {e}")));
             }
@@ -403,6 +374,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
+    use groundhog_indexer::indexer::TxInfoResult;
     use groundhog_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPageResult,
         EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
@@ -420,6 +392,7 @@ mod tests {
     };
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_x23_transport::try_connect;
+    use groundhog_xdr::exec_result::ExecResult;
     use groundhog_xdr::{
         transaction::{OptSignedTransactionBatch, TransactionHashBatch},
         types::SHA256Hash,
@@ -430,19 +403,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn deterministic_exec_result_maps_to_fault_kind() {
-        let status = map_exec_result(ExecResult::ExecResultTxDeterministicError);
-        match status {
-            ExecStatus::DeterministicError { kind } => {
-                assert_eq!(
-                    kind,
-                    groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT
-                );
-            }
-            other => panic!("expected DeterministicError, got {other:?}"),
-        }
-    }
     use crate::config::GatewayConfig;
     use crate::context::{
         BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SCHEDULER_LOOKUP_MAX_OUTSTANDING,
