@@ -33,68 +33,6 @@ pub enum LocalNodeBlockDriverMode {
     Interval,
 }
 
-/// Start the hog-devnode local node server.
-///
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    port: u16,
-    verbose: bool,
-    dev_account_count: Option<usize>,
-    hogd_dev_binary: Option<PathBuf>,
-    hogd_protocol: Option<String>,
-    startup_timeout_secs: Option<u64>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    run_with_block_driver(
-        port,
-        verbose,
-        dev_account_count,
-        hogd_dev_binary,
-        hogd_protocol,
-        startup_timeout_secs,
-        None,
-        None,
-        None,
-        cmd,
-        print,
-    )
-}
-
-/// Start the hog-devnode local node server with block-driver options.
-///
-#[allow(clippy::too_many_arguments)]
-pub fn run_with_block_driver(
-    port: u16,
-    verbose: bool,
-    dev_account_count: Option<usize>,
-    hogd_dev_binary: Option<PathBuf>,
-    hogd_protocol: Option<String>,
-    startup_timeout_secs: Option<u64>,
-    block_driver: Option<LocalNodeBlockDriverMode>,
-    block_interval_ms: Option<u64>,
-    rpc_max_connections: Option<u32>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    run_with_options(
-        LocalNodeOptions {
-            port,
-            hogd_dev_binary,
-            hogd_protocol,
-            startup_timeout: startup_timeout_secs.map(Duration::from_secs),
-            dev_account_count,
-            block_driver,
-            block_interval: block_interval_ms.map(Duration::from_millis),
-            rpc_max_connections,
-            ..LocalNodeOptions::default()
-        },
-        verbose,
-        cmd,
-        print,
-    )
-}
-
 /// Start the hog-devnode local node server with reusable local-node options.
 pub fn run_with_options(
     options: LocalNodeOptions,

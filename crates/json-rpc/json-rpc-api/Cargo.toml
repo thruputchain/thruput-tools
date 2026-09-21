@@ -24,4 +24,3 @@ groundhog-json-rpc-types = { workspace = true }
 groundhog-open-rpc = { workspace = true }
 groundhog-open-rpc-macros = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server", "client", "macros"] }
-async-trait = { workspace = true }

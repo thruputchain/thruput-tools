@@ -227,7 +227,7 @@ impl HealthSnapshot {
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn chain_tip_height(&self) -> Option<f64> {
         let height = self.chain_tip.height.as_ref()?;
-        Some(serde_json::to_value(height).ok()?.as_i64()? as f64)
+        Some(**height as f64)
     }
 
     #[allow(clippy::cast_precision_loss)]
