@@ -4,22 +4,14 @@ use std::sync::OnceLock;
 
 pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
 
-/// Path of the `fake_hogd_dev` example binary, built from the current
-/// workspace sources.
-///
-/// `cargo test` compiles that example only as a test harness, so the plain
-/// binary the supervisor spawns is built here rather than trusted from disk:
-/// a copy left in a cached target directory can predate a `groundhog-xdr`
-/// bump and advertise a protocol the supervisor rejects. Cargo re-links the
-/// binary on every build, so a fresh build costs one fingerprint check.
+/// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
+/// only as a test harness, so a copy on disk may predate a `groundhog-xdr` bump.
 pub(crate) fn fake_hogd_dev_binary() -> PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
 }
 
-/// Builds the example with the cargo running these tests and returns the
-/// executable path cargo reports, so the lookup follows whatever target
-/// directory or profile cargo actually used.
+/// Builds the example with the current cargo and returns the path it reports.
 fn build_fake_hogd_dev_binary() -> PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let output = Command::new(&cargo)
