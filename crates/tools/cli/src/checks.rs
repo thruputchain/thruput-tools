@@ -561,7 +561,7 @@ fn detect_rust_environment(project_start: &Path) -> (RustToolchainStatus, RustTa
     let (installed, default) = match installed_rust_toolchains() {
         Ok(toolchains) => toolchains,
         Err(error) => {
-            return unavailable_rust_environment(None, error);
+            return unavailable_rust_environment(None, error.to_string());
         }
     };
     let requested = match requested_rust_toolchain(project_start, &installed, default.as_deref()) {
@@ -572,7 +572,7 @@ fn detect_rust_environment(project_start: &Path) -> (RustToolchainStatus, RustTa
                 "rustup has no default or project toolchain".into(),
             );
         }
-        Err(error) => return unavailable_rust_environment(None, error),
+        Err(error) => return unavailable_rust_environment(None, error.to_string()),
     };
     let Some(name) = matching_installed_toolchain(&requested, &installed) else {
         return (
@@ -601,6 +601,7 @@ fn detect_rust_environment(project_start: &Path) -> (RustToolchainStatus, RustTa
     let probe_errors = [targets.err(), components.err()]
         .into_iter()
         .flatten()
+        .map(|error| error.to_string())
         .collect::<Vec<_>>();
 
     (
@@ -667,16 +668,78 @@ pub(crate) fn cargo_is_rustup_managed() -> bool {
     }
 }
 
-fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> {
+/// Why the `rustup` probe could not report the toolchain layout.
+#[derive(Debug, thiserror::Error)]
+enum RustToolchainProbeError {
+    /// `rustup` itself could not be run.
+    #[error("could not run rustup: {source}")]
+    Rustup {
+        #[source]
+        source: std::io::Error,
+    },
+    /// `rustup <kind> list` could not be run.
+    #[error("could not run rustup {kind} list: {source}")]
+    RustupList {
+        /// `target` or `component`.
+        kind: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    /// `rustup` ran and refused to list the installed toolchains.
+    #[error("could not list installed Rust toolchains: {detail}")]
+    ListToolchains {
+        /// What `rustup` reported on stderr.
+        detail: String,
+    },
+    /// `rustup` ran and refused to list one toolchain's targets or components.
+    #[error("could not list installed {kind}s for `{toolchain}`: {detail}")]
+    ListForToolchain {
+        /// `target` or `component`.
+        kind: &'static str,
+        /// The toolchain being inspected.
+        toolchain: String,
+        /// What `rustup` reported on stderr.
+        detail: String,
+    },
+    /// A toolchain pinning file could not be read.
+    #[error("could not read {path}: {source}")]
+    ReadPin {
+        /// The pinning file.
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A `rust-toolchain.toml` is not valid TOML.
+    #[error("could not parse {path}: {source}")]
+    ParsePin {
+        /// The pinning file.
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+    /// A `rust-toolchain.toml` parses but names no channel.
+    #[error("{path} does not declare toolchain.channel")]
+    PinMissingChannel {
+        /// The pinning file.
+        path: String,
+    },
+    /// A legacy `rust-toolchain` file holds no channel.
+    #[error("{path} is empty")]
+    PinEmpty {
+        /// The pinning file.
+        path: String,
+    },
+}
+
+fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), RustToolchainProbeError> {
     let output = installed_rust_toolchains_command()
         .output()
-        .map_err(|error| format!("could not run rustup: {error}"))?;
+        .map_err(|source| RustToolchainProbeError::Rustup { source })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "could not list installed Rust toolchains: {}",
-            detail.trim()
-        ));
+        return Err(RustToolchainProbeError::ListToolchains {
+            detail: detail.trim().to_owned(),
+        });
     }
 
     Ok(parse_installed_rust_toolchains(&String::from_utf8_lossy(
@@ -728,7 +791,7 @@ fn requested_rust_toolchain(
     project_start: &Path,
     installed: &[String],
     default: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, RustToolchainProbeError> {
     if let Some(toolchain) = std::env::var_os("RUSTUP_TOOLCHAIN")
         && !toolchain.is_empty()
     {
@@ -770,32 +833,45 @@ fn rustup_directory_override(project_start: &Path, installed: &[String]) -> Opti
         .map(|(_, toolchain)| toolchain)
 }
 
-fn rust_toolchain_file(project_start: &Path) -> Result<Option<String>, String> {
+fn rust_toolchain_file(project_start: &Path) -> Result<Option<String>, RustToolchainProbeError> {
     for directory in project_start.ancestors() {
         let toml_path = directory.join("rust-toolchain.toml");
         if toml_path.is_file() {
-            let contents = std::fs::read_to_string(&toml_path)
-                .map_err(|error| format!("could not read {}: {error}", toml_path.display()))?;
-            let document: toml::Value = toml::from_str(&contents)
-                .map_err(|error| format!("could not parse {}: {error}", toml_path.display()))?;
+            let contents = std::fs::read_to_string(&toml_path).map_err(|source| {
+                RustToolchainProbeError::ReadPin {
+                    path: toml_path.display().to_string(),
+                    source,
+                }
+            })?;
+            let document: toml::Value =
+                toml::from_str(&contents).map_err(|source| RustToolchainProbeError::ParsePin {
+                    path: toml_path.display().to_string(),
+                    source,
+                })?;
             let channel = document
                 .get("toolchain")
                 .and_then(|toolchain| toolchain.get("channel"))
                 .and_then(toml::Value::as_str)
                 .filter(|channel| !channel.is_empty())
-                .ok_or_else(|| {
-                    format!("{} does not declare toolchain.channel", toml_path.display())
+                .ok_or_else(|| RustToolchainProbeError::PinMissingChannel {
+                    path: toml_path.display().to_string(),
                 })?;
             return Ok(Some(channel.to_string()));
         }
 
         let legacy_path = directory.join("rust-toolchain");
         if legacy_path.is_file() {
-            let contents = std::fs::read_to_string(&legacy_path)
-                .map_err(|error| format!("could not read {}: {error}", legacy_path.display()))?;
+            let contents = std::fs::read_to_string(&legacy_path).map_err(|source| {
+                RustToolchainProbeError::ReadPin {
+                    path: legacy_path.display().to_string(),
+                    source,
+                }
+            })?;
             let channel = contents.lines().next().unwrap_or_default().trim();
             if channel.is_empty() {
-                return Err(format!("{} is empty", legacy_path.display()));
+                return Err(RustToolchainProbeError::PinEmpty {
+                    path: legacy_path.display().to_string(),
+                });
             }
             return Ok(Some(channel.to_string()));
         }
@@ -845,9 +921,9 @@ fn looks_like_host_triple(suffix: &str) -> bool {
 
 fn rustup_installed_list(
     project_start: &Path,
-    kind: &str,
+    kind: &'static str,
     toolchain: &str,
-) -> Result<String, String> {
+) -> Result<String, RustToolchainProbeError> {
     let output = std::process::Command::new("rustup")
         .args([
             kind,
@@ -859,15 +935,16 @@ fn rustup_installed_list(
         ])
         .current_dir(project_start)
         .output()
-        .map_err(|error| format!("could not run rustup {kind} list: {error}"))?;
+        .map_err(|source| RustToolchainProbeError::RustupList { kind, source })?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         let detail = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "could not list installed {kind}s for `{toolchain}`: {}",
-            detail.trim()
-        ))
+        Err(RustToolchainProbeError::ListForToolchain {
+            kind,
+            toolchain: toolchain.to_owned(),
+            detail: detail.trim().to_owned(),
+        })
     }
 }
 
@@ -911,7 +988,7 @@ fn check_devnode() -> DevnodeStatus {
             reachable: false,
             path: Some(path),
             version: None,
-            error: Some(error),
+            error: Some(error.to_string()),
         },
     }
 }
@@ -971,35 +1048,112 @@ fn check_dev_wallet_artifact(devnode: &DevnodeStatus) -> DevWalletArtifactStatus
     }
 }
 
-fn probe_devnode_version(path: &Path) -> Result<Option<String>, String> {
+/// Why `<devnode> --version` did not report a version.
+#[derive(Debug, thiserror::Error)]
+enum DevnodeProbeError {
+    /// A capture file for the probe's output could not be opened or cloned.
+    #[error("could not capture {binary} --version: {source}")]
+    Capture {
+        /// The binary being probed.
+        binary: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The output cap does not fit the platform's resource-limit type.
+    #[error("devnode output limit does not fit rlim_t")]
+    OutputLimitUnrepresentable,
+    /// The probe could not be started.
+    #[error("could not run {binary}: {source}")]
+    Spawn {
+        /// The binary being probed.
+        binary: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// A capture file could not be measured or re-read.
+    #[error("could not {action} devnode {stream}: {source}")]
+    Output {
+        /// What the probe was doing: `inspect`, `rewind`, or `read`.
+        action: &'static str,
+        /// `stdout` or `stderr`.
+        stream: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The probe wrote more than this probe is willing to read back.
+    #[error("{binary} --version produced at least {limit} bytes of output")]
+    OutputTooLarge {
+        /// The binary being probed.
+        binary: String,
+        /// The byte cap the probe enforces.
+        limit: u64,
+    },
+    /// The probe did not exit within its budget.
+    #[error("{binary} --version timed out after {timeout_ms} ms")]
+    Timeout {
+        /// The binary being probed.
+        binary: String,
+        /// The budget the probe allowed.
+        timeout_ms: u128,
+    },
+    /// Waiting on the probe failed.
+    #[error("could not wait for {binary} --version: {source}")]
+    Wait {
+        /// The binary being probed.
+        binary: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The probe exited nonzero without a diagnostic.
+    #[error("{binary} --version exited with {status}")]
+    ExitStatus {
+        /// The binary being probed.
+        binary: String,
+        /// The reported exit status.
+        status: String,
+    },
+    /// The probe exited nonzero and said why.
+    #[error("{binary} --version failed: {detail}")]
+    Failed {
+        /// The binary being probed.
+        binary: String,
+        /// What the probe reported on stderr.
+        detail: String,
+    },
+    /// The probe succeeded but printed something this cannot read as a version.
+    #[error("{binary} returned unexpected --version output")]
+    UnexpectedOutput {
+        /// The binary being probed.
+        binary: String,
+    },
+}
+
+fn probe_devnode_version(path: &Path) -> Result<Option<String>, DevnodeProbeError> {
     probe_devnode_version_with_timeout(path, std::time::Duration::from_secs(2))
 }
 
 fn probe_devnode_version_with_timeout(
     path: &Path,
     timeout: std::time::Duration,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, DevnodeProbeError> {
     const OUTPUT_LIMIT: u64 = 64 * 1024;
 
-    let stdout_file = tempfile::tempfile()
-        .map_err(|error| format!("could not capture {} --version: {error}", path.display()))?;
-    let stderr_file = tempfile::tempfile()
-        .map_err(|error| format!("could not capture {} --version: {error}", path.display()))?;
+    let capture_failed = |source| DevnodeProbeError::Capture {
+        binary: path.display().to_string(),
+        source,
+    };
+    let stdout_file = tempfile::tempfile().map_err(capture_failed)?;
+    let stderr_file = tempfile::tempfile().map_err(capture_failed)?;
     let mut command = std::process::Command::new(path);
-    command.arg("--version").stdout(
-        stdout_file
-            .try_clone()
-            .map_err(|error| format!("could not capture stdout: {error}"))?,
-    );
-    command.stderr(
-        stderr_file
-            .try_clone()
-            .map_err(|error| format!("could not capture stderr: {error}"))?,
-    );
+    command
+        .arg("--version")
+        .stdout(stdout_file.try_clone().map_err(capture_failed)?);
+    command.stderr(stderr_file.try_clone().map_err(capture_failed)?);
     configure_probe_process(&mut command, OUTPUT_LIMIT)?;
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not run {}: {error}", path.display()))?;
+    let mut child = command.spawn().map_err(|source| DevnodeProbeError::Spawn {
+        binary: path.display().to_string(),
+        source,
+    })?;
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
         let captured_bytes = probe_output_size_or_terminate(&mut child, || {
@@ -1007,10 +1161,10 @@ fn probe_devnode_version_with_timeout(
         })?;
         if captured_bytes >= OUTPUT_LIMIT {
             terminate_probe_processes(&mut child);
-            return Err(format!(
-                "{} --version produced at least {OUTPUT_LIMIT} bytes of output",
-                path.display()
-            ));
+            return Err(DevnodeProbeError::OutputTooLarge {
+                binary: path.display().to_string(),
+                limit: OUTPUT_LIMIT,
+            });
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -1023,38 +1177,44 @@ fn probe_devnode_version_with_timeout(
             }
             Ok(None) => {
                 terminate_probe_processes(&mut child);
-                return Err(format!(
-                    "{} --version timed out after {} ms",
-                    path.display(),
-                    timeout.as_millis()
-                ));
+                return Err(DevnodeProbeError::Timeout {
+                    binary: path.display().to_string(),
+                    timeout_ms: timeout.as_millis(),
+                });
             }
-            Err(error) => {
+            Err(source) => {
                 terminate_probe_processes(&mut child);
-                return Err(format!(
-                    "could not wait for {} --version: {error}",
-                    path.display()
-                ));
+                return Err(DevnodeProbeError::Wait {
+                    binary: path.display().to_string(),
+                    source,
+                });
             }
         }
     };
     if probe_output_size(&stdout_file, &stderr_file)? >= OUTPUT_LIMIT
         || probe_hit_file_size_limit(status)
     {
-        return Err(format!(
-            "{} --version produced at least {OUTPUT_LIMIT} bytes of output",
-            path.display()
-        ));
+        return Err(DevnodeProbeError::OutputTooLarge {
+            binary: path.display().to_string(),
+            limit: OUTPUT_LIMIT,
+        });
     }
     let stdout = read_probe_output(stdout_file, "stdout", OUTPUT_LIMIT)?;
     let stderr = read_probe_output(stderr_file, "stderr", OUTPUT_LIMIT)?;
 
     if !status.success() {
         let detail = stderr.trim();
+        let binary = path.display().to_string();
         return Err(if detail.is_empty() {
-            format!("{} --version exited with {status}", path.display())
+            DevnodeProbeError::ExitStatus {
+                binary,
+                status: status.to_string(),
+            }
         } else {
-            format!("{} --version failed: {detail}", path.display())
+            DevnodeProbeError::Failed {
+                binary,
+                detail: detail.to_owned(),
+            }
         });
     }
 
@@ -1072,10 +1232,9 @@ fn probe_devnode_version_with_timeout(
         }
     }
 
-    Err(format!(
-        "{} returned unexpected --version output",
-        path.display()
-    ))
+    Err(DevnodeProbeError::UnexpectedOutput {
+        binary: path.display().to_string(),
+    })
 }
 
 #[cfg(unix)]
@@ -1094,11 +1253,11 @@ fn probe_hit_file_size_limit(_status: std::process::ExitStatus) -> bool {
 fn configure_probe_process(
     command: &mut std::process::Command,
     output_limit: u64,
-) -> Result<(), String> {
+) -> Result<(), DevnodeProbeError> {
     use std::os::unix::process::CommandExt;
 
     let output_limit = libc::rlim_t::try_from(output_limit)
-        .map_err(|_| "devnode output limit does not fit rlim_t".to_string())?;
+        .map_err(|_| DevnodeProbeError::OutputLimitUnrepresentable)?;
     command.process_group(0);
     // SAFETY: `setrlimit` is async-signal-safe and the closure only uses its
     // captured integer before `exec` in the child process.
@@ -1122,7 +1281,7 @@ fn configure_probe_process(
 fn configure_probe_process(
     _command: &mut std::process::Command,
     _output_limit: u64,
-) -> Result<(), String> {
+) -> Result<(), DevnodeProbeError> {
     Ok(())
 }
 
@@ -1146,34 +1305,49 @@ fn terminate_probe_descendants(process_group: u32) {
 #[cfg(not(unix))]
 fn terminate_probe_descendants(_process_group: u32) {}
 
-fn probe_output_size(stdout: &std::fs::File, stderr: &std::fs::File) -> Result<u64, String> {
-    let stdout = stdout
-        .metadata()
-        .map_err(|error| format!("could not inspect devnode stdout: {error}"))?
-        .len();
-    let stderr = stderr
-        .metadata()
-        .map_err(|error| format!("could not inspect devnode stderr: {error}"))?
-        .len();
-    Ok(stdout.saturating_add(stderr))
+fn probe_output_size(
+    stdout: &std::fs::File,
+    stderr: &std::fs::File,
+) -> Result<u64, DevnodeProbeError> {
+    let measure = |file: &std::fs::File, stream| {
+        file.metadata()
+            .map(|metadata| metadata.len())
+            .map_err(|source| DevnodeProbeError::Output {
+                action: "inspect",
+                stream,
+                source,
+            })
+    };
+    Ok(measure(stdout, "stdout")?.saturating_add(measure(stderr, "stderr")?))
 }
 
-fn probe_output_size_or_terminate(
+fn probe_output_size_or_terminate<E>(
     child: &mut std::process::Child,
-    probe: impl FnOnce() -> Result<u64, String>,
-) -> Result<u64, String> {
+    probe: impl FnOnce() -> Result<u64, E>,
+) -> Result<u64, E> {
     probe().inspect_err(|_| terminate_probe_processes(child))
 }
 
-fn read_probe_output(mut file: std::fs::File, stream: &str, limit: u64) -> Result<String, String> {
+fn read_probe_output(
+    mut file: std::fs::File,
+    stream: &'static str,
+    limit: u64,
+) -> Result<String, DevnodeProbeError> {
     use std::io::{Read, Seek};
 
-    file.rewind()
-        .map_err(|error| format!("could not rewind devnode {stream}: {error}"))?;
+    file.rewind().map_err(|source| DevnodeProbeError::Output {
+        action: "rewind",
+        stream,
+        source,
+    })?;
     let mut bytes = Vec::new();
     file.take(limit)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("could not read devnode {stream}: {error}"))?;
+        .map_err(|source| DevnodeProbeError::Output {
+            action: "read",
+            stream,
+            source,
+        })?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -1625,7 +1799,10 @@ mod tests {
             probe_devnode_version_with_timeout(&binary, std::time::Duration::from_millis(50))
                 .unwrap_err();
 
-        assert!(error.contains("timed out"));
+        assert!(
+            matches!(error, DevnodeProbeError::Timeout { .. }),
+            "{error}"
+        );
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
@@ -1637,10 +1814,9 @@ mod tests {
         configure_probe_process(&mut command, 64 * 1024).unwrap();
         let mut child = command.spawn().unwrap();
 
-        let error = probe_output_size_or_terminate(&mut child, || {
-            Err("could not inspect devnode stdout".into())
-        })
-        .unwrap_err();
+        let error =
+            probe_output_size_or_terminate(&mut child, || Err("could not inspect devnode stdout"))
+                .unwrap_err();
 
         assert_eq!(error, "could not inspect devnode stdout");
         assert!(child.try_wait().unwrap().is_some());
@@ -1668,7 +1844,10 @@ mod tests {
         let error = probe_devnode_version_with_timeout(&binary, std::time::Duration::from_secs(5))
             .unwrap_err();
 
-        assert!(error.contains("produced at least"), "{error}");
+        assert!(
+            matches!(error, DevnodeProbeError::OutputTooLarge { .. }),
+            "{error}"
+        );
     }
 
     #[test]

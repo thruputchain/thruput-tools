@@ -1,19 +1,16 @@
 //! `groundhog_getEvents` handler.
 
+use groundhog_hogd_backend::indexer as shared_indexer;
 use groundhog_indexer::EventPageResult;
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::events::{EventPage, EventQuery, IdentifiedEvent};
-use groundhog_json_rpc_types::hex::Hex0x;
-use groundhog_json_rpc_types::transaction::TxHash;
-use std::time::Instant;
+use groundhog_json_rpc_types::events::{EventPage, EventQuery};
 
 use crate::config::HealthBackend;
 use crate::context::GatewayContext;
-use crate::error::GatewayError;
-use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
+use crate::metrics::REASON_PARSE_FAILED;
+use groundhog_json_rpc_server::RpcServerError;
 
-use super::parse_event::parse_emitted_event;
-use super::{backend_deadline, event_page_from_result};
+use super::{INDEXER, backend_deadline, timed_backend_call};
 
 /// Implementation of the `groundhog_getEvents` JSON-RPC method.
 /// Forwards the paginated `EventQuery` to the hogd indexer and
@@ -27,58 +24,37 @@ pub async fn get_events(
     ctx: &GatewayContext,
     context: RpcRequestContext,
     query: EventQuery,
-) -> Result<EventPage, GatewayError> {
+) -> Result<EventPage, RpcServerError> {
     let client = ctx
         .indexer
         .read()
         .await
         .clone()
-        .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
+        .ok_or_else(|| RpcServerError::BackendUnavailable("indexer not connected".into()))?;
 
     let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
-    let started_at = Instant::now();
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    let rpc_result = tokio::time::timeout_at(deadline.into(), client.get_events(&wire_query)).await;
-    ctx.metrics.observe_backend_request(
+    let result = timed_backend_call(
+        &ctx.metrics,
         HealthBackend::Indexer,
         "get_events",
-        match &rpc_result {
-            Err(_) => BackendRequestOutcome::Timeout,
-            Ok(Ok(EventPageResult::IndexerQueryOk { .. })) => BackendRequestOutcome::Ok,
-            Ok(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
-        },
-        started_at.elapsed(),
-    );
-    let result = rpc_result
-        .map_err(|_| GatewayError::BackendTimeout)?
-        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
-    let page = event_page_from_result(result)?;
-
-    let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
-    for identified in page.events.0 {
-        if let Some(event) = parse_emitted_event(identified.emitted_event) {
-            events.push(IdentifiedEvent {
-                tx_hash: TxHash(Hex0x(identified.tx_hash)),
-                block_height: identified.block_height,
-                sequence_number: identified.sequence_number,
-                event,
-            });
-        } else {
-            ctx.metrics
-                .observe_malformed_event_dropped(REASON_PARSE_FAILED);
-            tracing::warn!(
-                tx_hash = ?identified.tx_hash,
-                block_height = ?identified.block_height,
-                sequence_number = identified.sequence_number,
-                "dropped malformed event from indexer",
-            );
-        }
+        INDEXER,
+        deadline,
+        client.get_events(&wire_query),
+        |result| matches!(result, EventPageResult::IndexerQueryOk { .. }),
+    )
+    .await?;
+    let page = shared_indexer::event_page(INDEXER, result)?;
+    let decoded = shared_indexer::public_event_page(page);
+    ctx.metrics
+        .observe_malformed_events_dropped(REASON_PARSE_FAILED, decoded.dropped.len());
+    for dropped in &decoded.dropped {
+        tracing::warn!(
+            tx_hash = ?dropped.tx_hash,
+            block_height = ?dropped.block_height,
+            sequence_number = dropped.sequence_number,
+            "dropped malformed event from indexer",
+        );
     }
-
-    Ok(EventPage {
-        events,
-        cursor: page.cursor.into(),
-        latest_block: page.latest_block,
-        oldest_block: page.oldest_block,
-    })
+    Ok(decoded.page)
 }

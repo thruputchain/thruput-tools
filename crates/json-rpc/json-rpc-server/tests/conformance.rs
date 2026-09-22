@@ -654,6 +654,19 @@ async fn chain_tip_dispatches_through_chain_plane_for_all_shapes() {
 }
 
 #[tokio::test]
+async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
+    for backend in all_shapes() {
+        let config = server(backend)
+            .chain_config()
+            .await
+            .expect("bug: chain_config must dispatch through chain plane");
+
+        // The mock's config states nothing, so no parameters come back.
+        assert_eq!(config.max_contract_size_bytes, None);
+    }
+}
+
+#[tokio::test]
 async fn get_block_by_number_is_not_implemented_for_all_shapes() {
     for backend in all_shapes() {
         let err = server(backend)

@@ -1,5 +1,6 @@
 //! Seed/import confirmed records outside the measurement window.
 
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,7 +13,6 @@ use groundhog_json_rpc_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use crate::{
@@ -313,8 +313,10 @@ async fn prepare_inner(
     Ok(ConfirmedCorpus {
         identity: CorpusIdentity {
             count: records.len(),
-            sha256: digest(&bytes),
-            shape_sha256: digest(&serde_json::to_vec(&shapes).expect("bug: shape list serializes")),
+            sha256: sha256_prefixed_hex(&bytes),
+            shape_sha256: sha256_prefixed_hex(
+                &serde_json::to_vec(&shapes).expect("bug: shape list serializes"),
+            ),
             network_hash: corpus.network_hash,
             seed_nonce_start: nonce_start,
             fixture: cli
@@ -323,10 +325,6 @@ async fn prepare_inner(
         },
         records,
     })
-}
-
-pub(super) fn digest(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

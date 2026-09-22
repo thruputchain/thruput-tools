@@ -1,27 +1,18 @@
-//! Stub backend planes that always return `NotImplemented`.
+//! Stub backend planes that answer `NotImplemented`.
 //!
-//! The node supervisor wires backend planes incrementally. `chainTip` and
-//! `sendRawTransaction` now have a real hogd-dev scheduler adapter; read
-//! methods still use this stub until PR 4c lands the corresponding x23
-//! adapters.
+//! The supervisor serves submit, chain, and read methods through real
+//! hogd-dev adapters. This stub stands in only for the read and view
+//! planes when their backing services are not connected, so those methods
+//! fail with a stable wire error instead of a transport error.
 //!
 //! Wire-error strings carry only the JSON-RPC method name, so the public
-//! protocol surface is stable. The
-//! "stubbed because hogd-dev adapters aren't wired yet" context goes to
-//! `tracing::warn!` at supervisor startup and to module-level docs, not
-//! into the wire error.
-//!
-//! The stub is intentionally `pub(crate)`. It is not a long-term API; once
-//! submit and read have real adapters the type goes away.
+//! protocol surface is stable. The "not connected" context goes to
+//! `tracing::warn!` at supervisor startup, not into the wire error.
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, TipReading,
-    ValidatedTransaction, ViewPlane,
-};
+use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError, ViewPlane};
 use groundhog_json_rpc_types::{
-    BlockHeight, ContractAddress,
-    block::BlockInfo,
+    ContractAddress,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -35,41 +26,6 @@ pub(crate) struct StubBackend;
 impl StubBackend {
     pub(crate) fn new() -> Self {
         Self
-    }
-}
-
-#[async_trait]
-impl SubmitPlane for StubBackend {
-    async fn submit_raw_transaction(
-        &self,
-        _context: RpcRequestContext,
-        _tx: ValidatedTransaction,
-    ) -> Result<(), RpcServerError> {
-        Err(RpcServerError::NotImplemented("sendRawTransaction".into()))
-    }
-}
-
-#[async_trait]
-impl ChainPlane for StubBackend {
-    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
-        Err(RpcServerError::NotImplemented("chainTip".into()))
-    }
-
-    async fn get_block_by_number(
-        &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
-    }
-
-    async fn pending_transaction_count(
-        &self,
-        _context: RpcRequestContext,
-    ) -> Result<u64, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "pendingTransactionCount".into(),
-        ))
     }
 }
 

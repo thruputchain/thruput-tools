@@ -16,6 +16,7 @@ use groundhog_json_rpc_types::{
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     hex::HexBytes,
+    network_config::NetworkConfigParams,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -28,7 +29,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "5.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "5.3.1";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -63,16 +64,24 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check (mempool -> indexer -> unknown). `unknown` is only
-    /// returned after both the mempool and the indexer answered without a match; if
-    /// the mempool could not be consulted and the indexer has no record, the call
-    /// fails with `BackendUnavailable` because the transaction may still be pending.
+    /// Lightweight status check. The indexer is asked first, so `committed` wins; a
+    /// mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown`
+    /// is returned only after both backends answered without a match. If the mempool
+    /// could not be consulted and the indexer has no record, the call fails with
+    /// `BackendUnavailable` because the transaction may still be pending.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 
     /// Current chain tip: height, block hash, and the protocol it executed under.
     #[method(name = "chainTip")]
     async fn chain_tip(&self) -> RpcResult<ChainTip>;
+
+    /// The execution parameters the chain's network config states. Only stated
+    /// parameters are reported; an unstated one is absent. Served from a tip reading
+    /// refreshed at most once per cache window. Fails with `BackendUnavailable` when no
+    /// reading is available or the config version is unreadable.
+    #[method(name = "chainConfig")]
+    async fn chain_config(&self) -> RpcResult<NetworkConfigParams>;
 
     /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]

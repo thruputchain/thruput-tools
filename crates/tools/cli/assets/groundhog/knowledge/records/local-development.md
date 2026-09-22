@@ -58,9 +58,10 @@ node just to enable logging: stopping it discards its chain state.
 prompt or piped stdin. It accepts a checksummed Stellar S StrKey or a 32-byte
 hex seed, never a 64-byte stored keypair. Do not put private seeds in command
 arguments. Existing names are not overwritten; `dev-N` names are reserved.
-Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`). Malformed
-TOML or an invalid `default_key` is rejected before storing the key. If the key is stored but
-selecting the default fails, import succeeds with a warning and a recovery
+Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
+Malformed TOML or an invalid `default_key` is rejected before storing the key.
+If the key is stored but selecting the default fails, import succeeds with a
+warning and a recovery
 command (`groundhog keys use <name>`); do not import it again. `isDefault` is
 null when the configuration cannot be reread to confirm selection.
 

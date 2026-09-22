@@ -606,7 +606,7 @@ fn validate_document_profile(
         .map_err(|error| invalid_profile(path, profile, &error.to_string()))?;
     super::read::validate_profile(decoded)
         .map(|_| ())
-        .map_err(|message| invalid_profile(path, profile, &message))
+        .map_err(|error| invalid_profile(path, profile, &error.to_string()))
 }
 
 fn validate_default_profile(document: &DocumentMut, path: &Path) -> Result<(), CliError> {

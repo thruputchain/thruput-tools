@@ -13,35 +13,28 @@
 use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
+use groundhog_hogd_backend::scheduler as shared_scheduler;
 use groundhog_json_rpc_server::{RpcRequestContext, TipReading};
-use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
-use groundhog_scheduler::{ExpectedDBTip, RPCError};
-use groundhog_xdr::network_config::NetworkConfig;
+#[cfg(test)]
+use groundhog_json_rpc_types::block::ChainTip;
+use groundhog_scheduler::ExpectedDBTip;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
 use crate::adaptive_batch::deadline_cohorts;
 use crate::config::{HealthBackend, TipConfig};
 use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
-use crate::error::GatewayError;
+use crate::handlers::SCHEDULER;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
+use groundhog_json_rpc_server::RpcServerError;
 
 const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
-
-/// A scheduler tip returned by the coalesced backend request.
-#[derive(Debug, Clone)]
-pub struct TipSnapshot {
-    /// Chain state that advances with each commit.
-    pub tip: ChainTip,
-    /// Execution parameters in force for the block that follows the tip.
-    pub network_config: NetworkConfig,
-}
 
 /// Backend for chain-tip lookups.  In production this wraps the
 /// scheduler client; tests substitute a mock.
 #[async_trait]
 pub trait TipSink: Send + Sync + 'static {
-    async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError>;
+    async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError>;
 }
 
 /// Production sink: forwards to `schedgateway_get_tip` and maps the
@@ -68,17 +61,17 @@ impl SchedulerTipSink {
 
 #[async_trait]
 impl TipSink for SchedulerTipSink {
-    async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError> {
+    async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError> {
         let client = self.scheduler.read().await.clone();
         let client = client
-            .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
+            .ok_or_else(|| RpcServerError::BackendUnavailable("scheduler not connected".into()))?;
         let generation = client.generation();
         let started_at = Instant::now();
         let timeout = self
             .timeout
             .min(deadline.saturating_duration_since(started_at));
         if timeout.is_zero() {
-            return Err(GatewayError::BackendTimeout);
+            return Err(RpcServerError::BackendTimeout);
         }
         let mut call = tokio::spawn(async move { client.schedgateway_get_tip().await });
         let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
@@ -106,35 +99,21 @@ impl TipSink for SchedulerTipSink {
             clear_scheduler_if_current(&self.scheduler, generation).await;
         }
         let result = rpc_result
-            .map_err(|()| GatewayError::BackendTimeout)?
-            .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
-        match result {
-            ExpectedDBTip::kRPCNone { db_tip } => {
-                let block_hash = consensus_value_hash(&db_tip.value).map_err(|error| {
-                    GatewayError::BackendUnavailable(format!(
-                        "scheduler returned an unencodable consensus value: {error}"
-                    ))
-                })?;
-                Ok(TipSnapshot {
-                    tip: ChainTip {
-                        height: db_tip.value.proposal_header.block_height.clone(),
-                        block_hash,
-                    },
-                    network_config: db_tip.network_config,
-                })
+            .map_err(|()| RpcServerError::BackendTimeout)?
+            .map_err(|e| RpcServerError::BackendUnavailable(e.to_string()))?;
+        match shared_scheduler::tip_answer(SCHEDULER, result)? {
+            shared_scheduler::TipAnswer::Tip(db_tip) => {
+                Ok(shared_scheduler::tip_reading(SCHEDULER, *db_tip)?)
             }
-            ExpectedDBTip::Default { error } if RPCError(error) == RPCError::kRPCNotFound => Err(
-                GatewayError::BackendUnavailable("no committed blocks yet".into()),
+            shared_scheduler::TipAnswer::NoCommittedBlock => Err(
+                RpcServerError::BackendUnavailable("no committed blocks yet".into()),
             ),
-            other => Err(GatewayError::BackendUnavailable(format!(
-                "unexpected scheduler tip result: {other:?}"
-            ))),
         }
     }
 }
 
 struct Waiter {
-    reply: oneshot::Sender<Result<TipSnapshot, GatewayError>>,
+    reply: oneshot::Sender<Result<TipReading, RpcServerError>>,
     backend_deadline: Instant,
 }
 
@@ -176,7 +155,7 @@ impl Coalescer {
                             continue;
                         }
                         if waiter.backend_deadline <= now {
-                            let _ = waiter.reply.send(Err(GatewayError::BackendTimeout));
+                            let _ = waiter.reply.send(Err(RpcServerError::BackendTimeout));
                         } else {
                             live.push(waiter);
                         }
@@ -217,7 +196,7 @@ async fn fetch_tip_cohorts(
         let deadline = waiters[0].backend_deadline;
         if deadline <= now {
             for waiter in waiters {
-                let _ = waiter.reply.send(Err(GatewayError::BackendTimeout));
+                let _ = waiter.reply.send(Err(RpcServerError::BackendTimeout));
             }
             continue;
         }
@@ -299,7 +278,7 @@ impl TipCoalescer {
     /// coalescer's ingress is full; otherwise awaits the fanout from
     /// the next completed backend RPC.
     #[tracing::instrument(skip_all)]
-    async fn tip_snapshot(&self, context: RpcRequestContext) -> Result<TipSnapshot, GatewayError> {
+    async fn tip_snapshot(&self, context: RpcRequestContext) -> Result<TipReading, RpcServerError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let request_deadline = context
             .capped_from_start(self.request_timeout)
@@ -310,7 +289,7 @@ impl TipCoalescer {
             .deadline()
             .expect("backend timeout should bound chain-tip lookup");
         if backend_deadline <= Instant::now() {
-            return Err(GatewayError::BackendTimeout);
+            return Err(RpcServerError::BackendTimeout);
         }
         self.inner
             .sender
@@ -324,24 +303,24 @@ impl TipCoalescer {
                         TIP_COALESCER_COMPONENT,
                         REASON_INGRESS_FULL,
                     );
-                    GatewayError::Overloaded("chainTip ingress queue full".into())
+                    RpcServerError::Overloaded("chainTip ingress queue full".into())
                 }
                 mpsc::error::TrySendError::Closed(_) => {
                     self.metrics
                         .observe_internal_batch_rejected(TIP_COALESCER_COMPONENT, REASON_CLOSED);
-                    GatewayError::BackendUnavailable("tip coalescer shut down".into())
+                    RpcServerError::BackendUnavailable("tip coalescer shut down".into())
                 }
             })?;
         tokio::time::timeout_at(request_deadline.into(), reply_rx)
             .await
-            .map_err(|_| GatewayError::BackendTimeout)?
-            .map_err(|_| GatewayError::BackendUnavailable("tip coalescer dropped reply".into()))?
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(|_| RpcServerError::BackendUnavailable("tip coalescer dropped reply".into()))?
     }
 
     /// Ask for the current chain tip alone; production callers take
     /// [`Self::tip_reading`] so the config travels with it.
     #[cfg(test)]
-    pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
+    pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Ok(self.tip_snapshot(context).await?.tip)
     }
 
@@ -351,9 +330,8 @@ impl TipCoalescer {
     pub async fn tip_reading(
         &self,
         context: RpcRequestContext,
-    ) -> Result<TipReading, GatewayError> {
-        let snapshot = self.tip_snapshot(context).await?;
-        Ok(TipReading::new(snapshot.tip, snapshot.network_config))
+    ) -> Result<TipReading, RpcServerError> {
+        self.tip_snapshot(context).await
     }
 }
 
@@ -384,8 +362,8 @@ mod tests {
     }
 
     enum MockResponse {
-        Gate(oneshot::Receiver<Result<TipSnapshot, GatewayError>>),
-        Immediate(Result<TipSnapshot, GatewayError>),
+        Gate(oneshot::Receiver<Result<TipReading, RpcServerError>>),
+        Immediate(Result<TipReading, RpcServerError>),
     }
 
     impl MockSink {
@@ -398,7 +376,7 @@ mod tests {
             })
         }
 
-        fn queue_gate(&self) -> oneshot::Sender<Result<TipSnapshot, GatewayError>> {
+        fn queue_gate(&self) -> oneshot::Sender<Result<TipReading, RpcServerError>> {
             let (tx, rx) = oneshot::channel();
             self.responses
                 .lock()
@@ -407,7 +385,7 @@ mod tests {
             tx
         }
 
-        fn queue_response(&self, r: Result<TipSnapshot, GatewayError>) {
+        fn queue_response(&self, r: Result<TipReading, RpcServerError>) {
             self.responses
                 .lock()
                 .unwrap()
@@ -423,14 +401,14 @@ mod tests {
         }
     }
 
-    fn default_tip(height: i64) -> TipSnapshot {
+    fn default_tip(height: i64) -> TipReading {
         let bytes = [0u8; 32];
-        TipSnapshot {
-            tip: ChainTip {
+        TipReading::new(
+            ChainTip {
                 height: BlockHeight::new(height),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
             },
-            network_config: NetworkConfig::_0 {
+            groundhog_xdr::network_config::NetworkConfig::_0 {
                 v0: groundhog_xdr::network_config::NetworkConfigV0 {
                     params: xdr_common::VecM(vec![
                         groundhog_xdr::network_config::ConfigParam::kConfigParamMaxSHA256Buffers {
@@ -445,12 +423,12 @@ mod tests {
                     ]),
                 },
             },
-        }
+        )
     }
 
     #[async_trait]
     impl TipSink for MockSink {
-        async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError> {
+        async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError> {
             {
                 let mut n = self.seen.lock().unwrap();
                 *n += 1;
@@ -461,7 +439,9 @@ mod tests {
                 None => Ok(default_tip(self.default_height)),
                 Some(MockResponse::Immediate(r)) => r,
                 Some(MockResponse::Gate(rx)) => rx.await.unwrap_or_else(|_| {
-                    Err(GatewayError::BackendUnavailable("test gate dropped".into()))
+                    Err(RpcServerError::BackendUnavailable(
+                        "test gate dropped".into(),
+                    ))
                 }),
             }
         }
@@ -479,7 +459,7 @@ mod tests {
 
     #[async_trait]
     impl TipSink for PanicOnceTipSink {
-        async fn get_tip(&self, _deadline: Instant) -> Result<TipSnapshot, GatewayError> {
+        async fn get_tip(&self, _deadline: Instant) -> Result<TipReading, RpcServerError> {
             assert_ne!(
                 self.calls.fetch_add(1, Ordering::SeqCst),
                 0,
@@ -504,7 +484,7 @@ mod tests {
 
     #[async_trait]
     impl TipSink for PendingTipSink {
-        async fn get_tip(&self, _deadline: Instant) -> Result<TipSnapshot, GatewayError> {
+        async fn get_tip(&self, _deadline: Instant) -> Result<TipReading, RpcServerError> {
             let _marker = DropMarker(self.dropped.clone());
             self.started.notify_one();
             std::future::pending().await
@@ -513,15 +493,15 @@ mod tests {
 
     #[async_trait]
     impl TipSink for TimeoutInvalidatesTipSink {
-        async fn get_tip(&self, deadline: Instant) -> Result<TipSnapshot, GatewayError> {
+        async fn get_tip(&self, deadline: Instant) -> Result<TipReading, RpcServerError> {
             self.deadlines.lock().unwrap().push(deadline);
             if deadline < self.cutoff {
                 self.valid.store(false, Ordering::SeqCst);
-                Err(GatewayError::BackendTimeout)
+                Err(RpcServerError::BackendTimeout)
             } else if self.valid.load(Ordering::SeqCst) {
                 Ok(default_tip(20))
             } else {
-                Err(GatewayError::BackendUnavailable(
+                Err(RpcServerError::BackendUnavailable(
                     "scheduler invalidated by older timeout".into(),
                 ))
             }
@@ -605,7 +585,7 @@ mod tests {
             .chain_tip(RpcRequestContext::new(Some(Duration::ZERO)))
             .await;
 
-        assert!(matches!(result, Err(GatewayError::BackendTimeout)));
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
         assert_eq!(mock.seen(), 0);
     }
 
@@ -622,7 +602,7 @@ mod tests {
 
         assert!(matches!(
             coalescer.chain_tip(request_context()).await,
-            Err(GatewayError::BackendUnavailable(_))
+            Err(RpcServerError::BackendUnavailable(_))
         ));
         let tip = tokio::time::timeout(
             Duration::from_secs(1),
@@ -662,7 +642,7 @@ mod tests {
                 .await
                 .expect("bug: waiter should finish after abort")
                 .expect("bug: waiter task should not panic"),
-            Err(GatewayError::BackendUnavailable(_))
+            Err(RpcServerError::BackendUnavailable(_))
         ));
         assert!(dropped.load(Ordering::SeqCst));
     }
@@ -713,7 +693,7 @@ mod tests {
         let mock = MockSink::new(0);
         let first_gate = mock.queue_gate();
         mock.queue_response(Ok(default_tip(20)));
-        mock.queue_response(Err(GatewayError::BackendTimeout));
+        mock.queue_response(Err(RpcServerError::BackendTimeout));
         let coalescer = TipCoalescer::spawn_with_deadlines(
             &config_for_tests(1, 100),
             &(mock.clone() as Arc<dyn TipSink>),
@@ -754,7 +734,7 @@ mod tests {
 
         assert!(matches!(
             old.await.unwrap(),
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(newer.await.unwrap().unwrap().height, BlockHeight::new(20));
         assert_eq!(mock.seen(), 3);
@@ -794,7 +774,7 @@ mod tests {
         );
         assert!(matches!(
             old_waiter.await.expect("old reply should be sent"),
-            Err(GatewayError::BackendTimeout)
+            Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(
             sink.deadlines.lock().unwrap().as_slice(),
@@ -913,7 +893,7 @@ mod tests {
             .await
             .expect_err("should be overloaded");
         assert!(
-            matches!(err, GatewayError::Overloaded(_)),
+            matches!(err, RpcServerError::Overloaded(_)),
             "got {err:?}, expected Overloaded"
         );
 
@@ -950,11 +930,11 @@ mod tests {
         settle().await;
 
         // Fail the single RPC that holds all four waiters.
-        let _ = err_gate.send(Err(GatewayError::BackendUnavailable("mock".into())));
+        let _ = err_gate.send(Err(RpcServerError::BackendUnavailable("mock".into())));
         for (i, w) in waiters.into_iter().enumerate() {
             let r = w.await.unwrap();
             assert!(
-                matches!(r, Err(GatewayError::BackendUnavailable(_))),
+                matches!(r, Err(RpcServerError::BackendUnavailable(_))),
                 "waiter {i}: expected BackendUnavailable, got {r:?}"
             );
         }

@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -90,9 +91,9 @@ impl AirdropService {
         }
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
-            genesis_hash: hex_string(request.genesis_hash.0),
-            recipient: hex_string(request.recipient.0),
-            client_nonce: hex_encode(request.client_nonce.as_bytes()),
+            genesis_hash: prefixed_hex(request.genesis_hash.0),
+            recipient: prefixed_hex(request.recipient.0),
+            client_nonce: hex::encode(request.client_nonce.as_bytes()),
         };
         let now = SystemTime::now();
         if let Err(error) = self.policy_store.expire(now) {
@@ -126,7 +127,7 @@ impl AirdropService {
         };
         let quota_checks = [
             QuotaCheck {
-                key: QuotaKey::AirdropRecipient(hex_string(request.recipient.0)),
+                key: QuotaKey::AirdropRecipient(prefixed_hex(request.recipient.0)),
                 max: 1,
                 window: Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
             },
@@ -384,7 +385,7 @@ impl AirdropService {
             Ok(accepted) => {
                 let amount_matches =
                     accepted.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
-                attempt.tx_hash = Some(hex_string(accepted.tx_hash.0.0));
+                attempt.tx_hash = Some(prefixed_hex(accepted.tx_hash.0.0));
                 // An accepted transaction must not age out while its receipt is unresolved;
                 // otherwise the same idempotency key could submit a second transaction.
                 attempt.expires_at = None;
@@ -801,23 +802,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     }
 }
 
-fn hex_string(bytes: impl AsRef<[u8]>) -> String {
-    format!("0x{}", hex_encode(bytes.as_ref()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
-fn parse_tx_hash(value: &str) -> Option<TxHash> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes: [u8; 32] = hex::decode(value).ok()?.try_into().ok()?;
+pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
+    let bytes = decode_fixed_hex(value).ok()?;
     Some(TxHash(SHA256Hash::from(
         groundhog_xdr::types::SHA256Hash::from(bytes),
     )))
@@ -1081,7 +1067,7 @@ fn entrypoint_bytes(entrypoint: &HexBytes) -> Result<[u8; 8], AirdropRuntimeConf
     let len = entrypoint.0.len();
     entrypoint
         .0
-        .clone()
+        .as_slice()
         .try_into()
         .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(len))
 }
@@ -1090,7 +1076,7 @@ fn encode_transfer_calldata(
     recipient: &groundhog_xdr::types::ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, AirdropSubmitError> {
-    xdrs::cxs::encode(&(recipient, raw_amount))
+    groundhog_signing::native_hog_transfer_calldata(recipient, raw_amount)
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
 }
 

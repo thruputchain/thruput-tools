@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use groundhog_json_rpc_types::{
     ContractAddress, NetworkHashHex,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
@@ -179,8 +180,8 @@ fn resolve_selected_wallet(
         return Err(CliError::SavedWalletOwnerMismatch {
             wallet_name: wallet_name.to_owned(),
             key_name: key_name.to_owned(),
-            configured: format_hex(&validated.owner_public_key),
-            local: format_hex(&local),
+            configured: prefixed_hex(&validated.owner_public_key),
+            local: prefixed_hex(local),
         });
     }
     Ok(validated.address)
@@ -261,7 +262,7 @@ fn resolve_dev_wallet_address(
             key_name,
             format!(
                 "local dev account metadata returned public key {} for dev-{index}, expected 0x{}",
-                format_hex(&account.public_key),
+                prefixed_hex(&account.public_key),
                 hex::encode(expected_public_key),
             ),
         ));
@@ -486,7 +487,7 @@ fn signer_for_manifest_account(
             key_name,
             format!(
                 "runtime manifest bootstrap account dev-{index} public key {} does not match derivation seed",
-                format_hex(account.public_key.0.as_ref()),
+                prefixed_hex(account.public_key.0.as_ref()),
             ),
         ));
     }
@@ -506,10 +507,6 @@ fn dev_account_error(key_name: &str, message: impl Into<String>) -> CliError {
         key_name: key_name.to_string(),
         message: message.into(),
     }
-}
-
-fn format_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
 }
 
 #[cfg(test)]
@@ -576,14 +573,14 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
-                owner_public_key: format_hex(&[0x33; 32]),
+                address: prefixed_hex(wallet_address.as_ref()),
+                owner_public_key: prefixed_hex([0x33; 32]),
             },
         );
         let mut profile = test_profile("alice", None, wallets);
         profile
             .contracts
-            .insert("alice".into(), format_hex(contract_address.as_ref()));
+            .insert("alice".into(), prefixed_hex(contract_address.as_ref()));
 
         let resolved = resolve_address_target(&profile, "alice")
             .expect("bug: saved wallet target should resolve");
@@ -597,7 +594,7 @@ mod tests {
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile
             .contracts
-            .insert("counter".into(), format_hex(expected.as_ref()));
+            .insert("counter".into(), prefixed_hex(expected.as_ref()));
 
         let resolved = resolve_address_target(&profile, "counter")
             .expect("bug: contract alias should resolve");
@@ -645,10 +642,10 @@ mod tests {
         profile.source = Some(source.clone());
         profile
             .contracts
-            .insert("zebra".into(), format_hex(&[0x11; 32]));
+            .insert("zebra".into(), prefixed_hex([0x11; 32]));
         profile
             .contracts
-            .insert("alpha".into(), format_hex(&[0x22; 32]));
+            .insert("alpha".into(), prefixed_hex([0x22; 32]));
 
         let error = resolve_contract_target(&profile, "counter")
             .expect_err("bug: unknown contract alias should fail");
@@ -687,12 +684,12 @@ mod tests {
 
     #[test]
     fn contract_target_does_not_resolve_saved_wallet_names() {
-        let address = format_hex(&[0x33; 32]);
+        let address = prefixed_hex([0x33; 32]);
         let wallets = BTreeMap::from([(
             "counter".into(),
             SavedWalletBinding {
                 address,
-                owner_public_key: format_hex(&[0x44; 32]),
+                owner_public_key: prefixed_hex([0x44; 32]),
             },
         )]);
         let profile = test_profile("alice", None, wallets);
@@ -725,8 +722,8 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
-                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+                address: prefixed_hex(wallet_address.as_ref()),
+                owner_public_key: prefixed_hex(signer.verifying_key_bytes()),
             },
         );
         let profile = test_profile("alice", None, wallets);
@@ -746,8 +743,8 @@ mod tests {
         wallets.insert(
             "dev-default".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
-                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+                address: prefixed_hex(wallet_address.as_ref()),
+                owner_public_key: prefixed_hex(signer.verifying_key_bytes()),
             },
         );
         let profile = test_profile("default", None, wallets);
@@ -767,15 +764,15 @@ mod tests {
         wallets.insert(
             "broken".into(),
             SavedWalletBinding {
-                address: format_hex(&[0x85; 32]),
+                address: prefixed_hex([0x85; 32]),
                 owner_public_key: "not-hex".into(),
             },
         );
         wallets.insert(
             "trading".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
-                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+                address: prefixed_hex(wallet_address.as_ref()),
+                owner_public_key: prefixed_hex(signer.verifying_key_bytes()),
             },
         );
         let profile = test_profile("alice", None, wallets);
@@ -790,13 +787,13 @@ mod tests {
     #[test]
     fn non_dev_key_rejects_multiple_owner_matched_wallets() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let owner_public_key = format_hex(&signer.verifying_key_bytes());
+        let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
             wallets.insert(
                 name.into(),
                 SavedWalletBinding {
-                    address: format_hex(&[byte; 32]),
+                    address: prefixed_hex([byte; 32]),
                     owner_public_key: owner_public_key.clone(),
                 },
             );
@@ -816,13 +813,13 @@ mod tests {
     #[test]
     fn selected_wallet_disambiguates_owner_matched_wallets() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let owner_public_key = format_hex(&signer.verifying_key_bytes());
+        let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
             wallets.insert(
                 name.into(),
                 SavedWalletBinding {
-                    address: format_hex(&[byte; 32]),
+                    address: prefixed_hex([byte; 32]),
                     owner_public_key: owner_public_key.clone(),
                 },
             );
@@ -840,13 +837,13 @@ mod tests {
     #[test]
     fn profile_default_wallet_disambiguates_owner_matched_wallets() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let owner_public_key = format_hex(&signer.verifying_key_bytes());
+        let owner_public_key = prefixed_hex(signer.verifying_key_bytes());
         let mut wallets = BTreeMap::new();
         for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
             wallets.insert(
                 name.into(),
                 SavedWalletBinding {
-                    address: format_hex(&[byte; 32]),
+                    address: prefixed_hex([byte; 32]),
                     owner_public_key: owner_public_key.clone(),
                 },
             );
@@ -874,8 +871,8 @@ mod tests {
         wallets.insert(
             "trading".into(),
             SavedWalletBinding {
-                address: format_hex(&[0x83; 32]),
-                owner_public_key: format_hex(&other.verifying_key_bytes()),
+                address: prefixed_hex([0x83; 32]),
+                owner_public_key: prefixed_hex(other.verifying_key_bytes()),
             },
         );
         let profile = test_profile("default", None, wallets);
@@ -965,8 +962,8 @@ mod tests {
         profile.wallets.insert(
             "alice".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
-                owner_public_key: format_hex(&other.verifying_key_bytes()),
+                address: prefixed_hex(wallet_address.as_ref()),
+                owner_public_key: prefixed_hex(other.verifying_key_bytes()),
             },
         );
 
@@ -988,7 +985,7 @@ mod tests {
         profile.wallets.insert(
             "alice".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
+                address: prefixed_hex(wallet_address.as_ref()),
                 owner_public_key: "not-hex".into(),
             },
         );
@@ -1014,7 +1011,7 @@ mod tests {
         profile.wallets.insert(
             "alice".into(),
             SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
+                address: prefixed_hex(wallet_address.as_ref()),
                 owner_public_key: String::new(),
             },
         );

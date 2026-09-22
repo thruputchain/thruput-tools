@@ -645,26 +645,50 @@ fn decode_profile(name: &str, value: &toml::Value) -> PersistedProfileState {
                 .try_into::<ProjectProfile>()
                 .map_err(|error| error.to_string())
         })
-        .and_then(validate_profile);
+        .and_then(|profile| validate_profile(profile).map_err(|error| error.to_string()));
     match result {
         Ok(profile) => PersistedProfileState::Valid(profile),
         Err(reason) => PersistedProfileState::Invalid { reason },
     }
 }
 
-pub(super) fn validate_profile(profile: ProjectProfile) -> Result<ProjectProfile, String> {
+/// Why a persisted profile's fields were rejected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ProfileFieldError {
+    /// A URL field does not hold an absolute HTTP(S) URL.
+    #[error("{field} {detail}")]
+    Url {
+        /// The offending field's config key.
+        field: &'static str,
+        /// What the field must be instead.
+        detail: &'static str,
+    },
+    /// `default_key` is present but blank.
+    #[error("default_key cannot be empty")]
+    EmptyDefaultKey,
+}
+
+pub(super) fn validate_profile(
+    profile: ProjectProfile,
+) -> Result<ProjectProfile, ProfileFieldError> {
     if let Some(url) = profile.rpc_url.as_deref() {
-        validate_http_url(url).map_err(|message| format!("rpc_url {message}"))?;
+        validate_http_url(url).map_err(|detail| ProfileFieldError::Url {
+            field: "rpc_url",
+            detail,
+        })?;
     }
     if let Some(url) = profile.faucet_url.as_deref() {
-        validate_http_url(url).map_err(|message| format!("faucet_url {message}"))?;
+        validate_http_url(url).map_err(|detail| ProfileFieldError::Url {
+            field: "faucet_url",
+            detail,
+        })?;
     }
     if profile
         .default_key
         .as_deref()
         .is_some_and(|key| key.trim().is_empty())
     {
-        return Err("default_key cannot be empty".into());
+        return Err(ProfileFieldError::EmptyDefaultKey);
     }
     Ok(profile)
 }

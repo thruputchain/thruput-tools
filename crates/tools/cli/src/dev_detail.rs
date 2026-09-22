@@ -1,6 +1,6 @@
 use groundhog_json_rpc_types::dev::{StorageDeltaInfo, TransactionDetail, format_gas_summary};
 use groundhog_json_rpc_types::events::EmittedEvent;
-use groundhog_json_rpc_types::hex::HexBytes;
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use groundhog_json_rpc_types::transaction::TxHash;
 use jsonrpsee::core::ClientError;
 use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
@@ -60,7 +60,7 @@ pub fn print_transaction_detail(detail: &TransactionDetail, print: &Print) {
         if !detail.storage_deltas.is_empty() || !detail.receipt.events.is_empty() {
             print.status("");
         }
-        print.status(format!("  Return: {}", format_hex_bytes(return_data)));
+        print.status(format!("  Return: {}", prefixed_hex(return_data)));
     }
 
     if let Some(abort_data) = detail.receipt.abort_data.as_ref() {
@@ -70,7 +70,7 @@ pub fn print_transaction_detail(detail: &TransactionDetail, print: &Print) {
         {
             print.status("");
         }
-        print.status(format!("  Abort: {}", format_hex_bytes(abort_data)));
+        print.status(format!("  Abort: {}", prefixed_hex(abort_data)));
     }
 
     print.status(format!(
@@ -110,14 +110,14 @@ fn is_method_not_found(error: &ClientError) -> bool {
 fn format_storage_delta(delta: &StorageDeltaInfo) -> String {
     format!(
         "{}:{}  {}",
-        format_contract_address(&delta.address.0),
-        format_hex_bytes(&delta.key),
+        prefixed_hex(delta.address.0),
+        prefixed_hex(&delta.key),
         delta.summary,
     )
 }
 
 pub(crate) fn format_event(event: &EmittedEvent) -> String {
-    let mut parts = vec![format_contract_address(&event.contract_address.0)];
+    let mut parts = vec![prefixed_hex(event.contract_address.0)];
     parts.extend(
         event
             .topics
@@ -125,14 +125,6 @@ pub(crate) fn format_event(event: &EmittedEvent) -> String {
             .enumerate()
             .map(|(index, topic)| format!("topic{index}=0x{}", hex::encode(topic.0))),
     );
-    parts.push(format!("data={}", format_hex_bytes(&event.data)));
+    parts.push(format!("data={}", prefixed_hex(&event.data)));
     parts.join(" ")
-}
-
-fn format_contract_address(address: &groundhog_xdr::types::ContractAddress) -> String {
-    format!("0x{}", hex::encode(address.as_ref()))
-}
-
-fn format_hex_bytes(bytes: &HexBytes) -> String {
-    format!("0x{}", hex::encode(&bytes.0))
 }

@@ -252,13 +252,14 @@ fn parse_entrypoint_id(
     field: &'static str,
     value: &str,
 ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex::decode(value)
-        .map_err(|source| RuntimeManifestEntrypointError::InvalidHex { field, source })?;
-    let len = bytes.len();
-    let bytes: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| RuntimeManifestEntrypointError::InvalidLength { field, len })?;
+    let bytes = crate::hex::decode_fixed_hex::<8>(value).map_err(|error| match error {
+        crate::hex::FixedHexError::InvalidHex(source) => {
+            RuntimeManifestEntrypointError::InvalidHex { field, source }
+        }
+        crate::hex::FixedHexError::InvalidLength { len, .. } => {
+            RuntimeManifestEntrypointError::InvalidLength { field, len }
+        }
+    })?;
     Ok(ContractEntrypointID::from(bytes))
 }
 

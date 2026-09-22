@@ -113,21 +113,6 @@ fn workspace_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
-fn target_dir() -> std::path::PathBuf {
-    let root = workspace_root();
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(raw) => {
-            let path = std::path::PathBuf::from(raw);
-            if path.is_absolute() {
-                path
-            } else {
-                root.join(path)
-            }
-        }
-        None => root.join("target"),
-    }
-}
-
 #[cfg(unix)]
 // Creates the minimum persistent on-disk state accepted by `groundhog chain dump`.
 fn write_chain_data_fixture(root: &std::path::Path) {
@@ -253,38 +238,64 @@ fn chain_restore_help_documents_force_alias() {
     );
 }
 
+/// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
+/// only as a test harness, so a copy on disk may predate a `groundhog-xdr` bump.
 fn fake_hogd_dev_binary() -> std::path::PathBuf {
-    let binary = target_dir()
-        .join("debug")
-        .join("examples")
-        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
-    if binary.is_file() {
-        return binary;
-    }
+    static BINARY: OnceLock<std::path::PathBuf> = OnceLock::new();
+    BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
+}
 
+/// Builds the example with the current cargo and returns the path it reports.
+fn build_fake_hogd_dev_binary() -> std::path::PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(cargo)
+    let output = Command::new(&cargo)
         .args([
             "build",
             "--quiet",
+            "--locked",
+            "--message-format=json",
             "-p",
             "groundhog-node-supervisor",
             "--example",
             "fake_hogd_dev",
         ])
         .current_dir(workspace_root())
-        .status()
-        .expect("bug: cargo should run to build fake_hogd_dev example");
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to run {} to build the fake_hogd_dev example: {err}",
+                cargo.to_string_lossy()
+            )
+        });
     assert!(
-        status.success(),
-        "failed to build fake_hogd_dev example; status: {status}",
+        output.status.success(),
+        "failed to build fake_hogd_dev example; status: {}",
+        output.status
     );
+    let binary = fake_hogd_dev_executable(&output.stdout);
     assert!(
         binary.is_file(),
         "fake_hogd_dev example missing after build at {}",
         binary.display(),
     );
     binary
+}
+
+/// Finds the `fake_hogd_dev` example artifact in cargo's JSON build messages.
+fn fake_hogd_dev_executable(messages: &[u8]) -> std::path::PathBuf {
+    String::from_utf8_lossy(messages)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|message| {
+            message["reason"] == "compiler-artifact"
+                && message["target"]["name"] == "fake_hogd_dev"
+                && message["target"]["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "example"))
+        })
+        .and_then(|message| message["executable"].as_str().map(std::path::PathBuf::from))
+        .expect("bug: cargo build output should report the fake_hogd_dev example executable")
 }
 
 #[cfg(unix)]
@@ -5415,6 +5426,65 @@ fn transaction_commands_require_force_before_submission_or_attempt_state() {
 }
 
 #[test]
+fn funding_commands_refuse_without_force_before_reading_the_profile() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    write_project_config_with_alice_wallet(&project, "http://127.0.0.1:9", &config_home);
+    let recipient = format!("0x{}", "22".repeat(32));
+
+    let invocations = [
+        (vec!["airdrop".to_owned(), recipient], "request an airdrop"),
+        (
+            vec![
+                "wallet".to_owned(),
+                "create".to_owned(),
+                "--key".to_owned(),
+                "alice".to_owned(),
+                "--name".to_owned(),
+                "new-wallet".to_owned(),
+            ],
+            "create a wallet",
+        ),
+    ];
+
+    for (args, action) in invocations {
+        // The preflight runs before profile resolution, so `--force` is the first error.
+        let output = groundhog()
+            .arg("--json")
+            .args(&args)
+            .args(["--profile", "missing"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{action} unexpectedly succeeded");
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(
+            error["error"]["code"], "confirmation_required",
+            "{action}: {error}"
+        );
+        assert_eq!(error["error"]["details"]["action"], action);
+
+        let forced = groundhog()
+            .arg("--json")
+            .args(&args)
+            .args(["--profile", "missing", "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!forced.status.success(), "{action} unexpectedly succeeded");
+        let error: serde_json::Value = serde_json::from_slice(&forced.stderr).unwrap();
+        assert_eq!(
+            error["error"]["code"], "profile_not_found",
+            "{action}: {error}"
+        );
+    }
+}
+
+#[test]
 fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -5965,6 +6035,7 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
     assert_transfer_live_common(data, &run.local_hash, None);
     assert_eq!(data["height"], 43);
     assert_eq!(data["status"], serde_json::json!({ "result": "ok" }));
+    assert_eq!(data["gasUsed"], 1500);
     assert_eq!(data["events"], serde_json::json!([event]));
     assert_eq!(data["returnData"], "0x0506");
     for absent in [
@@ -7097,6 +7168,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
     let expected_address = format!("0x{}", "bb".repeat(32));
     assert_eq!(stdout["data"]["address"], expected_address);
     assert_eq!(stdout["data"]["addressSource"], "receipt");
+    assert_eq!(stdout["data"]["gasUsed"], 1500);
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
     assert!(stdout["data"].get("returnData").is_none());
@@ -7277,6 +7349,7 @@ fn deploy_live_human_fails_after_printing_receipt_context() {
     assert!(stderr.contains("height: 42"));
     assert!(stderr.contains("return data: 0x0102"), "stderr: {stderr}");
     assert!(stderr.contains("abort data: 0x0304"), "stderr: {stderr}");
+    assert!(stderr.contains("gas used: 4242"), "stderr: {stderr}");
 }
 
 #[test]
@@ -8514,6 +8587,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
+    assert_eq!(stdout["data"]["gasUsed"], 1500);
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
         advertised_wallet
@@ -8617,6 +8691,7 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(stderr.contains("contract: 0x"));
     assert!(stderr.contains("tx: 0x"));
     assert!(stderr.contains("height: 42"));
+    assert!(stderr.contains("gas used: 1500"), "stderr: {stderr}");
     assert!(stderr.contains("wallet: 0x"));
 }
 
@@ -9406,6 +9481,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     let receipt = serde_json::json!({
         "txHash": hash,
         "height": 42,
+        "gasUsed": 1500,
         "status": { "result": "ok" },
         "events": [event.clone()],
         "returnData": "0x0506",
@@ -9523,6 +9599,7 @@ fn tx_show_human_output_includes_raw_committed_receipt_data() {
         Some(TxShowRpcResponse::Result(serde_json::json!({
             "txHash": hash,
             "height": 43,
+            "gasUsed": 1500,
             "status": { "result": "reverted", "message": "bad\ncall" },
             "events": [event],
             "returnData": "0xccdd",
@@ -9645,6 +9722,7 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
         Some(TxShowRpcResponse::Result(serde_json::json!({
             "txHash": hash,
             "height": 52,
+            "gasUsed": 1500,
             "status": { "result": "ok" },
             "events": [],
         }))),
@@ -9664,6 +9742,7 @@ fn tx_show_matching_receipt_omits_absent_optional_fields() {
         serde_json::json!({
             "txHash": hash,
             "height": 52,
+            "gasUsed": 1500,
             "status": { "result": "ok" },
             "events": [],
         })
@@ -9748,6 +9827,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
             serde_json::json!({
                 "txHash": format!("0x{}", "ef".repeat(32)),
                 "height": 61,
+                "gasUsed": 1500,
                 "status": { "result": "ok" },
                 "events": [],
             }),
@@ -9757,6 +9837,7 @@ fn tx_show_rejects_receipt_hash_and_height_mismatches() {
             serde_json::json!({
                 "txHash": hash,
                 "height": 62,
+                "gasUsed": 1500,
                 "status": { "result": "ok" },
                 "events": [],
             }),
@@ -12681,6 +12762,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
                 "rawAmount": "25000000",
                 "txHash": format!("0x{}", "22".repeat(32)),
                 "height": 42,
+                "gasUsed": 1500,
                 "status": { "result": "ok" },
             }),
         );
@@ -12790,6 +12872,7 @@ fn serve_successful_transaction(listener: &TcpListener, deadline: Instant, heigh
         serde_json::json!({
             "txHash": tx_hash,
             "height": height,
+            "gasUsed": 1500,
             "status": { "result": "ok" },
             "events": [],
         }),
@@ -13094,6 +13177,7 @@ fn serve_transfer_poll(
                 "height": 43,
                 "status": status,
                 "events": events,
+                "gasUsed": 1500,
             });
             if let Some(value) = return_data {
                 receipt["returnData"] = serde_json::json!(value);
@@ -13729,6 +13813,7 @@ fn sample_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height,
+        "gasUsed": 1500,
         "status": { "result": "ok" },
         "events": [],
         "returnData": format!("0x{}", "bb".repeat(32)),
@@ -13739,6 +13824,7 @@ fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height,
+        "gasUsed": 4242,
         "status": {
             "result": "deterministicError",
             "kind": "outOfGas",
@@ -13758,6 +13844,7 @@ fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value 
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height,
+        "gasUsed": 1500,
         "status": { "result": "reverted", "message": null },
         "events": [],
         "abortData": format!("0x{}", hex::encode(abort_data)),
@@ -13769,6 +13856,7 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height,
+        "gasUsed": 1500,
         "status": { "result": "ok" },
         "events": [{
             "contractAddress": contract_address,
@@ -13783,6 +13871,7 @@ fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height,
+        "gasUsed": 1500,
         "status": {
             "result": "deterministicError",
             "kind": "fault",
@@ -13795,6 +13884,7 @@ fn sample_reverted_call_receipt(height: i64, abort_hex: &str) -> serde_json::Val
     serde_json::json!({
         "txHash": mock_tx_hash(),
         "height": height,
+        "gasUsed": 1500,
         "status": { "result": "reverted" },
         "events": [],
         "abortData": abort_hex,

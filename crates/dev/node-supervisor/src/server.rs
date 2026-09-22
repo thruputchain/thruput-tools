@@ -973,6 +973,20 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
             "0xe0b0468f28980b4982a63bea1018c0ec2bb12e8bd41b5f43dd1ac5fefb31cfe9"
         );
+        let chain_config = client
+            .chain_config()
+            .await
+            .expect("bug: chainConfig should dispatch to fake scheduler");
+        assert_eq!(
+            chain_config.max_sha256_buffers,
+            Some(0),
+            "chainConfig should report the parameters the fake scheduler's genesis config states"
+        );
+        assert_eq!(chain_config.max_cross_invoke_depth, Some(0));
+        assert_eq!(
+            chain_config.max_contract_size_bytes, None,
+            "a parameter the genesis config does not state is absent, not defaulted"
+        );
         assert_eq!(
             client
                 .pending_transaction_count()
@@ -2105,6 +2119,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     const CANNED_HASH_UNKNOWN_HEX: &str =
         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     const CANNED_HEIGHT_A: i64 = 5;
+    const CANNED_GAS_USED_A: u64 = 1_500;
     const CANNED_STORAGE_KEY_HEX: &str =
         "0x4242424242424242424242424242424242424242424242424242424242424242";
     const CANNED_STORAGE_MISSING_KEY_HEX: &str =
@@ -2316,6 +2331,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             receipt["txHash"].as_str().unwrap_or("").to_lowercase(),
             CANNED_HASH_A_HEX,
             "receipt txHash should round-trip"
+        );
+        assert_eq!(
+            receipt["gasUsed"], CANNED_GAS_USED_A,
+            "receipt should carry the gas the fake indexer's event log records"
         );
 
         handle.stop().await.expect("bug: clean shutdown");

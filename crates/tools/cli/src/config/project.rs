@@ -175,13 +175,18 @@ pub fn load_project_profiles(
 /// only the local bookkeeping can fail. Rejecting it in the argument parser
 /// fails before the transaction is spent. The value is trimmed so that what
 /// the CLI reports matches the key actually written.
-pub fn parse_contract_alias(value: &str) -> Result<String, String> {
+pub fn parse_contract_alias(value: &str) -> Result<String, EmptyContractAlias> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err("contract alias cannot be empty".to_string());
+        return Err(EmptyContractAlias);
     }
     Ok(trimmed.to_string())
 }
+
+/// A `--alias` value that is blank once trimmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("contract alias cannot be empty")]
+pub struct EmptyContractAlias;
 
 pub fn save_profile_contract_alias(
     project_root: &Path,
@@ -197,7 +202,8 @@ pub fn save_profile_contract_alias(
     }
     if !is_valid_address(address.trim()) {
         return Err(CliError::Other(
-            "contract address must be a C StrKey or 32-byte hex address".into(),
+            "contract address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
+                .into(),
         ));
     }
 
@@ -264,12 +270,13 @@ pub fn save_profile_wallet_address_with_default(
     }
     if !is_valid_address(address.trim()) {
         return Err(CliError::Other(
-            "wallet address must be a C StrKey or 32-byte hex address".into(),
+            "wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
+                .into(),
         ));
     }
     if groundhog_signing::strkey::parse_public_key(owner_public_key.trim()).is_err() {
         return Err(CliError::Other(
-            "wallet owner public key must be a G StrKey or 32-byte hex public key".into(),
+            "wallet owner public key must be a G StrKey or 64 hex characters, optionally prefixed with 0x".into(),
         ));
     }
 

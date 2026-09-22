@@ -21,12 +21,14 @@ env:
     groundhog-rv32-artifact
     groundhog-tx-validation
     groundhog-json-rpc-server
+    groundhog-hogd-backend
     groundhog-json-rpc-client
     groundhog-signing
     groundhog-client
     groundhog-node-supervisor
     groundhog-rv32-lower
     groundhog-toolchain
+    groundhog-cli-macros
     groundhog-cli
     groundhog-testkit
 

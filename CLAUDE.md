@@ -59,10 +59,23 @@ Workspace crates are grouped by boundary:
   artifact pipeline. Snapshot:
   `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`.
 
-`crates/x23/` owns internal transport helpers:
+`crates/x23/` owns the internal hogd-facing layer:
 
 - **x23-transport** — connection pools, address parsing, and typed connect
   errors for gateway and node-supervisor. Internal; not the public JSON-RPC API.
+- **hogd-backend** — shared hogd x23 backend adapters: intro-handshake
+  classification and the XDR-to-JSON-RPC mapping for `SchedGateway`,
+  `IndexerBlockExplorer`, `DbGateway`, and `ViewGateway` results, plus submit
+  batch packing and deadline cohorting, and the `getTransactionStatus`
+  probe order (`status::transaction_status` over a `StatusProbe` the binary
+  implements). Gateway and node-supervisor both decode hogd through it, so a
+  wire result has one meaning across both binaries and a composite answer
+  has one sequence. It owns no connections, timeouts, retry policy, or
+  metrics: those stay with each consumer, which is where the two genuinely
+  differ.
+  Its mapping functions take a `service` label because the gateway and the
+  supervisor name the same backend differently ("indexer" vs "hogd-dev
+  indexer"). Add new hogd result decoding here, not in a binary.
 
 `crates/tools/` and `crates/rv32/` own developer tooling:
 
@@ -70,6 +83,11 @@ Workspace crates are grouped by boundary:
   agent knowledge records, the embedded skill, and normalized bundle metadata.
 - **cli** — `groundhog` binary. Build/test/deploy/call/local-node workflow.
   Keep logic in the library crate; `main.rs` should be dispatch only.
+- **cli-macros** — `ErrorMeta`, the derive that reads each `CliError`
+  variant's `#[code]`, `#[hint]`, and `#[details]` attributes and generates
+  `code`, `hint`, `details_json`, and the `METADATA` catalog a snapshot test
+  pins. It exists so error metadata lives beside the variant instead of in
+  parallel match ladders.
 - **toolchain** — embedded trusted devnode catalog, bounded acquisition and
   extraction, and versioned cache management. Cache lookup remains local and
   non-mutating; only explicit acquisition receives an HTTP source.
@@ -78,8 +96,10 @@ Workspace crates are grouped by boundary:
   and call, XDR encoding.
 - **tx-validation** — off-chain mirror of the bounds hogd's executor checks
   before running a transaction. `NetworkConfigParams` flattens a db tip's
-  network config into per-parameter fields (`None` when unstated);
-  `check_transaction` reports violations as `TxInvalidDetail`.
+  network config into per-parameter fields (`None` when unstated); it is
+  defined in `json-rpc-types` because `chainConfig` returns it on the wire,
+  and re-exported here. `check_transaction` reports violations as
+  `TxInvalidDetail`.
   `ConfigParamName` is the one Rust-side spelling of the parameter names
   hog-devnode's `--network-config` flag and its data-dir metadata key by;
   `groundhog node` parses the flag into it rather than passing a free string.
@@ -399,8 +419,17 @@ groundhog-bench --url http://127.0.0.1:9546 \
   live in `groundhog_json_rpc_server::tx`; do not duplicate that logic in
   gateway or node-supervisor adapters.
 - Gateway handler modules are production backend helpers grouped by
-  subsystem (receipt, blocks, events, parsing). Do not add new public
+  subsystem (receipt, blocks, events, view). Do not add new public
   JSON-RPC handler implementations there.
+- Decoding a hogd x23 result into a public payload belongs in
+  `groundhog-hogd-backend`, not in a handler or a supervisor adapter: the
+  gateway and node-supervisor serve the same RPC surface from the same
+  services, and a second copy is how their answers drift apart. Handlers
+  keep what is theirs alone (client acquisition, timeouts, metrics,
+  degraded-mode policy) and call the shared decoder for the mapping. The
+  same holds for an answer composed from several backend reads:
+  `getTransactionStatus` runs `groundhog_hogd_backend::status` in both
+  binaries, each supplying only its raw indexer and mempool lookups.
 - `json-rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.
@@ -429,7 +458,10 @@ groundhog-bench --url http://127.0.0.1:9546 \
   (`ChainPlane::chain_tip` returns `TipReading`, tip plus network config)
   that every tip fetch refreshes: a submit that finds it stale, the public
   `chainTip` method, and a background task `GroundhogRpcServer::new` starts
-  on `tip_refresh_interval_ms`. A bound violation found against a cached
+  on `tip_refresh_interval_ms`. The public `chainConfig` method reads
+  through that same cache, so it costs the backend at most one fetch per
+  `tip_cache_ttl_ms` however often it is called, and reports only the
+  parameters the config states. A bound violation found against a cached
   reading is re-checked against a freshly fetched tip before it is
   returned, so a reading that lags a config upgrade never rejects what the
   current config admits. The checks are advisory, not a trust
@@ -488,11 +520,37 @@ that build matches a validated installed bundle manifest.
 
 ### Adding a new error variant
 
-1. Add the variant to `CliError` in `src/error.rs`.
-2. Add a `code()` arm.
-3. Add a `hint()` arm.
-4. Use the variant at call sites. Avoid `CliError::Other` for common
-   user-facing failures.
+Add the variant to `CliError` in `src/error.rs` and declare its metadata in
+attributes beside the `#[error(...)]` message; `ErrorMeta` generates `code`,
+`hint`, and `details_json` from them, so there is no match arm to update.
+
+```rust
+#[error("invalid `{argument}`: {message}")]
+#[hint("pass a value `groundhog config get {argument}` accepts")]
+#[details]
+InvalidArgument { argument: String, message: String },
+```
+
+- The code defaults to the variant name in `snake_case`. Add
+  `#[code("...")]` only when the stable code has to differ, and record a code
+  deliberately shared with another variant in `SHARED_CODES` in
+  `tests/error_metadata.rs`.
+- `#[hint(...)]` takes a format string over the variant's fields, the same
+  shape `#[error(...)]` takes; `#[hint(text = CONST)]` reuses a hint several
+  variants share, and `#[hint(expr = ...)]` calls a helper for a hint that
+  depends on a field's value. Leave `#[hint]` off when the message already
+  states the fix.
+- `#[details]` puts every named field in the `--json` payload under its
+  `camelCase` key, `#[details(a, b)]` selects a subset, and
+  `#[details(expr = ...)]` builds a payload that renames or nests fields.
+- Run `UPDATE_SNAPSHOTS=1 cargo test -p groundhog-cli --test error_metadata`
+  to record the new metadata. The snapshot carries every variant's code, hint,
+  and `camelCase` details keys, so it is what turns a variant rename, a
+  reworded hint, or a dropped details field into a failing test rather than a
+  silently changed contract. A hint or payload built by `expr` depends on the
+  error's field values and reads `computed` there; give it a test of its own.
+- Use the variant at call sites. Avoid `CliError::Other` for common
+  user-facing failures.
 
 ### Adding machine-readable output to a CLI command
 

@@ -354,6 +354,7 @@ mod tests {
                     events: vec![],
                     return_data: None,
                     abort_data: Some(types::hex::HexBytes(vec![1, 2, 3])),
+                    gas_used: 1_500,
                 }))
             })
             .unwrap();

@@ -7,18 +7,21 @@ use std::{
 };
 
 use async_trait::async_trait;
+use groundhog_hogd_backend::{scheduler as shared_scheduler, submit as shared_submit};
 use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
 use groundhog_scheduler::{
-    ParallelBatch, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
-    parallel::ParallelSignedTransactionBatch, sched_gateway::SchedGateway_SchedGateway1_Client,
+    SchedGatewaySubmitOutcomeBatch, parallel::ParallelSignedTransactionBatch,
+    sched_gateway::SchedGateway_SchedGateway1_Client,
 };
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot},
     task::AbortHandle,
 };
-use xdr_common::{BytesM, VecM};
 
-use crate::{block_driver::BlockDriverTrigger, request_deadline::within_request_deadline};
+use crate::{
+    block_driver::BlockDriverTrigger, request_deadline::within_request_deadline,
+    service::SCHEDULER_GATEWAY,
+};
 use groundhog_x23_transport::HOGD_LARGE_MESSAGE_SIZE;
 
 const MAX_BATCH_SIZE: usize = 1_000;
@@ -52,7 +55,7 @@ impl SubmitSink for SchedulerSink {
             .await
             .map_err(|error| {
                 RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev scheduler gateway submit outcome is indeterminate: {error}"
+                    "{SCHEDULER_GATEWAY} submit outcome is indeterminate: {error}"
                 ))
             })
     }
@@ -259,29 +262,30 @@ async fn run(
             continue;
         }
 
-        for cohort in deadline_cohorts(live) {
+        for cohort in
+            shared_submit::deadline_cohorts(live, MAX_DEADLINE_SKEW, |item| item.backend_deadline)
+        {
             let cohort = live_items(cohort, Instant::now());
             if cohort.is_empty() {
                 continue;
             }
-            let deadline = cohort
-                .iter()
-                .map(|item| item.backend_deadline)
-                .min()
-                .expect("bug: non-empty deadline cohort should have a deadline");
+            // Cohorts come back in ascending deadline order, so the first
+            // item's deadline is the tightest one this batch must honor.
+            let deadline = cohort[0].backend_deadline;
             tracing::debug!(
                 batch_size = cohort.len(),
                 "submitting dev-node transaction batch"
             );
-            let result = match pack(&cohort) {
-                Ok(batch) => submit_before(&sink, batch, deadline).await,
-                Err(error) => Err(error),
-            };
+            let result =
+                match shared_submit::pack(cohort.iter().map(|item| item.tx_bytes.as_slice())) {
+                    Ok(batch) => submit_before(&sink, batch, deadline).await,
+                    Err(error) => Err(error),
+                };
             let results = match result {
                 Ok(outcomes) if outcomes.0.len() == cohort.len() => outcomes
                     .0
                     .into_iter()
-                    .map(result_for_outcome)
+                    .map(shared_scheduler::submit_result)
                     .collect::<Vec<_>>(),
                 Ok(outcomes) => vec![
                     Err(RpcServerError::BackendUnavailable(format!(
@@ -319,27 +323,6 @@ async fn submit_before(
         .map_err(|_| RpcServerError::BackendTimeout)?
 }
 
-fn result_for_outcome(outcome: SchedGatewaySubmitOutcome) -> Result<(), RpcServerError> {
-    match outcome {
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAdmitted => Ok(()),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitAuthenticationRejected => {
-            Err(RpcServerError::TxRejected(
-                "scheduler rejected authentication for the signed transaction".into(),
-            ))
-        }
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitRetryable => Err(RpcServerError::Overloaded(
-            "scheduler could not admit the transaction; retry with backoff".into(),
-        )),
-        SchedGatewaySubmitOutcome::SchedGatewaySubmitInternalError => Err(
-            RpcServerError::BackendUnavailable("scheduler admission dependency failed".into()),
-        ),
-        unknown => Err(RpcServerError::BackendUnavailable(format!(
-            "scheduler returned unknown submission outcome {}",
-            unknown.0
-        ))),
-    }
-}
-
 fn live_items(items: Vec<Item>, now: Instant) -> Vec<Item> {
     items
         .into_iter()
@@ -356,47 +339,6 @@ fn live_items(items: Vec<Item>, now: Instant) -> Vec<Item> {
         .collect()
 }
 
-fn deadline_cohorts(items: Vec<Item>) -> Vec<Vec<Item>> {
-    let mut cohorts: Vec<Vec<Item>> = Vec::new();
-    let mut bounds: Option<(Instant, Instant)> = None;
-    for item in items {
-        let deadline = item.backend_deadline;
-        let (min, max) = bounds.map_or((deadline, deadline), |(min, max)| {
-            (min.min(deadline), max.max(deadline))
-        });
-        if bounds.is_some() && max.saturating_duration_since(min) <= MAX_DEADLINE_SKEW {
-            bounds = Some((min, max));
-            cohorts
-                .last_mut()
-                .expect("bug: current deadline cohort should exist")
-                .push(item);
-        } else {
-            bounds = Some((deadline, deadline));
-            cohorts.push(vec![item]);
-        }
-    }
-    cohorts
-}
-
-fn pack(items: &[Item]) -> Result<ParallelSignedTransactionBatch, RpcServerError> {
-    let mut segment_tokens = Vec::with_capacity(items.len());
-    let mut segment_bytes = Vec::with_capacity(items.len());
-    let total_bytes = items.iter().map(|item| item.tx_bytes.len()).sum();
-    let mut xdr = Vec::with_capacity(total_bytes);
-    for item in items {
-        let tx_len = u32::try_from(item.tx_bytes.len())
-            .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
-        segment_tokens.push(1);
-        segment_bytes.push(tx_len);
-        xdr.extend_from_slice(&item.tx_bytes);
-    }
-    Ok(ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(segment_tokens),
-        segment_bytes: VecM(segment_bytes),
-        xdr: BytesM(xdr),
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -404,9 +346,23 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
+    use groundhog_scheduler::SchedGatewaySubmitOutcome;
     use tokio::sync::{Notify, Semaphore};
+    use xdr_common::VecM;
 
     use super::*;
+
+    /// Group items the way the worker does, so a test reads the same
+    /// cohorts the submit loop would.
+    fn cohorts(items: Vec<Item>) -> Vec<Vec<Item>> {
+        shared_submit::deadline_cohorts(items, MAX_DEADLINE_SKEW, |item| item.backend_deadline)
+    }
+
+    /// Pack items the way the worker does.
+    fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
+        shared_submit::pack(items.iter().map(|item| item.tx_bytes.as_slice()))
+            .expect("bug: test transactions should pack")
+    }
 
     struct GatedSink {
         batches: Mutex<Vec<ParallelSignedTransactionBatch>>,
@@ -504,8 +460,7 @@ mod tests {
 
     #[test]
     fn pack_preserves_transaction_segments_and_bytes() {
-        let batch = pack(&[item(vec![1, 2]), item(vec![3, 4, 5])])
-            .expect("bug: test transactions should pack");
+        let batch = pack(&[item(vec![1, 2]), item(vec![3, 4, 5])]);
 
         assert_eq!(batch.segment_tokens.0, vec![1, 1]);
         assert_eq!(batch.segment_bytes.0, vec![2, 3]);
@@ -582,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn deadline_cohorts_preserve_ingress_order() {
+    fn the_tightest_deadline_cohort_is_submitted_first() {
         let now = Instant::now();
         let items = vec![
             item_with_reply(vec![1], now + Duration::from_secs(10)).0,
@@ -590,38 +545,35 @@ mod tests {
             item_with_reply(vec![3], now + Duration::from_secs(10)).0,
         ];
 
-        let order: Vec<_> = deadline_cohorts(items)
+        let order: Vec<Vec<u8>> = cohorts(items)
             .into_iter()
-            .flatten()
-            .map(|item| item.tx_bytes[0])
+            .map(|cohort| cohort.into_iter().map(|item| item.tx_bytes[0]).collect())
             .collect();
 
-        assert_eq!(order, vec![1, 2, 3]);
+        assert_eq!(order, vec![vec![2], vec![1, 3]]);
     }
 
     #[test]
-    fn deadline_cohorts_bound_min_and_max_without_reordering() {
+    fn a_cohort_spans_no_more_than_the_permitted_deadline_skew() {
         let now = Instant::now();
-        // Exercise both bound updates, inclusive skew, and reset after each split.
-        for offsets in [
-            [2_000, 1_500, 2_500, 2_501, 3_501, 3_502],
-            [2_000, 2_500, 1_500, 1_499, 499, 498],
-        ] {
-            let items = (0u8..)
-                .zip(offsets)
-                .map(|(index, millis)| {
-                    item_with_reply(vec![index], now + Duration::from_millis(millis)).0
-                })
-                .collect();
+        // Deadlines arrive out of order; grouping is by deadline, not arrival.
+        // Offsets are chosen so the skew boundary is exercised inclusively
+        // (2_500 joins an anchor at 1_500) and exclusively (2_501 does not).
+        let offsets = [2_000u64, 1_500, 2_500, 2_501, 3_501, 3_502];
+        let items = (0u8..)
+            .zip(offsets)
+            .map(|(index, millis)| {
+                item_with_reply(vec![index], now + Duration::from_millis(millis)).0
+            })
+            .collect();
 
-            let cohorts: Vec<Vec<_>> = deadline_cohorts(items)
-                .into_iter()
-                .map(|cohort| cohort.into_iter().map(|item| item.tx_bytes[0]).collect())
-                .collect();
+        let grouped: Vec<Vec<u8>> = cohorts(items)
+            .into_iter()
+            .map(|cohort| cohort.into_iter().map(|item| item.tx_bytes[0]).collect())
+            .collect();
 
-            assert_eq!(cohorts, vec![vec![0, 1, 2], vec![3, 4], vec![5]]);
-        }
-        assert!(deadline_cohorts(Vec::new()).is_empty());
+        assert_eq!(grouped, vec![vec![1, 0, 2], vec![3, 4], vec![5]]);
+        assert!(cohorts(Vec::new()).is_empty());
     }
 
     #[test]
@@ -630,11 +582,11 @@ mod tests {
         let (first, _first_reply) = item_with_reply(vec![1], now + Duration::from_secs(30));
         let (expired, mut expired_reply) = item_with_reply(vec![2], now + Duration::from_secs(5));
         let (live, mut live_reply) = item_with_reply(vec![3], now + Duration::from_millis(5_500));
-        let mut cohorts = deadline_cohorts(live_items(vec![first, expired, live], now));
-        assert_eq!(cohorts.len(), 2);
+        let mut grouped = cohorts(live_items(vec![first, expired, live], now));
+        assert_eq!(grouped.len(), 2);
 
-        // Model the first submission completing at the later cohort's earliest deadline.
-        let later = live_items(cohorts.pop().unwrap(), now + Duration::from_secs(5));
+        // Model time reaching the tightest cohort's deadline before it is packed.
+        let tightest = live_items(grouped.remove(0), now + Duration::from_secs(5));
 
         assert!(matches!(
             expired_reply.try_recv(),
@@ -644,7 +596,7 @@ mod tests {
             live_reply.try_recv(),
             Err(oneshot::error::TryRecvError::Empty)
         ));
-        assert_eq!(pack(&later).unwrap().xdr.0, vec![3]);
+        assert_eq!(pack(&tightest).xdr.0, vec![3]);
     }
 
     #[tokio::test]
@@ -838,13 +790,15 @@ mod tests {
         let sink = Arc::new(GatedSink::new());
         let (ingress_tx, ingress_rx) = mpsc::channel(2);
         let now = Instant::now();
-        let (first, first_reply) = item_with_reply(vec![1], now + Duration::from_secs(30));
-        let (second, second_reply) = item_with_reply(vec![2], now + Duration::from_secs(10));
+        // The tighter deadline is packed first, so the looser one is still
+        // queued when its caller goes away.
+        let (submitted, submitted_reply) = item_with_reply(vec![1], now + Duration::from_secs(10));
+        let (canceled, canceled_reply) = item_with_reply(vec![2], now + Duration::from_secs(30));
         ingress_tx
-            .try_send(first)
+            .try_send(submitted)
             .expect("bug: first test item should enter queue");
         ingress_tx
-            .try_send(second)
+            .try_send(canceled)
             .expect("bug: second test item should enter queue");
         drop(ingress_tx);
         let worker = tokio::spawn(run(
@@ -856,9 +810,9 @@ mod tests {
         ));
         sink.called.notified().await;
 
-        drop(second_reply);
+        drop(canceled_reply);
         sink.permits.add_permits(1);
-        first_reply
+        submitted_reply
             .await
             .expect("bug: first test reply should arrive")
             .expect("bug: first test submit should succeed");

@@ -2,8 +2,8 @@
 //!
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` does the composite scheduler-then-indexer probe
-//! that the gateway uses (scheduler for `Pending`, indexer for `Committed`).
+//! calls; `transaction_status` runs the indexer-and-mempool probe the gateway
+//! runs, from `groundhog_hogd_backend::status`, so both answer alike.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
@@ -13,77 +13,36 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::AddressAndKeyBatch;
-use groundhog_db_gateway::{
-    DbGateway_DbGateway1_Client, DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayResult,
+use groundhog_db_gateway::DbGateway_DbGateway1_Client;
+use groundhog_hogd_backend::{
+    db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
+    scheduler as shared_scheduler, status as shared_status,
 };
-use groundhog_indexer::{
-    EventPage as IndexerEventPage, EventPageResult,
-    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
-    IndexerQueryOutcome, TransactionRefPage as IndexerTransactionRefPage, TransactionRefPageResult,
-    TxInfoOutcome, TxInfoResult,
-};
+use groundhog_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     ContractAddress,
-    events::{EventPage, EventQuery, IdentifiedEvent},
-    hex::{Hex0x, HexBytes, Topic},
-    receipt::{ExecStatus, TransactionReceipt},
-    state::{StorageItemInfo, StorageItemRead},
+    events::{EventPage, EventQuery},
+    receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{
         AddressTransactionQuery as RpcAddressTransactionQuery, TransactionRefPage,
         TransactionStatus, TxHash,
     },
 };
-use groundhog_scheduler::{RPCError, sched_gateway::SchedGateway_SchedGateway1_Client};
+use groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client;
 use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
-use groundhog_xdr::{
-    event::TxEmittedEvent,
-    exec_result::ExecResult,
-    transaction::{InvocationFrameOutput, TransactionHash},
-    types::{AddressAndKey, StorageKey, StorageKeyContractData},
-};
+use groundhog_xdr::{transaction::TransactionHash, types::StorageKey};
 use xdr_common::VecM;
 
-use crate::{NodeSupervisorError, request_deadline::within_request_deadline};
+use crate::{
+    NodeSupervisorError,
+    request_deadline::within_request_deadline,
+    service::{DB_GATEWAY, INDEXER, SCHEDULER_GATEWAY},
+};
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
-const TOPIC_SIZE: usize = 32;
-const MAX_TOPICS: u32 = 3;
-
-fn indexer_query_error(outcome: i32) -> RpcServerError {
-    let message = if outcome == IndexerQueryOutcome::IndexerQueryNotReady.0 {
-        "hogd-dev indexer query backend is not ready".to_string()
-    } else if outcome == IndexerQueryOutcome::IndexerQueryInternalFailure.0 {
-        "hogd-dev indexer query backend failed internally".to_string()
-    } else {
-        format!("hogd-dev indexer returned unexpected query outcome: {outcome}")
-    };
-    RpcServerError::BackendUnavailable(message)
-}
-
-fn indexer_event_page(result: EventPageResult) -> Result<IndexerEventPage, RpcServerError> {
-    match result {
-        EventPageResult::IndexerQueryOk { page } => Ok(page),
-        EventPageResult::Default { outcome } => Err(indexer_query_error(outcome)),
-        _ => Err(RpcServerError::BackendUnavailable(
-            "hogd-dev indexer returned an unknown event-page result".into(),
-        )),
-    }
-}
-
-fn indexer_transaction_ref_page(
-    result: TransactionRefPageResult,
-) -> Result<IndexerTransactionRefPage, RpcServerError> {
-    match result {
-        TransactionRefPageResult::IndexerQueryOk { page } => Ok(page),
-        TransactionRefPageResult::Default { outcome } => Err(indexer_query_error(outcome)),
-        _ => Err(RpcServerError::BackendUnavailable(
-            "hogd-dev indexer returned an unknown transaction-page result".into(),
-        )),
-    }
-}
 
 /// Indexer-backed read plane for hogd-dev.
 ///
@@ -140,16 +99,13 @@ impl HogdDevReadBackend {
                 error: e.to_string(),
             })?;
 
-        if intro_outcome != IndexerBlockExplorerIntroOutcome::IntroSuccess {
-            return Err(NodeSupervisorError::ProtocolIntroRejected {
-                service: "IndexerBlockExplorer",
-                outcome: intro_outcome.0,
-                outcome_name: indexer_intro_outcome_name(intro_outcome),
-                is_protocol_mismatch: intro_outcome
-                    == IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol,
-                protocol: protocol_version.to_string(),
-                expected_protocol: expected_protocol.map(str::to_string),
-            });
+        let intro = intro::indexer_block_explorer(intro_outcome);
+        if !intro.accepted() {
+            return Err(NodeSupervisorError::intro_rejected(
+                intro,
+                protocol_version,
+                expected_protocol,
+            ));
         }
 
         let db_gateway = if let Some(endpoint) = gateway_endpoint {
@@ -166,6 +122,42 @@ impl HogdDevReadBackend {
             db_gateway,
             scheduler_gateway,
         })
+    }
+
+    /// Ask the indexer what it knows about one transaction.
+    async fn tx_lookup(&self, tx_hash: TxHash) -> Result<shared_indexer::TxLookup, RpcServerError> {
+        let hash = shared_receipt::tx_hash_to_wire(tx_hash);
+        let result = self
+            .indexer
+            .get_transaction_info(&hash)
+            .await
+            .map_err(|source| RpcServerError::BackendUnavailable(format!("{INDEXER}: {source}")))?;
+        shared_indexer::tx_lookup(INDEXER, result)
+    }
+}
+
+/// The supervisor's two status lookups. Neither is metered or bounded here:
+/// the caller's request deadline bounds the whole probe.
+impl shared_status::StatusProbe for HogdDevReadBackend {
+    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+        let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
+        let results = self
+            .scheduler_gateway
+            .schedgateway_lookup_tx(&batch)
+            .await
+            .map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
+            })?;
+        shared_scheduler::mempool_holds_tx(SCHEDULER_GATEWAY, &results)
+    }
+
+    async fn indexed_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
+        Ok(shared_indexer::committed_status(
+            self.tx_lookup(tx_hash).await?,
+        ))
     }
 }
 
@@ -273,168 +265,29 @@ impl ReadPlane for HogdDevReadBackend {
         tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         within_request_deadline(context, async {
-            let hash = tx_hash_to_wire(tx_hash);
-            let result = self
-                .indexer
-                .get_transaction_info(&hash)
-                .await
-                .map_err(|source| {
-                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-                })?;
-
-            match result {
-                TxInfoResult::TxInfoFound { info } => {
-                    let events = info
-                        .events
-                        .events
-                        .iter()
-                        .filter_map(parse_emitted_event)
-                        .collect();
-
-                    let (return_data, abort_data) = match &info.events.root_output {
-                        InvocationFrameOutput::Return { return_buffer } => {
-                            (Some(HexBytes(return_buffer.0.clone())), None)
-                        }
-                        InvocationFrameOutput::Abort { abort_buffer } => {
-                            (None, Some(HexBytes(abort_buffer.0.clone())))
-                        }
-                        _ => (None, None),
-                    };
-
-                    Ok(Some(TransactionReceipt {
-                        tx_hash,
-                        height: info.height,
-                        status: map_exec_result(info.events.exec_result),
-                        events,
-                        return_data,
-                        abort_data,
-                    }))
-                }
+            match self.tx_lookup(tx_hash).await? {
+                shared_indexer::TxLookup::Found(info) => Ok(Some(receipt(tx_hash, *info))),
                 // A recent nondeterministic failure is not a committed record;
                 // receipts exist only for committed transactions. The diagnostic
                 // surfaces through `transaction_status`.
-                TxInfoResult::TxInfoRecentFailure { .. } => Ok(None),
-                TxInfoResult::Default { outcome }
-                    if outcome == TxInfoOutcome::TxInfoNotFound.0 =>
-                {
+                shared_indexer::TxLookup::RecentFailure(_) | shared_indexer::TxLookup::NotFound => {
                     Ok(None)
-                }
-                TxInfoResult::Default { outcome } => {
-                    tracing::warn!(%outcome, "unexpected TxInfoResult outcome from hogd-dev indexer");
-                    Err(RpcServerError::BackendUnavailable(format!(
-                        "hogd-dev indexer returned unexpected outcome: {outcome}"
-                    )))
-                }
-                _ => {
-                    tracing::warn!("unknown TxInfoResult variant from hogd-dev indexer");
-                    Err(RpcServerError::BackendUnavailable(
-                        "hogd-dev indexer returned unknown TxInfoResult variant".into(),
-                    ))
                 }
             }
         })
         .await
     }
 
-    /// Return the semantic transaction status.
-    ///
-    /// Probe order:
-    /// 1. Scheduler mempool → `Pending` if found.
-    /// 2. Indexer committed set → `Committed { height }` if found;
-    ///    `RecentFailure` if the indexer holds a recent
-    ///    nondeterministic-failure diagnostic (best-effort, advisory).
-    /// 3. Neither → `Unknown`.
-    ///
-    /// Degraded mode: if the scheduler is unreachable, log a warning and skip
-    /// the pending check; terminal indexer answers still return, but an
-    /// indexer miss becomes `BackendUnavailable` instead of `Unknown`
-    /// because the transaction may still be pending in the unreachable
-    /// mempool. Indexer failure is a hard error — without it we cannot
-    /// report committed state.
+    /// Status by the probe order shared with the gateway; see
+    /// `groundhog_hogd_backend::status::transaction_status`. The whole
+    /// probe runs under the caller's request deadline.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
-        within_request_deadline(context, async {
-            let hash = tx_hash_to_wire(tx_hash);
-
-        // 1. Check scheduler mempool. Best-effort in that a failure does not
-        // abort the indexer lookup, but tracked: `Unknown` asserts the
-        // transaction is in neither place, which requires both to have
-        // answered.
-        let mut mempool_checked = false;
-        let batch: VecM<TransactionHash> = VecM(vec![hash]);
-        match self.scheduler_gateway.schedgateway_lookup_tx(&batch).await {
-            // Exactly one per-hash slot counts as a mempool answer. Any
-            // cardinality mismatch leaves the queried transaction unaccounted
-            // for and therefore cannot support an `Unknown` result.
-            Ok(results) if results.len() == 1 => match results.iter().next() {
-                Some(Some(_)) => return Ok(TransactionStatus::Pending),
-                Some(None) => mempool_checked = true,
-                None => unreachable!("length was checked above"),
-            },
-            Ok(results) => {
-                tracing::warn!(
-                    actual = results.len(),
-                    expected = 1,
-                    "hogd-dev scheduler gateway lookup returned the wrong slot count"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "hogd-dev scheduler gateway unreachable, cannot detect pending txs"
-                );
-            }
-        }
-
-        // 2. Check indexer (authoritative for committed state).
-        match self.indexer.get_transaction_info(&hash).await {
-            Ok(TxInfoResult::TxInfoFound { info }) => {
-                return Ok(TransactionStatus::Committed {
-                    height: info.height,
-                });
-            }
-            Ok(TxInfoResult::TxInfoRecentFailure { recent_failure }) => {
-                return Ok(TransactionStatus::from(&recent_failure));
-            }
-            Ok(TxInfoResult::Default { outcome }) if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
-            }
-            Ok(TxInfoResult::Default { outcome }) => {
-                tracing::warn!(%outcome, "unexpected TxInfoResult outcome from hogd-dev indexer");
-                return Err(RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev indexer returned unexpected outcome: {outcome}"
-                )));
-            }
-            Ok(_) => {
-                tracing::warn!("unknown TxInfoResult variant from hogd-dev indexer");
-                return Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev indexer returned unknown TxInfoResult variant".into(),
-                ));
-            }
-            Err(e) => {
-                return Err(RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev indexer: {e}"
-                )));
-            }
-        }
-
-            if mempool_checked {
-                Ok(TransactionStatus::Unknown)
-            } else {
-                // `Unknown` tells the client "not in mempool or indexer"; without
-                // a mempool answer that claim is unverified and a still-pending
-                // transaction would read as gone (inviting an unsafe re-sign).
-                Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev scheduler gateway unavailable: transaction is not committed but may still be \
-                     pending"
-                        .into(),
-                ))
-            }
-        })
-        .await
+        within_request_deadline(context, shared_status::transaction_status(self, tx_hash)).await
     }
 
     /// Return one page of contract events matching `query`.
@@ -457,33 +310,17 @@ impl ReadPlane for HogdDevReadBackend {
                 .map_err(|source| {
                     RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
                 })?;
-            let page = indexer_event_page(result)?;
-
-            let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
-            for identified in &page.events.0 {
-                if let Some(event) = parse_emitted_event(&identified.emitted_event) {
-                    events.push(IdentifiedEvent {
-                        tx_hash: TxHash(Hex0x(identified.tx_hash)),
-                        block_height: identified.block_height.clone(),
-                        sequence_number: identified.sequence_number,
-                        event,
-                    });
-                } else {
-                    tracing::warn!(
-                        tx_hash = ?identified.tx_hash,
-                        block_height = ?identified.block_height,
-                        sequence_number = identified.sequence_number,
-                        "dropped malformed event from hogd-dev indexer",
-                    );
-                }
+            let page = shared_indexer::event_page(INDEXER, result)?;
+            let decoded = shared_indexer::public_event_page(page);
+            for dropped in &decoded.dropped {
+                tracing::warn!(
+                    tx_hash = ?dropped.tx_hash,
+                    block_height = ?dropped.block_height,
+                    sequence_number = dropped.sequence_number,
+                    "dropped malformed event from hogd-dev indexer",
+                );
             }
-
-            Ok(EventPage {
-                events,
-                cursor: page.cursor.into(),
-                latest_block: page.latest_block,
-                oldest_block: page.oldest_block,
-            })
+            Ok(decoded.page)
         })
         .await
     }
@@ -505,7 +342,7 @@ impl ReadPlane for HogdDevReadBackend {
                 .map_err(|source| {
                     RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
                 })?;
-            let page = indexer_transaction_ref_page(result)?;
+            let page = shared_indexer::transaction_ref_page(INDEXER, result)?;
             Ok(page.into())
         })
         .await
@@ -574,39 +411,16 @@ async fn connect_db_gateway(
                 op: "dbgateway_intro",
                 error: e.to_string(),
             })?;
-    if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
-        return Err(NodeSupervisorError::ProtocolIntroRejected {
-            service: "DbGateway",
-            outcome: intro_outcome.0,
-            outcome_name: db_gateway_intro_outcome_name(intro_outcome),
-            is_protocol_mismatch: intro_outcome
-                == DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol,
-            protocol: protocol_version.to_string(),
-            expected_protocol: expected_protocol.map(str::to_string),
-        });
+    let intro = intro::db_gateway(intro_outcome);
+    if !intro.accepted() {
+        return Err(NodeSupervisorError::intro_rejected(
+            intro,
+            protocol_version,
+            expected_protocol,
+        ));
     }
 
     Ok(client)
-}
-
-fn indexer_intro_outcome_name(outcome: IndexerBlockExplorerIntroOutcome) -> &'static str {
-    match outcome.0 {
-        value if value == IndexerBlockExplorerIntroOutcome::IntroSuccess.0 => "IntroSuccess",
-        value if value == IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol.0 => {
-            "IntroMismatchedProtocol"
-        }
-        _ => "UnknownIndexerBlockExplorerIntroOutcome",
-    }
-}
-
-fn db_gateway_intro_outcome_name(outcome: DbGatewayIntroOutcome) -> &'static str {
-    match outcome.0 {
-        value if value == DbGatewayIntroOutcome::DbGatewayIntroSuccess.0 => "DbGatewayIntroSuccess",
-        value if value == DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol.0 => {
-            "DbGatewayIntroMismatchedProtocol"
-        }
-        _ => "UnknownDbGatewayIntroOutcome",
-    }
 }
 
 async fn get_storage_at_from_db_gateway(
@@ -617,9 +431,7 @@ async fn get_storage_at_from_db_gateway(
     get_item_from_db_gateway(
         db_gateway,
         address,
-        StorageKey::ContractData {
-            contract_data_key: StorageKeyContractData::from(key),
-        },
+        shared_db_gateway::contract_data_key(key),
     )
     .await
 }
@@ -636,149 +448,30 @@ async fn get_item_from_db_gateway(
     address: ContractAddress,
     key: StorageKey,
 ) -> Result<StorageItemRead, RpcServerError> {
-    let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
-        address: address.0,
-        key,
-    }]);
+    let batch = shared_db_gateway::single_key_batch(address, key);
     let outer = db_gateway
         .dbgateway_get_items(&batch)
         .await
-        .map_err(|source| {
-            RpcServerError::BackendUnavailable(format!("hogd-dev DbGateway: {source}"))
-        })?;
-    let payload = match outer {
-        DbGatewayResult::kRPCNone { payload } => payload,
-        DbGatewayResult::Default { error } => {
-            return Err(RpcServerError::BackendUnavailable(format!(
-                "hogd-dev DbGateway: {}",
-                RPCError(error)
-            )));
-        }
-        unexpected => {
-            tracing::warn!(
-                ?unexpected,
-                "hogd-dev DbGateway returned unsupported outer result variant"
-            );
-            return Err(RpcServerError::BackendUnavailable(
-                "hogd-dev DbGateway returned an unsupported result variant; regenerate the \
-                 DbGateway client for this protocol"
-                    .into(),
-            ));
-        }
-    };
-
-    let item = payload.items.0.into_iter().next().ok_or_else(|| {
-        RpcServerError::BackendUnavailable(
-            "hogd-dev DbGateway response had fewer items than the batch".into(),
-        )
-    })?;
-    // `payload.block_height` is the freshness boundary for the whole
-    // batch, including kRPCNotFound item misses.
-    match item {
-        DbGatewayItemResult::kRPCNone { item } => Ok(StorageItemRead {
-            block_height: payload.block_height,
-            item: Some(StorageItemInfo::from(item)),
-        }),
-        DbGatewayItemResult::Default { error } => {
-            let err = RPCError(error);
-            if err == RPCError::kRPCNotFound {
-                Ok(StorageItemRead {
-                    block_height: payload.block_height,
-                    item: None,
-                })
-            } else {
-                Err(RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev DbGateway item: {err}"
-                )))
-            }
-        }
-        unexpected => {
-            tracing::warn!(
-                ?unexpected,
-                "hogd-dev DbGateway returned unsupported per-item result variant"
-            );
-            Err(RpcServerError::BackendUnavailable(
-                "hogd-dev DbGateway returned an unsupported per-item result variant; \
-                 regenerate the DbGateway client for this protocol"
-                    .into(),
-            ))
-        }
-    }
+        .map_err(|source| RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {source}")))?;
+    let payload = shared_db_gateway::payload(DB_GATEWAY, outer)?;
+    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert the RPC-layer `TxHash` to the wire `TransactionHash`.
-fn tx_hash_to_wire(tx_hash: TxHash) -> TransactionHash {
-    TransactionHash::from(tx_hash.0.0.into_inner())
-}
-
-/// Map hogd's `ExecResult` (XDR int enum) to the API-types `ExecStatus`.
-///
-/// Mirrors `gateway/src/handlers/receipt.rs::map_exec_result` exactly.
-/// TODO: share with gateway once a common helper crate exists.
-fn map_exec_result(r: ExecResult) -> ExecStatus {
-    if r == ExecResult::ExecResultOK {
-        ExecStatus::Ok
-    } else if r == ExecResult::ExecResultTxRootFrameReverted {
-        ExecStatus::Reverted { message: None }
-    } else if r == ExecResult::ExecResultTxDeterministicError {
-        ExecStatus::DeterministicError {
-            kind: groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT.into(),
-        }
-    } else if r == ExecResult::ExecResultTxNonDeterministicError {
-        ExecStatus::NonDeterministicError
-    } else if r == ExecResult::ExecResultFailedGasSponsorship {
-        ExecStatus::FailedGasSponsorship
-    } else {
-        ExecStatus::Other
-    }
-}
-
-/// Parse a hogd `TxEmittedEvent` into an `EmittedEvent` with split topics and data.
-///
-/// Returns `None` if the event is malformed (`num_topics` > 3, or
-/// `serialized_event` is too short for the declared number of topics).
-///
-/// Mirrors `gateway/src/handlers/parse_event.rs::parse_emitted_event` exactly.
-/// TODO: share with gateway once a common helper crate exists.
-fn parse_emitted_event(
-    raw: &TxEmittedEvent,
-) -> Option<groundhog_json_rpc_types::events::EmittedEvent> {
-    let num_topics = raw.num_topics;
-    if num_topics > MAX_TOPICS {
-        tracing::warn!(num_topics, "event has too many topics, skipping");
-        return None;
-    }
-
-    let bytes: &[u8] = raw.serialized_event.as_ref();
-    let topics_len = num_topics as usize * TOPIC_SIZE;
-    if bytes.len() < topics_len {
+/// Build a public receipt from the indexer's committed record.
+fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
+    let decoded = shared_receipt::transaction_receipt(tx_hash, info.height, info.events);
+    if decoded.dropped_events > 0 {
         tracing::warn!(
-            num_topics,
-            event_len = bytes.len(),
-            "serialized_event too short for declared topics, skipping"
+            dropped = decoded.dropped_events,
+            ?tx_hash,
+            "dropped malformed events from hogd-dev indexer receipt",
         );
-        return None;
     }
-
-    let mut topics = Vec::with_capacity(num_topics as usize);
-    for i in 0..num_topics as usize {
-        let start = i * TOPIC_SIZE;
-        let mut topic = [0u8; TOPIC_SIZE];
-        topic.copy_from_slice(&bytes[start..start + TOPIC_SIZE]);
-        topics.push(Topic(topic));
-    }
-
-    let data = bytes[topics_len..].to_vec();
-
-    Some(groundhog_json_rpc_types::events::EmittedEvent {
-        contract_address: Hex0x(raw.contract_address),
-        topics,
-        data: HexBytes(data),
-    })
+    decoded.receipt
 }
 
 // ---------------------------------------------------------------------------
@@ -787,6 +480,10 @@ fn parse_emitted_event(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
@@ -800,8 +497,8 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        IndexerQueryOutcome, TransactionPage as IdxTransactionPage, TransactionPageResult,
-        TransactionQuery, TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
+        TransactionPage as IdxTransactionPage, TransactionPageResult, TransactionQuery,
+        TransactionRefPage, TransactionRefPageResult, TxInfo, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
     use groundhog_json_rpc_types::protocol_token::protocol_text;
@@ -839,44 +536,6 @@ mod tests {
 
     use super::HogdDevReadBackend;
 
-    #[test]
-    fn deterministic_exec_result_maps_to_fault_kind() {
-        let status = super::map_exec_result(
-            groundhog_xdr::exec_result::ExecResult::ExecResultTxDeterministicError,
-        );
-        match status {
-            groundhog_json_rpc_types::receipt::ExecStatus::DeterministicError { kind } => {
-                assert_eq!(
-                    kind,
-                    groundhog_json_rpc_types::receipt::DETERMINISTIC_ERROR_KIND_FAULT
-                );
-            }
-            other => panic!("expected DeterministicError, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn event_query_backend_failure_is_not_an_empty_page() {
-        let error = super::indexer_event_page(EventPageResult::Default {
-            outcome: IndexerQueryOutcome::IndexerQueryNotReady.0,
-        })
-        .unwrap_err();
-
-        assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
-        assert!(error.to_string().contains("not ready"));
-    }
-
-    #[test]
-    fn transaction_query_backend_failure_is_not_an_empty_page() {
-        let error = super::indexer_transaction_ref_page(TransactionRefPageResult::Default {
-            outcome: IndexerQueryOutcome::IndexerQueryInternalFailure.0,
-        })
-        .unwrap_err();
-
-        assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
-        assert!(error.to_string().contains("failed internally"));
-    }
-
     // These constants mirror the fake_hogd_dev fixture. Defined here so the
     // unit tests in this file have no dependency on the example binary's types.
     const CANNED_TX_HASH_A: [u8; 32] = [0xAAu8; 32];
@@ -885,6 +544,8 @@ mod tests {
     const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
     const CANNED_HEIGHT_A: i64 = 5;
     const CANNED_HEIGHT_B: i64 = 10;
+    const CANNED_GAS_USED_A: u64 = 1_500;
+    const CANNED_GAS_USED_B: u64 = 2_500;
     const CANNED_FAILURE_HEIGHT: i64 = 11;
     const CANNED_FAILURE_ADDRESS: [u8; 32] = [0x0Du8; 32];
     const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
@@ -913,6 +574,8 @@ mod tests {
 
     struct FakeScheduler {
         mode: FakeSchedulerMode,
+        /// How many `schedgateway_lookup_tx` calls the fake has served.
+        lookups: Arc<AtomicUsize>,
     }
 
     /// Build a minimal dummy `SignedTransaction` suitable for testing the
@@ -989,6 +652,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
             match self.mode {
                 FakeSchedulerMode::NoPending => {
                     Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
@@ -1021,19 +685,35 @@ mod tests {
         SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
+        let (addr, handle, _) = start_counting_fake_scheduler(mode).await;
+        (addr, handle)
+    }
+
+    /// Like [`start_fake_scheduler`], also returning the lookup call counter.
+    async fn start_counting_fake_scheduler(
+        mode: FakeSchedulerMode,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        Arc<AtomicUsize>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: test scheduler should bind");
         let addr = listener
             .local_addr()
             .expect("bug: test scheduler should have local addr");
+        let lookups = Arc::new(AtomicUsize::new(0));
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
-            Box::new(FakeScheduler { mode }),
+            Box::new(FakeScheduler {
+                mode,
+                lookups: lookups.clone(),
+            }),
         )));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
-        (addr, handle)
+        (addr, handle, lookups)
     }
 
     // -----------------------------------------------------------------------
@@ -1080,6 +760,7 @@ mod tests {
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
                     },
+                    gas_consumed: CANNED_GAS_USED_A,
                     events: VecM(vec![]),
                 },
             };
@@ -1094,6 +775,7 @@ mod tests {
                     root_output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![]),
                     },
+                    gas_consumed: CANNED_GAS_USED_B,
                     events: VecM(vec![]),
                 },
             };
@@ -1514,6 +1196,10 @@ mod tests {
         assert_eq!(
             *receipt.height, CANNED_HEIGHT_A,
             "receipt height should match CANNED_HEIGHT_A"
+        );
+        assert_eq!(
+            receipt.gas_used, CANNED_GAS_USED_A,
+            "receipt should carry the gas the event log committed"
         );
     }
 
@@ -1964,6 +1650,33 @@ mod tests {
             matches!(result, Err(RpcServerError::BackendUnavailable(_))),
             "lookup with an extra per-tx answer should surface BackendUnavailable, got {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transaction_status_slow_indexer_exhausts_deadline_before_mempool_is_asked() {
+        // Arrange: the indexer is asked first and never answers within the
+        // request deadline; the scheduler would report the tx pending.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
+        let (sched_addr, _sched, lookups) =
+            start_counting_fake_scheduler(FakeSchedulerMode::AllPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+
+        // Act
+        let result = backend
+            .transaction_status(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                tx_hash,
+            )
+            .await;
+
+        // Assert: the deadline is spent on the indexer, so the pending answer
+        // is never reached. All stages share one deadline.
+        assert!(
+            matches!(result, Err(RpcServerError::BackendTimeout)),
+            "expected BackendTimeout, got {result:?}"
+        );
+        assert_eq!(lookups.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

@@ -1,5 +1,6 @@
 //! Runtime-manifest inputs and benchmark request construction.
 
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::path::Path;
 
 use groundhog_json_rpc_types::runtime_manifest::{
@@ -13,7 +14,6 @@ use groundhog_signing::{
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, NetworkHash};
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use crate::BenchError;
@@ -189,7 +189,7 @@ pub(super) async fn load_runtime_manifest(
     })?;
     Ok(LoadedRuntimeManifest {
         manifest,
-        sha256: format!("0x{}", hex::encode(Sha256::digest(&bytes))),
+        sha256: sha256_prefixed_hex(&bytes),
     })
 }
 

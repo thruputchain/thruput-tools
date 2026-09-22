@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_client::codec::method_entrypoint_id;
@@ -16,7 +17,9 @@ use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
     format_contract_address,
 };
-use crate::config::{ProfileOverrides, find_project_config, resolve_profile_with_overrides};
+use crate::config::{
+    ProfileOverrides, ResolvedProfile, find_project_config, resolve_profile_with_overrides,
+};
 use crate::contract_spec::{
     InterfaceSpec, load_built_contract_spec, load_built_registered_interfaces,
 };
@@ -87,13 +90,21 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if !dry_run {
-        let cwd = std::env::current_dir()?;
-        resolve_profile_with_overrides(&cwd, profile, overrides)?;
         print.require_confirmation_available(force, "call a contract")?;
     }
     let plan = prepare_call_plan(
-        contract, method, args, package, artifacts, wallet, profile, overrides, gas_limit,
+        &cwd,
+        resolved_profile,
+        contract,
+        method,
+        args,
+        package,
+        artifacts,
+        wallet,
+        gas_limit,
     )?;
     if !dry_run {
         print.detail("contract", &plan.contract_address_hex);
@@ -140,6 +151,7 @@ pub fn run(
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
+            print.detail("gas used", receipt.gas_used);
             if decoded_return.is_none()
                 && let Some(ref data) = receipt.return_data
                 && !data.0.is_empty()
@@ -178,6 +190,7 @@ pub fn run(
         "method": prepared.method,
         "height": receipt.height,
         "status": receipt.status,
+        "gasUsed": receipt.gas_used,
         "statusSummary": status_summary,
         "returnData": receipt.return_data,
         "abortData": receipt.abort_data,
@@ -251,7 +264,7 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     let entrypoint_id = format_entrypoint_id(prepared.resolved.entrypoint);
-    let calldata_hex = format_hex_bytes(&prepared.calldata);
+    let calldata_hex = prefixed_hex(&prepared.calldata);
 
     print.status(format_args!(
         "Prepared dry-run call {} on {} via {}.",
@@ -289,10 +302,6 @@ fn print_dry_run(
 
 pub(crate) fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
     format!("0x{}", hex::encode(entrypoint.into_inner()))
-}
-
-pub(crate) fn format_hex_bytes(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
 }
 
 fn selector_summary(resolved: &ResolvedCall) -> String {
@@ -343,37 +352,44 @@ pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_call_plan(
+    cwd: &Path,
+    resolved_profile: ResolvedProfile,
     contract: &str,
     method: &str,
     args: &[String],
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
     gas_limit: u64,
 ) -> Result<CallPlan, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     prepare_call_plan_with_runtime(
-        contract, method, args, package, artifacts, wallet, profile, overrides, gas_limit, &rt,
+        cwd,
+        resolved_profile,
+        contract,
+        method,
+        args,
+        package,
+        artifacts,
+        wallet,
+        gas_limit,
+        &rt,
     )
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_call_plan_with_runtime(
+    cwd: &Path,
+    resolved_profile: ResolvedProfile,
     contract: &str,
     method: &str,
     args: &[String],
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
     gas_limit: u64,
     rt: &tokio::runtime::Runtime,
 ) -> Result<CallPlan, CliError> {
-    let cwd = std::env::current_dir()?;
-    let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
@@ -387,7 +403,7 @@ fn prepare_call_plan_with_runtime(
 
     let sender = resolve_transaction_sender(&resolved_profile, wallet)?;
 
-    let resolved = resolve_call(&cwd, method, package, artifacts)?;
+    let resolved = resolve_call(cwd, method, package, artifacts)?;
     let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
     let wallet_address = sender.wallet_address;

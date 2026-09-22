@@ -875,6 +875,93 @@
         ],
         "type": "string"
       },
+      "NetworkConfigParams": {
+        "description": "The execution parameters a chain's network config states, flattened\nfrom the list that carries them. Returned by `chainConfig`.\n\nA field is `None`, and absent from the JSON, when the config does not\nstate that parameter; the node alone decides what is then in force.\n`Default` is the reading with nothing stated.",
+        "properties": {
+          "maxAuthTokenDepth": {
+            "description": "Levels of node nesting an auth token may carry.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxBytestringLen": {
+            "description": "Bytes one bytestring storage item may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxContractSizeBytes": {
+            "description": "Bytes one attached contract's code blob may hold. The protocol fixes\n`kDefaultMaxContractSizeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxCrossInvokeDepth": {
+            "description": "Invocation frames one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxNewContractsPerTx": {
+            "description": "Contracts one transaction may attach in `contractsToDeploy`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32CodeBytes": {
+            "description": "Code bytes an RV32 artifact may carry to be attached. The protocol\nfixes `kDefaultMaxRv32CodeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32MemoryBytes": {
+            "description": "Guest data memory bytes an RV32 artifact may declare to be attached.\nThe protocol fixes `kDefaultMaxRv32MemoryBytes` as the value in force\nwhen unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSavepointDepth": {
+            "description": "Storage savepoints one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSha256Buffers": {
+            "description": "Concurrently open incremental SHA-256 buffers permitted per\ninvocation frame.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "NetworkInfo": {
         "description": "Immutable protocol identity reported by a JSON-RPC server.",
         "properties": {
@@ -1123,7 +1210,7 @@
         "type": "array"
       },
       "TransactionReceipt": {
-        "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasUsed`/`gasPrice`, `transactionIndex`, `logsBloom`.\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
+        "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasPrice`, `transactionIndex`, `logsBloom`.\n- `gasUsed` is committed by consensus as part of the transaction's event\n  log (`TxEventLog.gas_consumed`).\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
         "properties": {
           "abortData": {
             "anyOf": [
@@ -1142,6 +1229,12 @@
               "$ref": "#/components/schemas/EmittedEvent"
             },
             "type": "array"
+          },
+          "gasUsed": {
+            "description": "Gas the transaction consumed: the root frame, every frame it invoked,\nand the pre-execution validation of attached contracts. On an\nout-of-gas fault it equals the transaction's gas limit.\n\nCommitted by consensus as part of the event log, so every node\nreports the same figure.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "height": {
             "$ref": "#/components/schemas/BlockHeight",
@@ -1171,7 +1264,8 @@
           "txHash",
           "height",
           "status",
-          "events"
+          "events",
+          "gasUsed"
         ],
         "type": "object"
       },
@@ -1437,7 +1531,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.2.0"
+    "version": "5.3.1"
   },
   "methods": [
     {
@@ -1575,7 +1669,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check (mempool -> indexer -> unknown). `unknown` is only returned after both the mempool and the indexer answered without a match; if the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. The indexer is asked first, so `committed` wins; a mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown` is returned only after both backends answered without a match. If the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
       "tags": [
         {
           "name": "Core API"
@@ -1606,6 +1700,36 @@
         }
       },
       "summary": "Current chain tip: height, block hash, and the protocol it executed under.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_chainConfig",
+      "params": [],
+      "result": {
+        "name": "NetworkConfigParams",
+        "schema": {
+          "$ref": "#/components/schemas/NetworkConfigParams"
+        }
+      },
+      "summary": "The execution parameters the chain's network config states. Only stated parameters are reported; an unstated one is absent. Served from a tip reading refreshed at most once per cache window. Fails with `BackendUnavailable` when no reading is available or the config version is unreadable.",
       "tags": [
         {
           "name": "Core API"

@@ -25,6 +25,8 @@ const MAX_SPEC_MEMBERS: usize = 4_096;
 const MAX_TYPE_DEPTH: usize = 64;
 const MAX_EVENT_VALUES: usize = 4_096;
 const MAX_VALIDATION_VISITS: usize = 65_536;
+/// Topics an event may index, excluding topic 0's signature.
+const MAX_EVENT_TOPICS: usize = 2;
 
 type EventNameIndex = BTreeMap<String, usize>;
 type EventSignatureIndex = BTreeMap<[u8; 32], usize>;
@@ -41,9 +43,10 @@ impl ValidatedEventSpec {
     /// Load and validate an explicitly selected trusted local artifact.
     pub(crate) fn load(path: &Path) -> Result<Self, CliError> {
         let path_text = path.to_string_lossy().into_owned();
-        let spec = load_bounded_spec(path).map_err(|message| invalid_spec(&path_text, &message))?;
+        let spec = load_bounded_spec(path)
+            .map_err(|error| invalid_spec(&path_text, &error.to_string()))?;
         let (events_by_name, events_by_signature) =
-            validate_spec(&spec).map_err(|message| invalid_spec(&path_text, &message))?;
+            validate_spec(&spec).map_err(|error| invalid_spec(&path_text, &error.to_string()))?;
         Ok(Self {
             spec,
             events_by_name,
@@ -116,34 +119,164 @@ impl ValidatedEventSpec {
     }
 }
 
-fn load_bounded_spec(path: &Path) -> Result<ContractSpec, String> {
+/// Why a contract spec could not be loaded or its event definitions validated.
+///
+/// Every variant is reported against the spec's path by
+/// [`ValidatedEventSpec::load`], so the messages name only what is wrong
+/// inside the spec.
+#[derive(Debug, thiserror::Error)]
+enum SpecError {
+    /// An RV32 artifact was passed where its sidecar spec belongs.
+    #[error("RV32 artifacts do not embed contract specs; pass the sidecar at {sidecar}")]
+    ArtifactHasNoSpec {
+        /// Where the sidecar would be.
+        sidecar: String,
+    },
+    /// The path does not name a spec this can read.
+    #[error("unsupported file extension; expected .xdr")]
+    UnsupportedExtension,
+    /// The file could not be opened.
+    #[error("failed to open file: {source}")]
+    Open {
+        #[source]
+        source: std::io::Error,
+    },
+    /// The file could not be read.
+    #[error("failed to read file: {source}")]
+    Read {
+        #[source]
+        source: std::io::Error,
+    },
+    /// The file is larger than this is willing to read.
+    #[error("artifact exceeds the {limit}-byte limit")]
+    TooLarge {
+        /// The byte cap.
+        limit: u64,
+    },
+    /// The bytes are not a contract spec.
+    #[error("{detail}")]
+    Decode {
+        /// What the decoder reported.
+        detail: String,
+    },
+    /// A name field is not readable text.
+    #[error("invalid {context}: {detail}")]
+    InvalidName {
+        /// What was being named, such as `event name`.
+        context: &'static str,
+        /// What the decoder reported.
+        detail: String,
+    },
+    /// A name field is blank.
+    #[error("{context} cannot be empty")]
+    EmptyName {
+        /// What was being named.
+        context: &'static str,
+    },
+    /// A name used as an object key would decode as an index.
+    #[error("{context} `{name}` cannot be numeric")]
+    NumericName {
+        /// What was being named.
+        context: &'static str,
+        /// The offending name.
+        name: String,
+    },
+    /// Two fields of the same object claim the same name.
+    #[error("duplicate {context} field name `{name}`")]
+    DuplicateFieldName {
+        /// What holds the fields, such as `event payload`.
+        context: &'static str,
+        /// The colliding field name.
+        name: String,
+    },
+    /// Two definitions claim the same name or discriminant.
+    #[error("duplicate {context} `{name}`")]
+    Duplicate {
+        /// What collided, such as `event name` or `union discriminant`.
+        context: &'static str,
+        /// The colliding name or value.
+        name: String,
+    },
+    /// An event indexes more fields than a topic list holds.
+    #[error("event `{name}` declares {count} indexed fields; maximum is {MAX_EVENT_TOPICS}")]
+    TooManyIndexedFields {
+        /// The event.
+        name: String,
+        /// How many fields it indexes.
+        count: usize,
+    },
+    /// A named type refers to itself, directly or through another definition.
+    #[error("cyclic event type definition involving `{name}`")]
+    CyclicType {
+        /// The type the cycle passes through.
+        name: String,
+    },
+    /// A named type has no definition in the spec.
+    #[error("unresolved event type `{name}`")]
+    UnresolvedType {
+        /// The missing type.
+        name: String,
+    },
+    /// The spec declares more definitions and members than this will walk.
+    #[error("spec contains {count} definitions and members; maximum is {MAX_SPEC_MEMBERS}")]
+    TooManyMembers {
+        /// How many the spec declares.
+        count: usize,
+    },
+    /// Validation visited more types than its budget allows.
+    #[error("event type validation exceeds the complexity limit")]
+    ComplexityLimit,
+    /// A type nests deeper than this will walk.
+    #[error("event type exceeds the maximum depth of {MAX_TYPE_DEPTH}")]
+    DepthLimit,
+    /// Counting what an event can materialize overflowed.
+    #[error("event value expansion overflows")]
+    ValueOverflow,
+    /// An event can materialize more values than a decode will emit.
+    #[error("event may materialize {values} values; maximum is {MAX_EVENT_VALUES}")]
+    TooManyValues {
+        /// How many it can materialize.
+        values: usize,
+    },
+    /// The spec uses a construct event decoding does not support.
+    #[error("unsupported {construct}")]
+    Unsupported {
+        /// What is unsupported, such as `contract type in event payload`.
+        construct: &'static str,
+    },
+}
+
+fn load_bounded_spec(path: &Path) -> Result<ContractSpec, SpecError> {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("xdr") => {
             let bytes = read_bounded(path)?;
-            load_contract_spec_from_xdr(&bytes).map_err(|error| error.to_string())
+            load_contract_spec_from_xdr(&bytes).map_err(|error| SpecError::Decode {
+                detail: error.to_string(),
+            })
         }
-        Some("rv32a") => Err(format!(
-            "RV32 artifacts do not embed contract specs; pass the sidecar at {}",
-            path.with_extension("spec.xdr").display(),
-        )),
-        _ => Err("unsupported file extension; expected .xdr".into()),
+        Some("rv32a") => Err(SpecError::ArtifactHasNoSpec {
+            sidecar: path.with_extension("spec.xdr").display().to_string(),
+        }),
+        _ => Err(SpecError::UnsupportedExtension),
     }
 }
 
-fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
-    let file = File::open(path).map_err(|error| format!("failed to open file: {error}"))?;
+fn read_bounded(path: &Path) -> Result<Vec<u8>, SpecError> {
+    let file = File::open(path).map_err(|source| SpecError::Open { source })?;
     let mut bytes = Vec::new();
     let mut reader: Take<File> = file.take(MAX_SPEC_BYTES + 1);
     reader
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("failed to read file: {error}"))?;
+        .map_err(|source| SpecError::Read { source })?;
     if bytes.len() as u64 > MAX_SPEC_BYTES {
-        return Err(format!("artifact exceeds the {MAX_SPEC_BYTES}-byte limit"));
+        return Err(SpecError::TooLarge {
+            limit: MAX_SPEC_BYTES,
+        });
     }
     Ok(bytes)
 }
 
-fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureIndex), String> {
+fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureIndex), SpecError> {
     validate_member_limit(spec)?;
     let type_defs = event_type_def_index(&spec.type_defs)?;
     let mut events_by_name = BTreeMap::new();
@@ -153,17 +286,23 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
     for (index, event) in spec.events.iter().enumerate() {
         let name = required_name(&event.name, "event name", false)?;
         if events_by_name.insert(name.to_owned(), index).is_some() {
-            return Err(format!("duplicate event name `{name}`"));
+            return Err(SpecError::Duplicate {
+                context: "event name",
+                name: name.to_owned(),
+            });
         }
         let signature = event.signature.into_inner();
         if events_by_signature.insert(signature, index).is_some() {
-            return Err(format!("duplicate signature for event `{name}`"));
+            return Err(SpecError::Duplicate {
+                context: "signature for event",
+                name: name.to_owned(),
+            });
         }
-        if event.topics.len() > 2 {
-            return Err(format!(
-                "event `{name}` declares {} indexed fields; maximum is 2",
-                event.topics.len()
-            ));
+        if event.topics.len() > MAX_EVENT_TOPICS {
+            return Err(SpecError::TooManyIndexedFields {
+                name: name.to_owned(),
+                count: event.topics.len(),
+            });
         }
         validate_fields(
             &event.topics,
@@ -184,7 +323,7 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
     Ok((events_by_name, events_by_signature))
 }
 
-fn validate_member_limit(spec: &ContractSpec) -> Result<(), String> {
+fn validate_member_limit(spec: &ContractSpec) -> Result<(), SpecError> {
     let mut count = spec.events.len().saturating_add(spec.type_defs.len());
     check_member_limit(count)?;
     for event in spec.events.iter() {
@@ -225,13 +364,17 @@ fn validate_member_limit(spec: &ContractSpec) -> Result<(), String> {
                     }
                 }
             }
-            _ => return Err("unsupported contract type definition".into()),
+            _ => {
+                return Err(SpecError::Unsupported {
+                    construct: "contract type definition",
+                });
+            }
         }
     }
     Ok(())
 }
 
-fn add_nested_tuple_members(count: &mut usize, ty: &ContractType) -> Result<(), String> {
+fn add_nested_tuple_members(count: &mut usize, ty: &ContractType) -> Result<(), SpecError> {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         match ty {
@@ -248,34 +391,39 @@ fn add_nested_tuple_members(count: &mut usize, ty: &ContractType) -> Result<(), 
     Ok(())
 }
 
-fn add_members(count: &mut usize, members: usize) -> Result<(), String> {
+fn add_members(count: &mut usize, members: usize) -> Result<(), SpecError> {
     *count = count.saturating_add(members);
     check_member_limit(*count)
 }
 
-fn check_member_limit(count: usize) -> Result<(), String> {
+fn check_member_limit(count: usize) -> Result<(), SpecError> {
     if count > MAX_SPEC_MEMBERS {
-        return Err(format!(
-            "spec contains {count} definitions and members; maximum is {MAX_SPEC_MEMBERS}"
-        ));
+        return Err(SpecError::TooManyMembers { count });
     }
     Ok(())
 }
 
 fn event_type_def_index(
     definitions: &[ContractTypeDef],
-) -> Result<BTreeMap<String, &ContractTypeDef>, String> {
+) -> Result<BTreeMap<String, &ContractTypeDef>, SpecError> {
     let mut index = BTreeMap::new();
     for definition in definitions {
         let name = match definition {
             ContractTypeDef::TypeDefStruct { struct_def } => &struct_def.name,
             ContractTypeDef::TypeDefEnum { enum_def } => &enum_def.name,
             ContractTypeDef::TypeDefUnion { union_def } => &union_def.name,
-            _ => return Err("unsupported contract type definition".into()),
+            _ => {
+                return Err(SpecError::Unsupported {
+                    construct: "contract type definition",
+                });
+            }
         };
         let name = required_name(name, "type definition name", false)?;
         if index.insert(name.to_owned(), definition).is_some() {
-            return Err(format!("duplicate type definition name `{name}`"));
+            return Err(SpecError::Duplicate {
+                context: "type definition name",
+                name: name.to_owned(),
+            });
         }
     }
     Ok(index)
@@ -283,17 +431,17 @@ fn event_type_def_index(
 
 fn validate_fields(
     fields: &[ContractField],
-    context: &str,
+    context: &'static str,
     type_defs: &BTreeMap<String, &ContractTypeDef>,
     remaining_visits: &mut usize,
     count_values: bool,
-) -> Result<usize, String> {
+) -> Result<usize, SpecError> {
     let mut names = BTreeSet::new();
     let mut values = 0usize;
     for field in fields {
         let name = required_name(&field.name, context, true)?;
         if !names.insert(name.to_owned()) {
-            return Err(format!("duplicate {context} field name `{name}`"));
+            return Err(duplicate_field(context, name));
         }
         let mut visiting = BTreeSet::new();
         values = values
@@ -305,7 +453,7 @@ fn validate_fields(
                 1,
                 count_values,
             )?)
-            .ok_or_else(|| "event value expansion overflows".to_owned())?;
+            .ok_or(SpecError::ValueOverflow)?;
     }
     Ok(values)
 }
@@ -317,7 +465,7 @@ fn validate_type(
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
-) -> Result<usize, String> {
+) -> Result<usize, SpecError> {
     validate_type_limits(remaining_visits, depth)?;
     match ty {
         ContractType::Void
@@ -391,40 +539,64 @@ fn validate_type(
             }
             Ok(values)
         }
-        ContractType::Named { named } => {
-            let name = required_name(named, "named type", false)?;
-            if !visiting.insert(name.to_owned()) {
-                return Err(format!("cyclic event type definition involving `{name}`"));
-            }
-            let definition = type_defs
-                .get(name)
-                .ok_or_else(|| format!("unresolved event type `{name}`"))?;
-            let result = validate_type_definition(
-                definition,
-                type_defs,
-                visiting,
-                remaining_visits,
-                depth,
-                count_values,
-            );
-            visiting.remove(name);
-            result
-        }
-        ContractType::SignedToken { .. } => {
-            Err("signed-token values are not supported in event payloads".into())
-        }
-        _ => Err("unsupported contract type in event payload".into()),
+        ContractType::Named { named } => validate_named_type(
+            named,
+            type_defs,
+            visiting,
+            remaining_visits,
+            depth,
+            count_values,
+        ),
+        ContractType::SignedToken { .. } => Err(SpecError::Unsupported {
+            construct: "signed-token values in event payloads",
+        }),
+        _ => Err(SpecError::Unsupported {
+            construct: "contract type in event payload",
+        }),
     }
 }
 
-fn validate_type_limits(remaining_visits: &mut usize, depth: usize) -> Result<(), String> {
+/// Resolve a named type and validate its definition, refusing a cycle.
+///
+/// `visiting` holds the names on the current path; the name is removed again
+/// on the way out so a type reached twice through sibling fields still passes.
+fn validate_named_type(
+    named: &ContractSpecString,
+    type_defs: &BTreeMap<String, &ContractTypeDef>,
+    visiting: &mut BTreeSet<String>,
+    remaining_visits: &mut usize,
+    depth: usize,
+    count_values: bool,
+) -> Result<usize, SpecError> {
+    let name = required_name(named, "named type", false)?;
+    if !visiting.insert(name.to_owned()) {
+        return Err(SpecError::CyclicType {
+            name: name.to_owned(),
+        });
+    }
+    let definition = type_defs
+        .get(name)
+        .ok_or_else(|| SpecError::UnresolvedType {
+            name: name.to_owned(),
+        })?;
+    let result = validate_type_definition(
+        definition,
+        type_defs,
+        visiting,
+        remaining_visits,
+        depth,
+        count_values,
+    );
+    visiting.remove(name);
+    result
+}
+
+fn validate_type_limits(remaining_visits: &mut usize, depth: usize) -> Result<(), SpecError> {
     *remaining_visits = remaining_visits
         .checked_sub(1)
-        .ok_or_else(|| "event type validation exceeds the complexity limit".to_owned())?;
+        .ok_or(SpecError::ComplexityLimit)?;
     if depth > MAX_TYPE_DEPTH {
-        return Err(format!(
-            "event type exceeds the maximum depth of {MAX_TYPE_DEPTH}"
-        ));
+        return Err(SpecError::DepthLimit);
     }
     Ok(())
 }
@@ -436,7 +608,7 @@ fn validate_type_definition(
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
-) -> Result<usize, String> {
+) -> Result<usize, SpecError> {
     match definition {
         ContractTypeDef::TypeDefStruct { struct_def } => validate_named_fields(
             &struct_def.fields,
@@ -453,10 +625,16 @@ fn validate_type_definition(
             for variant in enum_def.variants.iter() {
                 let name = required_name(&variant.name, "enum variant", false)?;
                 if !names.insert(name) {
-                    return Err(format!("duplicate enum variant name `{name}`"));
+                    return Err(SpecError::Duplicate {
+                        context: "enum variant name",
+                        name: name.to_owned(),
+                    });
                 }
                 if !discriminants.insert(variant.value) {
-                    return Err(format!("duplicate enum discriminant `{}`", variant.value));
+                    return Err(SpecError::Duplicate {
+                        context: "enum discriminant",
+                        name: variant.value.to_string(),
+                    });
                 }
             }
             Ok(usize::from(count_values))
@@ -468,13 +646,16 @@ fn validate_type_definition(
             for case in union_def.cases.iter() {
                 let name = required_name(&case.name, "union case", false)?;
                 if !names.insert(name) {
-                    return Err(format!("duplicate union case name `{name}`"));
+                    return Err(SpecError::Duplicate {
+                        context: "union case name",
+                        name: name.to_owned(),
+                    });
                 }
                 if !discriminants.insert(case.discriminant) {
-                    return Err(format!(
-                        "duplicate union discriminant `{}`",
-                        case.discriminant
-                    ));
+                    return Err(SpecError::Duplicate {
+                        context: "union discriminant",
+                        name: case.discriminant.to_string(),
+                    });
                 }
                 let values = match &case.case_type {
                     ContractUnionCaseType::UnionCaseVoid => {
@@ -513,31 +694,37 @@ fn validate_type_definition(
                             count_values,
                         )?,
                     )?,
-                    _ => return Err("unsupported union case type in event payload".into()),
+                    _ => {
+                        return Err(SpecError::Unsupported {
+                            construct: "union case type in event payload",
+                        });
+                    }
                 };
                 max_values = max_values.max(values);
             }
             Ok(max_values)
         }
-        _ => Err("unsupported contract type definition".into()),
+        _ => Err(SpecError::Unsupported {
+            construct: "contract type definition",
+        }),
     }
 }
 
 fn validate_named_fields(
     fields: &[ContractField],
-    context: &str,
+    context: &'static str,
     type_defs: &BTreeMap<String, &ContractTypeDef>,
     visiting: &mut BTreeSet<String>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
-) -> Result<usize, String> {
+) -> Result<usize, SpecError> {
     let mut names = BTreeSet::new();
     let mut values = usize::from(count_values);
     for field in fields {
         let name = required_name(&field.name, context, true)?;
         if !names.insert(name) {
-            return Err(format!("duplicate {context} field name `{name}`"));
+            return Err(duplicate_field(context, name));
         }
         values = checked_values(
             values,
@@ -556,34 +743,41 @@ fn validate_named_fields(
 
 fn required_name<'a>(
     name: &'a ContractSpecString,
-    context: &str,
+    context: &'static str,
     object_key: bool,
-) -> Result<&'a str, String> {
-    let name = spec_string_text(name).map_err(|error| format!("invalid {context}: {error}"))?;
+) -> Result<&'a str, SpecError> {
+    let name = spec_string_text(name).map_err(|error| SpecError::InvalidName {
+        context,
+        detail: error.to_string(),
+    })?;
     if name.is_empty() {
-        return Err(format!("{context} cannot be empty"));
+        return Err(SpecError::EmptyName { context });
     }
     if object_key && name.parse::<usize>().is_ok() {
-        return Err(format!("{context} `{name}` cannot be numeric"));
+        return Err(SpecError::NumericName {
+            context,
+            name: name.to_owned(),
+        });
     }
     Ok(name)
 }
 
-fn bounded_container(inner: usize, len: usize) -> Result<usize, String> {
-    let children = inner
-        .checked_mul(len)
-        .ok_or_else(|| "event value expansion overflows".to_owned())?;
+fn duplicate_field(context: &'static str, name: &str) -> SpecError {
+    SpecError::DuplicateFieldName {
+        context,
+        name: name.to_owned(),
+    }
+}
+
+fn bounded_container(inner: usize, len: usize) -> Result<usize, SpecError> {
+    let children = inner.checked_mul(len).ok_or(SpecError::ValueOverflow)?;
     checked_values(1, children)
 }
 
-fn checked_values(left: usize, right: usize) -> Result<usize, String> {
-    let values = left
-        .checked_add(right)
-        .ok_or_else(|| "event value expansion overflows".to_owned())?;
+fn checked_values(left: usize, right: usize) -> Result<usize, SpecError> {
+    let values = left.checked_add(right).ok_or(SpecError::ValueOverflow)?;
     if values > MAX_EVENT_VALUES {
-        return Err(format!(
-            "event may materialize {values} values; maximum is {MAX_EVENT_VALUES}"
-        ));
+        return Err(SpecError::TooManyValues { values });
     }
     Ok(values)
 }
@@ -672,7 +866,7 @@ mod tests {
 
     use super::{
         MAX_EVENT_VALUES, MAX_SPEC_BYTES, MAX_SPEC_MEMBERS, MAX_TYPE_DEPTH, MAX_VALIDATION_VISITS,
-        ValidatedEventSpec, read_bounded, validate_spec,
+        SpecError, ValidatedEventSpec, read_bounded, validate_spec,
     };
     use crate::events_json::EventDecodeStatus;
 
@@ -871,11 +1065,13 @@ mod tests {
     fn validation_rejects_ambiguous_and_fixed_unbounded_event_shapes() {
         let mut duplicate = event_spec(ContractType::U64);
         duplicate.events.0.push(duplicate.events[0].clone());
-        assert!(
-            validate_spec(&duplicate)
-                .unwrap_err()
-                .contains("duplicate event name")
-        );
+        assert!(matches!(
+            validate_spec(&duplicate).unwrap_err(),
+            SpecError::Duplicate {
+                context: "event name",
+                ..
+            }
+        ));
 
         let array = ContractType::Array {
             array: groundhog_contract_spec::ContractArrayType {
@@ -883,11 +1079,10 @@ mod tests {
                 len: u32::try_from(MAX_EVENT_VALUES).unwrap(),
             },
         };
-        assert!(
-            validate_spec(&event_spec(array))
-                .unwrap_err()
-                .contains("may materialize")
-        );
+        assert!(matches!(
+            validate_spec(&event_spec(array)).unwrap_err(),
+            SpecError::TooManyValues { .. }
+        ));
     }
 
     #[test]
@@ -902,11 +1097,10 @@ mod tests {
         indexed.events.0[0].topics = VecM(vec![field("large", large_array())]);
 
         validate_spec(&indexed).expect("indexed values should not use the payload value budget");
-        assert!(
-            validate_spec(&event_spec(large_array()))
-                .unwrap_err()
-                .contains("may materialize")
-        );
+        assert!(matches!(
+            validate_spec(&event_spec(large_array())).unwrap_err(),
+            SpecError::TooManyValues { .. }
+        ));
     }
 
     #[test]
@@ -915,22 +1109,23 @@ mod tests {
         let mut second_event = duplicate_signature.events[0].clone();
         second_event.name = spec_string("PongEvent");
         duplicate_signature.events.0.push(second_event);
-        assert!(
-            validate_spec(&duplicate_signature)
-                .unwrap_err()
-                .contains("duplicate signature")
-        );
+        assert!(matches!(
+            validate_spec(&duplicate_signature).unwrap_err(),
+            SpecError::Duplicate {
+                context: "signature for event",
+                ..
+            }
+        ));
 
         let mut excess_topics = event_spec(ContractType::U64);
         excess_topics.events.0[0].topics.0.extend([
             field("second", ContractType::U64),
             field("third", ContractType::U64),
         ]);
-        assert!(
-            validate_spec(&excess_topics)
-                .unwrap_err()
-                .contains("maximum is 2")
-        );
+        assert!(matches!(
+            validate_spec(&excess_topics).unwrap_err(),
+            SpecError::TooManyIndexedFields { count: 3, .. }
+        ));
     }
 
     #[test]
@@ -938,21 +1133,19 @@ mod tests {
         let unresolved = event_spec(ContractType::Named {
             named: spec_string("Missing"),
         });
-        assert!(
-            validate_spec(&unresolved)
-                .unwrap_err()
-                .contains("unresolved event type `Missing`")
-        );
+        assert!(matches!(
+            validate_spec(&unresolved).unwrap_err(),
+            SpecError::UnresolvedType { name } if name == "Missing"
+        ));
 
         let mut duplicate_field = event_spec(ContractType::U64);
         duplicate_field.events.0[0]
             .fields
             .0
             .push(field("value", ContractType::Bool));
-        assert!(
-            validate_spec(&duplicate_field)
-                .unwrap_err()
-                .contains("duplicate event payload field name `value`")
+        assert_eq!(
+            validate_spec(&duplicate_field).unwrap_err().to_string(),
+            "duplicate event payload field name `value`"
         );
     }
 
@@ -969,11 +1162,10 @@ mod tests {
             .fields
             .0
             .push(field("one_too_many", ContractType::Void));
-        assert!(
-            validate_spec(&at_member_limit)
-                .unwrap_err()
-                .contains("definitions and members")
-        );
+        assert!(matches!(
+            validate_spec(&at_member_limit).unwrap_err(),
+            SpecError::TooManyMembers { .. }
+        ));
 
         let nested_tuple = |members| ContractType::Option {
             option_inner: Box::new(ContractType::Tuple {
@@ -982,11 +1174,10 @@ mod tests {
         };
         validate_spec(&event_spec(nested_tuple(MAX_SPEC_MEMBERS - 3)))
             .expect("nested tuple at exact member limit should be accepted");
-        assert!(
-            validate_spec(&event_spec(nested_tuple(MAX_SPEC_MEMBERS - 2)))
-                .unwrap_err()
-                .contains("definitions and members")
-        );
+        assert!(matches!(
+            validate_spec(&event_spec(nested_tuple(MAX_SPEC_MEMBERS - 2))).unwrap_err(),
+            SpecError::TooManyMembers { .. }
+        ));
 
         let array = |len| ContractType::Array {
             array: groundhog_contract_spec::ContractArrayType {
@@ -996,11 +1187,10 @@ mod tests {
         };
         validate_spec(&event_spec(array(MAX_EVENT_VALUES - 2)))
             .expect("exact materialized value limit should be accepted");
-        assert!(
-            validate_spec(&event_spec(array(MAX_EVENT_VALUES - 1)))
-                .unwrap_err()
-                .contains("may materialize")
-        );
+        assert!(matches!(
+            validate_spec(&event_spec(array(MAX_EVENT_VALUES - 1))).unwrap_err(),
+            SpecError::TooManyValues { .. }
+        ));
     }
 
     #[test]
@@ -1012,10 +1202,10 @@ mod tests {
             .fields
             .0
             .push(field("one_visit_too_many", ContractType::U64));
-        assert_eq!(
+        assert!(matches!(
             validate_spec(&at_limit).unwrap_err(),
-            "event type validation exceeds the complexity limit"
-        );
+            SpecError::ComplexityLimit
+        ));
     }
 
     #[test]
@@ -1072,11 +1262,10 @@ mod tests {
     #[test]
     fn type_depth_accepts_64_levels_and_rejects_65() {
         validate_spec(&named_chain(63)).expect("63 named types plus one scalar is 64 levels");
-        assert!(
-            validate_spec(&named_chain(64))
-                .unwrap_err()
-                .contains("maximum depth")
-        );
+        assert!(matches!(
+            validate_spec(&named_chain(64)).unwrap_err(),
+            SpecError::DepthLimit
+        ));
     }
 
     #[test]
@@ -1089,7 +1278,10 @@ mod tests {
             named: spec_string("Type0"),
         };
 
-        assert!(validate_spec(&spec).unwrap_err().contains("cyclic"));
+        assert!(matches!(
+            validate_spec(&spec).unwrap_err(),
+            SpecError::CyclicType { .. }
+        ));
     }
 
     #[test]
@@ -1114,6 +1306,9 @@ mod tests {
         assert_eq!(read_bounded(&path).unwrap().len() as u64, MAX_SPEC_BYTES);
 
         file.set_len(MAX_SPEC_BYTES + 1).unwrap();
-        assert!(read_bounded(&path).unwrap_err().contains("exceeds"));
+        assert!(matches!(
+            read_bounded(&path).unwrap_err(),
+            SpecError::TooLarge { .. }
+        ));
     }
 }

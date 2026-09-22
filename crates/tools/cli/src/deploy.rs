@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::decode_fixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_types::hex::HexBytes;
@@ -94,18 +95,18 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if !dry_run {
-        let cwd = std::env::current_dir()?;
-        resolve_profile_with_overrides(&cwd, profile, overrides)?;
         print.require_confirmation_available(force, "deploy a contract")?;
     }
     let plan = prepare_deploy_plan(
+        &cwd,
+        &resolved,
         artifact_path,
         package,
         artifacts,
         wallet,
-        profile,
-        overrides,
         print,
     )?;
     if !dry_run {
@@ -161,6 +162,7 @@ pub fn run(
             }
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
+            print.detail("gas used", receipt.gas_used);
         }
         other => {
             if insufficient_funding {
@@ -254,6 +256,7 @@ pub fn run(
         },
         "height": receipt.height,
         "status": receipt.status,
+        "gasUsed": receipt.gas_used,
         "transactionDetail": transaction_detail,
         "walletEntrypointId": prepared.wallet_entrypoint_id,
         "walletEntrypointSource": prepared.wallet_entrypoint_source,
@@ -428,17 +431,14 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_deploy_plan(
+    cwd: &Path,
+    resolved: &ResolvedProfile,
     artifact_path: Option<&Path>,
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
     print: &Print,
 ) -> Result<DeployPlan, CliError> {
-    let cwd = std::env::current_dir()?;
-    let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
-
     if resolved.rpc_url.is_none() && resolved.default_key.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
@@ -454,7 +454,7 @@ fn prepare_deploy_plan(
         )
     } else {
         let resolved_artifact =
-            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package)?;
+            crate::artifacts::resolve_groundhog_artifact(cwd, artifacts, package)?;
         warn_if_stale(
             &resolved_artifact.artifact,
             &resolved_artifact.package_root,
@@ -468,7 +468,7 @@ fn prepare_deploy_plan(
     };
     let artifact_bytes = std::fs::read(&artifact.path)?;
 
-    prepare_deploy_transaction_plan(artifact, artifact_bytes, package_name, &resolved, wallet)
+    prepare_deploy_transaction_plan(artifact, artifact_bytes, package_name, resolved, wallet)
 }
 
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.
@@ -616,11 +616,8 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
 
 /// Parse a `0x`-prefixed hex string into a 32-byte array.
 fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
-    let stripped = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    let bytes = hex::decode(stripped)
-        .map_err(|e| CliError::Other(format!("invalid predicted address hex: {e}")))?;
-    <[u8; 32]>::try_from(bytes.as_slice())
-        .map_err(|_| CliError::Other("predicted address must be exactly 32 bytes".into()))
+    decode_fixed_hex(hex_str)
+        .map_err(|error| CliError::Other(format!("invalid predicted address: {error}")))
 }
 
 fn warn_if_stale(
@@ -902,6 +899,7 @@ mod tests {
             events: Vec::new(),
             return_data: None,
             abort_data,
+            gas_used: 1_500,
         }
     }
 

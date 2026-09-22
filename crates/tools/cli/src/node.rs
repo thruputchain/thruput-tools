@@ -33,68 +33,6 @@ pub enum LocalNodeBlockDriverMode {
     Interval,
 }
 
-/// Start the hog-devnode local node server.
-///
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    port: u16,
-    verbose: bool,
-    dev_account_count: Option<usize>,
-    hogd_dev_binary: Option<PathBuf>,
-    hogd_protocol: Option<String>,
-    startup_timeout_secs: Option<u64>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    run_with_block_driver(
-        port,
-        verbose,
-        dev_account_count,
-        hogd_dev_binary,
-        hogd_protocol,
-        startup_timeout_secs,
-        None,
-        None,
-        None,
-        cmd,
-        print,
-    )
-}
-
-/// Start the hog-devnode local node server with block-driver options.
-///
-#[allow(clippy::too_many_arguments)]
-pub fn run_with_block_driver(
-    port: u16,
-    verbose: bool,
-    dev_account_count: Option<usize>,
-    hogd_dev_binary: Option<PathBuf>,
-    hogd_protocol: Option<String>,
-    startup_timeout_secs: Option<u64>,
-    block_driver: Option<LocalNodeBlockDriverMode>,
-    block_interval_ms: Option<u64>,
-    rpc_max_connections: Option<u32>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    run_with_options(
-        LocalNodeOptions {
-            port,
-            hogd_dev_binary,
-            hogd_protocol,
-            startup_timeout: startup_timeout_secs.map(Duration::from_secs),
-            dev_account_count,
-            block_driver,
-            block_interval: block_interval_ms.map(Duration::from_millis),
-            rpc_max_connections,
-            ..LocalNodeOptions::default()
-        },
-        verbose,
-        cmd,
-        print,
-    )
-}
-
 /// Start the hog-devnode local node server with reusable local-node options.
 pub fn run_with_options(
     options: LocalNodeOptions,
@@ -113,17 +51,39 @@ pub fn run_with_options(
 /// The name must be one this build knows, so a typo fails here rather than
 /// after hog-devnode has started. The value is a byte size, and whether it is
 /// one hog-devnode's build accepts stays hog-devnode's call.
-pub fn parse_network_config_override(value: &str) -> Result<(ConfigParamName, u32), String> {
+pub fn parse_network_config_override(
+    value: &str,
+) -> Result<(ConfigParamName, u32), NetworkConfigOverrideError> {
     let (name, amount) = value
         .split_once('=')
-        .ok_or_else(|| "expected NAME=VALUE, for example max_rv32_memory_bytes=16M".to_string())?;
-    let name = name
-        .parse::<ConfigParamName>()
-        .map_err(|error| error.to_string())?;
+        .ok_or(NetworkConfigOverrideError::NotAnAssignment)?;
+    let name = name.parse::<ConfigParamName>()?;
     let amount = crate::byte_size::parse_byte_size(amount)?;
     let amount =
-        u32::try_from(amount).map_err(|_| format!("{name} must fit an unsigned 32-bit integer"))?;
+        u32::try_from(amount).map_err(|_| NetworkConfigOverrideError::TooLarge { name, amount })?;
     Ok((name, amount))
+}
+
+/// Why a `--network-config NAME=VALUE` override was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NetworkConfigOverrideError {
+    /// The argument is not in `NAME=VALUE` form.
+    #[error("expected NAME=VALUE, for example max_rv32_memory_bytes=16M")]
+    NotAnAssignment,
+    /// The name is not one this build knows.
+    #[error(transparent)]
+    Name(#[from] groundhog_node_supervisor::UnknownConfigParamName),
+    /// The value is not a byte count.
+    #[error(transparent)]
+    Amount(#[from] crate::byte_size::ByteSizeError),
+    /// The value is a byte count, but wider than the parameter holds.
+    #[error("{name} must fit an unsigned 32-bit integer")]
+    TooLarge {
+        /// The parameter being overridden.
+        name: ConfigParamName,
+        /// The requested value.
+        amount: u64,
+    },
 }
 
 /// Startup options for a local hog-devnode-backed node.
@@ -1248,6 +1208,7 @@ mod tests {
         assert!(
             parse_network_config_override("max_rv32_memmory_bytes=2")
                 .unwrap_err()
+                .to_string()
                 .contains("max_rv32_memory_bytes")
         );
 

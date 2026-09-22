@@ -1,66 +1,65 @@
 pub mod blocks;
 pub mod events;
-mod parse_event;
 pub mod receipt;
 pub mod transactions;
 pub mod view;
 
 use std::time::{Duration, Instant};
 
-use groundhog_indexer::{
-    EventPage as IndexerEventPage, EventPageResult, IndexerQueryOutcome,
-    TransactionRefPage as IndexerTransactionRefPage, TransactionRefPageResult,
-};
-use groundhog_json_rpc_server::RpcRequestContext;
+use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError};
 
-use crate::error::GatewayError;
+use crate::config::HealthBackend;
+use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
+
+/// How the gateway names hogd's services in diagnostics.
+pub(crate) const INDEXER: &str = "indexer";
+pub(crate) const DB_GATEWAY: &str = "db_gateway";
+pub(crate) const SCHEDULER: &str = "scheduler";
+pub(crate) const VIEW_GATEWAY: &str = "view_gateway";
 
 fn backend_deadline(
     context: RpcRequestContext,
     timeout: Duration,
-) -> Result<Instant, GatewayError> {
+) -> Result<Instant, RpcServerError> {
     let deadline = context
         .capped_from_start(timeout)
         .deadline()
         .expect("bug: backend timeout should establish a deadline");
     if deadline <= Instant::now() {
-        Err(GatewayError::BackendTimeout)
+        Err(RpcServerError::BackendTimeout)
     } else {
         Ok(deadline)
     }
 }
 
-fn indexer_query_error(outcome: i32) -> GatewayError {
-    let message = if outcome == IndexerQueryOutcome::IndexerQueryNotReady.0 {
-        "indexer query backend is not ready".to_string()
-    } else if outcome == IndexerQueryOutcome::IndexerQueryInternalFailure.0 {
-        "indexer query backend failed internally".to_string()
-    } else {
-        format!("indexer query returned unexpected outcome: {outcome}")
+/// Run one backend RPC against `deadline` and record it as `op` on
+/// `backend`.
+///
+/// A timeout becomes `BackendTimeout` and a transport failure
+/// `BackendUnavailable`, prefixed with `service`. `is_ok` says whether a
+/// value the backend did return counts as a successful request for the
+/// metric; an outcome the caller's decoder will reject is still reported
+/// as an error here.
+pub(crate) async fn timed_backend_call<T, E: std::fmt::Display>(
+    metrics: &GatewayMetrics,
+    backend: HealthBackend,
+    op: &'static str,
+    service: &str,
+    deadline: Instant,
+    call: impl Future<Output = Result<T, E>>,
+    is_ok: impl Fn(&T) -> bool,
+) -> Result<T, RpcServerError> {
+    let started_at = Instant::now();
+    let result = tokio::time::timeout_at(deadline.into(), call).await;
+    let outcome = match &result {
+        Err(_) => BackendRequestOutcome::Timeout,
+        Ok(Ok(value)) if is_ok(value) => BackendRequestOutcome::Ok,
+        Ok(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
     };
-    GatewayError::BackendUnavailable(message)
-}
-
-fn event_page_from_result(result: EventPageResult) -> Result<IndexerEventPage, GatewayError> {
-    match result {
-        EventPageResult::IndexerQueryOk { page } => Ok(page),
-        EventPageResult::Default { outcome } => Err(indexer_query_error(outcome)),
-        _ => Err(GatewayError::BackendUnavailable(
-            "indexer query returned an unknown event-page result".into(),
-        )),
-    }
-}
-
-fn transaction_ref_page_from_result(
-    result: TransactionRefPageResult,
-) -> Result<IndexerTransactionRefPage, GatewayError> {
-    match result {
-        TransactionRefPageResult::IndexerQueryOk { page } => Ok(page),
-        TransactionRefPageResult::Default { outcome } => Err(indexer_query_error(outcome)),
-        _ => Err(GatewayError::BackendUnavailable(
-            "indexer query returned an unknown transaction-page result".into(),
-        )),
-    }
+    metrics.observe_backend_request(backend, op, outcome, started_at.elapsed());
+    result
+        .map_err(|_| RpcServerError::BackendTimeout)?
+        .map_err(|error| RpcServerError::BackendUnavailable(format!("{service}: {error}")))
 }
 
 #[cfg(test)]
@@ -69,9 +68,7 @@ mod tests {
 
     use groundhog_json_rpc_server::RpcRequestContext;
 
-    use groundhog_indexer::{EventPageResult, IndexerQueryOutcome, TransactionRefPageResult};
-
-    use super::{backend_deadline, event_page_from_result, transaction_ref_page_from_result};
+    use super::backend_deadline;
 
     #[test]
     fn backend_deadline_is_measured_from_request_start() {
@@ -85,33 +82,5 @@ mod tests {
             backend_deadline(context, Duration::from_secs(5)).unwrap(),
             expected
         );
-    }
-
-    #[test]
-    fn event_page_backend_failure_is_not_an_empty_page() {
-        let error = event_page_from_result(EventPageResult::Default {
-            outcome: IndexerQueryOutcome::IndexerQueryNotReady.0,
-        })
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            crate::error::GatewayError::BackendUnavailable(_)
-        ));
-        assert!(error.to_string().contains("not ready"));
-    }
-
-    #[test]
-    fn transaction_page_backend_failure_is_not_an_empty_page() {
-        let error = transaction_ref_page_from_result(TransactionRefPageResult::Default {
-            outcome: IndexerQueryOutcome::IndexerQueryInternalFailure.0,
-        })
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            crate::error::GatewayError::BackendUnavailable(_)
-        ));
-        assert!(error.to_string().contains("failed internally"));
     }
 }

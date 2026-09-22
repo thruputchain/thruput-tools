@@ -16,9 +16,6 @@ exclude = [
     "tests/",
 ]
 
-[features]
-default = ["std"]
-std = []
 
 [lints]
 workspace = true

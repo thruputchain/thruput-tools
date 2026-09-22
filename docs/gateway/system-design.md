@@ -106,7 +106,7 @@ still produce per-entry overload errors.
 
 | Data | Source | Existing RPC | Notes |
 |------|--------|-------------|-------|
-| Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
+| Transaction receipt (events, height, status, gas used) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, tx, TxEventLog }`; `TxEventLog.gas_consumed` is consensus-committed |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
 | Chain tip (height, hash) | hogd `SchedGateway` | `schedgateway_get_tip()` | |
 | Transaction submission | hogd `SchedGateway` | `schedgateway_submit_tx_batch(batch)` | Returns one request-scoped admission outcome per exact signed transaction |
@@ -277,7 +277,13 @@ one that serves `chainTip`); the shared server flattens it into
 reading (height plus params) that every fetch refreshes: a submit that
 finds it older than `tip_cache_ttl_ms`, the public `chainTip` method, and
 a background task that probes every `tip_refresh_interval_ms` on an idle
-server. A parameter the config does not state is `None` and its check is
+server. The public `chainConfig` method reads through that same cache, so
+however often it is called it costs the backend at most one fetch per
+`tip_cache_ttl_ms`; on a cold cache a caller waits for the in-flight probe
+rather than answering empty. It reports exactly the stated params and fails
+rather than answering when there is no reading or the config version is
+unreadable. For the pre-checks, a
+parameter the config does not state is `None` and its check is
 skipped, except where the protocol itself fixes the value in force for an
 unstated config: `maxContractSizeBytes` falls back to
 `kDefaultMaxContractSizeBytes` (256 KiB), the cap every chain predating the
@@ -378,13 +384,18 @@ do not hide abandoned queue waits. No transaction hash is used as a metric label
 immediately without occupying the scheduler lookup lane. Otherwise it checks
 the scheduler: a mempool hit returns `Pending`, including when the indexer is
 unavailable or holds an advisory failure from an earlier attempt. Without a
-mempool hit, a recent-failure diagnostic is returned. An initial indexer miss
-is checked again after the scheduler lookup to cover a commit between the
-reads; only successful misses from both backends can produce `Unknown`.
+mempool hit, a recent-failure diagnostic is returned. Only successful misses
+from both backends produce `Unknown`. A transaction that commits between the
+two reads is reported `Unknown` once; the client's next call sees it.
+That sequence is `groundhog_hogd_backend::status::transaction_status`, shared
+with `groundhog node`: each binary supplies its two raw lookups through the
+`StatusProbe` trait, so the gateway keeps its admission lane, deadline, and
+metrics inside those lookups and the two binaries cannot order the probe
+differently.
 
-Committed reads use one backend RPC. Pending reads normally use two, and
-unknown reads use three. All stages share one deadline, so a slow indexer can
-consume the budget before a pending lookup is dispatched.
+Committed reads use one backend RPC; pending and unknown reads use two. Both
+stages share one deadline, so a slow indexer can consume the budget before a
+pending lookup is dispatched.
 
 `RecentFailure` is best-effort and advisory: the indexer caches
 proposal-time two-phase-commit failure diagnostics for a few blocks,
@@ -528,9 +539,10 @@ remain a later phase.
 | Method | Data Source | Notes |
 |--------|-----------|-------|
 | `groundhog_sendRawTransaction(bytes) → TxHash` | hogd `SchedGateway` | Return the hash only after `Admitted`; this does not imply nomination or commitment |
-| `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
+| `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1; `gasUsed` from `TxEventLog.gas_consumed` |
 | `groundhog_getTransactionStatus(hash) → Status` | `SchedGateway.schedgateway_lookup_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | `SchedGateway.schedgateway_get_tip` | |
+| `groundhog_chainConfig() → NetworkConfigParams` | `SchedGateway.schedgateway_get_tip` | Stated execution parameters only; an unstated parameter is absent, never defaulted |
 | `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** | In OpenRPC; handler is not implemented until a block query backend exists |
 | `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
 | `groundhog_pendingTransactionCount() → u64` | `SchedGateway.schedgateway_pending_tx_count` | In OpenRPC; gateway handler is not wired yet |

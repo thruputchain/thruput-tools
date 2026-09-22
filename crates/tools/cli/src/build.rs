@@ -109,15 +109,32 @@ fn ensure_no_env_rustflags() -> Result<(), CliError> {
 /// the SDK linker-script contract: a positive multiple of 16. That it leaves
 /// room below the guest data address space is checked once that space is
 /// known, since the package's manifest can enlarge it.
-pub fn parse_stack_size(value: &str) -> Result<u32, String> {
+pub fn parse_stack_size(value: &str) -> Result<u32, StackSizeError> {
     let parsed = crate::byte_size::parse_byte_size(value)?;
     if parsed == 0 || !parsed.is_multiple_of(16) {
-        return Err(format!(
-            "stack size {parsed} must be a positive multiple of 16"
-        ));
+        return Err(StackSizeError::Misaligned { bytes: parsed });
     }
-    u32::try_from(parsed)
-        .map_err(|_| format!("stack size {parsed} does not fit a 32-bit address space"))
+    u32::try_from(parsed).map_err(|_| StackSizeError::TooLarge { bytes: parsed })
+}
+
+/// Why a `--stack-size` value was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StackSizeError {
+    /// The value is not a byte count.
+    #[error(transparent)]
+    ByteSize(#[from] crate::byte_size::ByteSizeError),
+    /// The SDK linker script needs a positive multiple of 16.
+    #[error("stack size {bytes} must be a positive multiple of 16")]
+    Misaligned {
+        /// The requested reserve.
+        bytes: u64,
+    },
+    /// The reserve does not fit the guest's address space.
+    #[error("stack size {bytes} does not fit a 32-bit address space")]
+    TooLarge {
+        /// The requested reserve.
+        bytes: u64,
+    },
 }
 
 /// The `[package.metadata.groundhog]` key that sizes a contract's guest data
@@ -138,18 +155,40 @@ pub enum ByteSizeValue {
 /// Parse `[package.metadata.groundhog] initial_memory_bytes`: the guest data
 /// address space a contract declares, a positive byte count that fits the
 /// artifact header's 32-bit `memory_bytes` field.
-pub fn parse_initial_memory_bytes(value: &ByteSizeValue) -> Result<u32, String> {
+pub fn parse_initial_memory_bytes(value: &ByteSizeValue) -> Result<u32, InitialMemoryError> {
     let bytes = match value {
         ByteSizeValue::Integer(bytes) => {
-            u64::try_from(*bytes).map_err(|_| format!("{bytes} is not a positive byte count"))?
+            u64::try_from(*bytes).map_err(|_| InitialMemoryError::Negative { value: *bytes })?
         }
         ByteSizeValue::Text(text) => crate::byte_size::parse_byte_size(text)?,
     };
     if bytes == 0 {
-        return Err("0 is not a positive byte count".to_string());
+        return Err(InitialMemoryError::Zero);
     }
-    u32::try_from(bytes)
-        .map_err(|_| format!("{bytes} does not fit the artifact's 32-bit memory_bytes field"))
+    u32::try_from(bytes).map_err(|_| InitialMemoryError::TooLarge { bytes })
+}
+
+/// Why a package's `initial_memory_bytes` was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InitialMemoryError {
+    /// The string form is not a byte count.
+    #[error(transparent)]
+    ByteSize(#[from] crate::byte_size::ByteSizeError),
+    /// The manifest states a negative integer.
+    #[error("{value} is not a positive byte count")]
+    Negative {
+        /// The integer the manifest states.
+        value: i64,
+    },
+    /// A contract cannot declare an empty data address space.
+    #[error("0 is not a positive byte count")]
+    Zero,
+    /// The declared space does not fit the artifact header.
+    #[error("{bytes} does not fit the artifact's 32-bit memory_bytes field")]
+    TooLarge {
+        /// The declared space.
+        bytes: u64,
+    },
 }
 
 /// The guest data-memory layout a build links and stamps.
@@ -234,10 +273,10 @@ fn package_initial_memory_bytes(
     };
     parse_initial_memory_bytes(value)
         .map(Some)
-        .map_err(|message| CliError::PackageMetadataInvalid {
+        .map_err(|error| CliError::PackageMetadataInvalid {
             package: pkg_name.to_string(),
             key: INITIAL_MEMORY_BYTES_KEY,
-            message,
+            message: error.to_string(),
         })
 }
 
@@ -600,11 +639,6 @@ pub fn resolve_package<'a>(
         .max_by_key(|p| p.manifest_path.parent().map_or(0, |d| d.as_os_str().len()))
         .map(|p| p.name.as_str())
         .ok_or(CliError::PackageRequired)
-}
-
-/// Run `cargo metadata` and parse the result.
-pub fn cargo_metadata() -> Result<CargoMetadata, CliError> {
-    cargo_metadata_with_artifacts(&ArtifactOptions::default())
 }
 
 pub fn cargo_metadata_with_artifacts(
@@ -1357,9 +1391,9 @@ mod raw_spec_format_preflight_tests {
         )
     }
 
-    fn check(json: &str) -> Result<(), String> {
+    fn check(json: &str) -> Result<(), crate::CliError> {
         let metadata = serde_json::from_str(json).expect("bug: fixture should parse");
-        super::check_dependency_raw_spec_format(&metadata, SELECTED).map_err(|e| e.to_string())
+        super::check_dependency_raw_spec_format(&metadata, SELECTED)
     }
 
     #[test]
@@ -1374,7 +1408,9 @@ mod raw_spec_format_preflight_tests {
         let newer = RAW_SPEC_FORMAT + 1;
         let json = workspace_json(SpecDep::Format(newer), SpecDep::Absent);
 
-        let message = check(&json).expect_err("a newer SDK format must refuse the build");
+        let message = check(&json)
+            .expect_err("a newer SDK format must refuse the build")
+            .to_string();
 
         assert!(
             message.contains("newer Groundhog SDK") && message.contains(&newer.to_string()),
@@ -1386,7 +1422,9 @@ mod raw_spec_format_preflight_tests {
     fn refuses_an_older_format() {
         let json = workspace_json(SpecDep::Format(RAW_SPEC_FORMAT - 1), SpecDep::Absent);
 
-        let message = check(&json).expect_err("an older SDK format must refuse the build");
+        let message = check(&json)
+            .expect_err("an older SDK format must refuse the build")
+            .to_string();
 
         assert!(
             message.contains("older Groundhog SDK"),
@@ -1399,7 +1437,8 @@ mod raw_spec_format_preflight_tests {
         // An SDK predating `[package.metadata.groundhog] raw_spec_format` is
         // format 0, which is unsupported in both directions.
         let message = check(&workspace_json(SpecDep::PreVersioning, SpecDep::Absent))
-            .expect_err("a pre-versioning SDK must refuse the build");
+            .expect_err("a pre-versioning SDK must refuse the build")
+            .to_string();
 
         assert!(
             message.contains("older Groundhog SDK"),

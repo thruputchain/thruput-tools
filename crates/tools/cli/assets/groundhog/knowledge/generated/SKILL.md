@@ -138,13 +138,15 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.36.0, standard interfaces 0.1.33, protocol-rs 0.36.0,
+This CLI uses SDK 0.36.1, standard interfaces 0.1.34, protocol-rs 0.38.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
-migrating an existing Rust project. SDK 0.36.0 removes the implicit `Clone`
-derive from contract exceptions and encodes supported scalar event topics
-directly as padded 32-byte big-endian values. Rebuild contracts and regenerate
-TypeScript bindings together to adopt that topic encoding; event signatures
-alone do not distinguish it from the previous hashed representation.
+migrating an existing Rust project. SDK 0.36.1 moves to protocol-rs 0.38.0,
+which commits each transaction's gas consumption in its event log;
+`getTransactionReceipt` reports it as `gasUsed`. SDK 0.36.0 removes the
+implicit `Clone` derive from contract exceptions and encodes supported scalar
+event topics directly as padded 32-byte big-endian values. Rebuild contracts
+and regenerate TypeScript bindings together to adopt that topic encoding; event
+signatures alone do not distinguish it from the previous hashed representation.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or
@@ -361,9 +363,10 @@ node just to enable logging: stopping it discards its chain state.
 prompt or piped stdin. It accepts a checksummed Stellar S StrKey or a 32-byte
 hex seed, never a 64-byte stored keypair. Do not put private seeds in command
 arguments. Existing names are not overwritten; `dev-N` names are reserved.
-Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`). Malformed
-TOML or an invalid `default_key` is rejected before storing the key. If the key is stored but
-selecting the default fails, import succeeds with a warning and a recovery
+Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
+Malformed TOML or an invalid `default_key` is rejected before storing the key.
+If the key is stored but selecting the default fails, import succeeds with a
+warning and a recovery
 command (`groundhog keys use <name>`); do not import it again. `isDefault` is
 null when the configuration cannot be reread to confirm selection.
 
