@@ -113,21 +113,6 @@ fn workspace_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
-fn target_dir() -> std::path::PathBuf {
-    let root = workspace_root();
-    match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(raw) => {
-            let path = std::path::PathBuf::from(raw);
-            if path.is_absolute() {
-                path
-            } else {
-                root.join(path)
-            }
-        }
-        None => root.join("target"),
-    }
-}
-
 #[cfg(unix)]
 // Creates the minimum persistent on-disk state accepted by `groundhog chain dump`.
 fn write_chain_data_fixture(root: &std::path::Path) {
@@ -253,38 +238,64 @@ fn chain_restore_help_documents_force_alias() {
     );
 }
 
+/// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
+/// only as a test harness, so a copy on disk may predate a `groundhog-xdr` bump.
 fn fake_hogd_dev_binary() -> std::path::PathBuf {
-    let binary = target_dir()
-        .join("debug")
-        .join("examples")
-        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
-    if binary.is_file() {
-        return binary;
-    }
+    static BINARY: OnceLock<std::path::PathBuf> = OnceLock::new();
+    BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
+}
 
+/// Builds the example with the current cargo and returns the path it reports.
+fn build_fake_hogd_dev_binary() -> std::path::PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(cargo)
+    let output = Command::new(&cargo)
         .args([
             "build",
             "--quiet",
+            "--locked",
+            "--message-format=json",
             "-p",
             "groundhog-node-supervisor",
             "--example",
             "fake_hogd_dev",
         ])
         .current_dir(workspace_root())
-        .status()
-        .expect("bug: cargo should run to build fake_hogd_dev example");
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to run {} to build the fake_hogd_dev example: {err}",
+                cargo.to_string_lossy()
+            )
+        });
     assert!(
-        status.success(),
-        "failed to build fake_hogd_dev example; status: {status}",
+        output.status.success(),
+        "failed to build fake_hogd_dev example; status: {}",
+        output.status
     );
+    let binary = fake_hogd_dev_executable(&output.stdout);
     assert!(
         binary.is_file(),
         "fake_hogd_dev example missing after build at {}",
         binary.display(),
     );
     binary
+}
+
+/// Finds the `fake_hogd_dev` example artifact in cargo's JSON build messages.
+fn fake_hogd_dev_executable(messages: &[u8]) -> std::path::PathBuf {
+    String::from_utf8_lossy(messages)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|message| {
+            message["reason"] == "compiler-artifact"
+                && message["target"]["name"] == "fake_hogd_dev"
+                && message["target"]["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "example"))
+        })
+        .and_then(|message| message["executable"].as_str().map(std::path::PathBuf::from))
+        .expect("bug: cargo build output should report the fake_hogd_dev example executable")
 }
 
 #[cfg(unix)]
