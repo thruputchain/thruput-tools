@@ -842,7 +842,7 @@ fn resolve_airdrop_recipient(
     }
     if crate::account_resolution::looks_like_address_literal(recipient) {
         let address = parse_contract_address(recipient).map_err(|_| {
-            CliError::Other("wallet address must be a C StrKey or 32-byte hex address".into())
+            CliError::Other("wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x".into())
         })?;
         return Ok(format_contract_address(&address));
     }
@@ -1159,7 +1159,10 @@ mod tests {
         let err = resolve_airdrop_recipient(&profile, "0xdeadbeef")
             .expect_err("bug: malformed direct address should fail");
 
-        assert!(err.to_string().contains("C StrKey or 32-byte hex address"));
+        assert!(
+            err.to_string()
+                .contains("C StrKey or 64 hex characters, optionally prefixed with 0x")
+        );
     }
 
     #[test]

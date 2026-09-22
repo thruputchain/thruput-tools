@@ -27,7 +27,7 @@ fn run(home: &TempDir, args: &[&str], input: Option<&str>) -> Output {
 }
 
 #[test]
-fn strkey_import_export_preserves_legacy_storage_and_public_identity() {
+fn strkey_import_preserves_legacy_storage_and_public_identity() {
     let home = TempDir::new().unwrap();
     let seed = [42; 32];
     let secret = strkey::format_secret_seed(&seed);
@@ -83,6 +83,20 @@ fn strkey_import_export_preserves_legacy_storage_and_public_identity() {
             0o600
         );
     }
+    let duplicate = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
+    assert!(!duplicate.status.success());
+    assert_eq!(std::fs::read(&key_path).unwrap(), bytes);
+    let listed = run(&home, &["keys", "ls"], None);
+    assert!(String::from_utf8_lossy(&listed.stdout).contains(&format!("public-key={public}")));
+}
+
+#[test]
+fn strkey_export_preserves_seed_and_requires_confirmation() {
+    let home = TempDir::new().unwrap();
+    let seed = [42; 32];
+    let secret = strkey::format_secret_seed(&seed);
+    let imported = run(&home, &["keys", "import", "alice"], Some(secret.as_str()));
+    assert!(imported.status.success());
     let exported = run(
         &home,
         &["keys", "export", "alice", "--format", "strkey", "--force"],
@@ -94,16 +108,18 @@ fn strkey_import_export_preserves_legacy_storage_and_public_identity() {
         secret.as_str()
     );
     assert!(exported.stderr.is_empty());
-    let json = run(
+    let exported_json = run(
         &home,
         &[
             "--json", "keys", "export", "alice", "--format", "strkey", "--force",
         ],
         None,
     );
-    let json: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert!(exported_json.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&exported_json.stdout).unwrap();
     assert_eq!(json["data"]["key"]["privateKey"], secret.as_str());
     let legacy = run(&home, &["keys", "export", "alice", "--force"], None);
+    assert!(legacy.status.success());
     assert_eq!(
         String::from_utf8(legacy.stdout).unwrap().trim(),
         format!("0x{}", hex::encode(seed))
@@ -115,11 +131,6 @@ fn strkey_import_export_preserves_legacy_storage_and_public_identity() {
     );
     assert!(!denied.status.success());
     assert!(!String::from_utf8_lossy(&denied.stdout).contains(secret.as_str()));
-    let duplicate = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
-    assert!(!duplicate.status.success());
-    assert_eq!(std::fs::read(&key_path).unwrap(), bytes);
-    let listed = run(&home, &["keys", "ls"], None);
-    assert!(String::from_utf8_lossy(&listed.stdout).contains(&format!("public-key={public}")));
 }
 
 #[test]

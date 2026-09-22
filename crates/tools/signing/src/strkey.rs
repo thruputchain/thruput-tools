@@ -8,10 +8,14 @@ use zeroize::Zeroizing;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// Expected a contract address, never an Ed25519 public key.
-    #[error("expected a C StrKey or 32-byte hex contract address")]
+    #[error(
+        "contract address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
+    )]
     ContractAddress,
     /// Expected an Ed25519 public key, never a contract address.
-    #[error("expected a G StrKey or 32-byte hex Ed25519 public key")]
+    #[error(
+        "Ed25519 public key must be a G StrKey or 64 hex characters, optionally prefixed with 0x"
+    )]
     PublicKey,
     /// Expected the 32-byte private seed, not a stored 64-byte keypair.
     #[error("expected an S StrKey or 32-byte hex Ed25519 seed")]
