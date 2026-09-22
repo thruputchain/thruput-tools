@@ -121,47 +121,22 @@ async fn a_mempool_miss_returns_the_indexer_diagnostic_or_failure() {
 }
 
 #[tokio::test]
-async fn the_indexer_is_asked_again_to_cover_a_commit_during_the_mempool_read() {
-    for mempool in [Ok(false), Err(mempool_down())] {
-        let probe = Scripted::new(vec![Ok(None), Ok(Some(committed()))], vec![mempool]);
-
-        let status = transaction_status(&probe, hash()).await.unwrap();
-
-        assert!(matches!(status, TransactionStatus::Committed { .. }));
-        assert_eq!(probe.asked(), ["indexer", "mempool", "indexer"]);
-    }
-}
-
-#[tokio::test]
-async fn a_recheck_failure_is_returned_rather_than_read_as_a_miss() {
-    let probe = Scripted::new(vec![Ok(None), Err(indexer_down())], vec![Ok(false)]);
-
-    let error = transaction_status(&probe, hash()).await.unwrap_err();
-
-    assert_eq!(error, indexer_down());
-    assert_eq!(probe.asked(), ["indexer", "mempool", "indexer"]);
-}
-
-#[tokio::test]
 async fn unknown_requires_both_backends_to_have_missed() {
-    let probe = Scripted::new(vec![Ok(None), Ok(None)], vec![Ok(false)]);
+    let probe = Scripted::new(vec![Ok(None)], vec![Ok(false)]);
     let status = transaction_status(&probe, hash()).await.unwrap();
     assert!(matches!(status, TransactionStatus::Unknown));
-    assert_eq!(probe.asked(), ["indexer", "mempool", "indexer"]);
+    assert_eq!(probe.asked(), ["indexer", "mempool"]);
 
-    let probe = Scripted::new(vec![Ok(None), Ok(None)], vec![Err(mempool_down())]);
+    let probe = Scripted::new(vec![Ok(None)], vec![Err(mempool_down())]);
     let error = transaction_status(&probe, hash()).await.unwrap_err();
     let RpcServerError::BackendUnavailable(message) = error else {
         panic!("expected BackendUnavailable, got {error:?}");
     };
     assert!(message.starts_with("scheduler: down"), "{message}");
     assert!(message.contains("may still be pending"), "{message}");
-    assert_eq!(probe.asked(), ["indexer", "mempool", "indexer"]);
+    assert_eq!(probe.asked(), ["indexer", "mempool"]);
 
-    let probe = Scripted::new(
-        vec![Ok(None), Ok(None)],
-        vec![Err(RpcServerError::BackendTimeout)],
-    );
+    let probe = Scripted::new(vec![Ok(None)], vec![Err(RpcServerError::BackendTimeout)]);
     let error = transaction_status(&probe, hash()).await.unwrap_err();
     assert_eq!(error, RpcServerError::BackendTimeout);
 }

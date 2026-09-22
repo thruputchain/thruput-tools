@@ -836,7 +836,7 @@ mod tests {
                 );
             }
             assert_eq!(gate.calls.load(Ordering::SeqCst), 20);
-            assert_eq!(indexer_calls.load(Ordering::SeqCst), 40);
+            assert_eq!(indexer_calls.load(Ordering::SeqCst), 20);
             assert_eq!(gate.max_active.load(Ordering::SeqCst), width);
             let snapshot = crate::health::GatewayHealthSnapshot::for_test(
                 crate::health::HealthStatus::Starting,
@@ -1278,40 +1278,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn indexer_recheck_covers_commit_race_and_preserves_errors() {
-        // Both a scheduler miss and a scheduler failure can race with a commit.
-        for mode in [FakeSchedulerMode::MempoolMiss, FakeSchedulerMode::RpcFail] {
-            for second in [Some(committed_result()), Some(indexer_miss()), None] {
-                let expected_commit = matches!(second, Some(TxInfoResult::TxInfoFound { .. }));
-                let expected_unknown = matches!(mode, FakeSchedulerMode::MempoolMiss)
-                    && matches!(second, Some(TxInfoResult::Default { .. }));
-                let (scheduler_addr, _scheduler) = start_fake_scheduler(mode.clone()).await;
-                let calls = Arc::new(AtomicUsize::new(0));
-                let (indexer_addr, _indexer) =
-                    start_scripted_indexer(vec![Some(indexer_miss()), second], calls.clone()).await;
-                let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-                let result = watchdog(get_transaction_status(
-                    &ctx,
-                    RpcRequestContext::unbounded(),
-                    test_hash(),
-                ))
-                .await;
-                if expected_commit {
-                    assert!(matches!(
-                        result.unwrap(),
-                        TransactionStatus::Committed { .. }
-                    ));
-                } else if expected_unknown {
-                    assert!(matches!(result.unwrap(), TransactionStatus::Unknown));
-                } else {
-                    assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
-                }
-                assert_eq!(calls.load(Ordering::SeqCst), 2);
-            }
-        }
-    }
-
-    #[tokio::test]
     async fn expired_indexer_wait_does_not_dispatch_scheduler() {
         let gate = LookupGate::new();
         let (scheduler_addr, _scheduler) =
@@ -1330,7 +1296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_timeout_does_not_dispatch_indexer_recheck() {
+    async fn scheduler_timeout_is_returned_after_an_indexer_miss() {
         let gate = LookupGate::new();
         let (scheduler_addr, _scheduler) =
             start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;

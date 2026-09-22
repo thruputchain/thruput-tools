@@ -36,10 +36,10 @@ pub trait StatusProbe: Sync {
     ) -> impl Future<Output = Result<Option<TransactionStatus>, RpcServerError>> + Send;
 }
 
-/// Decide a transaction's status: indexer, then mempool, then the indexer
-/// again to cover a commit during the mempool read. A committed record or a
-/// mempool hit answers at once; `Unknown` only when both backends answered
-/// and missed, and a failed mempool read is returned as its error instead.
+/// Decide a transaction's status: indexer, then mempool. A committed record
+/// or a mempool hit answers at once; `Unknown` only when both backends
+/// answered and missed, and a failed mempool read is returned as its error
+/// instead.
 pub async fn transaction_status<P: StatusProbe + ?Sized>(
     probe: &P,
     tx_hash: TxHash,
@@ -52,14 +52,15 @@ pub async fn transaction_status<P: StatusProbe + ?Sized>(
         Ok(true) => return Ok(TransactionStatus::Pending),
         Ok(false) => None,
         Err(error) => {
-            tracing::warn!(%error, "mempool lookup did not complete; checking indexer");
+            tracing::warn!(%error, "mempool lookup did not complete; using the indexer answer");
             Some(error)
         }
     };
+    // The indexer's other answer is a recent-failure diagnostic: best-effort,
+    // and about an earlier attempt. A transaction the mempool holds is being
+    // retried, so `Pending` had to win before this is worth returning. The
+    // same deferral keeps an indexer failure from hiding a pending answer.
     if let Some(status) = indexed? {
-        return Ok(status);
-    }
-    if let Some(status) = probe.indexed_status(tx_hash).await? {
         return Ok(status);
     }
     match mempool_failure {
