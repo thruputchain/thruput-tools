@@ -20,7 +20,7 @@ pub trait StatusProbe: Sync {
     ///
     /// An answer that does not account for the transaction (no per-hash
     /// slot, a transport failure, a timeout) is an error, never `false`:
-    /// see [`crate::scheduler::mempool_answer`].
+    /// see [`crate::scheduler::mempool_holds_tx`].
     fn mempool_holds(
         &self,
         tx_hash: TxHash,

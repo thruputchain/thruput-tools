@@ -32,17 +32,20 @@ fn admission_outcomes_separate_client_faults_from_backend_faults() {
 #[test]
 fn a_lookup_slot_count_other_than_one_is_not_an_absence() {
     assert_eq!(
-        mempool_holds_tx(&VecM(vec![OptSignedTransaction::None])),
-        Some(false)
+        mempool_holds_tx("scheduler", &VecM(vec![OptSignedTransaction::None])),
+        Ok(false)
     );
-    assert_eq!(mempool_holds_tx(&VecM(vec![])), None);
-    assert_eq!(
-        mempool_holds_tx(&VecM(vec![
-            OptSignedTransaction::None,
-            OptSignedTransaction::None,
-        ])),
-        None
-    );
+    assert!(matches!(
+        mempool_holds_tx("scheduler", &VecM(vec![])),
+        Err(RpcServerError::BackendUnavailable(_))
+    ));
+    assert!(matches!(
+        mempool_holds_tx(
+            "scheduler",
+            &VecM(vec![OptSignedTransaction::None, OptSignedTransaction::None]),
+        ),
+        Err(RpcServerError::BackendUnavailable(_))
+    ));
 }
 
 #[test]

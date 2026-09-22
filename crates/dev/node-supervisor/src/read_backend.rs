@@ -148,7 +148,7 @@ impl shared_status::StatusProbe for HogdDevReadBackend {
             .map_err(|error| {
                 RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
             })?;
-        shared_scheduler::mempool_answer(SCHEDULER_GATEWAY, &results)
+        shared_scheduler::mempool_holds_tx(SCHEDULER_GATEWAY, &results)
     }
 
     async fn indexed_status(

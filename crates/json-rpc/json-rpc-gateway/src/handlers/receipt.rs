@@ -233,7 +233,7 @@ async fn transaction_is_pending(
         started_at.elapsed(),
     );
     match rpc_result {
-        Ok(Ok(results)) => shared_scheduler::mempool_answer(SCHEDULER, &results),
+        Ok(Ok(results)) => shared_scheduler::mempool_holds_tx(SCHEDULER, &results),
         Ok(Err(error)) => Err(RpcServerError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
