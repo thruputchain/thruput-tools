@@ -253,38 +253,47 @@ fn chain_restore_help_documents_force_alias() {
     );
 }
 
+/// The `fake_hogd_dev` example, built from this checkout.
+///
+/// Always asks cargo for it rather than trusting a binary already in the
+/// target directory: one left by an earlier build advertises the protocol
+/// of the dependencies it was built against, and a stale one fails the
+/// supervisor's runtime identity check. Cargo's own freshness check makes
+/// the request a no-op when the binary is current. Built once per test
+/// process.
 fn fake_hogd_dev_binary() -> std::path::PathBuf {
-    let binary = target_dir()
-        .join("debug")
-        .join("examples")
-        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
-    if binary.is_file() {
-        return binary;
-    }
-
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(cargo)
-        .args([
-            "build",
-            "--quiet",
-            "-p",
-            "groundhog-node-supervisor",
-            "--example",
-            "fake_hogd_dev",
-        ])
-        .current_dir(workspace_root())
-        .status()
-        .expect("bug: cargo should run to build fake_hogd_dev example");
-    assert!(
-        status.success(),
-        "failed to build fake_hogd_dev example; status: {status}",
-    );
-    assert!(
-        binary.is_file(),
-        "fake_hogd_dev example missing after build at {}",
-        binary.display(),
-    );
-    binary
+    static BINARY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    BINARY
+        .get_or_init(|| {
+            let binary = target_dir()
+                .join("debug")
+                .join("examples")
+                .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
+            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+            let status = Command::new(cargo)
+                .args([
+                    "build",
+                    "--quiet",
+                    "-p",
+                    "groundhog-node-supervisor",
+                    "--example",
+                    "fake_hogd_dev",
+                ])
+                .current_dir(workspace_root())
+                .status()
+                .expect("bug: cargo should run to build fake_hogd_dev example");
+            assert!(
+                status.success(),
+                "failed to build fake_hogd_dev example; status: {status}",
+            );
+            assert!(
+                binary.is_file(),
+                "fake_hogd_dev example missing after build at {}",
+                binary.display(),
+            );
+            binary
+        })
+        .clone()
 }
 
 #[cfg(unix)]
