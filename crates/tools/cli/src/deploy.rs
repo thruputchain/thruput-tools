@@ -95,18 +95,18 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     if !dry_run {
-        let cwd = std::env::current_dir()?;
-        resolve_profile_with_overrides(&cwd, profile, overrides)?;
         print.require_confirmation_available(force, "deploy a contract")?;
     }
     let plan = prepare_deploy_plan(
+        &cwd,
+        &resolved,
         artifact_path,
         package,
         artifacts,
         wallet,
-        profile,
-        overrides,
         print,
     )?;
     if !dry_run {
@@ -431,17 +431,14 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_deploy_plan(
+    cwd: &Path,
+    resolved: &ResolvedProfile,
     artifact_path: Option<&Path>,
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
-    profile: Option<&str>,
-    overrides: &ProfileOverrides,
     print: &Print,
 ) -> Result<DeployPlan, CliError> {
-    let cwd = std::env::current_dir()?;
-    let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
-
     if resolved.rpc_url.is_none() && resolved.default_key.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
@@ -457,7 +454,7 @@ fn prepare_deploy_plan(
         )
     } else {
         let resolved_artifact =
-            crate::artifacts::resolve_groundhog_artifact(&cwd, artifacts, package)?;
+            crate::artifacts::resolve_groundhog_artifact(cwd, artifacts, package)?;
         warn_if_stale(
             &resolved_artifact.artifact,
             &resolved_artifact.package_root,
@@ -471,7 +468,7 @@ fn prepare_deploy_plan(
     };
     let artifact_bytes = std::fs::read(&artifact.path)?;
 
-    prepare_deploy_transaction_plan(artifact, artifact_bytes, package_name, &resolved, wallet)
+    prepare_deploy_transaction_plan(artifact, artifact_bytes, package_name, resolved, wallet)
 }
 
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.

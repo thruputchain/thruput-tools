@@ -1,8 +1,7 @@
 use groundhog_json_rpc_types::hex::{decode_fixed_hex, decode_prefixed_hex, prefixed_hex};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt as _;
 use getrandom::getrandom;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
@@ -33,16 +32,19 @@ use crate::balance::{
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
-    Network, ProfileOverrides, ResolvedProfile, cache_dir, find_project_config,
-    prepare_profile_wallet_removal, remove_prepared_profile_wallet,
-    resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
-    save_profile_default_wallet, save_profile_wallet_address_with_default,
+    ProfileOverrides, ResolvedProfile, find_project_config, prepare_profile_wallet_removal,
+    remove_prepared_profile_wallet, resolve_default_key_for_profile, resolve_profile,
+    resolve_profile_with_overrides, save_profile_default_wallet,
+    save_profile_wallet_address_with_default,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::keys::load_local_signer;
 use crate::network_descriptor::fetch_network_descriptor;
-use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
+use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
+use crate::remote_attempt::{
+    attempt_path, lock_attempt, read_attempt, remove_attempt, write_attempt,
+};
 use crate::result::CommandResult;
 use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
 use crate::terminal::render_shell_arg;
@@ -213,24 +215,15 @@ pub fn create(
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    if dry_run
-        && let Some(prepared) = prepare_remote_wallet_create_dry_run(
-            &cwd,
-            key_name,
-            wallet_name,
-            prefund,
-            profile,
-            overrides,
-        )?
-    {
+    let inputs = resolve_wallet_create_inputs(&cwd, key_name, wallet_name, profile, overrides)?;
+    if dry_run && let Some(prepared) = prepare_remote_wallet_create_dry_run(&inputs, prefund)? {
         return print_remote_dry_run_plan(&prepared, cmd, print);
     }
     if !dry_run {
         print.require_confirmation_available(force, "create a wallet")?;
     }
 
-    let plan =
-        prepare_wallet_create_plan(&cwd, key_name, wallet_name, prefund, profile, overrides)?;
+    let plan = prepare_wallet_create_plan(&cwd, inputs, prefund)?;
     if !dry_run {
         print_wallet_create_plan(&plan, print);
         if !print.confirm(force, "create a wallet", "Create this wallet?")? {
@@ -857,19 +850,15 @@ fn wallet_funding_command(wallet_name: &str, profile_name: &str) -> String {
 
 fn prepare_wallet_create_plan(
     cwd: &Path,
-    key_name: Option<&str>,
-    wallet_name: Option<&str>,
+    inputs: WalletCreateInputs,
     prefund: Option<&str>,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
 ) -> Result<WalletCreatePlan, CliError> {
-    let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
     let profile = inputs.profile;
     let key_name = inputs.key_name;
     let wallet_name = inputs.wallet_name;
 
-    match resolve_wallet_create_backend(&profile)? {
-        ProfileBackend::RemoteFaucet => {
+    match resolve_faucet_backend(&profile, "wallet create")? {
+        FaucetBackend::RemoteFaucet => {
             if prefund.is_some() {
                 return Err(CliError::Other(
                     "remote wallet prefunding is controlled by the faucet service; omit `--prefund`"
@@ -878,14 +867,10 @@ fn prepare_wallet_create_plan(
             }
             prepare_remote_wallet_create_plan(&profile, key_name, wallet_name)
         }
-        ProfileBackend::LocalManifest => {
+        FaucetBackend::LocalManifest => {
             let prefund_raw_amount = parse_local_wallet_prefund(prefund)?;
             prepare_local_wallet_create(cwd, profile, key_name, wallet_name, prefund_raw_amount)
         }
-        ProfileBackend::RpcOnly => Err(CliError::Other(format!(
-            "profile `{}` is RPC-only; wallet create requires either `runtime_manifest` or `faucet_url`",
-            profile.name
-        ))),
     }
 }
 
@@ -901,71 +886,13 @@ fn parse_local_wallet_prefund(prefund: Option<&str>) -> Result<u128, CliError> {
     Ok(amount)
 }
 
-fn resolve_wallet_create_backend(profile: &ResolvedProfile) -> Result<ProfileBackend, CliError> {
-    match profile.network {
-        Some(Network::Local) => {
-            if profile.rpc_url.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets local, but wallet create requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
-                ));
-            }
-            if configured_runtime_manifest_path(profile)?.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets local, but wallet create requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
-                ));
-            }
-            Ok(ProfileBackend::LocalManifest)
-        }
-        Some(Network::Devnet) => {
-            if configured_runtime_manifest_path(profile)?.is_some() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets devnet, but `--runtime-manifest` requires a local profile",
-                ));
-            }
-            if profile.rpc_url.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets devnet, but wallet create requires `rpc_url`",
-                ));
-            }
-            if profile.faucet_url.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets devnet, but wallet create requires `faucet_url`",
-                ));
-            }
-            Ok(ProfileBackend::RemoteFaucet)
-        }
-        Some(Network::Mainnet) => Err(profile_config_error(
-            profile,
-            "targets mainnet, but wallet create is not supported because mainnet does not exist yet",
-        )),
-        None => resolve_profile_backend(profile),
-    }
-}
-
-fn profile_config_error(profile: &ResolvedProfile, message: &'static str) -> CliError {
-    CliError::ProfileConfigInvalid {
-        profile: profile.name.clone(),
-        message: message.to_string(),
-    }
-}
-
 fn prepare_remote_wallet_create_dry_run(
-    cwd: &Path,
-    key_name: Option<&str>,
-    wallet_name: Option<&str>,
+    inputs: &WalletCreateInputs,
     prefund: Option<&str>,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
 ) -> Result<Option<PreparedRemoteWalletCreateDryRun>, CliError> {
-    let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
     if !matches!(
-        resolve_wallet_create_backend(&inputs.profile)?,
-        ProfileBackend::RemoteFaucet
+        resolve_faucet_backend(&inputs.profile, "wallet create")?,
+        FaucetBackend::RemoteFaucet
     ) {
         return Ok(None);
     }
@@ -991,8 +918,8 @@ fn prepare_remote_wallet_create_dry_run(
     Ok(Some(PreparedRemoteWalletCreateDryRun {
         faucet_url,
         rpc_url,
-        key_name: inputs.key_name,
-        wallet_name: inputs.wallet_name,
+        key_name: inputs.key_name.clone(),
+        wallet_name: inputs.wallet_name.clone(),
     }))
 }
 
@@ -1247,7 +1174,7 @@ fn load_or_create_remote_wallet_create_attempt(
         &genesis_hash,
     )?;
     let lock = lock_remote_wallet_create_attempt(&path)?;
-    if let Some(attempt) = read_remote_wallet_create_attempt(&path)?
+    if let Some(attempt) = read_attempt(&path)?
         && remote_wallet_create_attempt_matches(
             &attempt,
             profile_name,
@@ -1289,7 +1216,7 @@ fn load_or_create_remote_wallet_create_attempt(
         wallet_contract_hash,
         wallet_address: format_contract_address(&wallet_address),
     };
-    write_remote_wallet_create_attempt(&path, &attempt)?;
+    write_attempt(&path, &attempt)?;
     Ok(LoadedRemoteWalletCreateAttempt {
         attempt,
         path,
@@ -1391,32 +1318,6 @@ fn finalize_wallet_create_plan(plan: WalletCreatePlan) -> Result<PreparedWalletC
     }
 }
 
-fn read_remote_wallet_create_attempt(
-    path: &Path,
-) -> Result<Option<RemoteWalletCreateAttempt>, CliError> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    serde_json::from_str(&contents)
-        .map(Some)
-        .map_err(|error| CliError::Other(format!("failed to parse `{}`: {error}", path.display())))
-}
-
-fn write_remote_wallet_create_attempt(
-    path: &Path,
-    attempt: &RemoteWalletCreateAttempt,
-) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let contents =
-        serde_json::to_vec_pretty(attempt).map_err(|error| CliError::Other(error.to_string()))?;
-    std::fs::write(path, contents)?;
-    Ok(())
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "attempt identity is intentionally explicit"
@@ -1441,43 +1342,17 @@ fn remote_wallet_create_attempt_matches(
 }
 
 fn lock_remote_wallet_create_attempt(attempt_path: &Path) -> Result<File, CliError> {
-    let parent = attempt_path
-        .parent()
-        .ok_or_else(|| CliError::Other("wallet-create attempt path has no parent".into()))?;
-    std::fs::create_dir_all(parent)?;
-    let lock_path = attempt_path.with_extension("lock");
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let file = options.open(&lock_path)?;
-    file.try_lock_exclusive().map_err(|error| {
-        let contended = fs2::lock_contended_error();
-        if error.kind() == std::io::ErrorKind::WouldBlock
-            || error.raw_os_error() == contended.raw_os_error()
-        {
-            CliError::Other(format!(
-                "another wallet-create command is already running for this profile, key, wallet, and network ({})",
-                lock_path.display()
-            ))
-        } else {
-            error.into()
-        }
-    })?;
-    Ok(file)
+    lock_attempt(
+        attempt_path,
+        "wallet-create",
+        "profile, key, wallet, and network",
+    )
 }
 
 fn remove_remote_wallet_create_attempt(
     prepared: &PreparedRemoteWalletCreate,
 ) -> Result<(), CliError> {
-    match std::fs::remove_file(&prepared.attempt_path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+    remove_attempt(&prepared.attempt_path)
 }
 
 fn remote_wallet_create_attempt_path(
@@ -1487,13 +1362,10 @@ fn remote_wallet_create_attempt_path(
     network_id: &str,
     genesis_hash: &str,
 ) -> Result<PathBuf, CliError> {
-    let hash: [u8; 32] = Sha256::digest(format!(
-        "{profile}\0{key_name}\0{wallet_name}\0{network_id}\0{genesis_hash}"
-    ))
-    .into();
-    Ok(cache_dir()?
-        .join("wallet-create-attempts")
-        .join(format!("{}.json", hex::encode(hash))))
+    attempt_path(
+        "wallet-create-attempts",
+        &[profile, key_name, wallet_name, network_id, genesis_hash],
+    )
 }
 
 fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, CliError> {
@@ -1633,14 +1505,15 @@ mod tests {
     use super::{
         PreparedRemoteWalletCreate, RemoteWalletCreateAttempt, build_remote_wallet_create_plan,
         load_or_create_remote_wallet_create_attempt, lock_remote_wallet_create_attempt,
-        parse_local_wallet_prefund, read_remote_wallet_create_attempt,
-        remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
-        resolve_dev_wallet_artifact_path, resolve_wallet_create_backend,
+        parse_local_wallet_prefund, remote_wallet_create_attempt_path,
+        remove_remote_wallet_create_attempt, resolve_dev_wallet_artifact_path,
         resolve_wallet_create_inputs, validate_remote_create_wallet_address,
         validate_remote_wallet_prefund_amount, wallet_funding_command,
-        wallet_should_become_default, write_remote_wallet_create_attempt,
+        wallet_should_become_default,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
+    use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
+    use crate::remote_attempt::{read_attempt, write_attempt};
 
     #[test]
     fn first_wallet_becomes_default_only_for_effective_key() {
@@ -1833,7 +1706,7 @@ mod tests {
         let mut profile = test_profile();
         profile.faucet_url = None;
 
-        let error = resolve_wallet_create_backend(&profile)
+        let error = resolve_faucet_backend(&profile, "wallet create")
             .expect_err("bug: missing devnet faucet should fail");
 
         assert_eq!(
@@ -1849,7 +1722,7 @@ mod tests {
         let mut profile = test_profile();
         profile.rpc_url = None;
 
-        let error = resolve_wallet_create_backend(&profile)
+        let error = resolve_faucet_backend(&profile, "wallet create")
             .expect_err("bug: missing devnet rpc should fail");
 
         assert_eq!(
@@ -1864,13 +1737,10 @@ mod tests {
         let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
         let profile = test_profile();
 
-        let backend = resolve_wallet_create_backend(&profile)
+        let backend = resolve_faucet_backend(&profile, "wallet create")
             .expect("bug: configured devnet profile should resolve");
 
-        assert_eq!(
-            backend,
-            crate::profile_backend::ProfileBackend::RemoteFaucet
-        );
+        assert_eq!(backend, FaucetBackend::RemoteFaucet);
     }
 
     #[test]
@@ -1879,7 +1749,7 @@ mod tests {
         let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "/tmp/runtime.json");
         let profile = test_profile();
 
-        let error = resolve_wallet_create_backend(&profile)
+        let error = resolve_faucet_backend(&profile, "wallet create")
             .expect_err("bug: devnet runtime manifest should fail");
 
         assert_eq!(
@@ -1896,7 +1766,7 @@ mod tests {
         profile.network = Some(Network::Local);
         profile.faucet_url = None;
 
-        let error = resolve_wallet_create_backend(&profile)
+        let error = resolve_faucet_backend(&profile, "wallet create")
             .expect_err("bug: missing local manifest should fail");
 
         assert_eq!(
@@ -1907,16 +1777,19 @@ mod tests {
 
     #[test]
     #[serial]
-    fn wallet_create_rpc_only_profile_stays_rpc_only() {
+    fn wallet_create_rpc_only_profile_is_rejected() {
         let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
         let mut profile = test_profile();
         profile.network = None;
         profile.faucet_url = None;
 
-        let backend = resolve_wallet_create_backend(&profile)
-            .expect("bug: legacy rpc-only backend should resolve");
+        let error = resolve_faucet_backend(&profile, "wallet create")
+            .expect_err("bug: an rpc-only profile has nowhere to send wallet creation");
 
-        assert_eq!(backend, crate::profile_backend::ProfileBackend::RpcOnly);
+        assert_eq!(
+            error.to_string(),
+            "profile `preview` is RPC-only; wallet create requires either `runtime_manifest` or `faucet_url`"
+        );
     }
 
     #[test]
@@ -2056,7 +1929,7 @@ mod tests {
         assert_eq!(loaded.attempt.deploy_nonce.len(), 66);
         assert_eq!(loaded.attempt.client_nonce.len(), 34);
 
-        let stored = read_remote_wallet_create_attempt(&loaded.path)
+        let stored = read_attempt::<RemoteWalletCreateAttempt>(&loaded.path)
             .expect("bug: attempt should read")
             .expect("bug: attempt file should exist");
         assert_eq!(stored, loaded.attempt);
@@ -2176,8 +2049,7 @@ mod tests {
             wallet_contract_hash: format!("0x{}", "03".repeat(32)),
             wallet_address: format!("0x{}", "66".repeat(32)),
         };
-        write_remote_wallet_create_attempt(&path, &stale)
-            .expect("bug: stale attempt should be written");
+        write_attempt(&path, &stale).expect("bug: stale attempt should be written");
 
         let loaded = load_or_create_remote_wallet_create_attempt(
             &profile.name,
@@ -2191,7 +2063,7 @@ mod tests {
         assert_eq!(loaded.path, path);
         assert_ne!(loaded.attempt, stale);
         assert_eq!(loaded.attempt.owner_public_key, owner_public_key);
-        let stored = read_remote_wallet_create_attempt(&loaded.path)
+        let stored = read_attempt::<RemoteWalletCreateAttempt>(&loaded.path)
             .expect("bug: replacement should read")
             .expect("bug: replacement file should exist");
         assert_eq!(stored, loaded.attempt);

@@ -38,6 +38,7 @@ pub mod node;
 pub(crate) mod pagination;
 pub mod print;
 pub(crate) mod profile_backend;
+pub(crate) mod remote_attempt;
 pub mod result;
 pub(crate) mod runtime_manifest;
 pub mod scaffold;

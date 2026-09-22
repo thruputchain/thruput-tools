@@ -1,5 +1,7 @@
 use crate::{
-    CliError, config::ResolvedProfile, runtime_manifest::configured_runtime_manifest_path,
+    CliError,
+    config::{Network, ResolvedProfile},
+    runtime_manifest::configured_runtime_manifest_path,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,76 @@ pub(crate) fn resolve_profile_backend(
         return Ok(ProfileBackend::RemoteFaucet);
     }
     Ok(ProfileBackend::RpcOnly)
+}
+
+/// Where a command that funds a wallet sends its request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FaucetBackend {
+    /// The local dev wallet named by the profile's runtime manifest.
+    LocalManifest,
+    /// The hosted faucet at the profile's `faucet_url`.
+    RemoteFaucet,
+}
+
+/// Resolve the backend `feature` will use and check the profile carries
+/// what that backend needs.
+///
+/// `feature` names the command in error text, for example `airdrop` or
+/// `wallet create`. A profile that names a network is held to that
+/// network's requirements; one that does not is classified by what it
+/// configures.
+pub(crate) fn resolve_faucet_backend(
+    profile: &ResolvedProfile,
+    feature: &str,
+) -> Result<FaucetBackend, CliError> {
+    let config_error = |message: String| CliError::ProfileConfigInvalid {
+        profile: profile.name.clone(),
+        message,
+    };
+    match profile.network {
+        Some(Network::Local) => {
+            if profile.rpc_url.is_none() {
+                return Err(config_error(format!(
+                    "targets local, but {feature} requires `rpc_url`; run `groundhog node` or configure `rpc_url`"
+                )));
+            }
+            if configured_runtime_manifest_path(profile)?.is_none() {
+                return Err(config_error(format!(
+                    "targets local, but {feature} requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`"
+                )));
+            }
+            Ok(FaucetBackend::LocalManifest)
+        }
+        Some(Network::Devnet) => {
+            if configured_runtime_manifest_path(profile)?.is_some() {
+                return Err(config_error(
+                    "targets devnet, but `--runtime-manifest` requires a local profile".into(),
+                ));
+            }
+            if profile.rpc_url.is_none() {
+                return Err(config_error(format!(
+                    "targets devnet, but {feature} requires `rpc_url`"
+                )));
+            }
+            if profile.faucet_url.is_none() {
+                return Err(config_error(format!(
+                    "targets devnet, but {feature} requires `faucet_url`"
+                )));
+            }
+            Ok(FaucetBackend::RemoteFaucet)
+        }
+        Some(Network::Mainnet) => Err(config_error(format!(
+            "targets mainnet, but {feature} is not supported because mainnet does not exist yet"
+        ))),
+        None => match resolve_profile_backend(profile)? {
+            ProfileBackend::LocalManifest => Ok(FaucetBackend::LocalManifest),
+            ProfileBackend::RemoteFaucet => Ok(FaucetBackend::RemoteFaucet),
+            ProfileBackend::RpcOnly => Err(CliError::Other(format!(
+                "profile `{}` is RPC-only; {feature} requires either `runtime_manifest` or `faucet_url`",
+                profile.name
+            ))),
+        },
+    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,7 @@
 use std::borrow::Cow;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use fs2::FileExt as _;
 use getrandom::getrandom;
 use groundhog_json_rpc_client::AirdropApiClient;
 use groundhog_json_rpc_types::{
@@ -17,7 +16,6 @@ use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::NetworkHash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::account_resolution::{
     LocalBootstrapRole, lookup_dev_account_address, resolve_address_target_or_default_wallet,
@@ -28,15 +26,16 @@ use crate::balance::{
     local_funding_projection, low_local_faucet_balance_warning,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{
-    Network, ProfileOverrides, ResolvedProfile, cache_dir, resolve_profile_with_overrides,
-};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
 use crate::hog;
 use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
-use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
+use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
+use crate::remote_attempt::{
+    attempt_path, lock_attempt, read_attempt, remove_attempt, write_attempt,
+};
 use crate::result::CommandResult;
-use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
+use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -152,22 +151,22 @@ pub fn run(
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
+    let profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     let recipient = if let Some(recipient) = recipient {
         Cow::Borrowed(recipient)
     } else {
-        let profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
         Cow::Owned(resolve_address_target_or_default_wallet(&profile, None)?.0)
     };
     if dry_run
         && let Some(prepared) =
-            prepare_remote_airdrop_dry_run(&cwd, recipient.as_ref(), amount, profile, overrides)?
+            prepare_remote_airdrop_dry_run(recipient.as_ref(), amount, &profile)?
     {
         return print_remote_dry_run(&prepared, cmd, print);
     }
     if !dry_run {
         print.require_confirmation_available(force, "request an airdrop")?;
     }
-    let plan = prepare_airdrop_plan(&cwd, recipient.as_ref(), amount, profile, overrides)?;
+    let plan = prepare_airdrop_plan(profile, recipient.as_ref(), amount)?;
     if !dry_run {
         print_airdrop_plan(&plan, print);
         if !print.confirm(force, "request an airdrop", "Request this airdrop?")? {
@@ -190,16 +189,13 @@ pub fn run(
 }
 
 fn prepare_remote_airdrop_dry_run(
-    cwd: &Path,
     recipient: &str,
     amount: Option<&str>,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
+    profile: &ResolvedProfile,
 ) -> Result<Option<PreparedRemoteAirdropDryRun>, CliError> {
-    let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
     if !matches!(
-        resolve_airdrop_backend(&profile)?,
-        ProfileBackend::RemoteFaucet
+        resolve_faucet_backend(profile, "airdrop")?,
+        FaucetBackend::RemoteFaucet
     ) {
         return Ok(None);
     }
@@ -219,7 +215,7 @@ fn prepare_remote_airdrop_dry_run(
         .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?
         .trim_end_matches('/')
         .to_owned();
-    let recipient_wallet = resolve_airdrop_recipient(&profile, recipient)?;
+    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
     parse_contract_address(&recipient_wallet)?;
 
     Ok(Some(PreparedRemoteAirdropDryRun {
@@ -587,15 +583,12 @@ fn print_remote_airdrop_policy(
 }
 
 fn prepare_airdrop_plan(
-    cwd: &Path,
+    profile: ResolvedProfile,
     recipient: &str,
     amount: Option<&str>,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
 ) -> Result<AirdropPlan, CliError> {
-    let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
-    match resolve_airdrop_backend(&profile)? {
-        ProfileBackend::RemoteFaucet => {
+    match resolve_faucet_backend(&profile, "airdrop")? {
+        FaucetBackend::RemoteFaucet => {
             if amount.is_some() {
                 return Err(CliError::Other(
                     "remote airdrop amount is set by the faucet service".into(),
@@ -603,66 +596,9 @@ fn prepare_airdrop_plan(
             }
             prepare_remote_airdrop_plan(profile, recipient)
         }
-        ProfileBackend::LocalManifest => prepare_local_airdrop_plan(&profile, recipient, amount)
+        FaucetBackend::LocalManifest => prepare_local_airdrop_plan(&profile, recipient, amount)
             .map(Box::new)
             .map(AirdropPlan::Local),
-        ProfileBackend::RpcOnly => Err(CliError::Other(format!(
-            "profile `{}` is RPC-only; airdrop requires either `runtime_manifest` or `faucet_url`",
-            profile.name
-        ))),
-    }
-}
-
-fn resolve_airdrop_backend(profile: &ResolvedProfile) -> Result<ProfileBackend, CliError> {
-    match profile.network {
-        Some(Network::Local) => {
-            if profile.rpc_url.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets local, but airdrop requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
-                ));
-            }
-            if configured_runtime_manifest_path(profile)?.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets local, but airdrop requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
-                ));
-            }
-            Ok(ProfileBackend::LocalManifest)
-        }
-        Some(Network::Devnet) => {
-            if configured_runtime_manifest_path(profile)?.is_some() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets devnet, but `--runtime-manifest` requires a local profile",
-                ));
-            }
-            if profile.rpc_url.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets devnet, but airdrop requires `rpc_url`",
-                ));
-            }
-            if profile.faucet_url.is_none() {
-                return Err(profile_config_error(
-                    profile,
-                    "targets devnet, but airdrop requires `faucet_url`",
-                ));
-            }
-            Ok(ProfileBackend::RemoteFaucet)
-        }
-        Some(Network::Mainnet) => Err(profile_config_error(
-            profile,
-            "targets mainnet, but airdrop is not supported because mainnet does not exist yet",
-        )),
-        None => resolve_profile_backend(profile),
-    }
-}
-
-fn profile_config_error(profile: &ResolvedProfile, message: &'static str) -> CliError {
-    CliError::ProfileConfigInvalid {
-        profile: profile.name.clone(),
-        message: message.to_string(),
     }
 }
 
@@ -775,7 +711,7 @@ fn load_or_create_remote_airdrop_attempt(
 
     let mut attempts = Vec::new();
     for attempt_path in std::iter::once(&path).chain(legacy_paths.iter()) {
-        if let Some(attempt) = read_remote_airdrop_attempt(attempt_path)?
+        if let Some(attempt) = read_attempt(attempt_path)?
             && remote_airdrop_attempt_matches(
                 &attempt,
                 &profile.name,
@@ -798,9 +734,9 @@ fn load_or_create_remote_airdrop_attempt(
             )));
         }
         recipient_wallet.clone_into(&mut attempt.recipient_wallet);
-        write_remote_airdrop_attempt(&path, &attempt)?;
+        write_attempt(&path, &attempt)?;
         for legacy_path in &legacy_paths {
-            remove_remote_airdrop_attempt_path(legacy_path)?;
+            remove_attempt(legacy_path)?;
         }
         return Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_locks));
     }
@@ -814,7 +750,7 @@ fn load_or_create_remote_airdrop_attempt(
         genesis_hash,
         client_nonce: format!("0x{}", hex::encode(client_nonce)),
     };
-    write_remote_airdrop_attempt(&path, &attempt)?;
+    write_attempt(&path, &attempt)?;
     Ok((LoadedRemoteAirdropAttempt { attempt, path }, attempt_locks))
 }
 
@@ -871,69 +807,11 @@ fn remote_airdrop_attempt_matches(
 }
 
 fn lock_remote_airdrop_attempt(attempt_path: &Path) -> Result<File, CliError> {
-    let parent = attempt_path
-        .parent()
-        .ok_or_else(|| CliError::Other("airdrop attempt path has no parent".into()))?;
-    std::fs::create_dir_all(parent)?;
-    let lock_path = attempt_path.with_extension("lock");
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let file = options.open(&lock_path)?;
-    file.try_lock_exclusive().map_err(|error| {
-        let contended = fs2::lock_contended_error();
-        if error.kind() == std::io::ErrorKind::WouldBlock
-            || error.raw_os_error() == contended.raw_os_error()
-        {
-            CliError::Other(format!(
-                "another airdrop command is already running for this profile, recipient, and network ({})",
-                lock_path.display()
-            ))
-        } else {
-            error.into()
-        }
-    })?;
-    Ok(file)
-}
-
-fn read_remote_airdrop_attempt(path: &Path) -> Result<Option<RemoteAirdropAttempt>, CliError> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    serde_json::from_str(&contents)
-        .map(Some)
-        .map_err(|error| CliError::Other(format!("failed to parse `{}`: {error}", path.display())))
-}
-
-fn write_remote_airdrop_attempt(
-    path: &Path,
-    attempt: &RemoteAirdropAttempt,
-) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let contents =
-        serde_json::to_vec_pretty(attempt).map_err(|error| CliError::Other(error.to_string()))?;
-    std::fs::write(path, contents)?;
-    Ok(())
+    lock_attempt(attempt_path, "airdrop", "profile, recipient, and network")
 }
 
 fn remove_remote_airdrop_attempt(prepared: &PreparedRemoteAirdrop) -> Result<(), CliError> {
-    remove_remote_airdrop_attempt_path(&prepared.attempt_path)
-}
-
-fn remove_remote_airdrop_attempt_path(path: &Path) -> Result<(), CliError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+    remove_attempt(&prepared.attempt_path)
 }
 
 fn remote_airdrop_attempt_path(
@@ -942,13 +820,10 @@ fn remote_airdrop_attempt_path(
     network_id: &str,
     genesis_hash: &str,
 ) -> Result<PathBuf, CliError> {
-    let hash: [u8; 32] = Sha256::digest(format!(
-        "{profile}\0{recipient_wallet}\0{network_id}\0{genesis_hash}"
-    ))
-    .into();
-    Ok(cache_dir()?
-        .join("airdrop-attempts")
-        .join(format!("{}.json", hex::encode(hash))))
+    attempt_path(
+        "airdrop-attempts",
+        &[profile, recipient_wallet, network_id, genesis_hash],
+    )
 }
 
 fn resolve_airdrop_recipient(
@@ -1087,11 +962,12 @@ mod tests {
         PreparedAirdrop, PreparedLocalAirdrop, RemoteAirdropAttempt, ensure_local_airdrop_success,
         lock_remote_airdrop_attempt, observe_post_airdrop_balance,
         prepare_remote_airdrop_with_descriptor, remote_airdrop_attempt_path,
-        resolve_airdrop_backend, resolve_airdrop_recipient, validate_remote_airdrop_amount,
-        write_remote_airdrop_attempt,
+        resolve_airdrop_recipient, validate_remote_airdrop_amount,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
+    use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
+    use crate::remote_attempt::write_attempt;
 
     const ATTEMPT_LOCK_TEST_PATH: &str = "GROUNDHOG_ATTEMPT_LOCK_TEST_PATH";
     const ATTEMPT_LOCK_TEST_MODE: &str = "GROUNDHOG_ATTEMPT_LOCK_TEST_MODE";
@@ -1179,7 +1055,7 @@ mod tests {
         )
         .unwrap();
         let client_nonce = format!("0x{}", "11".repeat(16));
-        write_remote_airdrop_attempt(
+        write_attempt(
             &legacy_path,
             &RemoteAirdropAttempt {
                 profile: profile.name.clone(),
@@ -1238,7 +1114,7 @@ mod tests {
             (&canonical_path, &recipient_wallet),
             (&legacy_path, &legacy_recipient),
         ] {
-            write_remote_airdrop_attempt(
+            write_attempt(
                 path,
                 &RemoteAirdropAttempt {
                     profile: profile.name.clone(),
@@ -1385,8 +1261,8 @@ mod tests {
         profile.name = "devnet".into();
         profile.network = Some(Network::Devnet);
 
-        let error =
-            resolve_airdrop_backend(&profile).expect_err("bug: missing devnet faucet should fail");
+        let error = resolve_faucet_backend(&profile, "airdrop")
+            .expect_err("bug: missing devnet faucet should fail");
 
         assert_eq!(
             error.to_string(),
@@ -1404,8 +1280,8 @@ mod tests {
         profile.rpc_url = None;
         profile.faucet_url = Some("http://127.0.0.1:8081".into());
 
-        let error =
-            resolve_airdrop_backend(&profile).expect_err("bug: missing devnet rpc should fail");
+        let error = resolve_faucet_backend(&profile, "airdrop")
+            .expect_err("bug: missing devnet rpc should fail");
 
         assert_eq!(
             error.to_string(),
@@ -1422,13 +1298,10 @@ mod tests {
         profile.network = Some(Network::Devnet);
         profile.faucet_url = Some("http://127.0.0.1:8081".into());
 
-        let backend = resolve_airdrop_backend(&profile)
+        let backend = resolve_faucet_backend(&profile, "airdrop")
             .expect("bug: configured devnet profile should resolve");
 
-        assert_eq!(
-            backend,
-            crate::profile_backend::ProfileBackend::RemoteFaucet
-        );
+        assert_eq!(backend, FaucetBackend::RemoteFaucet);
     }
 
     #[test]
@@ -1439,8 +1312,8 @@ mod tests {
         profile.name = "local".into();
         profile.network = Some(Network::Local);
 
-        let error =
-            resolve_airdrop_backend(&profile).expect_err("bug: missing local manifest should fail");
+        let error = resolve_faucet_backend(&profile, "airdrop")
+            .expect_err("bug: missing local manifest should fail");
 
         assert_eq!(
             error.to_string(),
