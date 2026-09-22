@@ -83,13 +83,13 @@ pub fn run(
     from: Option<&str>,
     dry_run: bool,
     force: bool,
-    profile: Option<&str>,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
+    let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
     if !dry_run {
         print.require_confirmation_available(force, "transfer HOG")?;
     }

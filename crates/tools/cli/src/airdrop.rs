@@ -152,9 +152,7 @@ pub fn run(
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let resolve_profile = || resolve_profile_with_overrides(&cwd, profile_name, overrides);
-    // Only a defaulted recipient needs the profile before the confirmation
-    // preflight; with an explicit one, a missing `--force` stays the first
-    // error a non-interactive caller sees, whatever state the config is in.
+    // Only a defaulted recipient needs the profile before the confirmation preflight.
     let (profile, recipient) = if let Some(recipient) = recipient {
         (None, Cow::Borrowed(recipient))
     } else {

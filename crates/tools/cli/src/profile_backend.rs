@@ -36,9 +36,7 @@ pub(crate) enum FaucetBackend {
 /// what that backend needs.
 ///
 /// `feature` names the command in error text, for example `airdrop` or
-/// `wallet create`. A profile that names a network is held to that
-/// network's requirements; one that does not is classified by what it
-/// configures.
+/// `wallet create`.
 pub(crate) fn resolve_faucet_backend(
     profile: &ResolvedProfile,
     feature: &str,

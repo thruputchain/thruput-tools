@@ -5439,9 +5439,7 @@ fn funding_commands_refuse_without_force_before_reading_the_profile() {
     ];
 
     for (args, action) in invocations {
-        // A profile that does not exist is a config error, but the
-        // confirmation preflight runs first, so a script without `--force`
-        // sees the same error whether or not its config is usable.
+        // The preflight runs before profile resolution, so `--force` is the first error.
         let output = groundhog()
             .arg("--json")
             .args(&args)

@@ -215,9 +215,7 @@ pub fn create(
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    // The confirmation preflight needs no config, so a missing `--force` stays
-    // the first error a non-interactive caller sees, whatever state the
-    // profile, key, or wallet name is in.
+    // The preflight needs no config, so a missing `--force` stays the first error.
     if !dry_run {
         print.require_confirmation_available(force, "create a wallet")?;
     }
