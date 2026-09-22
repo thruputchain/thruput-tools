@@ -1930,10 +1930,7 @@ fn ts_property_key(name: &str) -> Result<String, CliError> {
     Ok(ts_string_literal(name))
 }
 
-/// Read a spec string as text for emission.
-///
-/// Unlike the codec's validator, this accepts any UTF-8: the emitter
-/// escapes whatever the spec carries rather than refusing to describe it.
+/// Read a spec string as text for emission; accepts any UTF-8, unlike the codec's validator.
 fn spec_string_text(value: &groundhog_contract_spec::ContractSpecString) -> Result<&str, CliError> {
     std::str::from_utf8(value.as_ref()).map_err(|error| {
         CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {error}"))

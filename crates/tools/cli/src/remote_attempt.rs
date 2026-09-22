@@ -1,10 +1,7 @@
 //! On-disk records of in-flight remote faucet requests.
 //!
-//! A hosted faucet deduplicates requests by client nonce, so a command that
-//! is retried after a crash or a lost response must present the nonce it
-//! used the first time. Each command keeps that state in a JSON file under
-//! the cache directory, named by a digest of the request's identity, and
-//! holds an exclusive lock beside it while the request is in flight.
+//! A retry must reuse the original client nonce, so each command records it
+//! in a JSON file under the cache directory with a lock beside it.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};

@@ -717,8 +717,8 @@ fn load_or_create_remote_airdrop_attempt(
     }
 
     let mut attempts = Vec::new();
-    for attempt_path in std::iter::once(&path).chain(legacy_paths.iter()) {
-        if let Some(attempt) = read_attempt(attempt_path)?
+    for candidate_path in std::iter::once(&path).chain(legacy_paths.iter()) {
+        if let Some(attempt) = read_attempt(candidate_path)?
             && remote_airdrop_attempt_matches(
                 &attempt,
                 &profile.name,
