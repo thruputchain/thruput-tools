@@ -66,10 +66,13 @@ Workspace crates are grouped by boundary:
 - **hogd-backend** — shared hogd x23 backend adapters: intro-handshake
   classification and the XDR-to-JSON-RPC mapping for `SchedGateway`,
   `IndexerBlockExplorer`, `DbGateway`, and `ViewGateway` results, plus submit
-  batch packing and deadline cohorting. Gateway and node-supervisor both
-  decode hogd through it, so a wire result has one meaning across both
-  binaries. It owns no connections, timeouts, retry policy, or metrics —
-  those stay with each consumer, which is where the two genuinely differ.
+  batch packing and deadline cohorting, and the `getTransactionStatus`
+  probe order (`status::transaction_status` over a `StatusProbe` the binary
+  implements). Gateway and node-supervisor both decode hogd through it, so a
+  wire result has one meaning across both binaries and a composite answer
+  has one sequence. It owns no connections, timeouts, retry policy, or
+  metrics — those stay with each consumer, which is where the two genuinely
+  differ.
   Its mapping functions take a `service` label because the gateway and the
   supervisor name the same backend differently ("indexer" vs "hogd-dev
   indexer"). Add new hogd result decoding here, not in a binary.
@@ -423,7 +426,10 @@ groundhog-bench --url http://127.0.0.1:9546 \
   gateway and node-supervisor serve the same RPC surface from the same
   services, and a second copy is how their answers drift apart. Handlers
   keep what is theirs alone — client acquisition, timeouts, metrics,
-  degraded-mode policy — and call the shared decoder for the mapping.
+  degraded-mode policy — and call the shared decoder for the mapping. The
+  same holds for an answer composed from several backend reads:
+  `getTransactionStatus` runs `groundhog_hogd_backend::status` in both
+  binaries, each supplying only its raw indexer and mempool lookups.
 - `json-rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.

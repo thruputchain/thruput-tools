@@ -387,6 +387,11 @@ unavailable or holds an advisory failure from an earlier attempt. Without a
 mempool hit, a recent-failure diagnostic is returned. An initial indexer miss
 is checked again after the scheduler lookup to cover a commit between the
 reads; only successful misses from both backends can produce `Unknown`.
+That sequence is `groundhog_hogd_backend::status::transaction_status`, shared
+with `groundhog node`: each binary supplies its two raw lookups through the
+`StatusProbe` trait, so the gateway keeps its admission lane, deadline, and
+metrics inside those lookups and the two binaries cannot order the probe
+differently.
 
 Committed reads use one backend RPC. Pending reads normally use two, and
 unknown reads use three. All stages share one deadline, so a slow indexer can

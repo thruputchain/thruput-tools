@@ -59,6 +59,23 @@ pub fn mempool_holds_tx(results: &OptSignedTransactionBatch) -> Option<bool> {
     results.iter().next().map(Option::is_some)
 }
 
+/// Read a single-hash lookup as a definite mempool answer.
+///
+/// Wraps [`mempool_holds_tx`]: a slot count other than one leaves the
+/// queried transaction unaccounted for and becomes a `BackendUnavailable`
+/// naming `service`, so no caller can read it as an absence.
+pub fn mempool_answer(
+    service: &str,
+    results: &OptSignedTransactionBatch,
+) -> Result<bool, RpcServerError> {
+    mempool_holds_tx(results).ok_or_else(|| {
+        RpcServerError::BackendUnavailable(format!(
+            "{service} returned {} lookup results for one transaction",
+            results.0.len()
+        ))
+    })
+}
+
 /// Compute the public chain tip for a consensus value.
 pub fn chain_tip(service: &str, value: &ConsensusValue) -> Result<ChainTip, RpcServerError> {
     let block_hash = consensus_value_hash(value).map_err(|error| {

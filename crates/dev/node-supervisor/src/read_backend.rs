@@ -2,8 +2,8 @@
 //!
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` does the composite scheduler-then-indexer probe
-//! that the gateway uses (scheduler for `Pending`, indexer for `Committed`).
+//! calls; `transaction_status` runs the indexer-and-mempool probe the gateway
+//! runs, from `groundhog_hogd_backend::status`, so both answer alike.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_hogd_backend::{
     db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
-    scheduler as shared_scheduler,
+    scheduler as shared_scheduler, status as shared_status,
 };
 use groundhog_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
@@ -39,7 +39,7 @@ use xdr_common::VecM;
 use crate::{
     NodeSupervisorError,
     request_deadline::within_request_deadline,
-    service::{DB_GATEWAY, INDEXER},
+    service::{DB_GATEWAY, INDEXER, SCHEDULER_GATEWAY},
 };
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
@@ -133,6 +133,32 @@ impl HogdDevReadBackend {
             .await
             .map_err(|source| RpcServerError::BackendUnavailable(format!("{INDEXER}: {source}")))?;
         shared_indexer::tx_lookup(INDEXER, result)
+    }
+}
+
+/// The supervisor's two status lookups. Neither is metered or bounded here:
+/// the caller's request deadline bounds the whole probe.
+#[async_trait]
+impl shared_status::StatusProbe for HogdDevReadBackend {
+    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+        let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
+        let results = self
+            .scheduler_gateway
+            .schedgateway_lookup_tx(&batch)
+            .await
+            .map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
+            })?;
+        shared_scheduler::mempool_answer(SCHEDULER_GATEWAY, &results)
+    }
+
+    async fn indexed_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
+        Ok(shared_indexer::committed_status(
+            self.tx_lookup(tx_hash).await?,
+        ))
     }
 }
 
@@ -253,75 +279,18 @@ impl ReadPlane for HogdDevReadBackend {
         .await
     }
 
-    /// Return the semantic transaction status.
-    ///
-    /// Probe order:
-    /// 1. Scheduler mempool → `Pending` if found.
-    /// 2. Indexer committed set → `Committed { height }` if found;
-    ///    `RecentFailure` if the indexer holds a recent
-    ///    nondeterministic-failure diagnostic (best-effort, advisory).
-    /// 3. Neither → `Unknown`.
-    ///
-    /// Degraded mode: if the scheduler is unreachable, log a warning and skip
-    /// the pending check; terminal indexer answers still return, but an
-    /// indexer miss becomes `BackendUnavailable` instead of `Unknown`
-    /// because the transaction may still be pending in the unreachable
-    /// mempool. Indexer failure is a hard error — without it we cannot
-    /// report committed state.
+    /// Status by the probe order shared with the gateway
+    /// (`groundhog_hogd_backend::status`): indexer, then mempool, then the
+    /// indexer again to cover a commit between the reads. `Unknown` needs
+    /// both to have answered; an unreachable scheduler with an indexer miss
+    /// is `BackendUnavailable`, because the transaction may still be pending.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
-        within_request_deadline(context, async {
-            // 1. Check the scheduler mempool. Best-effort in that a failure
-            // does not abort the indexer lookup, but tracked: `Unknown`
-            // asserts the transaction is in neither place, which requires
-            // both to have answered.
-            let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
-            let mempool_checked =
-                match self.scheduler_gateway.schedgateway_lookup_tx(&batch).await {
-                    Ok(results) => match shared_scheduler::mempool_holds_tx(&results) {
-                        Some(true) => return Ok(TransactionStatus::Pending),
-                        Some(false) => true,
-                        None => {
-                            tracing::warn!(
-                                actual = results.len(),
-                                expected = 1,
-                                "hogd-dev scheduler gateway lookup returned the wrong slot count"
-                            );
-                            false
-                        }
-                    },
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            "hogd-dev scheduler gateway unreachable, cannot detect pending txs"
-                        );
-                        false
-                    }
-                };
-
-            // 2. Check the indexer (authoritative for committed state).
-            if let Some(status) = shared_indexer::committed_status(self.tx_lookup(tx_hash).await?) {
-                return Ok(status);
-            }
-
-            if mempool_checked {
-                Ok(TransactionStatus::Unknown)
-            } else {
-                // `Unknown` tells the client "not in mempool or indexer"; without
-                // a mempool answer that claim is unverified and a still-pending
-                // transaction would read as gone (inviting an unsafe re-sign).
-                Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev scheduler gateway unavailable: transaction is not committed but may still be \
-                     pending"
-                        .into(),
-                ))
-            }
-        })
-        .await
+        within_request_deadline(context, shared_status::transaction_status(self, tx_hash)).await
     }
 
     /// Return one page of contract events matching `query`.
