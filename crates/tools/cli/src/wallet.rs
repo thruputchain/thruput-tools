@@ -215,12 +215,15 @@ pub fn create(
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
+    // The confirmation preflight needs no config, so a missing `--force` stays
+    // the first error a non-interactive caller sees, whatever state the
+    // profile, key, or wallet name is in.
+    if !dry_run {
+        print.require_confirmation_available(force, "create a wallet")?;
+    }
     let inputs = resolve_wallet_create_inputs(&cwd, key_name, wallet_name, profile, overrides)?;
     if dry_run && let Some(prepared) = prepare_remote_wallet_create_dry_run(&inputs, prefund)? {
         return print_remote_dry_run_plan(&prepared, cmd, print);
-    }
-    if !dry_run {
-        print.require_confirmation_available(force, "create a wallet")?;
     }
 
     let plan = prepare_wallet_create_plan(&cwd, inputs, prefund)?;

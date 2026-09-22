@@ -145,26 +145,35 @@ pub fn run(
     amount: Option<&str>,
     dry_run: bool,
     force: bool,
-    profile: Option<&str>,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
-    let recipient = if let Some(recipient) = recipient {
-        Cow::Borrowed(recipient)
+    let resolve_profile = || resolve_profile_with_overrides(&cwd, profile_name, overrides);
+    // Only a defaulted recipient needs the profile before the confirmation
+    // preflight; with an explicit one, a missing `--force` stays the first
+    // error a non-interactive caller sees, whatever state the config is in.
+    let (profile, recipient) = if let Some(recipient) = recipient {
+        (None, Cow::Borrowed(recipient))
     } else {
-        Cow::Owned(resolve_address_target_or_default_wallet(&profile, None)?.0)
+        let profile = resolve_profile()?;
+        let recipient = resolve_address_target_or_default_wallet(&profile, None)?.0;
+        (Some(profile), Cow::Owned(recipient))
+    };
+    if !dry_run {
+        print.require_confirmation_available(force, "request an airdrop")?;
+    }
+    let profile = match profile {
+        Some(profile) => profile,
+        None => resolve_profile()?,
     };
     if dry_run
         && let Some(prepared) =
             prepare_remote_airdrop_dry_run(recipient.as_ref(), amount, &profile)?
     {
         return print_remote_dry_run(&prepared, cmd, print);
-    }
-    if !dry_run {
-        print.require_confirmation_available(force, "request an airdrop")?;
     }
     let plan = prepare_airdrop_plan(profile, recipient.as_ref(), amount)?;
     if !dry_run {
