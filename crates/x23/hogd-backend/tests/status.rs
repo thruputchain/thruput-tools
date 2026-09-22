@@ -45,7 +45,7 @@ impl StatusProbe for Scripted {
             .lock()
             .unwrap()
             .pop_front()
-            .expect("mempool asked more often than scripted")
+            .expect("bug: mempool asked more often than scripted")
     }
 
     async fn indexed_status(&self, _tx_hash: TxHash) -> IndexerAnswer {
@@ -54,7 +54,7 @@ impl StatusProbe for Scripted {
             .lock()
             .unwrap()
             .pop_front()
-            .expect("indexer asked more often than scripted")
+            .expect("bug: indexer asked more often than scripted")
     }
 }
 
