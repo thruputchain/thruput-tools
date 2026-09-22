@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 pub(crate) const FAKE_HOGD_DEV_MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
@@ -17,40 +17,57 @@ pub(crate) fn fake_hogd_dev_binary() -> PathBuf {
     BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
 }
 
+/// Builds the example with the cargo running these tests and returns the
+/// executable path cargo reports, so the lookup follows whatever target
+/// directory or profile cargo actually used.
 fn build_fake_hogd_dev_binary() -> PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(cargo)
+    let output = Command::new(&cargo)
         .args([
             "build",
             "--quiet",
             "--locked",
+            "--message-format=json",
             "-p",
             "groundhog-node-supervisor",
             "--example",
             "fake_hogd_dev",
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .status()
-        .expect("bug: cargo should run to build the fake_hogd_dev example");
+        .stderr(Stdio::inherit())
+        .output()
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to run {} to build the fake_hogd_dev example: {err}",
+                cargo.to_string_lossy()
+            )
+        });
     assert!(
-        status.success(),
-        "failed to build fake_hogd_dev example; status: {status}"
+        output.status.success(),
+        "failed to build fake_hogd_dev example; status: {}",
+        output.status
     );
-
-    let current_exe = std::env::current_exe().expect("bug: current test binary path is available");
-    let deps_dir = current_exe
-        .parent()
-        .expect("bug: test binary has a parent directory");
-    let target_dir = deps_dir
-        .parent()
-        .expect("bug: test binary lives under target deps");
-    let binary = target_dir
-        .join("examples")
-        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
+    let binary = fake_hogd_dev_executable(&output.stdout);
     assert!(
         binary.is_file(),
         "fake_hogd_dev example missing after build at {}",
         binary.display()
     );
     binary
+}
+
+/// Finds the `fake_hogd_dev` example artifact in cargo's JSON build messages.
+fn fake_hogd_dev_executable(messages: &[u8]) -> PathBuf {
+    String::from_utf8_lossy(messages)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|message| {
+            message["reason"] == "compiler-artifact"
+                && message["target"]["name"] == "fake_hogd_dev"
+                && message["target"]["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "example"))
+        })
+        .and_then(|message| message["executable"].as_str().map(PathBuf::from))
+        .expect("bug: cargo build output should report the fake_hogd_dev example executable")
 }
