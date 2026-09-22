@@ -253,20 +253,26 @@ fn chain_restore_help_documents_force_alias() {
     );
 }
 
+/// Path of the `fake_hogd_dev` example binary, built from the current
+/// workspace sources.
+///
+/// `cargo test` compiles that example only as a test harness, so the plain
+/// binary `groundhog node` spawns is built here rather than trusted from disk:
+/// a copy left in a cached target directory can predate a `groundhog-xdr`
+/// bump and advertise a protocol the supervisor rejects. Cargo re-links the
+/// binary on every build, so a fresh build costs one fingerprint check.
 fn fake_hogd_dev_binary() -> std::path::PathBuf {
-    let binary = target_dir()
-        .join("debug")
-        .join("examples")
-        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
-    if binary.is_file() {
-        return binary;
-    }
+    static BINARY: OnceLock<std::path::PathBuf> = OnceLock::new();
+    BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
+}
 
+fn build_fake_hogd_dev_binary() -> std::path::PathBuf {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let status = Command::new(cargo)
         .args([
             "build",
             "--quiet",
+            "--locked",
             "-p",
             "groundhog-node-supervisor",
             "--example",
@@ -279,6 +285,10 @@ fn fake_hogd_dev_binary() -> std::path::PathBuf {
         status.success(),
         "failed to build fake_hogd_dev example; status: {status}",
     );
+    let binary = target_dir()
+        .join("debug")
+        .join("examples")
+        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
     assert!(
         binary.is_file(),
         "fake_hogd_dev example missing after build at {}",
