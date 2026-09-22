@@ -384,13 +384,18 @@ do not hide abandoned queue waits. No transaction hash is used as a metric label
 immediately without occupying the scheduler lookup lane. Otherwise it checks
 the scheduler: a mempool hit returns `Pending`, including when the indexer is
 unavailable or holds an advisory failure from an earlier attempt. Without a
-mempool hit, a recent-failure diagnostic is returned. An initial indexer miss
-is checked again after the scheduler lookup to cover a commit between the
-reads; only successful misses from both backends can produce `Unknown`.
+mempool hit, a recent-failure diagnostic is returned. Only successful misses
+from both backends produce `Unknown`. A transaction that commits between the
+two reads is reported `Unknown` once; the client's next call sees it.
+That sequence is `groundhog_hogd_backend::status::transaction_status`, shared
+with `groundhog node`: each binary supplies its two raw lookups through the
+`StatusProbe` trait, so the gateway keeps its admission lane, deadline, and
+metrics inside those lookups and the two binaries cannot order the probe
+differently.
 
-Committed reads use one backend RPC. Pending reads normally use two, and
-unknown reads use three. All stages share one deadline, so a slow indexer can
-consume the budget before a pending lookup is dispatched.
+Committed reads use one backend RPC; pending and unknown reads use two. Both
+stages share one deadline, so a slow indexer can consume the budget before a
+pending lookup is dispatched.
 
 `RecentFailure` is best-effort and advisory: the indexer caches
 proposal-time two-phase-commit failure diagnostics for a few blocks,

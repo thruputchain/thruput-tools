@@ -1531,7 +1531,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.3.0"
+    "version": "5.3.1"
   },
   "methods": [
     {
@@ -1669,7 +1669,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check (mempool -> indexer -> unknown). `unknown` is only returned after both the mempool and the indexer answered without a match; if the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. The indexer is asked first, so `committed` wins; a mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown` is returned only after both backends answered without a match. If the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
       "tags": [
         {
           "name": "Core API"

@@ -45,18 +45,24 @@ pub fn submit_result(outcome: SchedGatewaySubmitOutcome) -> Result<(), RpcServer
     }
 }
 
-/// Read a single-hash `schedgateway_lookup_tx` answer.
+/// Read a single-hash `schedgateway_lookup_tx` answer: whether the mempool
+/// holds the transaction.
 ///
-/// `Some(true)` means the mempool holds the transaction and `Some(false)`
-/// that it does not. `None` means the scheduler did not answer with exactly
-/// one per-hash slot, which leaves the queried transaction unaccounted for:
-/// never read it as absent, because a status of `Unknown` claims the
-/// transaction is in neither the mempool nor the indexer.
-pub fn mempool_holds_tx(results: &OptSignedTransactionBatch) -> Option<bool> {
-    if results.0.len() != 1 {
-        return None;
+/// A slot count other than one leaves the queried transaction unaccounted
+/// for and is a `BackendUnavailable` naming `service`, never `false`: a
+/// status of `Unknown` claims the transaction is in neither the mempool nor
+/// the indexer.
+pub fn mempool_holds_tx(
+    service: &str,
+    results: &OptSignedTransactionBatch,
+) -> Result<bool, RpcServerError> {
+    match results.iter().next() {
+        Some(slot) if results.0.len() == 1 => Ok(slot.is_some()),
+        _ => Err(RpcServerError::BackendUnavailable(format!(
+            "{service} returned {} lookup results for one transaction",
+            results.0.len()
+        ))),
     }
-    results.iter().next().map(Option::is_some)
 }
 
 /// Compute the public chain tip for a consensus value.

@@ -2,8 +2,8 @@
 //!
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` does the composite scheduler-then-indexer probe
-//! that the gateway uses (scheduler for `Pending`, indexer for `Committed`).
+//! calls; `transaction_status` runs the indexer-and-mempool probe the gateway
+//! runs, from `groundhog_hogd_backend::status`, so both answer alike.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_hogd_backend::{
     db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
-    scheduler as shared_scheduler,
+    scheduler as shared_scheduler, status as shared_status,
 };
 use groundhog_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, indexer::TxInfo};
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
@@ -39,7 +39,7 @@ use xdr_common::VecM;
 use crate::{
     NodeSupervisorError,
     request_deadline::within_request_deadline,
-    service::{DB_GATEWAY, INDEXER},
+    service::{DB_GATEWAY, INDEXER, SCHEDULER_GATEWAY},
 };
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
@@ -133,6 +133,31 @@ impl HogdDevReadBackend {
             .await
             .map_err(|source| RpcServerError::BackendUnavailable(format!("{INDEXER}: {source}")))?;
         shared_indexer::tx_lookup(INDEXER, result)
+    }
+}
+
+/// The supervisor's two status lookups. Neither is metered or bounded here:
+/// the caller's request deadline bounds the whole probe.
+impl shared_status::StatusProbe for HogdDevReadBackend {
+    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+        let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
+        let results = self
+            .scheduler_gateway
+            .schedgateway_lookup_tx(&batch)
+            .await
+            .map_err(|error| {
+                RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
+            })?;
+        shared_scheduler::mempool_holds_tx(SCHEDULER_GATEWAY, &results)
+    }
+
+    async fn indexed_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
+        Ok(shared_indexer::committed_status(
+            self.tx_lookup(tx_hash).await?,
+        ))
     }
 }
 
@@ -253,75 +278,16 @@ impl ReadPlane for HogdDevReadBackend {
         .await
     }
 
-    /// Return the semantic transaction status.
-    ///
-    /// Probe order:
-    /// 1. Scheduler mempool → `Pending` if found.
-    /// 2. Indexer committed set → `Committed { height }` if found;
-    ///    `RecentFailure` if the indexer holds a recent
-    ///    nondeterministic-failure diagnostic (best-effort, advisory).
-    /// 3. Neither → `Unknown`.
-    ///
-    /// Degraded mode: if the scheduler is unreachable, log a warning and skip
-    /// the pending check; terminal indexer answers still return, but an
-    /// indexer miss becomes `BackendUnavailable` instead of `Unknown`
-    /// because the transaction may still be pending in the unreachable
-    /// mempool. Indexer failure is a hard error — without it we cannot
-    /// report committed state.
+    /// Status by the probe order shared with the gateway; see
+    /// `groundhog_hogd_backend::status::transaction_status`. The whole
+    /// probe runs under the caller's request deadline.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
         context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
-        within_request_deadline(context, async {
-            // 1. Check the scheduler mempool. Best-effort in that a failure
-            // does not abort the indexer lookup, but tracked: `Unknown`
-            // asserts the transaction is in neither place, which requires
-            // both to have answered.
-            let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
-            let mempool_checked =
-                match self.scheduler_gateway.schedgateway_lookup_tx(&batch).await {
-                    Ok(results) => match shared_scheduler::mempool_holds_tx(&results) {
-                        Some(true) => return Ok(TransactionStatus::Pending),
-                        Some(false) => true,
-                        None => {
-                            tracing::warn!(
-                                actual = results.len(),
-                                expected = 1,
-                                "hogd-dev scheduler gateway lookup returned the wrong slot count"
-                            );
-                            false
-                        }
-                    },
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            "hogd-dev scheduler gateway unreachable, cannot detect pending txs"
-                        );
-                        false
-                    }
-                };
-
-            // 2. Check the indexer (authoritative for committed state).
-            if let Some(status) = shared_indexer::committed_status(self.tx_lookup(tx_hash).await?) {
-                return Ok(status);
-            }
-
-            if mempool_checked {
-                Ok(TransactionStatus::Unknown)
-            } else {
-                // `Unknown` tells the client "not in mempool or indexer"; without
-                // a mempool answer that claim is unverified and a still-pending
-                // transaction would read as gone (inviting an unsafe re-sign).
-                Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev scheduler gateway unavailable: transaction is not committed but may still be \
-                     pending"
-                        .into(),
-                ))
-            }
-        })
-        .await
+        within_request_deadline(context, shared_status::transaction_status(self, tx_hash)).await
     }
 
     /// Return one page of contract events matching `query`.
@@ -514,6 +480,10 @@ fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
@@ -604,6 +574,8 @@ mod tests {
 
     struct FakeScheduler {
         mode: FakeSchedulerMode,
+        /// How many `schedgateway_lookup_tx` calls the fake has served.
+        lookups: Arc<AtomicUsize>,
     }
 
     /// Build a minimal dummy `SignedTransaction` suitable for testing the
@@ -680,6 +652,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
             match self.mode {
                 FakeSchedulerMode::NoPending => {
                     Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
@@ -712,19 +685,35 @@ mod tests {
         SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
+        let (addr, handle, _) = start_counting_fake_scheduler(mode).await;
+        (addr, handle)
+    }
+
+    /// Like [`start_fake_scheduler`], also returning the lookup call counter.
+    async fn start_counting_fake_scheduler(
+        mode: FakeSchedulerMode,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        Arc<AtomicUsize>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: test scheduler should bind");
         let addr = listener
             .local_addr()
             .expect("bug: test scheduler should have local addr");
+        let lookups = Arc::new(AtomicUsize::new(0));
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
-            Box::new(FakeScheduler { mode }),
+            Box::new(FakeScheduler {
+                mode,
+                lookups: lookups.clone(),
+            }),
         )));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
-        (addr, handle)
+        (addr, handle, lookups)
     }
 
     // -----------------------------------------------------------------------
@@ -1661,6 +1650,33 @@ mod tests {
             matches!(result, Err(RpcServerError::BackendUnavailable(_))),
             "lookup with an extra per-tx answer should surface BackendUnavailable, got {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transaction_status_slow_indexer_exhausts_deadline_before_mempool_is_asked() {
+        // Arrange: the indexer is asked first and never answers within the
+        // request deadline; the scheduler would report the tx pending.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
+        let (sched_addr, _sched, lookups) =
+            start_counting_fake_scheduler(FakeSchedulerMode::AllPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+
+        // Act
+        let result = backend
+            .transaction_status(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                tx_hash,
+            )
+            .await;
+
+        // Assert: the deadline is spent on the indexer, so the pending answer
+        // is never reached. All stages share one deadline.
+        assert!(
+            matches!(result, Err(RpcServerError::BackendTimeout)),
+            "expected BackendTimeout, got {result:?}"
+        );
+        assert_eq!(lookups.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

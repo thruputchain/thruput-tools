@@ -5,6 +5,7 @@ use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
 use groundhog_hogd_backend::{
     indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
+    status as shared_status,
 };
 use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client,
@@ -25,7 +26,7 @@ use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 use groundhog_json_rpc_server::RpcServerError;
 
-use super::{INDEXER, backend_deadline, timed_backend_call};
+use super::{INDEXER, SCHEDULER, backend_deadline, timed_backend_call};
 
 struct SchedulerLookupGuard<T: Send + 'static> {
     worker: Option<JoinHandle<T>>,
@@ -232,15 +233,7 @@ async fn transaction_is_pending(
         started_at.elapsed(),
     );
     match rpc_result {
-        // Any cardinality other than one leaves the queried transaction
-        // unaccounted for, which cannot support a `false`.
-        Ok(Ok(results)) => match shared_scheduler::mempool_holds_tx(&results) {
-            Some(pending) => Ok(pending),
-            None => Err(RpcServerError::BackendUnavailable(format!(
-                "scheduler returned {} lookup results for one transaction",
-                results.0.len()
-            ))),
-        },
+        Ok(Ok(results)) => shared_scheduler::mempool_holds_tx(SCHEDULER, &results),
         Ok(Err(error)) => Err(RpcServerError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
@@ -291,11 +284,31 @@ async fn lookup_transaction_info(
     .await
 }
 
-/// Check the indexer first so committed reads do not occupy the scheduler lane.
-/// Pending takes precedence over advisory failure diagnostics. After an indexer
-/// miss and scheduler miss, recheck the indexer to cover a commit between reads.
-/// All stages share one deadline; Unknown requires successful misses from both
-/// backends. A pending answer remains available if the indexer is disconnected.
+/// The gateway's two status lookups: the admission-bounded, metered
+/// scheduler lane and the indexer, both against one request deadline.
+struct GatewayStatusProbe<'a> {
+    ctx: &'a GatewayContext,
+    deadline: Instant,
+}
+
+impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
+    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+        transaction_is_pending(self.ctx, self.deadline, tx_hash).await
+    }
+
+    async fn indexed_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
+        indexed_transaction_status(self.ctx, self.deadline, tx_hash).await
+    }
+}
+
+/// Status by the probe order shared with the node supervisor
+/// (`groundhog_hogd_backend::status`). All stages share one deadline, so a
+/// slow indexer can consume the budget before the scheduler lookup is
+/// dispatched. A pending answer remains available if the indexer is
+/// disconnected.
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
@@ -303,30 +316,7 @@ pub async fn get_transaction_status(
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, RpcServerError> {
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    let indexed = indexed_transaction_status(ctx, deadline, tx_hash).await;
-    if let Ok(Some(TransactionStatus::Committed { height })) = indexed {
-        return Ok(TransactionStatus::Committed { height });
-    }
-    let scheduler_failure = match transaction_is_pending(ctx, deadline, tx_hash).await {
-        Ok(true) => return Ok(TransactionStatus::Pending),
-        Ok(false) => None,
-        Err(error) => {
-            tracing::warn!(%error, "scheduler lookup did not complete; checking indexer");
-            Some(error)
-        }
-    };
-    // Retain the existing pending-over-diagnostic precedence. Indexer failures
-    // cannot yield Unknown, even if the scheduler reports a miss.
-    if let Some(status) = indexed? {
-        return Ok(status);
-    }
-    if let Some(status) = indexed_transaction_status(ctx, deadline, tx_hash).await? {
-        return Ok(status);
-    }
-    match scheduler_failure {
-        Some(error) => Err(error),
-        None => Ok(TransactionStatus::Unknown),
-    }
+    shared_status::transaction_status(&GatewayStatusProbe { ctx, deadline }, tx_hash).await
 }
 
 #[cfg(test)]
@@ -846,7 +836,7 @@ mod tests {
                 );
             }
             assert_eq!(gate.calls.load(Ordering::SeqCst), 20);
-            assert_eq!(indexer_calls.load(Ordering::SeqCst), 40);
+            assert_eq!(indexer_calls.load(Ordering::SeqCst), 20);
             assert_eq!(gate.max_active.load(Ordering::SeqCst), width);
             let snapshot = crate::health::GatewayHealthSnapshot::for_test(
                 crate::health::HealthStatus::Starting,
@@ -1288,40 +1278,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn indexer_recheck_covers_commit_race_and_preserves_errors() {
-        // Both a scheduler miss and a scheduler failure can race with a commit.
-        for mode in [FakeSchedulerMode::MempoolMiss, FakeSchedulerMode::RpcFail] {
-            for second in [Some(committed_result()), Some(indexer_miss()), None] {
-                let expected_commit = matches!(second, Some(TxInfoResult::TxInfoFound { .. }));
-                let expected_unknown = matches!(mode, FakeSchedulerMode::MempoolMiss)
-                    && matches!(second, Some(TxInfoResult::Default { .. }));
-                let (scheduler_addr, _scheduler) = start_fake_scheduler(mode.clone()).await;
-                let calls = Arc::new(AtomicUsize::new(0));
-                let (indexer_addr, _indexer) =
-                    start_scripted_indexer(vec![Some(indexer_miss()), second], calls.clone()).await;
-                let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-                let result = watchdog(get_transaction_status(
-                    &ctx,
-                    RpcRequestContext::unbounded(),
-                    test_hash(),
-                ))
-                .await;
-                if expected_commit {
-                    assert!(matches!(
-                        result.unwrap(),
-                        TransactionStatus::Committed { .. }
-                    ));
-                } else if expected_unknown {
-                    assert!(matches!(result.unwrap(), TransactionStatus::Unknown));
-                } else {
-                    assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
-                }
-                assert_eq!(calls.load(Ordering::SeqCst), 2);
-            }
-        }
-    }
-
-    #[tokio::test]
     async fn expired_indexer_wait_does_not_dispatch_scheduler() {
         let gate = LookupGate::new();
         let (scheduler_addr, _scheduler) =
@@ -1340,7 +1296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_timeout_does_not_dispatch_indexer_recheck() {
+    async fn scheduler_timeout_is_returned_after_an_indexer_miss() {
         let gate = LookupGate::new();
         let (scheduler_addr, _scheduler) =
             start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
