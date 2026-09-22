@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
 use groundhog_hogd_backend::status::{StatusProbe, transaction_status};
 use groundhog_json_rpc_server::RpcServerError;
 use groundhog_json_rpc_types::{
@@ -37,7 +36,6 @@ impl Scripted {
     }
 }
 
-#[async_trait]
 impl StatusProbe for Scripted {
     async fn mempool_holds(&self, _tx_hash: TxHash) -> MempoolAnswer {
         self.asked.lock().unwrap().push("mempool");

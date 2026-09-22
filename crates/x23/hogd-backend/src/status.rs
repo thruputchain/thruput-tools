@@ -5,7 +5,8 @@
 //! admission permits, deadlines, metrics, and connection recovery inside
 //! them; [`transaction_status`] owns only the order and the precedence.
 
-use async_trait::async_trait;
+use std::future::Future;
+
 use groundhog_json_rpc_server::RpcServerError;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
@@ -14,23 +15,25 @@ use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 /// Each read is one backend request, bounded and metered however the
 /// implementer bounds and meters its requests. Failures are returned, not
 /// swallowed: the sequencer decides which ones a later answer overrides.
-#[async_trait]
 pub trait StatusProbe: Sync {
     /// Whether the scheduler mempool holds `tx_hash`.
     ///
     /// An answer that does not account for the transaction (no per-hash
     /// slot, a transport failure, a timeout) is an error, never `false`:
     /// see [`crate::scheduler::mempool_answer`].
-    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError>;
+    fn mempool_holds(
+        &self,
+        tx_hash: TxHash,
+    ) -> impl Future<Output = Result<bool, RpcServerError>> + Send;
 
     /// The status the indexer records for `tx_hash`, or `None` for a miss.
     ///
     /// `Some` is `Committed` or `RecentFailure`, as
     /// [`crate::indexer::committed_status`] decodes them.
-    async fn indexed_status(
+    fn indexed_status(
         &self,
         tx_hash: TxHash,
-    ) -> Result<Option<TransactionStatus>, RpcServerError>;
+    ) -> impl Future<Output = Result<Option<TransactionStatus>, RpcServerError>> + Send;
 }
 
 /// Decide a transaction's status from the indexer and the mempool.

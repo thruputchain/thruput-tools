@@ -138,7 +138,6 @@ impl HogdDevReadBackend {
 
 /// The supervisor's two status lookups. Neither is metered or bounded here:
 /// the caller's request deadline bounds the whole probe.
-#[async_trait]
 impl shared_status::StatusProbe for HogdDevReadBackend {
     async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
         let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
@@ -483,6 +482,10 @@ fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
@@ -573,6 +576,8 @@ mod tests {
 
     struct FakeScheduler {
         mode: FakeSchedulerMode,
+        /// How many `schedgateway_lookup_tx` calls the fake has served.
+        lookups: Arc<AtomicUsize>,
     }
 
     /// Build a minimal dummy `SignedTransaction` suitable for testing the
@@ -649,6 +654,7 @@ mod tests {
             &self,
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
             match self.mode {
                 FakeSchedulerMode::NoPending => {
                     Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
@@ -681,19 +687,35 @@ mod tests {
         SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
+        let (addr, handle, _) = start_counting_fake_scheduler(mode).await;
+        (addr, handle)
+    }
+
+    /// Like [`start_fake_scheduler`], also returning the lookup call counter.
+    async fn start_counting_fake_scheduler(
+        mode: FakeSchedulerMode,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        Arc<AtomicUsize>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: test scheduler should bind");
         let addr = listener
             .local_addr()
             .expect("bug: test scheduler should have local addr");
+        let lookups = Arc::new(AtomicUsize::new(0));
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SchedGateway_SchedGateway1_Dispatcher::new(
-            Box::new(FakeScheduler { mode }),
+            Box::new(FakeScheduler {
+                mode,
+                lookups: lookups.clone(),
+            }),
         )));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
-        (addr, handle)
+        (addr, handle, lookups)
     }
 
     // -----------------------------------------------------------------------
@@ -1630,6 +1652,33 @@ mod tests {
             matches!(result, Err(RpcServerError::BackendUnavailable(_))),
             "lookup with an extra per-tx answer should surface BackendUnavailable, got {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transaction_status_slow_indexer_exhausts_deadline_before_mempool_is_asked() {
+        // Arrange: the indexer is asked first and never answers within the
+        // request deadline; the scheduler would report the tx pending.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
+        let (sched_addr, _sched, lookups) =
+            start_counting_fake_scheduler(FakeSchedulerMode::AllPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+
+        // Act
+        let result = backend
+            .transaction_status(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                tx_hash,
+            )
+            .await;
+
+        // Assert: the deadline is spent on the indexer, so the pending answer
+        // is never reached. All stages share one deadline.
+        assert!(
+            matches!(result, Err(RpcServerError::BackendTimeout)),
+            "expected BackendTimeout, got {result:?}"
+        );
+        assert_eq!(lookups.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

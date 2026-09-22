@@ -3,7 +3,6 @@
 
 use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
-use async_trait::async_trait;
 use groundhog_hogd_backend::{
     indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
     status as shared_status,
@@ -292,7 +291,6 @@ struct GatewayStatusProbe<'a> {
     deadline: Instant,
 }
 
-#[async_trait]
 impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
     async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
         transaction_is_pending(self.ctx, self.deadline, tx_hash).await
