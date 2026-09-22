@@ -71,7 +71,7 @@ Workspace crates are grouped by boundary:
   implements). Gateway and node-supervisor both decode hogd through it, so a
   wire result has one meaning across both binaries and a composite answer
   has one sequence. It owns no connections, timeouts, retry policy, or
-  metrics — those stay with each consumer, which is where the two genuinely
+  metrics: those stay with each consumer, which is where the two genuinely
   differ.
   Its mapping functions take a `service` label because the gateway and the
   supervisor name the same backend differently ("indexer" vs "hogd-dev

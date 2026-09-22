@@ -64,14 +64,11 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check. The indexer is asked first, so a committed record
-    /// answers `committed` at once; otherwise a mempool hit answers `pending`, which
-    /// takes precedence over a recent-failure diagnostic; an indexer miss is checked
-    /// again after the mempool lookup to cover a commit between the reads. `unknown`
-    /// is only returned after both the mempool and the indexer answered without a
-    /// match; if the mempool could not be consulted and the indexer has no record, the
-    /// call fails with `BackendUnavailable` because the transaction may still be
-    /// pending.
+    /// Lightweight status check. The indexer is asked first, so `committed` wins; a
+    /// mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown`
+    /// is returned only after both backends answered without a match. If the mempool
+    /// could not be consulted and the indexer has no record, the call fails with
+    /// `BackendUnavailable` because the transaction may still be pending.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 

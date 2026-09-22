@@ -1,17 +1,9 @@
 //! The `getTransactionStatus` probe: which backends are asked, in what
 //! order, and what each answer decides.
 //!
-//! A transaction's status lives in two places. The scheduler mempool holds
-//! it while it is pending; the indexer holds it once it is committed, or
-//! holds a recent-failure diagnostic for it. The gateway and the node
-//! supervisor both compose those two reads into one answer, and the
-//! composition is where their answers used to drift: one asked the mempool
-//! first and the other the indexer, so a transaction in both places, or one
-//! that committed between the two reads, read differently depending on
-//! which binary served it. [`transaction_status`] is that composition, once.
-//! A binary supplies only its two raw lookups through [`StatusProbe`] and
-//! keeps what is its own — admission permits, deadlines, metrics, and
-//! connection recovery — inside those lookups.
+//! A binary supplies its two raw lookups through [`StatusProbe`], keeping
+//! admission permits, deadlines, metrics, and connection recovery inside
+//! them; [`transaction_status`] owns only the order and the precedence.
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::RpcServerError;
@@ -26,8 +18,8 @@ use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 pub trait StatusProbe: Sync {
     /// Whether the scheduler mempool holds `tx_hash`.
     ///
-    /// An answer that does not account for the transaction — no per-hash
-    /// slot, a transport failure, a timeout — is an error, never `false`:
+    /// An answer that does not account for the transaction (no per-hash
+    /// slot, a transport failure, a timeout) is an error, never `false`:
     /// see [`crate::scheduler::mempool_answer`].
     async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError>;
 
@@ -43,21 +35,15 @@ pub trait StatusProbe: Sync {
 
 /// Decide a transaction's status from the indexer and the mempool.
 ///
-/// Sequence:
-/// 1. Indexer. A committed record answers at once, so committed reads never
-///    occupy the mempool lookup lane.
-/// 2. Mempool. A hit answers `Pending`, overriding a recent-failure
-///    diagnostic (which belongs to an earlier attempt) and an indexer
-///    failure alike.
-/// 3. The indexer's first answer. A recent-failure diagnostic is returned.
-///    An indexer failure is returned too: without the indexer nothing can
-///    rule out a commit, so a mempool miss cannot become `Unknown`.
-/// 4. Indexer again. The first read can miss a transaction that committed
-///    while the mempool was being consulted; a record found now is returned.
-/// 5. `Unknown` only when both backends answered and both missed. A mempool
-///    read that failed is returned as its error instead, because the
-///    transaction may still be pending in the mempool that could not be
-///    consulted, and reporting it gone would invite an unsafe re-sign.
+/// 1. Indexer: a committed record answers at once.
+/// 2. Mempool: a hit answers `Pending`, over a recent-failure diagnostic
+///    and over an indexer failure.
+/// 3. The indexer's first answer: a diagnostic is returned, and so is an
+///    indexer failure, since a mempool miss alone cannot rule out a commit.
+/// 4. Indexer again, to cover a commit during the mempool read.
+/// 5. `Unknown` when both backends answered and both missed; a failed
+///    mempool read is returned as its error instead, because the
+///    transaction may still be pending.
 ///
 /// Committed reads cost one backend request, pending reads two, and unknown
 /// reads three.

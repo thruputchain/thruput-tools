@@ -253,14 +253,8 @@ fn chain_restore_help_documents_force_alias() {
     );
 }
 
-/// The `fake_hogd_dev` example, built from this checkout.
-///
-/// Always asks cargo for it rather than trusting a binary already in the
-/// target directory: one left by an earlier build advertises the protocol
-/// of the dependencies it was built against, and a stale one fails the
-/// supervisor's runtime identity check. Cargo's own freshness check makes
-/// the request a no-op when the binary is current. Built once per test
-/// process.
+/// The `fake_hogd_dev` example, built once per test process. Always asks
+/// cargo: a stale binary fails the supervisor's runtime identity check.
 fn fake_hogd_dev_binary() -> std::path::PathBuf {
     static BINARY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     BINARY
