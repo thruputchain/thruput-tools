@@ -5426,6 +5426,65 @@ fn transaction_commands_require_force_before_submission_or_attempt_state() {
 }
 
 #[test]
+fn funding_commands_refuse_without_force_before_reading_the_profile() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    write_project_config_with_alice_wallet(&project, "http://127.0.0.1:9", &config_home);
+    let recipient = format!("0x{}", "22".repeat(32));
+
+    let invocations = [
+        (vec!["airdrop".to_owned(), recipient], "request an airdrop"),
+        (
+            vec![
+                "wallet".to_owned(),
+                "create".to_owned(),
+                "--key".to_owned(),
+                "alice".to_owned(),
+                "--name".to_owned(),
+                "new-wallet".to_owned(),
+            ],
+            "create a wallet",
+        ),
+    ];
+
+    for (args, action) in invocations {
+        // The preflight runs before profile resolution, so `--force` is the first error.
+        let output = groundhog()
+            .arg("--json")
+            .args(&args)
+            .args(["--profile", "missing"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{action} unexpectedly succeeded");
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(
+            error["error"]["code"], "confirmation_required",
+            "{action}: {error}"
+        );
+        assert_eq!(error["error"]["details"]["action"], action);
+
+        let forced = groundhog()
+            .arg("--json")
+            .args(&args)
+            .args(["--profile", "missing", "--force"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!forced.status.success(), "{action} unexpectedly succeeded");
+        let error: serde_json::Value = serde_json::from_slice(&forced.stderr).unwrap();
+        assert_eq!(
+            error["error"]["code"], "profile_not_found",
+            "{action}: {error}"
+        );
+    }
+}
+
+#[test]
 fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

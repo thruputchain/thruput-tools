@@ -20,7 +20,7 @@ use crate::account_resolution::{
     bind_sender_to_network, resolve_address_target, resolve_sender_account,
 };
 use crate::codec::format_contract_address;
-use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::hog;
 use crate::network_descriptor::resolve_wallet_signing_context;
 use crate::result::{CommandError, CommandResult};
@@ -83,17 +83,17 @@ pub fn run(
     from: Option<&str>,
     dry_run: bool,
     force: bool,
-    profile: Option<&str>,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
     if !dry_run {
-        let cwd = std::env::current_dir()?;
-        resolve_profile_with_overrides(&cwd, profile, overrides)?;
         print.require_confirmation_available(force, "transfer HOG")?;
     }
-    let plan = prepare_plan(recipient, amount, from, profile, overrides)?;
+    let plan = prepare_plan(profile, recipient, amount, from)?;
     if !dry_run {
         print.detail("recipient", format_contract_address(&plan.recipient));
         print.detail("amount", format_args!("{} HOG", plan.amount));
@@ -130,14 +130,11 @@ enum LiveOutcome {
 }
 
 fn prepare_plan(
+    profile: ResolvedProfile,
     recipient_input: &str,
     amount_input: &str,
     from: Option<&str>,
-    profile_name: Option<&str>,
-    overrides: &ProfileOverrides,
 ) -> Result<TransferPlan, CliError> {
-    let cwd = std::env::current_dir()?;
-    let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let recipient = resolve_address_target(&profile, recipient_input)?;
