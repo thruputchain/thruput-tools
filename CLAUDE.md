@@ -425,8 +425,8 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `groundhog-hogd-backend`, not in a handler or a supervisor adapter: the
   gateway and node-supervisor serve the same RPC surface from the same
   services, and a second copy is how their answers drift apart. Handlers
-  keep what is theirs alone — client acquisition, timeouts, metrics,
-  degraded-mode policy — and call the shared decoder for the mapping. The
+  keep what is theirs alone (client acquisition, timeouts, metrics,
+  degraded-mode policy) and call the shared decoder for the mapping. The
   same holds for an answer composed from several backend reads:
   `getTransactionStatus` runs `groundhog_hogd_backend::status` in both
   binaries, each supplying only its raw indexer and mempool lookups.

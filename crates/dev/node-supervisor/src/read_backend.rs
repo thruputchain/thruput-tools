@@ -278,11 +278,9 @@ impl ReadPlane for HogdDevReadBackend {
         .await
     }
 
-    /// Status by the probe order shared with the gateway
-    /// (`groundhog_hogd_backend::status`): indexer, then mempool, then the
-    /// indexer again to cover a commit between the reads. `Unknown` needs
-    /// both to have answered; an unreachable scheduler with an indexer miss
-    /// is `BackendUnavailable`, because the transaction may still be pending.
+    /// Status by the probe order shared with the gateway; see
+    /// `groundhog_hogd_backend::status::transaction_status`. The whole
+    /// probe runs under the caller's request deadline.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,

@@ -36,20 +36,10 @@ pub trait StatusProbe: Sync {
     ) -> impl Future<Output = Result<Option<TransactionStatus>, RpcServerError>> + Send;
 }
 
-/// Decide a transaction's status from the indexer and the mempool.
-///
-/// 1. Indexer: a committed record answers at once.
-/// 2. Mempool: a hit answers `Pending`, over a recent-failure diagnostic
-///    and over an indexer failure.
-/// 3. The indexer's first answer: a diagnostic is returned, and so is an
-///    indexer failure, since a mempool miss alone cannot rule out a commit.
-/// 4. Indexer again, to cover a commit during the mempool read.
-/// 5. `Unknown` when both backends answered and both missed; a failed
-///    mempool read is returned as its error instead, because the
-///    transaction may still be pending.
-///
-/// Committed reads cost one backend request, pending reads two, and unknown
-/// reads three.
+/// Decide a transaction's status: indexer, then mempool, then the indexer
+/// again to cover a commit during the mempool read. A committed record or a
+/// mempool hit answers at once; `Unknown` only when both backends answered
+/// and missed, and a failed mempool read is returned as its error instead.
 pub async fn transaction_status<P: StatusProbe + ?Sized>(
     probe: &P,
     tx_hash: TxHash,
