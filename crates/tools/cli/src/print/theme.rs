@@ -77,6 +77,10 @@ impl Theme {
     pub fn label(self) -> Style {
         self.style(Color::Reset, Modifier::DIM)
     }
+
+    pub fn routine_log(self) -> Style {
+        self.label()
+    }
     pub fn outcome(self, outcome: Outcome) -> Style {
         self.style(outcome.color(), Modifier::empty())
     }

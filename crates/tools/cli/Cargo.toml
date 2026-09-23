@@ -78,9 +78,13 @@ jsonrpsee = { workspace = true, features = ["client", "http-client"] }
 libc = { workspace = true }
 tempfile = "3"
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [dev-dependencies]
 pretty_assertions = "1"
 serial_test = { workspace = true }
+vt100 = "0.16"
 
 [build-dependencies]
 serde_json.workspace = true

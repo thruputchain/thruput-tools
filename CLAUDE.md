@@ -393,6 +393,11 @@ groundhog-bench --url http://127.0.0.1:9546 \
   Static components use Ratatui cell buffers and Crossterm styles through `Print`;
   `--no-ui` selects plain output. Live progress and command-family migrations are
   tracked separately. Do not initialize a full-screen terminal for static output.
+- Long-running display-only work can use the scoped `print::progress::Task` adapter.
+  Use `print.phase()` for real stage changes and route child output through
+  `print.relay_output()`. Finish the task before prompts or final reports;
+  `print.outcome_report()` places collected warnings below the result card.
+  Keep raw data/interactive child modes on the append-only path.
 - When a command's `data` payload is intended to be a stable
   machine-readable contract, include a command-specific
   `schemaVersion` field inside `data` from v1 onward. Do not version

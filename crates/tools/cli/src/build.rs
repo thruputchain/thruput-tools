@@ -53,6 +53,14 @@ pub fn run(
     explicit_profile: Option<&str>,
     print: &Print,
 ) -> Result<(), CliError> {
+    let build_print = print
+        .clone()
+        .with_compact_build(inline_build_args(cargo_args));
+    let task = crate::print::progress::Task::start(
+        &build_print,
+        "Inspecting project",
+        inline_build_args(cargo_args),
+    );
     let result = build_rv32_project(
         package,
         cargo_args,
@@ -60,8 +68,29 @@ pub fn run(
         explicit_profile,
         stack_size,
         bindings,
-        print,
-    )?;
+        task.print(),
+    );
+    let compact = task.print().is_compact_build();
+    let warnings = task.finish();
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            for warning in warnings {
+                if compact {
+                    print.defer_build_warning(warning);
+                } else {
+                    print.warn(warning);
+                }
+            }
+            return Err(error);
+        }
+    };
+    print.outcome_report(
+        crate::print::Outcome::Success,
+        "Build complete",
+        &build_summary(&result),
+        &warnings,
+    );
     print.json(&crate::result::CommandResult::new(
         "build",
         json!({
@@ -84,6 +113,47 @@ pub fn run(
         }),
     ))?;
     Ok(())
+}
+
+fn inline_build_args(args: &[String]) -> bool {
+    // Preserve explicitly requested Cargo data/style formats and direct I/O modes.
+    !args.iter().any(|arg| {
+        arg == "--message-format"
+            || arg == "--verbose"
+            || arg == "-v"
+            || arg == "-vv"
+            || arg.starts_with("--message-format=")
+            || arg == "--color"
+            || arg.starts_with("--color=")
+    }) && std::env::var_os("CARGO_TERM_COLOR").is_none()
+}
+
+fn build_summary(result: &BuildResult) -> Vec<(String, String)> {
+    let mut items = vec![
+        ("Package".into(), result.project_name.clone()),
+        ("Artifact".into(), result.rv32.display().to_string()),
+        ("ELF".into(), result.elf.display().to_string()),
+        ("Metadata".into(), result.metadata.display().to_string()),
+        (
+            "Artifact size".into(),
+            format!("{} bytes", result.size_bytes),
+        ),
+        ("Code".into(), format!("{} bytes", result.code_bytes)),
+        (
+            "Guest memory".into(),
+            format!("{} bytes", result.memory_bytes),
+        ),
+    ];
+    for (label, path) in [
+        ("Spec JSON", &result.spec_json),
+        ("Spec XDR", &result.spec_xdr),
+        ("TypeScript", &result.bindings_ts),
+    ] {
+        if let Some(path) = path {
+            items.push((label.into(), path.display().to_string()));
+        }
+    }
+    items
 }
 
 /// Refuse to build when the environment carries a rustflags override.
@@ -335,6 +405,7 @@ pub fn build_rv32_project(
         .and_then(|p| p.manifest_path.parent())
         .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
 
+    print.phase("Checking build configuration...");
     check_rv32_build_config(&metadata.workspace_root, &package_root, print)?;
     let contract_toml = require_contract_toml(&metadata.workspace_root)?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
@@ -350,7 +421,7 @@ pub fn build_rv32_project(
              {INITIAL_MEMORY_BYTES_KEY})"
         ));
     }
-    print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
+    print.phase(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
     // `--stack-size` and `initial_memory_bytes` switch to `cargo rustc`: its
     // trailing flags append to the final rustc invocation, which is the only
@@ -381,6 +452,10 @@ pub fn build_rv32_project(
 
     artifacts.apply_to_command(&mut cmd);
 
+    if print.is_compact_build() {
+        cmd.arg("--message-format=json");
+    }
+
     for arg in cargo_args {
         cmd.arg(arg);
     }
@@ -405,7 +480,7 @@ pub fn build_rv32_project(
         fs::create_dir_all(parent)?;
     }
 
-    print.status("Lowering RV32 ELF...");
+    print.phase("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
     let lowered = groundhog_rv32_lower::lower_with(
         &elf_bytes,
@@ -448,12 +523,13 @@ pub fn build_rv32_project(
         return Err(error.into());
     }
 
-    print.status("Checking for contract spec...");
+    print.phase("Checking for contract spec...");
     let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
     let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
     let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
     let bindings_ts = if bindings.iter().any(|binding| binding == "ts") {
         if let Some(ref finalized) = finalized {
+            print.phase("Generating TypeScript bindings...");
             let ts_path = rv32.with_extension("ts");
             let source_name = rv32
                 .file_name()
@@ -472,12 +548,14 @@ pub fn build_rv32_project(
     };
 
     let size = fs::metadata(&rv32)?.len();
-    print.status(format_args!(
-        "Built {} ({size} bytes; code {} bytes, guest data memory {} bytes)",
-        rv32.display(),
-        lowered.code.len(),
-        lowered.memory_bytes
-    ));
+    if !print.in_task() {
+        print.status(format_args!(
+            "Built {} ({size} bytes; code {} bytes, guest data memory {} bytes)",
+            rv32.display(),
+            lowered.code.len(),
+            lowered.memory_bytes
+        ));
+    }
 
     Ok(BuildResult {
         project_name: pkg_name.to_string(),
@@ -752,7 +830,7 @@ fn run_cargo_metadata(command: &mut Command, print: &Print) -> Result<Vec<u8>, C
         .stderr
         .take()
         .expect("bug: child stderr is piped above");
-    let captured = match crate::capture_cargo_stderr(stderr_pipe, relay) {
+    let captured = match crate::capture_cargo_stderr(stderr_pipe, relay, print) {
         Ok(captured) => captured,
         Err(error) => {
             crate::stop_cargo(&mut child);
@@ -881,7 +959,7 @@ fn check_contract_raw_spec_format(
     cargo_args: &[String],
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status("Resolving the dependency graph...");
+    print.phase("Resolving the dependency graph...");
     match cargo_metadata_with_deps(ManifestFlags::from_cargo_args(cargo_args), print) {
         Ok(metadata) => check_dependency_raw_spec_format(&metadata, pkg_name),
         Err(error) => {

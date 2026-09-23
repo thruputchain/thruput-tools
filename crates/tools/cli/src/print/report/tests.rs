@@ -248,9 +248,9 @@ fn diagnostic_hierarchy_styles_hint_and_matches_card_width() {
     assert!(styled[heading].contains("[2m"), "code should be muted");
     assert!(styled[hint].contains("38;5;6m"), "hint should be cyan");
     assert!(styled[hint].contains("[1m"), "hint heading should be bold");
-    assert!(lines[hint - 1].is_empty());
+    assert!(!lines[hint - 1].is_empty());
     assert!(
-        lines[heading + 1..hint - 1]
+        lines[heading + 1..hint]
             .iter()
             .all(|line| line.starts_with("  "))
     );
@@ -298,6 +298,43 @@ fn diagnostic_hint_has_ascii_and_plain_fallbacks() {
             "  hint: Try the existing command"
         ]
     );
+}
+
+#[test]
+fn compiler_notes_share_hint_layout_without_removing_source_gutters() {
+    for unicode in [true, false] {
+        for excerpt in ["", " --> src/main.rs:2:1\n2 | value;\n  | ^^^^^\n"] {
+            let mut report = Report::new(Policy {
+                width: Some(80),
+                color: false,
+                unicode,
+            });
+            report.compiler_diagnostic(
+                Outcome::Warning,
+                &format!(
+                    "Compiler warning\n{excerpt}  |\n  = note: first line\n          second line"
+                ),
+                None,
+            );
+            let lines: Vec<_> = report
+                .into_lines()
+                .iter()
+                .map(|line| line.trim_end().to_owned())
+                .collect();
+            let arrow = if unicode { "↳" } else { ">" };
+            assert!(lines.contains(&format!("  {arrow} Note")));
+            assert!(lines.contains(&"    first line".to_owned()));
+            assert!(lines.contains(&"    second line".to_owned()));
+            assert_eq!(
+                lines.iter().any(|line| line.trim() == "|"),
+                !excerpt.is_empty()
+            );
+            if !excerpt.is_empty() {
+                assert!(lines.iter().any(|line| line.contains("2 | value;")));
+                assert!(lines.iter().any(|line| line.contains("| ^^^^^")));
+            }
+        }
+    }
 }
 
 #[test]

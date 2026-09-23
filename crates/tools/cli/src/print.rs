@@ -3,7 +3,10 @@ use crate::terminal::terminal_safe;
 use serde::Serialize;
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
+mod diagnostic;
+mod log;
 mod policy;
+pub(crate) mod progress;
 mod render;
 mod report;
 mod theme;
@@ -14,7 +17,7 @@ const CYAN: &str = "\x1b[36m";
 
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Independent CLI switches retain their existing combinations and semantics"
@@ -24,6 +27,10 @@ pub struct Print {
     json: bool,
     trace_commands: bool,
     no_ui: bool,
+    task: Option<std::sync::Arc<progress::TaskOutput>>,
+    verbose_build: bool,
+    compact_build: bool,
+    diagnostics: std::sync::Arc<std::sync::Mutex<Vec<diagnostic::Diagnostic>>>,
 }
 
 impl Print {
@@ -33,6 +40,10 @@ impl Print {
             json,
             trace_commands: false,
             no_ui: false,
+            task: None,
+            verbose_build: false,
+            compact_build: false,
+            diagnostics: std::sync::Arc::default(),
         }
     }
 
@@ -43,6 +54,10 @@ impl Print {
             json: false,
             trace_commands: false,
             no_ui: false,
+            task: None,
+            verbose_build: false,
+            compact_build: false,
+            diagnostics: std::sync::Arc::default(),
         }
     }
 
@@ -65,12 +80,62 @@ impl Print {
     }
 
     fn output_policy(&self) -> policy::Policy {
-        policy::Policy::stderr(self.no_ui || self.quiet || self.json)
+        let mut policy = policy::Policy::stderr(self.no_ui || self.quiet || self.json);
+        // The live viewport inserts safe plain diagnostic text; final reports are
+        // rendered with the parent's full theme after the worker has finished.
+        if self.is_live() {
+            policy.color = false;
+        }
+        policy
     }
 
-    fn write_report(output: report::Report) {
+    fn write_report(&self, output: report::Report) {
         for line in output.into_lines() {
+            self.emit_human(&line);
+        }
+    }
+
+    fn emit_human(&self, line: &str) {
+        if !self
+            .task
+            .as_ref()
+            .is_some_and(|output| output.line(progress::Stream::Stderr, line))
+        {
             eprintln!("{line}");
+        }
+    }
+
+    pub(crate) fn is_live(&self) -> bool {
+        self.task.as_ref().is_some_and(|output| output.live())
+    }
+
+    pub(crate) fn in_task(&self) -> bool {
+        self.task.is_some()
+    }
+
+    pub(crate) fn relay_output(&self, stream: progress::Stream, bytes: &[u8]) -> io::Result<()> {
+        if let Some(output) = &self.task {
+            output.data(stream, bytes)
+        } else {
+            match stream {
+                progress::Stream::Stdout => io::stdout().lock().write_all(bytes),
+                progress::Stream::Stderr => io::stderr().lock().write_all(bytes),
+            }
+        }
+    }
+
+    /// Update a task's phase, or print a normal status line in append-only modes.
+    pub fn phase(&self, message: impl std::fmt::Display) {
+        if self.quiet || self.json {
+            return;
+        }
+        let message = message.to_string();
+        if !self
+            .task
+            .as_ref()
+            .is_some_and(|output| output.phase(&message))
+        {
+            self.status(message);
         }
     }
 
@@ -173,13 +238,13 @@ impl Print {
         if !self.trace_commands {
             return;
         }
-        eprintln!("+ {}", render_command(command));
+        self.emit_human(&format!("+ {}", render_command(command)));
     }
 
     /// Informational status message (suppressed by --quiet).
     pub fn status(&self, msg: impl std::fmt::Display) {
-        if !self.quiet && !self.json {
-            eprintln!("{msg}");
+        if !self.quiet && !self.json && !self.compact_build {
+            self.emit_human(&msg.to_string());
         }
     }
 
@@ -188,6 +253,10 @@ impl Print {
     /// Data remains visible under `--quiet`; JSON commands should use [`Self::json`].
     pub fn data_line(&self, value: impl std::fmt::Display) -> Result<(), CliError> {
         if self.json {
+            return Ok(());
+        }
+        if self.is_live() {
+            self.relay_output(progress::Stream::Stdout, format!("{value}\n").as_bytes())?;
             return Ok(());
         }
         let mut stdout = io::stdout().lock();
@@ -212,7 +281,7 @@ impl Print {
         }
         let mut report = report::Report::new(self.output_policy());
         report.message(outcome, &msg.to_string(), None, None);
-        Self::write_report(report);
+        self.write_report(report);
     }
 
     /// Label/value detail line for human output.
@@ -222,7 +291,7 @@ impl Print {
         }
         let mut output = report::Report::new(self.output_policy());
         output.detail(label, &value.to_string());
-        Self::write_report(output);
+        self.write_report(output);
     }
 
     /// Render a responsive green summary card on stderr.
@@ -247,7 +316,7 @@ impl Print {
         let mut output = report::Report::new(self.output_policy());
         output.card(title, items);
         output.findings(findings);
-        Self::write_report(output);
+        self.write_report(output);
     }
 
     /// Render records as a responsive table, or stacked cards on narrow terminals.
@@ -258,17 +327,37 @@ impl Print {
         }
         let mut output = report::Report::new(self.output_policy());
         output.table(title, headers, rows);
-        Self::write_report(output);
+        self.write_report(output);
     }
 
     /// Render a result card with an explicit outcome label in its title.
     pub fn outcome_card(&self, outcome: Outcome, title: &str, items: &[(String, String)]) {
-        if self.quiet || self.json {
+        self.outcome_report(outcome, title, items, &[]);
+    }
+
+    /// Render a final outcome and warnings using the card's reading width.
+    /// Quiet mode retains warnings; JSON commands own their structured warning payload.
+    pub fn outcome_report(
+        &self,
+        outcome: Outcome,
+        title: &str,
+        items: &[(String, String)],
+        warnings: &[String],
+    ) {
+        if self.json {
+            return;
+        }
+        if self.quiet {
+            for warning in warnings {
+                self.warn(warning);
+            }
             return;
         }
         let mut output = report::Report::new(self.output_policy());
         output.outcome_card(outcome, title, items);
-        Self::write_report(output);
+        output.warnings(warnings);
+        self.append_diagnostics(&mut output);
+        self.write_report(output);
     }
 
     /// Render a conventional `Next:` block for human output.
@@ -279,7 +368,7 @@ impl Print {
 
         let mut output = report::Report::new(self.output_policy());
         output.next_steps(steps);
-        Self::write_report(output);
+        self.write_report(output);
     }
 
     /// Start a short human task line that can be replaced by success in TTY mode.
@@ -304,9 +393,13 @@ impl Print {
     /// command result envelope instead).
     pub fn warn(&self, msg: impl std::fmt::Display) {
         if !self.json {
+            if let Some(output) = &self.task {
+                output.warn(msg.to_string());
+                return;
+            }
             let mut output = report::Report::new(self.output_policy());
             output.message(Outcome::Warning, &msg.to_string(), None, None);
-            Self::write_report(output);
+            self.write_report(output);
         }
     }
 
@@ -375,9 +468,16 @@ impl Print {
             Some(error.code()),
             error.hint().as_deref(),
         );
-        let mut stderr = io::stderr().lock();
-        for line in output.into_lines() {
-            writeln!(stderr, "{line}")?;
+        self.append_diagnostics(&mut output);
+        if self.is_live() {
+            for line in output.into_lines() {
+                self.relay_output(progress::Stream::Stderr, format!("{line}\n").as_bytes())?;
+            }
+        } else {
+            let mut stderr = io::stderr().lock();
+            for line in output.into_lines() {
+                writeln!(stderr, "{line}")?;
+            }
         }
         Ok(())
     }

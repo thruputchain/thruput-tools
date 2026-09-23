@@ -250,6 +250,13 @@ impl Report {
         }
     }
 
+    pub fn warnings(&mut self, warnings: &[String]) {
+        for warning in warnings {
+            self.renderer.lines.push(String::new());
+            self.message(Outcome::Warning, warning, None, None);
+        }
+    }
+
     pub fn message(
         &mut self,
         outcome: Outcome,
@@ -284,6 +291,48 @@ impl Report {
         }
     }
 
+    pub fn compiler_diagnostic(&mut self, outcome: Outcome, text: &str, code: Option<&str>) {
+        self.renderer.lines.push(String::new());
+        let width = self.renderer.policy.width;
+        self.renderer.policy.width = self.summary_width.or(width);
+        let has_excerpt = text.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("-->")
+                || line.starts_with(":::")
+                || line.split_once('|').is_some_and(|(number, _)| {
+                    let number = number.trim();
+                    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                })
+        });
+        let mut lines = text.lines();
+        self.diagnostic(outcome, lines.next().unwrap_or_default(), code, None);
+        let mut note_indent = None;
+        for line in lines {
+            if !matches!(outcome, Outcome::Warning | Outcome::Error) {
+                self.renderer.text(Text::from(terminal_safe(line)), 2);
+                continue;
+            }
+            if let Some(note) = line.trim_start().strip_prefix("= note: ") {
+                note_indent = Some(line.len() - note.len());
+                self.annotation("Note", note);
+                continue;
+            }
+            if let Some(indent) = note_indent
+                && let Some(continuation) = line.strip_prefix(&" ".repeat(indent))
+            {
+                self.renderer
+                    .text(Text::from(terminal_safe(continuation)), 4);
+                continue;
+            }
+            note_indent = None;
+            if !has_excerpt && line.trim() == "|" {
+                continue;
+            }
+            self.renderer.text(Text::from(terminal_safe(line)), 2);
+        }
+        self.renderer.policy.width = width;
+    }
+
     fn diagnostic(
         &mut self,
         outcome: Outcome,
@@ -309,16 +358,24 @@ impl Report {
         self.renderer.text(Text::from(Line::from(heading)), 0);
         self.renderer.text(Text::from(terminal_safe(message)), 2);
         if let Some(hint) = hint {
-            self.renderer.lines.push(String::new());
-            let label = if self.renderer.policy.unicode {
-                "↳ Hint"
-            } else {
-                "> Hint"
-            };
-            self.renderer
-                .text(Text::from(safe_line(label, self.renderer.theme.hint())), 2);
-            self.renderer.text(Text::from(terminal_safe(hint)), 4);
+            self.annotation("Hint", hint);
         }
+    }
+
+    fn annotation(&mut self, label: &str, message: &str) {
+        let arrow = if self.renderer.policy.unicode {
+            "↳"
+        } else {
+            ">"
+        };
+        self.renderer.text(
+            Text::from(safe_line(
+                &format!("{arrow} {label}"),
+                self.renderer.theme.hint(),
+            )),
+            2,
+        );
+        self.renderer.text(Text::from(terminal_safe(message)), 4);
     }
 
     pub fn next_steps(&mut self, steps: &[String]) {

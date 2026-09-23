@@ -337,6 +337,15 @@ deterministic local-development keys into production configuration.
 Use `--no-ui` for plain human output without boxes or terminal controls. It keeps
 existing confirmation rules; use `--json` for machine-readable command results.
 
+On compatible foreground terminals, `groundhog build` shows delayed phase and
+elapsed-time progress, then an artifact summary with compiler diagnostics and
+Groundhog warnings below it. Compiler messages retain source locations, snippets,
+and notes; identical diagnostics from the same package appear once. Use
+`groundhog build --verbose` (or `-v`) to see Cargo logs live. Resizing or resuming a
+stopped job switches progress to append-only output to preserve scrollback.
+Redirected streams, `--no-ui`, and explicit Cargo output-format/color settings
+keep live append-only logs. `--json` retains its machine-readable output contract.
+
 Typical CLI discovery:
 
 ```console

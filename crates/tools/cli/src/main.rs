@@ -374,6 +374,9 @@ impl StatusArgs {
 
 #[derive(Args)]
 struct BuildArgs {
+    /// Show Cargo logs live instead of collecting diagnostics below the result
+    #[arg(short, long)]
+    verbose: bool,
     /// Package to build (required in workspaces)
     #[arg(short, long)]
     package: Option<String>,
@@ -406,7 +409,7 @@ impl BuildArgs {
             &self.cargo_args,
             &self.artifacts.options(&cwd),
             self.profile.as_deref(),
-            &ctx.print,
+            &ctx.print.clone().with_verbose_build(self.verbose),
         )
     }
 }
