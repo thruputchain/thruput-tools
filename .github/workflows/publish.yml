@@ -59,6 +59,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: groundhogchain/actions
+          persist-credentials: false
           path: actions
           ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
 
@@ -107,9 +108,13 @@ jobs:
           publish-delay-seconds: '20'
 
       - name: push tag
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.publish-tag.outputs.tag }}
         run: |
-          git remote set-url origin https://${{ github.actor }}:${{ github.token }}@github.com/${{ github.repository }}.git
-          TAG="${{ steps.publish-tag.outputs.tag }}"
+          git remote set-url origin "https://${ACTOR}:${TOKEN}@github.com/${REPO}.git"
           LOCAL_COMMIT=$(git rev-parse "$TAG")
           # Check if tag exists on remote and get its commit SHA
           REMOTE_TAG_REF=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
@@ -127,7 +132,7 @@ jobs:
             # Tag doesn't exist on remote, push it
             git push origin "$TAG"
           fi
-          git remote set-url origin git@github.com:${{ github.repository }}.git
+          git remote set-url origin "git@github.com:${REPO}.git"
 
       - name: trigger binary release
         env:
