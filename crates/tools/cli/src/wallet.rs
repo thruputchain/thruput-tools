@@ -47,7 +47,6 @@ use crate::remote_attempt::{
 };
 use crate::result::CommandResult;
 use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
-use crate::terminal::render_shell_arg;
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -55,7 +54,9 @@ use crate::tx_utils::{
 use crate::{CliError, Print, dev_keys};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 4;
-const WALLET_CREATE_PREFUND_HOG: &str = "1";
+// The dev wallet funds each deployed contract with 10 HOG. Leave room for
+// wallet creation, transaction gas, and further local development.
+const WALLET_CREATE_PREFUND_HOG: &str = "200";
 
 #[derive(Debug)]
 pub(crate) enum PreparedWalletCreate {
@@ -300,7 +301,6 @@ fn create_local_wallet(
         observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
     print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
-    print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
 
     let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
         .into_iter()
@@ -392,7 +392,6 @@ fn create_remote_wallet(
         observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
     print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
-    print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
 
     print.json(&CommandResult::new(
         cmd,
@@ -837,16 +836,6 @@ fn print_remote_dry_run_plan(
     ))?;
 
     Ok(())
-}
-
-fn print_wallet_funding_next_step(wallet_name: &str, profile_name: &str, print: &Print) {
-    print.next_steps(&[wallet_funding_command(wallet_name, profile_name)]);
-}
-
-fn wallet_funding_command(wallet_name: &str, profile_name: &str) -> String {
-    let profile = render_shell_arg(&format!("--profile={profile_name}"));
-    let wallet = render_shell_arg(wallet_name);
-    format!("groundhog airdrop {profile} -- {wallet}")
 }
 
 fn prepare_wallet_create_plan(
@@ -1509,8 +1498,7 @@ mod tests {
         parse_local_wallet_prefund, remote_wallet_create_attempt_path,
         remove_remote_wallet_create_attempt, resolve_dev_wallet_artifact_path,
         resolve_wallet_create_inputs, validate_remote_create_wallet_address,
-        validate_remote_wallet_prefund_amount, wallet_funding_command,
-        wallet_should_become_default,
+        validate_remote_wallet_prefund_amount, wallet_should_become_default,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
     use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
@@ -1529,8 +1517,11 @@ mod tests {
     }
 
     #[test]
-    fn local_wallet_prefund_defaults_to_one_hog_and_parses_exactly() {
-        assert_eq!(parse_local_wallet_prefund(None).unwrap(), crate::hog::SCALE);
+    fn local_wallet_prefund_defaults_to_two_hundred_hog_and_parses_exactly() {
+        assert_eq!(
+            parse_local_wallet_prefund(None).unwrap(),
+            200 * crate::hog::SCALE
+        );
         assert_eq!(
             parse_local_wallet_prefund(Some("1.0000001")).unwrap(),
             crate::hog::SCALE + 1
@@ -1543,14 +1534,6 @@ mod tests {
             .expect_err("bug: sub-one HOG prefund should fail");
 
         assert_eq!(error.code(), "invalid_hog_amount");
-    }
-
-    #[test]
-    fn wallet_funding_command_supports_option_like_names() {
-        assert_eq!(
-            wallet_funding_command("-alice", "-preview"),
-            "groundhog airdrop --profile=-preview -- -alice"
-        );
     }
 
     #[test]

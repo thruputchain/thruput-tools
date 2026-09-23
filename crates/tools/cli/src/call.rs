@@ -32,6 +32,9 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
+/// Default gas budget for a contract call and its inner invocation.
+pub const DEFAULT_CALL_GAS_LIMIT: u64 = 25_000_000;
+
 /// Current schema version for `call --json` data payloads.
 pub const CALL_JSON_SCHEMA_VERSION: u32 = 1;
 
@@ -115,6 +118,7 @@ pub fn run(
             print.note("Cancelled");
             return Ok(());
         }
+        check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
     }
     let prepared = sign_call_plan(plan)?;
     if dry_run {
@@ -447,6 +451,28 @@ fn prepare_call_plan_with_runtime(
         transaction: tx,
         signer: sender.signer,
     })
+}
+
+fn check_call_gas_balance(rpc_url: &str, wallet: &str, gas_limit: u64) -> Result<(), CliError> {
+    let address = crate::codec::parse_contract_address(wallet)?;
+    let balance = crate::balance::fetch_balance_blocking(
+        rpc_url,
+        groundhog_json_rpc_types::ContractAddress::from(address),
+    )?;
+    let available = balance.raw_balance.parse::<u128>().map_err(|error| {
+        CliError::Other(format!(
+            "invalid raw balance `{}` from RPC: {error}",
+            balance.raw_balance
+        ))
+    })?;
+    if available < u128::from(gas_limit) {
+        return Err(CliError::CallGasBalanceInsufficient {
+            wallet: wallet.to_owned(),
+            available_raw: available,
+            required_raw: gas_limit,
+        });
+    }
+    Ok(())
 }
 
 fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {

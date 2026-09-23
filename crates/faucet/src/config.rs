@@ -657,7 +657,10 @@ mod tests {
 
         assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
         assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
-        assert_eq!(config.network.wallet_create.prefund_raw_amount, "10000000");
+        assert_eq!(
+            config.network.wallet_create.prefund_raw_amount,
+            "2000000000"
+        );
         assert_eq!(config.network.native_hog.decimals, 7);
         assert_eq!(config.airdrop.raw_amount, "1000000000");
     }

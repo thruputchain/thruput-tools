@@ -585,7 +585,7 @@ struct CallArgs {
     #[arg(long)]
     dry_run: bool,
     /// Gas budget for the transaction and its inner contract invocation
-    #[arg(long, default_value_t = groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+    #[arg(long, default_value_t = groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT,
           value_parser = clap::value_parser!(u64).range(1..))]
     gas_limit: u64,
     /// Saved wallet to call from
@@ -2091,7 +2091,7 @@ mod tests {
     #[test]
     fn call_gas_limit_accepts_override_and_preserves_default() {
         for (extra, expected) in [
-            (vec![], groundhog_signing::DEFAULT_TX_GAS_LIMIT),
+            (vec![], 25_000_000),
             (vec!["--gas-limit", "200000000"], 200_000_000),
         ] {
             let mut args = vec!["groundhog", "call", "counter", "increment"];
