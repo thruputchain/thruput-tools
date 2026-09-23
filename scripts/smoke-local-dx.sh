@@ -1019,9 +1019,8 @@ UNDERFUNDED_WALLET_JSON="$(run_json "wallet create with a 1 HOG override" "$CLI"
 [[ "$(json_field data.prefund_raw_amount "$UNDERFUNDED_WALLET_JSON")" == "10000000" ]] \
     || die "underfunded wallet create did not use the 1 HOG override"
 "$CLI" keys use "$UNDERFUNDED_KEY"
-# The 1 HOG override leaves less than the transaction gas limit after wallet
-# creation. Add 1 HOG so deploy reaches execution and tests the receipt-level
-# insufficient-funding guidance.
+# 1 HOG leaves less than the tx gas limit; add 1 HOG so deploy reaches
+# execution and exercises the receipt-level funding guidance.
 SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop --force "$UNDERFUNDED_KEY" --amount 1)"
 [[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
     || die "scheduler-floor airdrop did not commit successfully"
