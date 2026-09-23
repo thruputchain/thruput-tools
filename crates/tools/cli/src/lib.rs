@@ -84,8 +84,12 @@ pub fn require_cargo() -> Result<(), CliError> {
 /// Piping stderr is what lets cargo's output be relayed and kept at the same
 /// time, and it is also what makes cargo drop color, so restore it when our
 /// own stderr is a terminal and the user has not already chosen.
-pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command) {
+pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command, print: &Print) {
     use std::io::IsTerminal;
+    if print.is_no_ui() {
+        cmd.env("CARGO_TERM_COLOR", "never");
+        return;
+    }
     if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
         cmd.env("CARGO_TERM_COLOR", "always");
     }
@@ -163,7 +167,7 @@ pub fn run_cargo(
         // example a link error naming the Groundhog linker script). Piping
         // stderr would otherwise turn cargo's color off, so ask for it back
         // when our own stderr is a terminal and the user has not chosen.
-        keep_cargo_color(cmd);
+        keep_cargo_color(cmd, print);
         cmd.stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn()?;
         let stderr_pipe = child

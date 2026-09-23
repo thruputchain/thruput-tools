@@ -27,6 +27,9 @@ struct GlobalArgs {
     /// Emit structured JSON output
     #[arg(long, global = true)]
     json: bool,
+    /// Use plain human output without boxes, animation, or terminal controls
+    #[arg(long, global = true)]
+    no_ui: bool,
     /// Print each cargo command to stderr before running it
     #[arg(long, global = true)]
     show_cargo_commands: bool,
@@ -1688,7 +1691,18 @@ enum ParsedCli {
 }
 
 fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> ParsedCli {
-    let matches = match cli_command(bundle_identity).try_get_matches() {
+    // Clap can print help/errors before Print exists. Honor the global plain-output
+    // switch here too, but do not inspect arguments forwarded after `--`.
+    let no_ui = std::env::args_os()
+        .skip(1)
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--no-ui");
+    let command = cli_command(bundle_identity).color(if no_ui {
+        clap::ColorChoice::Never
+    } else {
+        clap::ColorChoice::Auto
+    });
+    let matches = match command.try_get_matches() {
         Ok(matches) => matches,
         Err(error) => {
             if error.kind() == clap::error::ErrorKind::DisplayVersion
@@ -1729,6 +1743,7 @@ fn main() {
     };
     let ctx = Ctx {
         print: Print::new(cli.global.quiet, cli.global.json)
+            .with_no_ui(cli.global.no_ui)
             .with_command_trace(cli.global.show_cargo_commands),
         cmd_name: cli.command.command_name(),
         offline: cli.global.offline

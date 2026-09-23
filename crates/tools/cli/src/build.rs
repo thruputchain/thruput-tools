@@ -739,7 +739,7 @@ fn run_cargo_metadata(command: &mut Command, print: &Print) -> Result<Vec<u8>, C
     let staged_stdout = tempfile::NamedTempFile::new().map_err(failed)?;
     let relay = !print.is_json() && !print.is_quiet();
     if relay {
-        crate::keep_cargo_color(command);
+        crate::keep_cargo_color(command, print);
     }
     command
         .stdin(Stdio::null())

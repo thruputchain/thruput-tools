@@ -333,6 +333,10 @@ application work. Prefer the active local profile and runtime information
 reported by `groundhog status --json` and `groundhog node --json`. Do not copy
 deterministic local-development keys into production configuration.
 
+`groundhog status` and shared result cards use responsive terminal rendering.
+Use `--no-ui` for plain human output without boxes or terminal controls. It keeps
+existing confirmation rules; use `--json` for machine-readable command results.
+
 Typical CLI discovery:
 
 ```console

@@ -40,7 +40,7 @@ pub fn run_with_options(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    init_node_tracing(verbose, print.is_json());
+    init_node_tracing(verbose, print);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     rt.block_on(async { run_hogd_dev(options, cmd, print).await })
@@ -1018,8 +1018,8 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
     }
 }
 
-pub(crate) fn init_node_tracing(verbose: bool, json: bool) {
-    init_tracing(default_tracing_filter(verbose, json), json);
+pub(crate) fn init_node_tracing(verbose: bool, print: &Print) {
+    init_tracing(default_tracing_filter(verbose, print.is_json()), print);
 }
 
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
@@ -1032,12 +1032,13 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     }
 }
 
-fn init_tracing(default_filter: &str, json: bool) {
+fn init_tracing(default_filter: &str, print: &Print) {
     use tracing_subscriber::EnvFilter;
 
-    let dim_logs = !json && crate::print::supports_ansi_stderr();
+    let dim_logs = !print.is_json() && !print.is_no_ui() && crate::print::supports_ansi_stderr();
 
     let _ = tracing_subscriber::fmt()
+        .with_ansi(dim_logs)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
         )

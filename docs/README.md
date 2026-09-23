@@ -26,6 +26,9 @@ This directory has two kinds of documents:
 
 ## Reference
 
+- [Command UI system MVP](specs/2026-09-21-cli-tui-mvp.md) - shared responsive
+  Ratatui/Crossterm components, consistent command outcomes, and a complete command/
+  output-mode migration matrix; supersedes the full-screen shell plan.
 - [Dev-node transaction submission batching](specs/2026-09-04-dev-node-submit-batching.md) -
   active design and acceptance criteria for batching embedded local-node
   submissions.

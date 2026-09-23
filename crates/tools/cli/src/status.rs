@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::checks::{self, FindingLevel};
+use crate::checks;
 use crate::{CliError, Print};
 
 /// Schema version of the `status --json` data payload.
@@ -77,9 +77,7 @@ pub fn run(
         };
     }
 
-    render_summary(&report, print);
-    print.status("");
-    render_findings(&report, print);
+    render_report(&report, print);
 
     if report.has_warnings() {
         Err(CliError::StatusHasWarnings)
@@ -88,13 +86,18 @@ pub fn run(
     }
 }
 
-fn render_summary(report: &checks::StatusReport, print: &Print) {
-    let items = summary_items(report);
-    print.summary_card("Groundhog Status", &items);
+fn render_report(report: &checks::StatusReport, print: &Print) {
+    let mut items = environment_items(report);
+    items.extend([
+        ("Keys".into(), keys_label(report)),
+        ("Default Key".into(), default_key_label(report)),
+    ]);
+    items.extend(project_items(report));
+    print.summary_report("Groundhog Status", &items, report.all_findings());
 }
 
-fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
-    let mut items = vec![
+fn environment_items(report: &checks::StatusReport) -> Vec<(String, String)> {
+    vec![
         ("Cargo".into(), installed_label(report.environment.cargo)),
         (
             "Rust Toolchain".into(),
@@ -123,11 +126,11 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
                 "not configured".into()
             },
         ),
-        ("Keys".into(), keys_label(report)),
-        ("Default Key".into(), default_key_label(report)),
-        ("Project".into(), project_label(report)),
-    ];
+    ]
+}
 
+fn project_items(report: &checks::StatusReport) -> Vec<(String, String)> {
+    let mut items = vec![("Project".into(), project_label(report))];
     if report.project.profile_name.is_some() {
         items.push(("Profile".into(), profile_label(report)));
         items.push(("RPC URL".into(), rpc_url_label(report)));
@@ -285,20 +288,4 @@ fn profile_resolved(report: &checks::StatusReport) -> bool {
             "profile_not_found" | "profile_config_invalid" | "no_active_profile"
         )
     })
-}
-
-fn render_findings(report: &checks::StatusReport, print: &Print) {
-    for finding in report.all_findings() {
-        match finding.level {
-            FindingLevel::Warn => {
-                print.warn(format_args!("{}: {}", finding.code, finding.message));
-            }
-            FindingLevel::Info => {
-                print.status(format_args!("info: {}", finding.message));
-            }
-        }
-        if let Some(hint) = finding.hint.as_deref() {
-            print.status(format_args!("  hint: {hint}"));
-        }
-    }
 }

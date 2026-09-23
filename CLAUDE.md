@@ -383,6 +383,16 @@ groundhog-bench --url http://127.0.0.1:9546 \
   Standalone build tools such as `groundhog-agent-knowledge` may report errors
   directly to stderr and exit nonzero; do not depend on the product CLI solely
   for its output helper.
+- Use `print.summary_card(title, items)` for label/value result cards. Pass the
+  original strings; the shared renderer handles escaping, width, Unicode wrapping,
+  color, and plain output. Use `print.summary_report(title, items, findings)` when
+  the card also needs width-aware findings and hints. Do not draw new summary boxes
+  in individual commands.
+- The active [command UI migration spec](docs/specs/2026-09-21-cli-tui-mvp.md)
+  defines the shared Ratatui/Crossterm component target and per-command coverage.
+  Static components use Ratatui cell buffers and Crossterm styles through `Print`;
+  `--no-ui` selects plain output. Live progress and command-family migrations are
+  tracked separately. Do not initialize a full-screen terminal for static output.
 - When a command's `data` payload is intended to be a stable
   machine-readable contract, include a command-specific
   `schemaVersion` field inside `data` from v1 onward. Do not version
