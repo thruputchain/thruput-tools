@@ -9,7 +9,6 @@ pub mod backend;
 pub mod batch;
 pub mod config;
 pub mod error;
-pub mod params;
 pub mod server;
 pub mod tx;
 
@@ -21,5 +20,4 @@ pub use backend::{
 };
 pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig};
 pub use error::RpcServerError;
-pub use params::RejectUndeclaredParams;
 pub use server::{BuildInfo, GroundhogRpcServer};

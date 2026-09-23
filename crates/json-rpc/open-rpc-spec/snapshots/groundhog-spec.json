@@ -1688,9 +1688,6 @@
     {
       "errors": [
         {
-          "$ref": "#/components/errors/InvalidParams"
-        },
-        {
           "$ref": "#/components/errors/BackendUnavailable"
         },
         {
@@ -1721,9 +1718,6 @@
     {
       "errors": [
         {
-          "$ref": "#/components/errors/InvalidParams"
-        },
-        {
           "$ref": "#/components/errors/BackendUnavailable"
         },
         {
@@ -1752,11 +1746,7 @@
       ]
     },
     {
-      "errors": [
-        {
-          "$ref": "#/components/errors/InvalidParams"
-        }
-      ],
+      "errors": [],
       "name": "groundhog_networkInfo",
       "params": [],
       "result": {
@@ -1825,9 +1815,6 @@
     },
     {
       "errors": [
-        {
-          "$ref": "#/components/errors/InvalidParams"
-        },
         {
           "$ref": "#/components/errors/BackendUnavailable"
         },
@@ -2071,11 +2058,7 @@
       ]
     },
     {
-      "errors": [
-        {
-          "$ref": "#/components/errors/InvalidParams"
-        }
-      ],
+      "errors": [],
       "name": "groundhog_version",
       "params": [],
       "result": {

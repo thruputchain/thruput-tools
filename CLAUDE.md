@@ -430,14 +430,11 @@ groundhog-bench --url http://127.0.0.1:9546 \
   same holds for an answer composed from several backend reads:
   `getTransactionStatus` runs `groundhog_hogd_backend::status` in both
   binaries, each supplying only its raw indexer and mempool lookups.
-- Params a method does not declare are rejected with `InvalidParams`, never
-  ignored. jsonrpsee drops extra positional params and unknown by-name keys,
-  so `json-rpc-server`'s `RejectUndeclaredParams` layer checks each call
-  against the parameter names `#[open_rpc]` emits from the trait; every server
-  that serves the public API must layer it. Request structs in
-  `json-rpc-types` use `deny_unknown_fields` (an internally tagged enum with
-  unit variants needs a struct-variant mirror to deserialize from, as
-  `BlockAnchor` does).
+- Request structs in `json-rpc-types` use `deny_unknown_fields`, so a field
+  a request does not define (a height on a latest-state read) is rejected
+  rather than ignored. An internally tagged enum with unit variants needs a
+  struct-variant mirror to deserialize from, as `BlockAnchor` does: serde's
+  `deny_unknown_fields` does not reach unit variants.
 - `json-rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.

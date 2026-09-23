@@ -129,18 +129,20 @@ fn method_error_codes(method: &str) -> &'static [i32] {
         | "groundhog_getEvents"
         | "groundhog_getTransactionsByAddress"
         | "groundhog_getStorageAt"
-        | "groundhog_view"
-        | "groundhog_chainTip"
-        | "groundhog_chainConfig"
-        | "groundhog_pendingTransactionCount" => &[
+        | "groundhog_view" => &[
             codes::INVALID_PARAMS,
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        // No backend dispatch; only a call carrying params fails.
-        "groundhog_networkInfo" | "groundhog_version" => &[codes::INVALID_PARAMS],
+        "groundhog_chainTip" | "groundhog_chainConfig" | "groundhog_pendingTransactionCount" => &[
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
+        "groundhog_networkInfo" | "groundhog_version" => &[],
         "groundhog_requestAirdrop" => &[
             codes::INVALID_PARAMS,
             codes::TX_REJECTED,
