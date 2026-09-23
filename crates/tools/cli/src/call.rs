@@ -12,10 +12,11 @@ use serde_json::json;
 
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
 use crate::artifacts::ArtifactOptions;
+use crate::balance::fetch_balance_blocking;
 use crate::build::{CargoMetadata, cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
-    format_contract_address,
+    format_contract_address, parse_contract_address,
 };
 use crate::config::{
     ProfileOverrides, ResolvedProfile, find_project_config, resolve_profile_with_overrides,
@@ -454,8 +455,8 @@ fn prepare_call_plan_with_runtime(
 }
 
 fn check_call_gas_balance(rpc_url: &str, wallet: &str, gas_limit: u64) -> Result<(), CliError> {
-    let address = crate::codec::parse_contract_address(wallet)?;
-    let balance = crate::balance::fetch_balance_blocking(
+    let address = parse_contract_address(wallet)?;
+    let balance = fetch_balance_blocking(
         rpc_url,
         groundhog_json_rpc_types::ContractAddress::from(address),
     )?;
