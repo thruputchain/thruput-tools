@@ -388,6 +388,9 @@ groundhog-bench --url http://127.0.0.1:9546 \
   color, and plain output. Use `print.summary_report(title, items, findings)` when
   the card also needs width-aware findings and hints. Do not draw new summary boxes
   in individual commands.
+- Use `print.data_table()` for human listings that belong on stdout. It uses
+  stdout's terminal capabilities and retains the command's plain rows for pipes,
+  quiet mode, and `--no-ui`.
 - The active [command UI migration spec](docs/specs/2026-09-21-cli-tui-mvp.md)
   defines the shared Ratatui/Crossterm component target and per-command coverage.
   Static components use Ratatui cell buffers and Crossterm styles through `Print`;

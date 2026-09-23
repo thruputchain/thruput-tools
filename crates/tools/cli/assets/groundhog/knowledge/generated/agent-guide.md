@@ -337,6 +337,13 @@ deterministic local-development keys into production configuration.
 Use `--no-ui` for plain human output without boxes or terminal controls. It keeps
 existing confirmation rules; use `--json` for machine-readable command results.
 
+`groundhog keys ls` and `groundhog wallet ls` show tables when the columns fit,
+or stacked records on narrower terminals. They mark defaults and retain full
+addresses. Wallet listings show the selected profile and owner public keys;
+missing owner keys appear as `Not recorded`. Listing data stays on stdout.
+Pipes, `--quiet`, and `--no-ui` retain the plain rows; `--json` retains the
+structured records.
+
 On compatible foreground terminals, `groundhog build` shows delayed phase and
 elapsed-time progress, then an artifact summary with compiler diagnostics and
 Groundhog warnings below it. Compiler messages retain source locations, snippets,

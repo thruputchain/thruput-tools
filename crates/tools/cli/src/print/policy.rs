@@ -16,16 +16,32 @@ impl Policy {
     };
 
     pub fn stderr(no_ui: bool) -> Self {
+        Self::destination(
+            no_ui,
+            io::stderr().is_terminal(),
+            crate::terminal::stderr_width(),
+        )
+    }
+
+    pub fn stdout(no_ui: bool) -> Self {
+        Self::destination(
+            no_ui,
+            io::stdout().is_terminal(),
+            crate::terminal::stdout_width(),
+        )
+    }
+
+    fn destination(no_ui: bool, tty: bool, width: Option<usize>) -> Self {
         let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
             .into_iter()
             .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()));
         Self::resolve(
             no_ui,
-            io::stderr().is_terminal(),
+            tty,
             std::env::var("TERM").ok().as_deref(),
             std::env::var_os("NO_COLOR").is_some(),
             locale.as_deref(),
-            crate::terminal::stderr_width(),
+            width,
         )
     }
 

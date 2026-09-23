@@ -695,20 +695,37 @@ pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(
         return Ok(());
     }
 
-    if wallets.is_empty() {
-        println!("No wallets saved.");
-        return Ok(());
-    }
-
-    for wallet in wallets {
-        let marker = if wallet.is_default { "*" } else { " " };
-        println!(
-            "{marker} {} {} owner {}",
-            wallet.name, wallet.address, wallet.owner_public_key
-        );
-    }
-
-    Ok(())
+    let rows: Vec<_> = wallets
+        .iter()
+        .map(|wallet| {
+            vec![
+                if wallet.is_default {
+                    format!("{} (default)", wallet.name)
+                } else {
+                    wallet.name.clone()
+                },
+                wallet.address.clone(),
+                if wallet.owner_public_key.is_empty() {
+                    "Not recorded".into()
+                } else {
+                    wallet.owner_public_key.clone()
+                },
+            ]
+        })
+        .collect();
+    print.data_table(
+        &format!("Wallets ({})", profile.name),
+        &["Name".into(), "Address".into(), "Owner public key".into()],
+        &rows,
+        "No wallets saved.",
+        wallets.iter().map(|wallet| {
+            let marker = if wallet.is_default { "*" } else { " " };
+            format!(
+                "{marker} {} {} owner {}",
+                wallet.name, wallet.address, wallet.owner_public_key
+            )
+        }),
+    )
 }
 
 pub fn use_wallet(

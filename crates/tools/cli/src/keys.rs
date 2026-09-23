@@ -107,17 +107,29 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
         return Ok(());
     }
 
-    if keys.is_empty() {
-        println!("No keys stored.");
-        return Ok(());
-    }
-
-    for key in keys {
-        let marker = if key.is_default { "*" } else { " " };
-        println!("{marker} {} {}", key.name, key.address);
-    }
-
-    Ok(())
+    let rows: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            vec![
+                if key.is_default {
+                    format!("{} (default)", key.name)
+                } else {
+                    key.name.clone()
+                },
+                key.address.clone(),
+            ]
+        })
+        .collect();
+    print.data_table(
+        "Keys",
+        &["Name".into(), "Address".into()],
+        &rows,
+        "No keys stored.",
+        keys.iter().map(|key| {
+            let marker = if key.is_default { "*" } else { " " };
+            format!("{marker} {} {}", key.name, key.address)
+        }),
+    )
 }
 
 /// Export a stored private key after interactive confirmation or `force` authorization.

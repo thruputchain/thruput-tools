@@ -330,6 +330,46 @@ impl Print {
         self.write_report(output);
     }
 
+    /// Render a human data table on stdout, retaining plain rows for pipes and quiet mode.
+    pub fn data_table(
+        &self,
+        title: &str,
+        headers: &[String],
+        rows: &[Vec<String>],
+        empty_message: &str,
+        plain_rows: impl Iterator<Item = String>,
+    ) -> Result<(), CliError> {
+        if self.json {
+            return Ok(());
+        }
+        let policy = policy::Policy::stdout(self.no_ui || self.quiet);
+        let mut stdout = io::stdout().lock();
+        if policy.width.is_none() {
+            if rows.is_empty() {
+                writeln!(stdout, "{empty_message}")?;
+            } else {
+                for line in plain_rows {
+                    writeln!(stdout, "{line}")?;
+                }
+            }
+        } else {
+            let mut report = report::Report::new(policy);
+            if rows.is_empty() {
+                report.outcome_card(
+                    Outcome::Empty,
+                    title,
+                    &[("Result".into(), empty_message.into())],
+                );
+            } else {
+                report.table(title, headers, rows);
+            }
+            for line in report.into_lines() {
+                writeln!(stdout, "{line}")?;
+            }
+        }
+        Ok(())
+    }
+
     /// Render a result card with an explicit outcome label in its title.
     pub fn outcome_card(&self, outcome: Outcome, title: &str, items: &[(String, String)]) {
         self.outcome_report(outcome, title, items, &[]);

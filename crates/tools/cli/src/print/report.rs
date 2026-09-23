@@ -456,32 +456,29 @@ impl Report {
             })
             .collect();
         let width = self.renderer.policy.width.unwrap_or(0);
-        let column_width =
-            usize::from(width.saturating_sub(4)).saturating_sub(columns - 1) / columns;
-        if column_width < 12
-            || UnicodeWidthStr::width(terminal_safe(title).as_str()) + 5 > usize::from(width)
-            || records.iter().flatten().any(|value| {
-                paragraph(value.clone()).line_count(u16::try_from(column_width.max(2)).unwrap_or(2))
-                    > usize::from(u16::MAX)
+        let column_widths: Vec<_> = (0..columns)
+            .map(|column| {
+                std::iter::once(&headers[column])
+                    .chain(records.iter().map(|record| &record[column]))
+                    .map(|value| UnicodeWidthStr::width(value.as_str()))
+                    .max()
+                    .unwrap_or(0)
+                    .max(12)
             })
+            .collect();
+        let available = usize::from(width.saturating_sub(4)).saturating_sub(columns - 1);
+        // Keep addresses and other identifiers together. If the columns do not
+        // fit, stacked cards provide more readable wrapping than interleaved cells.
+        if column_widths.iter().sum::<usize>() > available
+            || UnicodeWidthStr::width(terminal_safe(title).as_str()) + 5 > usize::from(width)
         {
-            for (index, record) in records.iter().enumerate() {
-                if index > 0 {
-                    self.renderer.lines.push(String::new());
-                }
-                let fields: Vec<_> = headers
-                    .iter()
-                    .cloned()
-                    .zip(record.iter().cloned())
-                    .collect();
-                self.card(
-                    &format!("{title} ({}/{})", index + 1, records.len()),
-                    &fields,
-                );
-            }
+            self.stacked_records(title, &headers, &records);
             return;
         }
-        let column_width = u16::try_from(column_width).unwrap_or(12);
+        let column_widths: Vec<_> = column_widths
+            .into_iter()
+            .map(|width| u16::try_from(width).unwrap_or(12))
+            .collect();
         self.edge(
             &terminal_safe(title),
             width,
@@ -491,7 +488,8 @@ impl Report {
         for (index, record) in std::iter::once(&headers).chain(records.iter()).enumerate() {
             let cells: Vec<_> = record
                 .iter()
-                .map(|value| wrapped_cell(value, column_width))
+                .zip(&column_widths)
+                .map(|(value, &width)| wrapped_cell(value, width))
                 .collect();
             let height = cells.iter().map(Vec::len).max().unwrap_or(1);
             for start in (0..height).step_by(usize::from(PAGE_ROWS)) {
@@ -512,13 +510,33 @@ impl Report {
                 let mut buffer = Buffer::empty(area);
                 self.frame(Borders::LEFT | Borders::RIGHT)
                     .render(area, &mut buffer);
-                Table::new(table_rows, vec![Constraint::Length(column_width); columns])
-                    .column_spacing(1)
-                    .render(Rect::new(2, 0, width - 4, rows), &mut buffer);
+                Table::new(
+                    table_rows,
+                    column_widths.iter().copied().map(Constraint::Length),
+                )
+                .column_spacing(1)
+                .render(Rect::new(2, 0, width - 4, rows), &mut buffer);
                 self.renderer.append(&buffer);
             }
         }
         self.edge("", width, false, self.renderer.theme.title());
+    }
+
+    fn stacked_records(&mut self, title: &str, headers: &[String], records: &[Vec<String>]) {
+        for (index, record) in records.iter().enumerate() {
+            if index > 0 {
+                self.renderer.lines.push(String::new());
+            }
+            let fields: Vec<_> = headers
+                .iter()
+                .cloned()
+                .zip(record.iter().cloned())
+                .collect();
+            self.card(
+                &format!("{title} ({}/{})", index + 1, records.len()),
+                &fields,
+            );
+        }
     }
 }
 

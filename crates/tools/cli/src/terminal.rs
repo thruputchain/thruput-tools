@@ -1,5 +1,14 @@
 /// Width of the terminal receiving human status output, when available.
 pub(crate) fn stderr_width() -> Option<usize> {
+    output_width(false)
+}
+
+/// Width of the terminal receiving human data output, when available.
+pub(crate) fn stdout_width() -> Option<usize> {
+    output_width(true)
+}
+
+fn output_width(stdout: bool) -> Option<usize> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -12,7 +21,11 @@ pub(crate) fn stderr_width() -> Option<usize> {
         // SAFETY: size is writable and TIOCGWINSZ only fills that winsize.
         let result = unsafe {
             libc::ioctl(
-                std::io::stderr().as_raw_fd(),
+                if stdout {
+                    std::io::stdout().as_raw_fd()
+                } else {
+                    std::io::stderr().as_raw_fd()
+                },
                 libc::TIOCGWINSZ,
                 &raw mut size,
             )
@@ -21,6 +34,8 @@ pub(crate) fn stderr_width() -> Option<usize> {
             return Some(usize::from(size.ws_col));
         }
     }
+    #[cfg(not(unix))]
+    let _ = stdout;
     None
 }
 
