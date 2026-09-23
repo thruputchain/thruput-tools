@@ -48,3 +48,12 @@ fn generated_module_doc_compiles_with_reexported_project_imports() {
     assert_eq!(json["methods"][0]["name"], "alias_ping");
     assert_eq!(json["methods"][0]["result"]["schema"]["type"], "integer");
 }
+
+#[test]
+fn generated_param_names_list_each_method_in_declaration_order() {
+    assert_eq!(
+        DemoApiOpenRpc::PARAM_NAMES,
+        &[("demo_echo", &["value"][..])]
+    );
+    assert_eq!(AliasApiOpenRpc::PARAM_NAMES, &[("alias_ping", &[][..])]);
+}

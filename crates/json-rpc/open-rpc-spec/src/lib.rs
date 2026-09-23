@@ -129,14 +129,11 @@ fn method_error_codes(method: &str) -> &'static [i32] {
         | "groundhog_getEvents"
         | "groundhog_getTransactionsByAddress"
         | "groundhog_getStorageAt"
-        | "groundhog_view" => &[
+        | "groundhog_view"
+        | "groundhog_chainTip"
+        | "groundhog_chainConfig"
+        | "groundhog_pendingTransactionCount" => &[
             codes::INVALID_PARAMS,
-            codes::BACKEND_UNAVAILABLE,
-            codes::BACKEND_TIMEOUT,
-            codes::OVERLOADED,
-            codes::NOT_IMPLEMENTED,
-        ],
-        "groundhog_chainTip" | "groundhog_chainConfig" | "groundhog_pendingTransactionCount" => &[
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,
             codes::OVERLOADED,

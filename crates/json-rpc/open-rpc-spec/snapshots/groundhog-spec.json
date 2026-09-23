@@ -220,6 +220,7 @@
     },
     "schemas": {
       "AddressTransactionQuery": {
+        "additionalProperties": false,
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
         "properties": {
           "address": {
@@ -336,6 +337,7 @@
         ]
       },
       "AirdropRequest": {
+        "additionalProperties": false,
         "description": "Public parameters for `groundhog_requestAirdrop`.",
         "properties": {
           "clientNonce": {
@@ -380,6 +382,7 @@
         "description": "Where to begin iteration on the initial call.",
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atBeginning",
@@ -392,6 +395,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atEnd",
@@ -404,6 +408,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "height": {
                 "$ref": "#/components/schemas/BlockHeight"
@@ -620,6 +625,7 @@
         "type": "object"
       },
       "EventFilter": {
+        "additionalProperties": false,
         "description": "A single event-filter predicate: events must be emitted by one of\n`contractAddresses` AND match the topic constraints. Required\nnon-empty `contractAddresses` — the indexer has no topic-indexed\ncolumn family and can't efficiently serve \"any contract\" scans.\n(When such an index is added, the gateway relaxes the non-empty\ncheck; the wire contract stays the same.)",
         "properties": {
           "contractAddresses": {
@@ -675,6 +681,7 @@
         "type": "object"
       },
       "EventQuery": {
+        "additionalProperties": false,
         "description": "`getEvents` request. A candidate event matches the query iff it\nmatches at least one `EventFilter` in `filters` (OR across filters,\nAND within each filter).",
         "properties": {
           "anchor": {
@@ -707,6 +714,7 @@
         "type": "object"
       },
       "EventTopicFilter": {
+        "additionalProperties": false,
         "description": "Positional topic filter. For each topic position (0, 1, 2):\n  - An empty list means \"match anything at this position.\"\n  - A non-empty list means \"match if the event's topic at this\n    position is in this list.\" OR within a position, AND across\n    positions.\n\nPartial match: a filter that specifies only topic0 matches events\nwith more topics. Extra topics on the event past the filter's\nspecified positions are ignored. (This is the ethereum getLogs /\nstellar-rpc post-#358 semantics.)",
         "properties": {
           "topic0": {
@@ -1468,6 +1476,7 @@
         "type": "object"
       },
       "ViewRequest": {
+        "additionalProperties": false,
         "description": "Request for sandboxed contract simulation against the latest committed state.",
         "properties": {
           "calldata": {
@@ -1531,7 +1540,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.3.1"
+    "version": "6.0.0"
   },
   "methods": [
     {
@@ -1679,6 +1688,9 @@
     {
       "errors": [
         {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
           "$ref": "#/components/errors/BackendUnavailable"
         },
         {
@@ -1708,6 +1720,9 @@
     },
     {
       "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
         {
           "$ref": "#/components/errors/BackendUnavailable"
         },
@@ -1806,6 +1821,9 @@
     },
     {
       "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
         {
           "$ref": "#/components/errors/BackendUnavailable"
         },
@@ -2041,7 +2059,7 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against committed state.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against.",
       "tags": [
         {
           "name": "Core API"

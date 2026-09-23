@@ -1087,6 +1087,57 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         handle.stopped().await;
     }
 
+    /// A height added to `view` in any of the three places a caller might put it
+    /// is rejected as invalid params instead of silently reading latest state.
+    #[tokio::test]
+    async fn view_rejects_a_height_wherever_the_caller_puts_it() {
+        use crate::{RejectUndeclaredParams, batch::tests::http_request};
+        use serde_json::{Value, json};
+
+        let transport = jsonrpsee::server::Server::builder()
+            .set_rpc_middleware(
+                jsonrpsee::core::middleware::RpcServiceBuilder::new()
+                    .layer_fn(RejectUndeclaredParams::new),
+            )
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = transport.local_addr().unwrap();
+        let handle = transport.start(server(Arc::new(MockBackend::default())).into_rpc());
+        let request = json!({
+            "contract": format!("0x{}", "00".repeat(32)),
+            "entrypoint": "0x0000000000000000",
+            "calldata": "0x",
+        });
+        let mut with_height = request.clone();
+        with_height["height"] = json!(62256);
+        let call = |params: Value| {
+            json!({"jsonrpc": "2.0", "id": 1, "method": "groundhog_view", "params": params})
+                .to_string()
+        };
+
+        let mut codes = Vec::new();
+        for params in [
+            json!([request]),
+            json!([with_height]),
+            json!({"request": request, "height": 62256}),
+            json!([request, 62256]),
+        ] {
+            let response: Value =
+                serde_json::from_str(&http_request(address, &call(params)).await).unwrap();
+            codes.push(response["error"]["code"].clone());
+        }
+
+        assert_ne!(
+            codes[0],
+            json!(-32602),
+            "a request without a height is valid"
+        );
+        assert_eq!(codes[1..], [json!(-32602), json!(-32602), json!(-32602)]);
+        handle.stop().unwrap();
+        handle.stopped().await;
+    }
+
     #[async_trait::async_trait]
     impl ReadPlane for ReadOnly {
         async fn transaction_receipt(

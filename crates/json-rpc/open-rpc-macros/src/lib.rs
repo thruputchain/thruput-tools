@@ -109,16 +109,32 @@ fn generate_companion(
     let struct_name = format_ident!("{}OpenRpc", item_trait.ident);
     let namespace = &args.namespace;
 
-    let method_stmts: Vec<TokenStream2> = item_trait
-        .items
-        .iter()
-        .filter_map(|item| {
+    let methods = || {
+        item_trait.items.iter().filter_map(|item| {
             if let TraitItem::Fn(method) = item {
                 Some(method)
             } else {
                 None
             }
         })
+    };
+
+    let param_name_entries: Vec<TokenStream2> = methods()
+        .filter_map(|method| {
+            let rpc_name = extract_method_name(&method.attrs)?;
+            let full_name = format!("{namespace}_{rpc_name}");
+            let names = method.sig.inputs.iter().filter_map(|arg| {
+                if let FnArg::Typed(pat_type) = arg {
+                    Some(pat_to_name(&pat_type.pat))
+                } else {
+                    None
+                }
+            });
+            Some(quote! { (#full_name, &[#(#names),*]) })
+        })
+        .collect();
+
+    let method_stmts: Vec<TokenStream2> = methods()
         .filter_map(|method| {
             let rpc_name = extract_method_name(&method.attrs)?;
             let full_name = format!("{namespace}_{rpc_name}");
@@ -189,6 +205,12 @@ fn generate_companion(
         pub struct #struct_name;
 
         impl #struct_name {
+            /// Each RPC method's full name paired with its parameter names, in
+            /// declaration order. The names are the trait's Rust argument names;
+            /// jsonrpsee also accepts their `camelCase` spelling in by-name params.
+            pub const PARAM_NAMES: &'static [(&'static str, &'static [&'static str])] =
+                &[#(#param_name_entries),*];
+
             /// Append every RPC method in the companion trait to the
             /// provided module builder.
             pub fn module_doc(builder: &mut #open_rpc_path::ModuleBuilder<'_>) {

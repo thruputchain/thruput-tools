@@ -29,7 +29,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "5.3.1";
+pub const WIRE_FORMAT_VERSION: &str = "6.0.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -128,7 +128,9 @@ pub trait GroundhogApi {
     #[method(name = "getBalance")]
     async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse>;
 
-    /// Execute a sandboxed contract simulation against committed state.
+    /// Execute a sandboxed contract simulation against the latest committed state.
+    /// There is no way to select a past height; `height` in the response names the
+    /// snapshot the view ran against.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 

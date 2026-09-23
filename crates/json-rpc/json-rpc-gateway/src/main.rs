@@ -24,7 +24,9 @@ use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
 use groundhog_bundle_identity::{BundleIdentity, BundleSubject};
 use groundhog_json_rpc_api::GroundhogApiServer;
-use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_server::{
+    BuildInfo, GroundhogRpcServer, RejectUndeclaredParams, RpcServerConfig,
+};
 use groundhog_json_rpc_types::{NetworkHashHex, SHA256Hash};
 
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -262,7 +264,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             batch_ctx
                 .config
                 .batch_service(inner, max_response_body_size)
-        });
+        })
+        .layer_fn(RejectUndeclaredParams::new);
     let server = jsonrpsee::server::Server::builder()
         .set_config(server_cfg)
         .set_http_middleware(http_mw)

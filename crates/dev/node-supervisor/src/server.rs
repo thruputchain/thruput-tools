@@ -12,7 +12,9 @@ use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
 use groundhog_json_rpc_server::batch::ConcurrentBatchService;
-use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_server::{
+    BuildInfo, GroundhogRpcServer, RejectUndeclaredParams, RpcServerConfig,
+};
 use groundhog_json_rpc_types::protocol_token::protocol_text;
 use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
 use groundhog_xdr::PROTOCOL_VERSION;
@@ -542,10 +544,11 @@ where
         .max_connections(rpc_max_connections)
         .max_response_body_size(max_response_body_size)
         .build();
-    let rpc_middleware =
-        jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
+    let rpc_middleware = jsonrpsee::core::middleware::RpcServiceBuilder::new()
+        .layer_fn(move |inner| {
             ConcurrentBatchService::new(inner, max_response_body_size, rpc_batch_concurrency)
-        });
+        })
+        .layer_fn(RejectUndeclaredParams::new);
     let server = Server::builder()
         .set_config(server_config)
         .set_rpc_middleware(rpc_middleware)
