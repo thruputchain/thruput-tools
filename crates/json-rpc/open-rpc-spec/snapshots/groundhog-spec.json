@@ -1752,7 +1752,11 @@
       ]
     },
     {
-      "errors": [],
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        }
+      ],
       "name": "groundhog_networkInfo",
       "params": [],
       "result": {
@@ -2067,7 +2071,11 @@
       ]
     },
     {
-      "errors": [],
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        }
+      ],
       "name": "groundhog_version",
       "params": [],
       "result": {

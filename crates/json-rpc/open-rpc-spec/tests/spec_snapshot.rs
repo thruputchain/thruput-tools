@@ -14,12 +14,6 @@ use pretty_assertions::assert_eq;
 
 const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
 
-// Methods that are infallible by design and intentionally carry an empty
-// `errors: []` array. Add a method here only when it has no backend
-// dispatch and cannot fail. Both current methods are sourced from immutable
-// process state.
-const INFALLIBLE_METHODS: &[&str] = &["groundhog_networkInfo", "groundhog_version"];
-
 #[test]
 fn openrpc_spec_matches_snapshot() {
     let spec = build_spec();
@@ -131,8 +125,8 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
     );
     assert_eq!(
         network_info["errors"],
-        serde_json::json!([]),
-        "networkInfo should be infallible after startup validation"
+        serde_json::json!([{"$ref": "#/components/errors/InvalidParams"}]),
+        "networkInfo fails only on params it does not declare: it has no backend dispatch"
     );
 
     assert_airdrop_contract(schemas, methods);
@@ -260,13 +254,12 @@ fn assert_error_docs_are_wired(
     );
     assert!(
         methods.iter().all(|method| {
-            let name = method["name"].as_str().unwrap_or_default();
-            INFALLIBLE_METHODS.contains(&name)
-                || method["errors"]
-                    .as_array()
-                    .is_some_and(|errors| !errors.is_empty())
+            method["errors"]
+                .as_array()
+                .is_some_and(|errors| !errors.is_empty())
         }),
-        "every fallible current method should document at least one JSON-RPC error"
+        "every method should document at least one JSON-RPC error: \
+         any of them rejects params it does not declare"
     );
     for method in methods {
         for error in method["errors"]
