@@ -34,7 +34,13 @@ jobs:
       contents: read
     uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@2c5fd2d95a58f11da1e362b08c57a08fb7dfec51
 
+  # Gated on dependency-policy: cargo-deny inspects the graph without
+  # compiling it, so these run only once the dependencies are known
+  # good. Otherwise every dependency's build scripts and proc-macros
+  # execute here, with these jobs' secrets in scope, while the check
+  # that might object is still running.
   clippy:
+    needs: dependency-policy
     name: Clippy
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
@@ -52,6 +58,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
+    needs: dependency-policy
     name: Test
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
@@ -120,6 +127,7 @@ jobs:
           done
 
   cli-smoke:
+    needs: dependency-policy
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
