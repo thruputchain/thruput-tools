@@ -2667,6 +2667,48 @@ export type Result =
     }
 
     #[test]
+    fn generated_method_type_names_reject_colliding_spec_types() {
+        for suffix in ["Args", "Result"] {
+            let name = format!("ERC20Transfer{suffix}");
+            let mut spec = erc20_spec();
+            spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_string(&name),
+                    fields: vec![].try_into().unwrap(),
+                },
+            });
+
+            let error = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap_err();
+            assert!(error.to_string().contains(&format!(
+                "generated TypeScript value name \"{name}\" collides between \
+                 struct type definition \"{name}\" and method \"ERC20.transfer\" {suffix} type"
+            )));
+        }
+    }
+
+    #[test]
+    fn method_type_suffixes_allow_noncolliding_spec_types() {
+        for name in ["TransferArgs", "TransferResult"] {
+            let mut spec = erc20_spec();
+            spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_string(name),
+                    fields: vec![ContractField {
+                        name: spec_string("value"),
+                        ty: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            });
+
+            let output = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
+            assert!(output.contains(&format!("export interface {name} {{")));
+            assert!(output.contains("export interface ERC20TransferArgs {"));
+        }
+    }
+
+    #[test]
     fn method_name_public_collision_errors() {
         let spec = counter_spec_with_methods(
             vec![
