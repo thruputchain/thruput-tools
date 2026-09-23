@@ -391,6 +391,8 @@ groundhog-bench --url http://127.0.0.1:9546 \
 - Use `print.data_table()` for human listings that belong on stdout. It uses
   stdout's terminal capabilities and retains the command's plain rows for pipes,
   quiet mode, and `--no-ui`.
+  Use `print.data_summary()` for stdout cards and `print.data_findings()` for
+  their interactive findings. Keep the command's plain representation explicit.
 - The active [command UI migration spec](docs/specs/2026-09-21-cli-tui-mvp.md)
   defines the shared Ratatui/Crossterm component target and per-command coverage.
   Static components use Ratatui cell buffers and Crossterm styles through `Print`;

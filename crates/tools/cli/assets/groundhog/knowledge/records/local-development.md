@@ -39,6 +39,12 @@ missing owner keys appear as `Not recorded`. Listing data stays on stdout.
 Pipes, `--quiet`, and `--no-ui` retain the plain rows; `--json` retains the
 structured records.
 
+`groundhog config get` shows a persisted configuration card. Add `--sources`
+to show each value's global or project origin and how the profile was selected.
+`groundhog config profiles` marks the active profile, lists config layers and
+validation states, and shows invalid or missing profile warnings below the list.
+These commands keep data on stdout and retain plain and JSON output modes.
+
 On compatible foreground terminals, `groundhog build` shows delayed phase and
 elapsed-time progress, then an artifact summary with compiler diagnostics and
 Groundhog warnings below it. Compiler messages retain source locations, snippets,

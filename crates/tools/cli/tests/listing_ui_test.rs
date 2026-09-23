@@ -210,3 +210,106 @@ fn listing_errors_do_not_produce_empty_or_partial_success_reports() {
         assert!(!output.stderr.is_empty());
     }
 }
+
+#[test]
+fn config_cards_preserve_merged_values_and_field_sources() {
+    let fixture = Fixture::new();
+    let config_dir = fixture.root.path().join("config/groundhog");
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(config_dir.join("config.toml"), "[profile.local]\nnetwork = \"local\"\nrpc_url = \"https://global.example\"\n[profile.local.contracts]\nshared = \"0x1234\"\n").unwrap();
+    fs::write(fixture.root.path().join("groundhog.toml"), "default_profile = \"local\"\n[profile.local]\nrpc_url = \"https://project.example/long/path\"\n").unwrap();
+    for columns in [24, 40, 80, 120] {
+        for args in [vec!["config", "get"], vec!["config", "get", "--sources"]] {
+            let output = terminal_output(fixture.command(&args), columns);
+            let text = visible(&output, columns);
+            let compact: String = text
+                .chars()
+                .filter(|c| !c.is_whitespace() && *c != '│')
+                .collect();
+            for value in [
+                "Configuration",
+                "local",
+                "https://project.example/long/path",
+                "0x1234",
+                "notset",
+                "None",
+            ] {
+                assert!(compact.contains(value), "missing {value}: {text}");
+            }
+            assert!(!compact.contains("https://global.example"));
+            if args.contains(&"--sources") {
+                assert!(compact.contains("local(global)"), "{text}");
+                assert!(
+                    compact.contains("https://project.example/long/path(project)"),
+                    "{text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn config_profiles_keep_invalid_and_missing_rows_with_findings_below() {
+    let fixture = Fixture::new();
+    fs::write(fixture.root.path().join("groundhog.toml"), "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n[profile.broken]\nnetwork = \"not-a-network\"\n").unwrap();
+    for missing in [false, true] {
+        let mut command = fixture.command(&["config", "profiles"]);
+        if missing {
+            command.env("GROUNDHOG_PROFILE", "missing");
+        }
+        let output = terminal_output(command, 100);
+        let text = visible(&output, 100);
+        assert!(text.contains("Invalid"), "{text}");
+        assert!(text.contains("profile_invalid"), "{text}");
+        assert!(
+            text.find("Invalid").unwrap() < text.find("Warning").unwrap(),
+            "{text}"
+        );
+        if missing {
+            assert!(text.contains("missing (active)"), "{text}");
+            assert!(text.contains("profile_missing"), "{text}");
+        } else {
+            assert!(text.contains("local (active)"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn config_plain_modes_retain_the_same_stdout_and_json_payloads() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["config", "get"],
+        vec!["config", "get", "--sources"],
+        vec!["config", "profiles"],
+    ] {
+        let baseline = fixture.command(&args).output().unwrap();
+        assert!(baseline.status.success());
+        for flag in ["--quiet", "--no-ui", "--json"] {
+            let mut args = args.clone();
+            args.push(flag);
+            let piped = fixture.command(&args).output().unwrap();
+            let terminal = terminal_output(fixture.command(&args), 80);
+            assert!(terminal.status.success());
+            assert!(terminal.stderr.is_empty());
+            assert_eq!(
+                String::from_utf8_lossy(&terminal.stdout).replace("\r\n", "\n"),
+                String::from_utf8_lossy(&piped.stdout)
+            );
+            if flag != "--json" {
+                assert_eq!(piped.stdout, baseline.stdout);
+            }
+        }
+    }
+    fs::write(fixture.root.path().join("groundhog.toml"), "").unwrap();
+    let args = ["config", "profiles"];
+    let output = terminal_output(fixture.command(&args), 80);
+    assert!(visible(&output, 80).contains("No profiles configured."));
+    let baseline = fixture.command(&args).output().unwrap();
+    let mut command = fixture.command(&args);
+    command.arg("--no-ui");
+    let plain = terminal_output(command, 80);
+    assert_eq!(
+        String::from_utf8_lossy(&plain.stdout).replace("\r\n", "\n"),
+        String::from_utf8_lossy(&baseline.stdout)
+    );
+}

@@ -216,18 +216,6 @@ impl Print {
         self.output_policy().color
     }
 
-    /// Returns whether styled human data on stdout is appropriate.
-    pub fn is_human_stdout_tty(&self) -> bool {
-        !self.quiet
-            && !self.json
-            && !self.no_ui
-            && io::stdout().is_terminal()
-            && terminal_allows_ansi(
-                std::env::var_os("TERM").as_deref(),
-                std::env::var_os("NO_COLOR").as_deref(),
-            )
-    }
-
     /// Trace a subprocess invocation to stderr when command tracing is on.
     ///
     /// Opt-in diagnostic (see the global `--show-cargo-commands` flag). Writes
@@ -339,30 +327,62 @@ impl Print {
         empty_message: &str,
         plain_rows: impl Iterator<Item = String>,
     ) -> Result<(), CliError> {
+        let empty = rows.is_empty();
+        let mut plain_rows = plain_rows.peekable();
+        let plain_empty = plain_rows.peek().is_none();
+        self.write_data_report(
+            std::iter::once(empty_message.to_owned())
+                .filter(move |_| empty && plain_empty)
+                .chain(plain_rows),
+            |report| {
+                if empty {
+                    report.outcome_card(
+                        Outcome::Empty,
+                        title,
+                        &[("Result".into(), empty_message.into())],
+                    );
+                } else {
+                    report.table(title, headers, rows);
+                }
+            },
+        )
+    }
+
+    /// Render a data card on stdout, retaining the supplied plain representation.
+    pub fn data_summary(
+        &self,
+        title: &str,
+        items: &[(String, String)],
+        plain_rows: impl Iterator<Item = String>,
+    ) -> Result<(), CliError> {
+        self.write_data_report(plain_rows, |report| report.card(title, items))
+    }
+
+    /// Append shared findings to an interactive stdout report.
+    /// Plain modes retain the command's supplied plain representation.
+    pub fn data_findings(&self, findings: &[crate::checks::Finding]) -> Result<(), CliError> {
+        self.write_data_report(std::iter::empty(), |report| {
+            report.findings(findings.iter());
+        })
+    }
+
+    fn write_data_report(
+        &self,
+        plain_rows: impl Iterator<Item = String>,
+        render: impl FnOnce(&mut report::Report),
+    ) -> Result<(), CliError> {
         if self.json {
             return Ok(());
         }
         let policy = policy::Policy::stdout(self.no_ui || self.quiet);
         let mut stdout = io::stdout().lock();
         if policy.width.is_none() {
-            if rows.is_empty() {
-                writeln!(stdout, "{empty_message}")?;
-            } else {
-                for line in plain_rows {
-                    writeln!(stdout, "{line}")?;
-                }
+            for line in plain_rows {
+                writeln!(stdout, "{line}")?;
             }
         } else {
             let mut report = report::Report::new(policy);
-            if rows.is_empty() {
-                report.outcome_card(
-                    Outcome::Empty,
-                    title,
-                    &[("Result".into(), empty_message.into())],
-                );
-            } else {
-                report.table(title, headers, rows);
-            }
+            render(&mut report);
             for line in report.into_lines() {
                 writeln!(stdout, "{line}")?;
             }
