@@ -164,7 +164,7 @@ impl From<&groundhog_trace::TxFailureDiagnostic> for TransactionStatus {
 /// invocation targets that address; transactions that merely touch the
 /// address mid-execution do not match.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AddressTransactionQuery {
     pub address: ContractAddress,
     pub order: IterationOrder,

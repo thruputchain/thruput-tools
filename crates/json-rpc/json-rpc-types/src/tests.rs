@@ -68,6 +68,7 @@ mod schema_generation {
 mod wire_format {
     use serde_json::Value;
 
+    use crate::airdrop::{AirdropRequest, ClientNonce};
     use crate::block::{BlockInfo, BlockProjectionError, ChainTip, consensus_value_hash};
     use crate::events::{
         BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventQuery,
@@ -439,6 +440,86 @@ mod wire_format {
 
         let roundtrip: EventQuery = serde_json::from_value(v).unwrap();
         assert_eq!(roundtrip, query);
+    }
+
+    /// Request types reject a field they do not define at every nesting level,
+    /// so a caller who adds one (a block height on a latest-state read) learns
+    /// the server will not honor it.
+    #[test]
+    fn request_types_reject_unknown_fields() {
+        fn rejects<T: serde::de::DeserializeOwned + std::fmt::Debug>(valid: &Value, path: &[&str]) {
+            serde_json::from_value::<T>(valid.clone()).expect("valid request should parse");
+            let mut bad = valid.clone();
+            let mut target = &mut bad;
+            for key in path {
+                target = if let Ok(index) = key.parse::<usize>() {
+                    &mut target[index]
+                } else {
+                    &mut target[*key]
+                };
+            }
+            target["blockHeight"] = Value::from(62_256);
+            let parsed = serde_json::from_value::<T>(bad);
+            let err = parsed.expect_err(&format!("{path:?}: unknown field should be rejected"));
+            assert!(
+                err.to_string().contains("unknown field `blockHeight`"),
+                "{path:?}: {err}"
+            );
+        }
+
+        let view = serde_json::to_value(ViewRequest {
+            contract: zero_address(),
+            entrypoint: HexBytes(vec![0; 8]),
+            calldata: HexBytes(vec![]),
+            caller: None,
+        })
+        .unwrap();
+        rejects::<ViewRequest>(&view, &[]);
+
+        let filter = EventFilter {
+            contract_addresses: ContractAddressList(VecM(vec![zero_address()])),
+            topics: EventTopicFilter {
+                topic0: TopicList(VecM(vec![])),
+                topic1: TopicList(VecM(vec![])),
+                topic2: TopicList(VecM(vec![])),
+            },
+        };
+        for anchor in [
+            BlockAnchor::AtBeginning,
+            BlockAnchor::AtEnd,
+            BlockAnchor::AtHeight { height: 7.into() },
+        ] {
+            let events = serde_json::to_value(EventQuery {
+                filters: EventFilterList(VecM(vec![filter.clone()])),
+                order: IterationOrder::Ascending,
+                anchor: anchor.clone(),
+                cursor: PaginationCursor(vec![]),
+                limit: 50,
+            })
+            .unwrap();
+            rejects::<EventQuery>(&events, &[]);
+            rejects::<EventQuery>(&events, &["anchor"]);
+            rejects::<EventQuery>(&events, &["filters", "0"]);
+            rejects::<EventQuery>(&events, &["filters", "0", "topics"]);
+
+            let by_address = serde_json::to_value(AddressTransactionQuery {
+                address: zero_address(),
+                order: IterationOrder::Descending,
+                anchor,
+                cursor: PaginationCursor(vec![]),
+                limit: 50,
+            })
+            .unwrap();
+            rejects::<AddressTransactionQuery>(&by_address, &[]);
+            rejects::<AddressTransactionQuery>(&by_address, &["anchor"]);
+        }
+
+        let airdrop = serde_json::to_value(AirdropRequest {
+            recipient: zero_address(),
+            client_nonce: ClientNonce::new(vec![1; 16]).unwrap(),
+        })
+        .unwrap();
+        rejects::<AirdropRequest>(&airdrop, &[]);
     }
 
     #[test]

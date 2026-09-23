@@ -75,7 +75,7 @@ pub enum ClientNonceError {
 
 /// Public parameters for `groundhog_requestAirdrop`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AirdropRequest {
     /// Address receiving the native HOG transfer.
     pub recipient: ContractAddress,
