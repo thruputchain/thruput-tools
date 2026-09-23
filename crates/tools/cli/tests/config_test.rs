@@ -2180,6 +2180,37 @@ fn config_set_network_hash_parses_its_field_name_and_persists() {
 }
 
 #[test]
+fn config_set_network_hash_accepts_the_0x_prefix_rpc_reports() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+    let hash = "ab".repeat(32);
+    let field: groundhog_cli::config::ConfigField = "network-hash".parse().unwrap();
+
+    // `groundhog_networkInfo` reports the hash 0x-prefixed; pasting it back
+    // must work and persist the unprefixed form the manifest uses.
+    let report = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        field,
+        &format!("0x{hash}"),
+        false,
+        true,
+    )
+    .unwrap();
+
+    assert!(report.changed);
+    assert!(
+        fs::read_to_string(tmp.path().join("groundhog.toml"))
+            .unwrap()
+            .contains(&format!("network_hash = \"{hash}\""))
+    );
+}
+
+#[test]
 fn config_set_network_hash_rejects_a_non_canonical_value() {
     let tmp = TempDir::new().unwrap();
     fs::write(

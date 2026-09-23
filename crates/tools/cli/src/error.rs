@@ -405,8 +405,8 @@ pub enum CliError {
     MissingNetworkHash,
     #[error("profile network_hash {value:?} is not 64 lowercase hexadecimal digits")]
     #[hint(
-        "network_hash is the unprefixed 32-byte network hash: 64 lowercase \
-         hexadecimal digits, as `groundhog node` writes it into the runtime manifest"
+        "network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, \
+         optionally 0x-prefixed, as `groundhog_networkInfo` reports it"
     )]
     InvalidNetworkHash { value: String },
     #[error("invalid HOG amount `{input}`: {message}")]

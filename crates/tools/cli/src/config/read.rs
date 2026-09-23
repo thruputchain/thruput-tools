@@ -38,11 +38,20 @@ impl ConfigField {
                 Ok(ConfigFieldValue::String(value.to_owned()))
             }
             Self::NetworkHash => {
+                // Accept the `0x` spelling `groundhog_networkInfo` and the
+                // faucet descriptor emit, and store the unprefixed form the
+                // runtime manifest uses. Reuse the wire type's validation so a
+                // profile cannot hold a hash the signing path would later
+                // reject.
                 let value = value.trim();
-                // Reuse the wire type's validation so a profile cannot hold a
-                // hash the signing path would later reject.
+                let value = value.strip_prefix("0x").unwrap_or(value);
                 groundhog_json_rpc_types::NetworkHashHex::try_from(value)
-                    .map_err(|_| invalid_field(self, "expected 64 lowercase hexadecimal digits"))
+                    .map_err(|_| {
+                        invalid_field(
+                            self,
+                            "expected 64 lowercase hexadecimal digits, optionally 0x-prefixed",
+                        )
+                    })
                     .map(|hash| ConfigFieldValue::String(hash.as_ref().to_owned()))
             }
             Self::DefaultKey => {

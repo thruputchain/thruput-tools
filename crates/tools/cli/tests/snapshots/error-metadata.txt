@@ -255,7 +255,7 @@ MissingNetworkHash
 
 InvalidNetworkHash
   code: invalid_network_hash
-  hint text: network_hash is the unprefixed 32-byte network hash: 64 lowercase hexadecimal digits, as `groundhog node` writes it into the runtime manifest
+  hint text: network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, optionally 0x-prefixed, as `groundhog_networkInfo` reports it
 
 InvalidHogAmount
   code: invalid_hog_amount

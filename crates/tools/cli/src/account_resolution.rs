@@ -129,7 +129,7 @@ pub(crate) fn resolve_network_hash(
         .network_hash
         .as_deref()
         .ok_or(CliError::MissingNetworkHash)?;
-    NetworkHashHex::try_from(configured)
+    NetworkHashHex::try_from(configured.strip_prefix("0x").unwrap_or(configured))
         .map(|hash| hash.to_network_hash())
         .map_err(|_| CliError::InvalidNetworkHash {
             value: configured.to_owned(),
@@ -891,6 +891,16 @@ mod tests {
                 .expect("hint expected")
                 .contains("groundhog wallet create")
         );
+    }
+
+    #[test]
+    fn network_hash_accepts_a_hand_edited_0x_prefix() {
+        let mut profile = test_profile("alice", None, BTreeMap::new());
+        profile.network_hash = Some(format!("0x{}", "ab".repeat(32)));
+
+        let resolved = resolve_network_hash(&profile, "alice").unwrap();
+
+        assert_eq!(resolved, NetworkHashHex::from([0xab; 32]).to_network_hash());
     }
 
     fn test_profile(
