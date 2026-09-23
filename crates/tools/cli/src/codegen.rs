@@ -2680,7 +2680,8 @@ export type Result =
 
             let error = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap_err();
             assert!(error.to_string().contains(&format!(
-                "generated TypeScript value name \"{name}\" collides between struct type definition \"{name}\" and method \"ERC20.transfer\" {suffix} type"
+                "generated TypeScript value name \"{name}\" collides between \
+                 struct type definition \"{name}\" and method \"ERC20.transfer\" {suffix} type"
             )));
         }
     }
