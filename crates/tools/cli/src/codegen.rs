@@ -1774,9 +1774,15 @@ fn method_type_stem(interface_name: &str, public_method_name: &str) -> String {
     )
 }
 
+/// The exception's name as a TypeScript string literal.
+///
+/// A display position, not spec data: this lands in type position on
+/// `<Interface>DeclaredException`, where consumers discriminate on it. The
+/// declared segment is what a person reads; the whole id travels in the spec
+/// literal beside it.
 fn exception_name(ty: &ContractType) -> Result<String, CliError> {
     if let ContractType::Named { named } = ty {
-        ts_spec_id_literal(named)
+        Ok(ts_string_literal(spec_string_text(&named.declared)?))
     } else {
         Ok("null".into())
     }

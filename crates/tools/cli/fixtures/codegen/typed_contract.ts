@@ -68,7 +68,7 @@ export const spec: ContractSpec = {
     {
       v: ContractTypeDefKind.TypeDefUnion,
       union_def: {
-        name: s("ExampleError"),
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") },
         cases: [
           {
             name: s("InvalidValue"),
@@ -86,7 +86,7 @@ export const spec: ContractSpec = {
   ],
   events: [
     {
-      name: s("ChangedEvent"),
+      name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ChangedEvent") },
       signature: topic(fromHex("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a")),
       topics: [
         { name: s("actor"), ty: { v: ContractTypeKind.Address } },

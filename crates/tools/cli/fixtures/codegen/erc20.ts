@@ -81,7 +81,7 @@ export const spec: ContractSpec = {
     {
       v: ContractTypeDefKind.TypeDefEnum,
       enum_def: {
-        name: s("ERC20Error"),
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ERC20Error") },
         variants: [
           { name: s("AlreadyInitialized"), value: 1n },
           { name: s("MustBeContractOwner"), value: 2n },

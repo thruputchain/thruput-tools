@@ -46,7 +46,7 @@ export const spec: ContractSpec = {
     {
       v: ContractTypeDefKind.TypeDefStruct,
       struct_def: {
-        name: s("Tree"),
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") },
         fields: [
           { name: s("value"), ty: { v: ContractTypeKind.U32 } },
           { name: s("left"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: s("Tree") } } },
