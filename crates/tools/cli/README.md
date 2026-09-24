@@ -125,6 +125,13 @@ build was compiled with, so overrides need a `hog-devnode` build carrying the
 matching flag. These settings affect genesis; when using `--data-dir`, supply
 the same overrides on every restart or choose a fresh directory.
 
+`groundhog test --integration` accepts the same repeatable flag for its
+ephemeral node:
+
+```bash
+groundhog test --integration --network-config max_rv32_memory_bytes=16M
+```
+
 ## Contract call gas
 
 `groundhog call --gas-limit 200000000` sets the total transaction gas budget

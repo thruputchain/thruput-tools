@@ -53,6 +53,9 @@ pub struct IntegrationTestOptions {
     pub hogd_protocol: Option<String>,
     /// Exact managed hog-devnode version requested for the ephemeral node.
     pub hog_devnode_version: Option<String>,
+    /// Genesis network parameter overrides for the ephemeral node (mirrors
+    /// `groundhog node --network-config`). A parameter given twice is rejected.
+    pub network_config_overrides: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     /// Forbid managed network acquisition for the ephemeral node.
     pub offline: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
@@ -289,6 +292,7 @@ fn run_integration_with_dev_node(
         pid_file: crate::node::LocalNodePidFile::Disabled,
         hogd_protocol,
         hogd_dev_version: integration.hog_devnode_version.clone(),
+        network_config_overrides: integration.network_config_overrides.clone(),
         offline: integration.offline,
         ..crate::node::LocalNodeOptions::default()
     };
