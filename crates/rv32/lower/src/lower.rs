@@ -275,10 +275,8 @@ fn validate_sections(
     if text_off + text_size > data.len() {
         return Err(invalid(".text extends past end of file"));
     }
-    // A multiple-of-four section size alone does not exclude pairs of
-    // compressed instructions. Check every instruction boundary, independent
-    // of ELF flags (which can be absent or stale). Full opcode validation
-    // remains the runtime's responsibility.
+    // Section alignment alone permits paired compressed encodings; check every boundary.
+    // Full opcode validation remains the runtime's responsibility.
     for (index, instruction) in data[text_off..text_off + text_size]
         .chunks_exact(4)
         .enumerate()
