@@ -32,6 +32,9 @@ env:
     groundhog-cli
     groundhog-testkit
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     permissions:
