@@ -37,7 +37,6 @@ pub(crate) fn spec_string_text(value: &ContractSpecString) -> Result<&str, CliEr
     groundhog_client::codec::spec_string_text(value).map_err(Into::into)
 }
 
-
 pub(crate) fn build_type_def_index(
     type_defs: &[ContractTypeDef],
 ) -> Result<TypeDefIndex<'_>, CliError> {

@@ -570,9 +570,7 @@ fn validate_named_type(
 ) -> Result<usize, SpecError> {
     let id = required_id(named, "named type")?;
     if !visiting.insert(id.clone()) {
-        return Err(SpecError::CyclicType {
-            name: id_label(id),
-        });
+        return Err(SpecError::CyclicType { name: id_label(id) });
     }
     let definition = type_defs
         .get(id)

@@ -1243,12 +1243,14 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
                 spec_string_text(&struct_def.name.declared)?,
                 "struct type definition",
             ),
-            ContractTypeDef::TypeDefEnum { enum_def } => {
-                (spec_string_text(&enum_def.name.declared)?, "enum type definition")
-            }
-            ContractTypeDef::TypeDefUnion { union_def } => {
-                (spec_string_text(&union_def.name.declared)?, "union type definition")
-            }
+            ContractTypeDef::TypeDefEnum { enum_def } => (
+                spec_string_text(&enum_def.name.declared)?,
+                "enum type definition",
+            ),
+            ContractTypeDef::TypeDefUnion { union_def } => (
+                spec_string_text(&union_def.name.declared)?,
+                "union type definition",
+            ),
             _ => {
                 return Err(CliError::SpecFailed(
                     "type definition contains an unsupported kind".into(),
@@ -1862,7 +1864,9 @@ fn spec_uses_type(spec: &ContractSpec, predicate: impl Fn(&ContractType) -> bool
 
 fn type_def_name(def: &ContractTypeDef) -> Result<&str, CliError> {
     match def {
-        ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name.declared),
+        ContractTypeDef::TypeDefStruct { struct_def } => {
+            spec_string_text(&struct_def.name.declared)
+        }
         ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name.declared),
         ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name.declared),
         _ => Err(CliError::SpecFailed(

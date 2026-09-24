@@ -49,15 +49,9 @@ fn conflict_code_maps_all_known_codes() {
         (DbConflictCode::ValueMismatch, "valueMismatch"),
         (DbConflictCode::BoundsExceeded, "boundsExceeded"),
         (DbConflictCode::Overflow, "overflow"),
-        (
-            DbConflictCode::ReplayProtection,
-            "replayProtection",
-        ),
+        (DbConflictCode::ReplayProtection, "replayProtection"),
         (DbConflictCode::QueueConsumer, "queueConsumer"),
-        (
-            DbConflictCode::CapacityExceeded,
-            "capacityExceeded",
-        ),
+        (DbConflictCode::CapacityExceeded, "capacityExceeded"),
     ];
     for (code, expected) in cases {
         let json =

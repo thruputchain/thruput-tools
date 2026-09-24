@@ -296,9 +296,7 @@ pub fn decode_abort_payload(
     payload: &[u8],
 ) -> Result<DecodedAbort, AbortDecodeError> {
     let exception = match ty {
-        ContractType::Named { named } => {
-            spec_string_text(&named.declared).ok().map(str::to_owned)
-        }
+        ContractType::Named { named } => spec_string_text(&named.declared).ok().map(str::to_owned),
         _ => None,
     };
     let bad_decode = |detail: String| AbortDecodeError::BadDecode {
