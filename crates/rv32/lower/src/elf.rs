@@ -8,6 +8,7 @@
 use crate::error::{Result, invalid};
 
 // Section header types.
+pub const SHT_PROGBITS: u32 = 1;
 pub const SHT_RELA: u32 = 4;
 pub const SHT_NOBITS: u32 = 8;
 pub const SHT_REL: u32 = 9;

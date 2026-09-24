@@ -1905,7 +1905,9 @@ dependencies = [
  "groundhog-build-info",
  "groundhog-rv32-artifact",
  "groundhog-spec-tool",
+ "same-file",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
 ]
 

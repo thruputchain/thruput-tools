@@ -255,6 +255,9 @@ fn validate_sections(
     if !text.is_exec() || !text.is_alloc() {
         return Err(invalid(".text must be alloc+exec"));
     }
+    if text.sh_type != elf::SHT_PROGBITS {
+        return Err(invalid(".text must be file-backed SHT_PROGBITS"));
+    }
     if text.addr != 0 {
         return Err(invalid(format!(
             ".text must start at vaddr 0, got {}",
@@ -271,6 +274,22 @@ fn validate_sections(
     let text_size = text.size as usize;
     if text_off + text_size > data.len() {
         return Err(invalid(".text extends past end of file"));
+    }
+    // A multiple-of-four section size alone does not exclude pairs of
+    // compressed instructions. Check every instruction boundary, independent
+    // of ELF flags (which can be absent or stale). Full opcode validation
+    // remains the runtime's responsibility.
+    for (index, instruction) in data[text_off..text_off + text_size]
+        .chunks_exact(4)
+        .enumerate()
+    {
+        if instruction[0] & 0b11 != 0b11 {
+            return Err(invalid(format!(
+                ".text contains a compressed instruction encoding at PC {:#x}; \
+                 build for riscv32im without the C extension",
+                index * 4
+            )));
+        }
     }
 
     let interface_table_has_reader = sections.iter().any(|section| {

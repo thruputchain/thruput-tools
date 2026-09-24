@@ -132,6 +132,7 @@ nix = { version = "0.30", default-features = false, features = ["process"] }
 insta = "1"
 serial_test = "4"
 tempfile = "3"
+same-file = "1"
 
 # --- Observability ---
 tracing = "0.1"
