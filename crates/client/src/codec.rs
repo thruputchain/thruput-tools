@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use groundhog_contract_spec::{
-    ContractArrayType, ContractEnumDef, ContractExceptionType, ContractField, ContractSpecMethod,
-    ContractSpecString, ContractStructDef, ContractType, ContractTypeDef, ContractUnionCase,
-    ContractUnionCaseType, ContractUnionDef, ContractVectorType,
+    ContractArrayType, ContractEnumDef, ContractExceptionType, ContractField, ContractSpecId,
+    ContractSpecMethod, ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
+    ContractUnionCase, ContractUnionCaseType, ContractUnionDef, ContractVectorType,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
@@ -145,7 +145,7 @@ pub struct SpecMethodMetadata {
 }
 
 /// Named contract type definitions keyed by contract type name.
-pub type TypeDefIndex<'a> = BTreeMap<String, &'a ContractTypeDef>;
+pub type TypeDefIndex<'a> = BTreeMap<ContractSpecId, &'a ContractTypeDef>;
 
 /// Encode argument strings into contract calldata using the resolved metadata.
 pub fn encode_args(args: &[String], metadata: Option<&CallMetadata>) -> Result<Vec<u8>, Error> {
@@ -296,7 +296,9 @@ pub fn decode_abort_payload(
     payload: &[u8],
 ) -> Result<DecodedAbort, AbortDecodeError> {
     let exception = match ty {
-        ContractType::Named { named } => spec_string_text(named).ok().map(str::to_owned),
+        ContractType::Named { named } => {
+            spec_string_text(&named.declared).ok().map(str::to_owned)
+        }
         _ => None,
     };
     let bad_decode = |detail: String| AbortDecodeError::BadDecode {
@@ -349,6 +351,21 @@ pub fn format_contract_address(address: &ContractAddress) -> String {
     prefixed_hex(address)
 }
 
+/// Render a spec id for a diagnostic, validating every segment.
+///
+/// Only for messages. Lookups compare whole [`ContractSpecId`]s, which is
+/// what keeps two same-named types in different crates or modules apart;
+/// this rendering joins the segments and so cannot be taken apart again.
+/// The shape matches `groundhog_spec_tool`'s `spec_id_lossy`, so the CLI and
+/// the spec tool name the same type the same way.
+fn spec_id_text(id: &ContractSpecId) -> Result<String, Error> {
+    let crate_name = spec_string_text(&id.crate_name)?;
+    let major = spec_string_text(&id.major)?;
+    let module_path = spec_string_text(&id.module_path)?;
+    let declared = spec_string_text(&id.declared)?;
+    Ok(format!("{module_path}::{declared} ({crate_name}@{major})"))
+}
+
 /// Decode a spec string as UTF-8 text and validate it as a safe identifier.
 ///
 /// Spec strings originate from Rust type and method names. A string
@@ -373,10 +390,11 @@ pub fn build_type_def_index(type_defs: &[ContractTypeDef]) -> Result<TypeDefInde
     let mut index = BTreeMap::new();
 
     for type_def in type_defs {
-        let name = spec_type_def_name(type_def)?.to_owned();
-        if index.insert(name.clone(), type_def).is_some() {
+        let id = spec_type_def_id(type_def)?;
+        if index.insert(id.clone(), type_def).is_some() {
             return Err(Error::SpecFailed(format!(
-                "contract spec defines `{name}` multiple times"
+                "contract spec defines `{}` multiple times",
+                spec_id_text(id)?
             )));
         }
     }
@@ -576,11 +594,11 @@ fn encode_local_typed_args(args: &[String], method: &MethodMetadata) -> Result<V
     Ok(encoded)
 }
 
-fn spec_type_def_name(type_def: &ContractTypeDef) -> Result<&str, Error> {
+fn spec_type_def_id(type_def: &ContractTypeDef) -> Result<&ContractSpecId, Error> {
     match type_def {
-        ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name),
-        ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name),
-        ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name),
+        ContractTypeDef::TypeDefStruct { struct_def } => Ok(&struct_def.name),
+        ContractTypeDef::TypeDefEnum { enum_def } => Ok(&enum_def.name),
+        ContractTypeDef::TypeDefUnion { union_def } => Ok(&union_def.name),
         _ => Err(Error::SpecFailed(
             "contract spec contains an unsupported type definition kind".into(),
         )),
@@ -588,14 +606,16 @@ fn spec_type_def_name(type_def: &ContractTypeDef) -> Result<&str, Error> {
 }
 
 fn resolve_named_type_def<'a>(
-    named: &ContractSpecString,
+    named: &ContractSpecId,
     type_defs: &'a TypeDefIndex<'a>,
 ) -> Result<&'a ContractTypeDef, Error> {
-    let name = spec_string_text(named)?;
-    type_defs
-        .get(name)
-        .copied()
-        .ok_or_else(|| Error::SpecFailed(format!("contract spec is missing `{name}`")))
+    match type_defs.get(named).copied() {
+        Some(type_def) => Ok(type_def),
+        None => Err(Error::SpecFailed(format!(
+            "contract spec is missing `{}`",
+            spec_id_text(named)?
+        ))),
+    }
 }
 
 fn encode_cli_spec_value(
@@ -824,7 +844,7 @@ fn encode_vector_json_value(
 }
 
 fn encode_named_json_value(
-    named: &ContractSpecString,
+    named: &ContractSpecId,
     value: &Value,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
@@ -1186,7 +1206,7 @@ fn encode_union_case(
         _ => {
             return Err(Error::SpecFailed(format!(
                 "contract spec contains an unsupported union case in `{}`",
-                spec_string_text(&union_def.name)?
+                spec_id_text(&union_def.name)?
             )));
         }
     }
@@ -1542,7 +1562,7 @@ fn decode_vector_value_from_reader(
 }
 
 fn decode_named_value_from_reader(
-    named: &ContractSpecString,
+    named: &ContractSpecId,
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
@@ -1728,7 +1748,7 @@ fn decode_union_value(
         _ => {
             return Err(Error::SpecFailed(format!(
                 "contract spec contains an unsupported union in `{}`",
-                spec_string_text(&union_def.name)?
+                spec_id_text(&union_def.name)?
             )));
         }
     }

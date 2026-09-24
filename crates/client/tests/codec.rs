@@ -1,4 +1,5 @@
 use groundhog_contract_spec::ContractField;
+use groundhog_contract_spec::ContractSpecId;
 use groundhog_contract_spec::ContractSpecMethod;
 use groundhog_contract_spec::ContractSpecString;
 use groundhog_contract_spec::ContractType;
@@ -11,6 +12,18 @@ use groundhog_client::codec::*;
 
 fn spec_string(s: &str) -> ContractSpecString {
     s.try_into().unwrap()
+}
+
+/// A spec id for these fixtures: one crate, one module, so the declared name
+/// is what tells the types apart -- which is all these tests turn on. Tests
+/// that turn on identity itself live in the spec tool's canonicalizer.
+fn spec_id(declared: &str) -> ContractSpecId {
+    ContractSpecId {
+        crate_name: spec_string("counter"),
+        major: spec_string("1"),
+        module_path: spec_string("counter"),
+        declared: spec_string(declared),
+    }
 }
 
 #[test]
@@ -63,7 +76,7 @@ const COUNTER_ERROR_SELECTOR: u64 = 0xb199_47ac_b2fa_14ff;
 fn counter_error_type_defs() -> Vec<ContractTypeDef> {
     vec![ContractTypeDef::TypeDefUnion {
         union_def: ContractUnionDef {
-            name: spec_string("CounterError"),
+            name: spec_id("CounterError"),
             cases: vec![
                 ContractUnionCase {
                     name: spec_string("Underflow"),
@@ -97,7 +110,7 @@ fn throwing_spec_metadata() -> SpecMethodMetadata {
         throws: vec![groundhog_contract_spec::ContractExceptionType {
             selector: COUNTER_ERROR_SELECTOR,
             ty: ContractType::Named {
-                named: spec_string("CounterError"),
+                named: spec_id("CounterError"),
             },
         }],
     }
@@ -144,7 +157,7 @@ fn decode_abort_decodes_declared_spec_exception() {
     let bytes = encode_abort_bytes(
         COUNTER_ERROR_SELECTOR,
         ContractType::Named {
-            named: spec_string("CounterError"),
+            named: spec_id("CounterError"),
         },
         counter_error_type_defs(),
         &expected.to_string(),
@@ -192,7 +205,7 @@ fn decode_abort_reports_unknown_selector() {
     let bytes = encode_abort_bytes(
         0x1234_5678_9abc_def0,
         ContractType::Named {
-            named: spec_string("CounterError"),
+            named: spec_id("CounterError"),
         },
         counter_error_type_defs(),
         "Underflow",
@@ -215,7 +228,7 @@ fn decode_abort_reports_trailing_bytes() {
     let mut bytes = encode_abort_bytes(
         COUNTER_ERROR_SELECTOR,
         ContractType::Named {
-            named: spec_string("CounterError"),
+            named: spec_id("CounterError"),
         },
         counter_error_type_defs(),
         "Underflow",
