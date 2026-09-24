@@ -1,10 +1,9 @@
-# Catch advisories filed against dependencies already frozen in Cargo.lock,
-# where nothing in the repo changes but our exposure does.
+# Catch advisories filed against dependencies since we last pushed.
 name: Rust dependency audit
 
 on:
   schedule:
-    - cron: '0 8 * * *'
+    - cron: '0 8 * * *' # daily at 08:00 UTC
   workflow_dispatch: {}
 
 permissions:
@@ -23,6 +22,7 @@ jobs:
     secrets:
       registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
 
+  # This workflow is asynchronous, so report problems by filing an issue
   notify:
     name: Report dependency problem
     needs: scan
