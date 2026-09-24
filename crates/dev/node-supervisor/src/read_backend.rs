@@ -1148,7 +1148,7 @@ mod tests {
                     address: ContractAddress::from(CANNED_FAILURE_ADDRESS),
                     key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
                 },
-                code: groundhog_trace::DbConflictCode::kDbConflictExclusiveLock,
+                code: groundhog_trace::DbConflictCode::ExclusiveLockDenied,
             },
         }
     }
