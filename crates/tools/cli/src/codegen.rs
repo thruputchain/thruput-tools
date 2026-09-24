@@ -12,84 +12,6 @@ use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id}
 
 use crate::CliError;
 /// Map a contract type to its TypeScript type reference string.
-/// Where a spec id lands in the generated TypeScript: the namespaces it
-/// nests under, then the declaration's own name.
-///
-/// The mapping is total and injective, so no pass has to detect collisions
-/// and no name shifts when an unrelated type is added to the spec. Two types
-/// that differ anywhere in their id land in different places.
-struct TsIdPath {
-    namespaces: Vec<String>,
-    name: String,
-}
-
-impl TsIdPath {
-    /// The fully qualified reference, e.g. `groundhog_erc20_if.v1.ERC20Error`.
-    fn qualified(&self) -> String {
-        let mut out = String::new();
-        for ns in &self.namespaces {
-            out.push_str(ns);
-            out.push('.');
-        }
-        out.push_str(&self.name);
-        out
-    }
-}
-
-/// Map a spec id onto its TypeScript path.
-///
-/// Every segment is rendered, never parsed back out:
-/// - the crate name is a Cargo package name, so hyphenated; `-` becomes `_`,
-///   which cannot alias two crates together because a registry already treats
-///   `a-b` and `a_b` as one name
-/// - the major is nested rather than suffixed, so a crate actually named
-///   `foo_v1` lands at `foo_v1.v…` instead of aliasing onto `foo` major 1
-/// - `module_path!()` leads with the crate's own Rust ident, which the first
-///   namespace already carries, so that segment is dropped when it matches
-fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
-    let crate_name = spec_string_text(&id.crate_name)?;
-    let major = spec_string_text(&id.major)?;
-    let module_path = spec_string_text(&id.module_path)?;
-    let declared = spec_string_text(&id.declared)?;
-
-    // `name = "..."` is substituted verbatim and the SDK validates it only as
-    // UTF-8, so a declared name can contain `::`. Nesting on it would make
-    // this mapping non-injective: a type named `A::B` at a crate's root and a
-    // type named `B` in that crate's module `A` would land in one place.
-    if declared.contains("::") {
-        return Err(CliError::SpecFailed(format!(
-            "spec type `{}` has `::` in its declared name, which a generated \
-             binding cannot tell apart from a module of that path; drop it \
-             from the `name = \"...\"` attribute",
-            spec_id_text(id)?
-        )));
-    }
-
-    let krate = crate_name.replace('-', "_");
-    let mut namespaces = vec![krate.clone(), format!("v{}", major.replace('.', "_"))];
-
-    let mut segments = module_path.split("::").filter(|s| !s.is_empty()).peekable();
-    if segments.peek() == Some(&krate.as_str()) {
-        segments.next();
-    }
-    namespaces.extend(segments.map(str::to_owned));
-
-    for ns in &namespaces {
-        validate_ts_identifier(ns, "spec id segment")?;
-    }
-    validate_ts_identifier(declared, "spec type name")?;
-
-    Ok(TsIdPath {
-        namespaces,
-        name: declared.to_owned(),
-    })
-}
-
-/// A spec id in TypeScript reference position.
-fn ts_id_ref(id: &ContractSpecId) -> Result<String, CliError> {
-    Ok(ts_id_path(id)?.qualified())
-}
-
 fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     match ty {
         ContractType::Void => Ok("void".into()),
@@ -145,7 +67,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
             Ok(format!("readonly [{}]", items.join(", ")))
         }
-        ContractType::Named { named } => ts_id_ref(named),
+        ContractType::Named { named } => Ok(spec_string_text(named)?.to_owned()),
         ContractType::SignedToken {
             signed_token_preimage,
         } => match signed_token_preimage.preimage_type.as_deref() {
@@ -172,7 +94,7 @@ fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
 
 /// Emit a TypeScript interface for a contract struct definition.
 fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
-    let name = ts_id_path(&def.name)?.name;
+    let name = spec_string_text(&def.name)?;
     let mut fields = String::new();
     for field in def.fields.iter() {
         let field_name = spec_string_text(&field.name)?;
