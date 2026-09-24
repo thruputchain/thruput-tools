@@ -22,7 +22,7 @@ jobs:
   dependency-policy:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@2c5fd2d95a58f11da1e362b08c57a08fb7dfec51
+    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@6c7d96b0470e7d44e4a99cecafa6743f820611c9
     with:
       runs-on: namespace-profile-hogd-linux-2604
       registry-name: groundhog
@@ -33,7 +33,7 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@2c5fd2d95a58f11da1e362b08c57a08fb7dfec51
+    uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@6c7d96b0470e7d44e4a99cecafa6743f820611c9
 
   clippy:
     needs: dependency-policy # Check deps before building anything
