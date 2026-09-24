@@ -324,8 +324,8 @@ future wallet address, transfers HOG to that address, waits for the prefund to
 commit, and only then deploys and initializes the wallet contract. The wallet
 contract does not transfer HOG during `create_wallet`. Local wallet creation
 prefunds 200 HOG by default, leaving room for multiple dev-wallet contract
-deployments (each transfers 10 HOG) and transaction costs. Remote faucets advertise
-their own prefund amount.
+deployments (each transfers 10 HOG) and transaction costs. Remote faucets
+advertise their own prefund amount.
 
 For `network = "local"`, the CLI signs the prefund and create transactions with
 the fixed local bootstrap faucet role advertised by `groundhog node` (`dev-0`).
