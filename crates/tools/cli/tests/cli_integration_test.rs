@@ -14482,3 +14482,100 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
         },
     })
 }
+
+#[test]
+fn issuer_runtime_events_survive_the_cli_http_boundary() {
+    let fixture: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/issuer-events.json")).unwrap();
+    assert_eq!(fixture.len(), 9);
+    let token = fixture[0]["event"]["contractAddress"].as_str().unwrap();
+
+    for movements_only in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let selected: Vec<_> = fixture
+            .iter()
+            .filter(|record| {
+                !movements_only
+                    || [transfer_signature(), mint_signature(), burn_signature()]
+                        .iter()
+                        .any(|signature| record["event"]["topics"][0] == *signature)
+            })
+            .collect();
+        let events: Vec<_> = selected
+            .iter()
+            .enumerate()
+            .map(|(index, record)| {
+                serde_json::json!({
+                    "txHash": format!("0x{:064x}", index + 1),
+                    "blockHeight": 20 - index,
+                    "sequenceNumber": 0,
+                    "event": record["event"],
+                })
+            })
+            .collect();
+        let filters = if movements_only {
+            all_token_event_filters(token)
+        } else {
+            serde_json::json!([{
+                "contractAddresses": [token],
+                "topics": { "topic0": [], "topic1": [], "topic2": [] },
+            }])
+        };
+        let (rpc_url, server) = spawn_events_rpc(
+            serde_json::json!({
+                "filters": filters, "order": "descending", "anchor": { "kind": "atEnd" },
+                "cursor": "0x", "limit": 50,
+            }),
+            EventRpcResponse::Result(serde_json::json!({
+                "events": events, "cursor": "0x", "latestBlock": 20, "oldestBlock": 0,
+            })),
+        );
+        let command = if movements_only {
+            ["token", "transfers"]
+        } else {
+            ["events", "list"]
+        };
+        let output = groundhog()
+            .arg("--json")
+            .args(command)
+            .args([token, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let key = if movements_only { "records" } else { "events" };
+        let records = report["data"][key].as_array().unwrap();
+        assert_eq!(records.len(), if movements_only { 4 } else { 9 });
+        for (record, original) in records.iter().zip(selected) {
+            for field in ["contractAddress", "topics", "data"] {
+                assert_eq!(record[field], original["event"][field]);
+            }
+            if movements_only {
+                assert_eq!(record["decodeStatus"], "decoded");
+                let expected = if original["operation"] == "clawback" {
+                    "burn"
+                } else {
+                    original["operation"].as_str().unwrap()
+                };
+                assert_eq!(record["transfer"]["kind"], expected);
+            } else {
+                assert_eq!(record["decodeStatus"], "notRequested");
+            }
+        }
+        if movements_only {
+            assert_eq!(report["data"]["schemaVersion"], 2);
+            for (record, amount) in records.iter().zip(["100", "25", "5", "7"]) {
+                assert_eq!(record["transfer"]["rawAmount"], amount);
+            }
+            let alice = format!("0x{}", "13".repeat(32));
+            assert_eq!(records[3]["transfer"]["from"], alice);
+            assert!(records[3]["transfer"]["to"].is_null());
+        }
+    }
+}
