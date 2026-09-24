@@ -403,23 +403,11 @@ impl SupervisedChild {
             return Ok(false);
         };
 
-        // SAFETY: kill(2) with signal 0 performs existence/permission checks
-        // for the process group and does not deliver a signal.
-        let result = unsafe { libc::kill(target, 0) };
-        if result == 0 {
-            return Ok(true);
-        }
-
-        let source = std::io::Error::last_os_error();
-        match source.raw_os_error() {
-            Some(libc::ESRCH) => Ok(false),
-            Some(libc::EPERM) => Ok(true),
-            _ => Err(NodeSupervisorError::Signal {
-                program: self.program.clone(),
-                signal: ChildSignal::from_raw(0),
-                source,
-            }),
-        }
+        process_group_has_live_member(-target).map_err(|source| NodeSupervisorError::Signal {
+            program: self.program.clone(),
+            signal: ChildSignal::from_raw(0),
+            source,
+        })
     }
 
     /// Unix process-group id used for child lifecycle signals.
@@ -467,6 +455,96 @@ impl SupervisedChild {
     }
 }
 
+/// Report whether `process_group` has a member that has not exited.
+///
+/// An exited process stays in its group as a zombie until its parent reaps it.
+/// An orphaned descendant waits on PID 1 for that, and in some containers PID 1
+/// reaps late or never, so `kill(-pgid, 0)` alone would report a stopped node
+/// as still running. A zombie holds no ports, files, or locks, so on Linux a
+/// group whose only members are zombies is reported as gone. Where the members
+/// cannot be inspected, the group is reported as live.
+#[cfg(unix)]
+pub(crate) fn process_group_has_live_member(process_group: i32) -> std::io::Result<bool> {
+    // SAFETY: kill(2) with signal 0 performs existence/permission checks
+    // for the process group and does not deliver a signal.
+    let result = unsafe { libc::kill(-process_group, 0) };
+    if result != 0 {
+        let source = std::io::Error::last_os_error();
+        return match source.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(source),
+        };
+    }
+
+    #[cfg(target_os = "linux")]
+    return Ok(linux_process_group_has_running_member(process_group));
+
+    #[cfg(not(target_os = "linux"))]
+    Ok(true)
+}
+
+/// Scan `/proc` for a member of `process_group` with a thread that has not exited.
+///
+/// A thread-group leader that exits before its other threads reports the zombie
+/// state while those threads run, so a zombie leader is checked thread by thread.
+#[cfg(target_os = "linux")]
+fn linux_process_group_has_running_member(process_group: i32) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return true;
+    };
+
+    entries.flatten().any(|entry| {
+        let is_pid = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()));
+        if !is_pid {
+            return false;
+        }
+
+        let Some((state, member_group)) = read_linux_stat(&entry.path().join("stat")) else {
+            return false;
+        };
+        if member_group != process_group {
+            return false;
+        }
+        if !linux_state_has_exited(state) {
+            return true;
+        }
+
+        std::fs::read_dir(entry.path().join("task")).is_ok_and(|tasks| {
+            tasks.flatten().any(|task| {
+                read_linux_stat(&task.path().join("stat"))
+                    .is_some_and(|(state, _)| !linux_state_has_exited(state))
+            })
+        })
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_stat(path: &std::path::Path) -> Option<(char, i32)> {
+    parse_linux_stat_state_and_group(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Parse the state and process-group fields of a `/proc/<pid>/stat` line.
+///
+/// The command name is parenthesized and may itself contain spaces or `)`, so
+/// fields are counted from the last `)`.
+#[cfg(target_os = "linux")]
+fn parse_linux_stat_state_and_group(stat: &str) -> Option<(char, i32)> {
+    let mut fields = stat.get(stat.rfind(')')? + 1..)?.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let _parent_pid = fields.next()?;
+    let process_group = fields.next()?.parse().ok()?;
+    Some((state, process_group))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_state_has_exited(state: char) -> bool {
+    matches!(state, 'Z' | 'X' | 'x')
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use crate::test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary};
@@ -507,5 +585,67 @@ mod tests {
             .expect("bug: test child should be killable");
 
         assert!(!status.success());
+    }
+
+    #[test]
+    fn process_group_with_running_member_is_live() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("bug: sleep should spawn");
+        let process_group = i32::try_from(child.id()).expect("bug: pid should fit pid_t");
+
+        let live = super::process_group_has_live_member(process_group);
+
+        child.kill().expect("bug: sleep should be killable");
+        child.wait().expect("bug: sleep should be reaped");
+        assert!(live.expect("bug: process group should be inspectable"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_group_of_only_zombies_is_gone() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = std::process::Command::new("true")
+            .process_group(0)
+            .spawn()
+            .expect("bug: true should spawn");
+        let pid = child.id();
+        let process_group = i32::try_from(pid).expect("bug: pid should fit pid_t");
+        // Leave the exited child unreaped so it stays in its group as a zombie.
+        let stat_path = std::path::PathBuf::from(format!("/proc/{pid}/stat"));
+        let mut zombie = false;
+        for _ in 0..500 {
+            zombie = super::read_linux_stat(&stat_path).is_some_and(|(state, _)| state == 'Z');
+            if zombie {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // SAFETY: signal 0 only checks that the group is present.
+        let kernel_reports_group = unsafe { libc::kill(-process_group, 0) } == 0;
+
+        let live = super::process_group_has_live_member(process_group);
+
+        child.wait().expect("bug: true should be reaped");
+        assert!(zombie, "bug: exited child should be a zombie until reaped");
+        assert!(kernel_reports_group);
+        assert!(!live.expect("bug: process group should be inspectable"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_stat_parse_counts_fields_after_the_last_paren() {
+        let stat = "4242 (hog) (dev node) Z 1 4240 4240 0 -1 4194560";
+
+        assert_eq!(
+            super::parse_linux_stat_state_and_group(stat),
+            Some(('Z', 4240))
+        );
+        assert_eq!(super::parse_linux_stat_state_and_group("4242 hog"), None);
     }
 }
