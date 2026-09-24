@@ -2392,7 +2392,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert!(
             events
                 .iter()
-                .all(|event| event["event"]["contractAddress"] == contract)
+                .all(|event| event["event"]["contractAddress"] == contract),
+            "events should come from the filtered contract"
         );
         let cursor = page["cursor"].as_str().unwrap_or("");
         assert!(

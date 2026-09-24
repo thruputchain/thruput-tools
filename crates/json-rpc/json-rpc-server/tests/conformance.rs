@@ -428,12 +428,18 @@ async fn empty_event_filters_are_rejected_before_dispatch_for_all_shapes() {
         let mut mixed = simple_query();
         mixed.filters.0.0.push(no_contracts.filters.0.0[0].clone());
         for query in [empty, no_contracts, mixed] {
-            let error = svc.get_events(query).await.unwrap_err();
+            let error = svc
+                .get_events(query)
+                .await
+                .expect_err("bug: empty event filters must be rejected");
             assert_eq!(error.code(), codes::INVALID_PARAMS);
         }
         assert_eq!(*calls.lock().await, 0);
         // No topic constraints is a valid wildcard within a named contract.
-        let page = svc.get_events(simple_query()).await.unwrap();
+        let page = svc
+            .get_events(simple_query())
+            .await
+            .expect("bug: a named contract with wildcard topics must be accepted");
         assert!(page.events.is_empty());
         assert_eq!(*calls.lock().await, 1);
     }
