@@ -129,7 +129,9 @@ the same overrides on every restart or choose a fresh directory.
 
 `groundhog call --gas-limit 200000000` sets the total transaction gas budget
 and the requested inner invocation budget; the inner call remains bounded by
-the transaction's remaining gas. The default is still 10,000,000.
+the transaction's remaining gas. The default is 25,000,000, which requires
+at least 2.5 HOG in the sending wallet. The CLI checks that balance before
+submitting a call; use `--gas-limit` to set a different budget.
 
 ## Using cargo directly
 
@@ -320,9 +322,10 @@ groundhog wallet rm alice
 Wallet creation is always prefund-first. The CLI or hosted faucet derives the
 future wallet address, transfers HOG to that address, waits for the prefund to
 commit, and only then deploys and initializes the wallet contract. The wallet
-contract does not transfer HOG during `create_wallet`. The default prefund is
-1 HOG on Local and Devnet. This funds wallet creation only; run `groundhog
-airdrop <wallet>` before deploying another contract from the new wallet.
+contract does not transfer HOG during `create_wallet`. Local wallet creation
+prefunds 200 HOG by default, leaving room for multiple dev-wallet contract
+deployments (each transfers 10 HOG) and transaction costs. Remote faucets
+advertise their own prefund amount.
 
 For `network = "local"`, the CLI signs the prefund and create transactions with
 the fixed local bootstrap faucet role advertised by `groundhog node` (`dev-0`).
@@ -338,8 +341,9 @@ For a remote faucet-backed profile such as Devnet, the CLI sends one
 idempotent `POST /v1/create-wallet` request. The faucet performs the same
 prefund-then-create sequence with its hosted signing wallet. The client never
 receives that signing key. Wallet-create prefunding is separate from ordinary
-`groundhog airdrop` requests. Devnet wallet creation uses the service-advertised
-1 HOG prefund and rejects `--prefund` because the service controls the amount.
+`groundhog airdrop` requests. Devnet wallet creation uses the
+service-advertised prefund and rejects `--prefund` because the service controls
+the amount.
 
 The CLI, faucet, and node must advertise and use the same dev-wallet contract
 build. An older self-funding `create_wallet` contract combined with a
@@ -600,8 +604,7 @@ When recovering `--data-dir`, pass the original explicit user allocation.
 Changing it requires a fresh data directory; recovered state does not bypass
 authoritative validation.
 
-The wallet-create prefund is 1 HOG; the local bootstrap uses a fixed
-1,000,000 HOG faucet and 100 HOG per user.
+The local bootstrap uses a fixed 1,000,000 HOG faucet and 100 HOG per user.
 
 `--hogd-protocol` overrides the protocol token used for hog-devnode x23 intro
 handshakes. It is useful when a local `hog-devnode` build is slightly ahead of

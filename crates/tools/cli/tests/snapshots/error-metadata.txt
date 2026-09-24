@@ -348,6 +348,11 @@ InvalidEventSpec
 RuntimeInit
   code: runtime_init_failed
 
+CallGasBalanceInsufficient
+  code: call_gas_balance_insufficient
+  hint text: add HOG to the wallet or lower `--gas-limit` if the contract needs less gas
+  details: wallet, availableRaw, requiredRaw
+
 RpcMethodFailed
   code: rpc_method_failed
   hint text: check the RPC endpoint and node logs for details

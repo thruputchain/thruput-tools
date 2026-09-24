@@ -546,6 +546,18 @@ pub enum CliError {
     #[error("failed to initialize async runtime: {0}")]
     #[code("runtime_init_failed")]
     RuntimeInit(String),
+    #[error(
+        "wallet {wallet} has {} HOG, below the {} HOG required by this call's gas limit",
+        crate::hog::format_amount(*available_raw),
+        crate::hog::format_amount(u128::from(*required_raw))
+    )]
+    #[hint("add HOG to the wallet or lower `--gas-limit` if the contract needs less gas")]
+    #[details(wallet, available_raw, required_raw)]
+    CallGasBalanceInsufficient {
+        wallet: String,
+        available_raw: u128,
+        required_raw: u64,
+    },
     #[error("{method} failed: {message}")]
     #[hint("check the RPC endpoint and node logs for details")]
     RpcMethodFailed {

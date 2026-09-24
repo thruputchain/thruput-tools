@@ -4733,7 +4733,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["key"], "owner");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "10000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "2000000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
         stdout["data"]["owner_public_key"]
@@ -4805,7 +4805,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "owner");
     assert_eq!(stdout["data"]["key"], "owner");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "10000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "2000000000");
     assert!(stdout["data"].get("signed_prefund_tx").is_none());
     assert!(stdout["data"].get("signed_tx").is_none());
 }
@@ -4853,6 +4853,51 @@ fn local_wallet_create_json_warns_when_projected_faucet_balance_is_below_ten_hog
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
     assert_eq!(payload["data"]["schemaVersion"], 4);
+}
+
+#[test]
+fn local_wallet_create_human_does_not_suggest_an_airdrop() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let faucet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet, None);
+    let (rpc_url, rpc_server) = spawn_local_wallet_create_rpc(&faucet);
+    std::fs::write(project.join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profile.default]\nnetwork = \"local\"\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let generated = groundhog()
+        .args(["keys", "generate", "owner"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+
+    let output = groundhog()
+        .args(["wallet", "create", "--key", "owner", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Wallet created:"), "{stderr}");
+    assert!(!stderr.contains("groundhog airdrop"), "{stderr}");
 }
 
 #[test]
@@ -8306,8 +8351,6 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             "--json",
             "call",
             "--dry-run",
-            "--gas-limit",
-            "200000000",
             "--wallet",
             "trading",
             &contract,
@@ -8353,7 +8396,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             .starts_with("0x")
     );
     let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
-    assert_eq!(signed_tx.tx.invocation.gas_limit, 200_000_000);
+    assert_eq!(signed_tx.tx.invocation.gas_limit, 25_000_000);
     let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
     let (_, _, target_gas, _): (
         groundhog_xdr::types::ContractAddress,
@@ -8361,7 +8404,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
         u64,
         Vec<u8>,
     ) = xdrs::txs::decode(&inner).unwrap();
-    assert_eq!(target_gas, 200_000_000);
+    assert_eq!(target_gas, 25_000_000);
     assert_eq!(
         format!(
             "0x{}",
@@ -8463,6 +8506,91 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
     assert_eq!(signed_tx_entrypoint(signed_tx), "0x646f416374696f6e");
+}
+
+#[test]
+fn call_with_insufficient_gas_balance_fails_before_submission() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let rpc_server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        assert_eq!(request["method"], "groundhog_chainTip");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "height": 42,
+                "blockHash": format!("0x{}", "00".repeat(32)),
+            }),
+        );
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
+        assert_eq!(request["method"], "groundhog_getBalance");
+        assert_eq!(request["params"][0], format!("0x{}", "aa".repeat(32)));
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "address": format!("0x{}", "aa".repeat(32)),
+                "rawBalance": "10000000",
+                "height": 42,
+            }),
+        );
+        assert_no_follow_up_rpc(&listener);
+    });
+    write_project_config_with_alice_wallet(&project, &format!("http://{addr}"), &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let result: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"]["code"], "call_gas_balance_insufficient");
+    assert_eq!(
+        result["error"]["details"]["wallet"],
+        format!("0x{}", "aa".repeat(32))
+    );
+    assert_eq!(result["error"]["details"]["availableRaw"], 10_000_000);
+    assert_eq!(result["error"]["details"]["requiredRaw"], 25_000_000);
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("1 HOG")
+    );
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("2.5 HOG")
+    );
+    assert!(
+        result["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("--gas-limit")
+    );
 }
 
 #[test]
@@ -12798,7 +12926,7 @@ fn spawn_local_wallet_create_rpc(faucet: &str) -> (String, thread::JoinHandle<()
     let faucet = faucet.to_owned();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
-        serve_balance(&listener, deadline, &faucet, "110024013", 41);
+        serve_balance(&listener, deadline, &faucet, "2100024013", 41);
         serve_chain_tip(&listener, deadline, 42);
         serve_successful_transaction(&listener, deadline, 43);
         serve_successful_transaction(&listener, deadline, 44);
@@ -12811,7 +12939,7 @@ fn spawn_local_wallet_create_rpc(faucet: &str) -> (String, thread::JoinHandle<()
             &request["id"],
             serde_json::json!({
                 "address": wallet,
-                "rawBalance": "10000000",
+                "rawBalance": "1999902045",
                 "height": 44,
             }),
         );
@@ -13768,8 +13896,22 @@ fn spawn_transaction_rpc(
             }),
         );
 
-        // 2. sendRawTransaction
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
+        // Contract calls check the sender balance before submission; deploys do not.
+        let (mut stream, mut request) =
+            read_jsonrpc_request(&listener, deadline, "getBalance or sendRawTransaction");
+        if request["method"] == "groundhog_getBalance" {
+            let address = request["params"][0].as_str().unwrap();
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({
+                    "address": address,
+                    "rawBalance": "100000000",
+                    "height": height,
+                }),
+            );
+            (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
+        }
         assert_eq!(request["method"], "groundhog_sendRawTransaction");
         assert!(
             request["params"][0].as_str().unwrap().starts_with("0x"),
