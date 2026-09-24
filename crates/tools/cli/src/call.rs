@@ -119,6 +119,8 @@ pub fn run(
             print.note("Cancelled");
             return Ok(());
         }
+        // An underfunded call can be dropped without a receipt; give funding
+        // guidance here instead of waiting for a timeout.
         check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
     }
     let prepared = sign_call_plan(plan)?;
