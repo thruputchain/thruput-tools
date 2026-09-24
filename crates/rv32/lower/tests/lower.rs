@@ -629,6 +629,12 @@ fn spec_metadata_section_names_match_spec_tool() {
         groundhog_rv32_lower::lower::FINAL_SPEC_SECTION,
         groundhog_spec_tool::FINAL_SECTION_NAME,
     );
+    // The prefix has to actually cover the current name, or a bump would
+    // silently stop stripping the section it is meant to catch.
+    assert!(
+        groundhog_spec_tool::FINAL_SECTION_NAME
+            .starts_with(groundhog_rv32_lower::lower::FINAL_SPEC_SECTION_PREFIX),
+    );
 }
 
 #[test]

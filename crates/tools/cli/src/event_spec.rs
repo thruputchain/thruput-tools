@@ -1179,7 +1179,7 @@ mod tests {
         });
         assert!(matches!(
             validate_spec(&unresolved).unwrap_err(),
-            SpecError::UnresolvedType { name } if name == "Missing"
+            SpecError::UnresolvedType { name } if name == "demo::Missing (demo@1)"
         ));
 
         let mut duplicate_field = event_spec(ContractType::U64);

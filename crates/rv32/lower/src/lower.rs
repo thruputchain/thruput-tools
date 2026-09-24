@@ -64,8 +64,19 @@ pub const NULL_GUARD_BYTES: u32 = 8;
 /// `spec_metadata_section_names_match_spec_tool`.
 pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 
-/// Name of the finalized contract-spec section, mirroring
-/// `groundhog_spec_tool::FINAL_SECTION_NAME`.
+/// Name prefix shared by every version of the finalized contract-spec
+/// section.
+///
+/// Matched as a prefix for the reason the raw one is. The finalized name
+/// gained a version with `groundhogspecv1`, and an artifact carrying the
+/// older `groundhogspecv0` must still be stripped rather than reaching the
+/// "unexpected alloc section" path: these bytes are discarded either way, so
+/// a format bump is no reason to fail a lowering. Mirrors
+/// `groundhog_spec_tool::FINAL_SECTION_NAME`, which this is a prefix of, and
+/// is pinned to it by `spec_metadata_section_names_match_spec_tool`.
+pub const FINAL_SPEC_SECTION_PREFIX: &str = "groundhogspecv";
+
+/// Name of the finalized contract-spec section this SDK generation writes.
 pub const FINAL_SPEC_SECTION: &str = "groundhogspecv1";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
@@ -174,7 +185,7 @@ fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
 }
 
 fn is_spec_metadata_section(name: &str) -> bool {
-    name.starts_with(RAW_SPEC_SECTION_PREFIX) || name == FINAL_SPEC_SECTION
+    name.starts_with(RAW_SPEC_SECTION_PREFIX) || name.starts_with(FINAL_SPEC_SECTION_PREFIX)
 }
 
 /// Validate the interface table's shape and report duplicate ids.
