@@ -149,6 +149,8 @@ sha2 = "0.10"
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 zeroize = "1"
+stellar-strkey = "=0.0.18"
+rpassword = "7.4"
 
 # --- Error handling ---
 thiserror = "2"

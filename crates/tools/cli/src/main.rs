@@ -572,7 +572,8 @@ impl DeployArgs {
 
 #[derive(Args)]
 struct CallArgs {
-    /// Contract alias or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
     method: String,
@@ -720,7 +721,8 @@ impl BalanceArgs {
 
 #[derive(Args)]
 struct ViewArgs {
-    /// Contract alias or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
     method: String,
@@ -766,7 +768,8 @@ impl ViewArgs {
 
 #[derive(Args)]
 struct StorageArgs {
-    /// Contract alias or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    #[allow(clippy::doc_markdown)]
     address: String,
     /// 32-byte storage key as 0x-prefixed hex
     key: String,
@@ -922,15 +925,24 @@ enum KeysCommand {
         #[arg(long, hide = true)]
         fund: bool,
     },
+    /// Import a secret seed from hidden terminal input or piped stdin (S StrKey or 32-byte hex)
+    #[allow(clippy::doc_markdown)]
+    Import {
+        /// New key name; existing keys are never overwritten
+        name: String,
+    },
     /// List stored keys
     Ls,
     /// Export a private key for client use
     #[command(
-        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private key is written to stdout as lowercase, 0x-prefixed hex. Treat it as a secret: do not expose it in logs, CI output, or committed files."
+        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private key is written to stdout as lowercase, 0x-prefixed hex by default; --format strkey exports an S StrKey. Treat it as a secret: do not expose it in logs, CI output, or committed files."
     )]
     Export {
         /// Key name to export
         name: String,
+        /// Private seed encoding
+        #[arg(long, value_enum, default_value_t = groundhog_cli::keys::KeyExportFormat::Hex)]
+        format: groundhog_cli::keys::KeyExportFormat,
         #[command(flatten)]
         confirmation: ConfirmationArgs,
     },
@@ -952,6 +964,7 @@ impl KeysCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Generate { .. } => "keys.generate",
+            Self::Import { .. } => "keys.import",
             Self::Ls => "keys.ls",
             Self::Export { .. } => "keys.export",
             Self::Use { .. } => "keys.use",
@@ -963,10 +976,19 @@ impl KeysCommand {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
             Self::Generate { name, fund } => groundhog_cli::keys::generate(&name, fund, cmd, print),
+            Self::Import { name } => groundhog_cli::keys::import(&name, cmd, print),
             Self::Ls => groundhog_cli::keys::list(cmd, print),
-            Self::Export { name, confirmation } => {
-                groundhog_cli::keys::export(&name, confirmation.force, cmd, print)
-            }
+            Self::Export {
+                name,
+                format,
+                confirmation,
+            } => groundhog_cli::keys::export_with_format(
+                &name,
+                confirmation.force,
+                format,
+                cmd,
+                print,
+            ),
             Self::Use { name } => groundhog_cli::keys::use_key(&name, cmd, print),
             Self::Rm { name, confirmation } => {
                 groundhog_cli::keys::remove(&name, confirmation.force, cmd, print)

@@ -29,6 +29,8 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 ed25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+stellar-strkey = { workspace = true }
 
 [dev-dependencies]
 groundhog-json-rpc-server = { workspace = true }

@@ -38,3 +38,19 @@ re-exported so adapters can use matching versions.
 
 Node management remains a separate capability based on `groundhog-node-supervisor`.
 Adding a node adapter to another CLI should not expand this crate's dependencies.
+
+## Text encodings for host applications
+
+`groundhog_client::strkey` re-exports the encoding helpers from
+`groundhog-signing`. Use `parse_contract_address` / `format_contract_address`
+for C StrKeys, `parse_public_key` / `format_public_key` for G public keys, and
+`parse_secret_seed` / `format_secret_seed` for explicit S seed import/export.
+Parsing also accepts legacy 32-byte hex. Invalid checksum, length or type is
+rejected; errors never include the supplied input. Secret results use
+`Zeroizing`; applications remain responsible for their own input buffers.
+
+These helpers preserve bytes. G public keys do not become Groundhog account or
+wallet addresses, and none of the encodings identify a network. The spec codec
+accepts C addresses, including nested typed arguments. Its decoded output and
+public RPC JSON remain hex for compatibility. A host that wants C output can
+call the formatter explicitly. Neither CLI needs its own StrKey conversion.

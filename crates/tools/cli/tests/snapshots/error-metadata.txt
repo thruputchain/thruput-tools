@@ -164,6 +164,14 @@ KeyNameInvalid
   code: key_name_invalid
   hint text: key names may only contain letters, digits, hyphens, and underscores
 
+InvalidSecretSeed
+  code: invalid_secret_seed
+  hint text: provide one private seed through stdin or the hidden prompt; never pass it as a command argument
+
+ReservedDevKeyName
+  code: reserved_dev_key_name
+  hint text: choose a name other than dev-N for an imported key
+
 JsonUnsupported
   code: json_unsupported
   hint format: run `groundhog {0}` without `--json`

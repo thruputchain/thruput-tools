@@ -325,12 +325,23 @@ pub fn decode_abort_payload(
     })
 }
 
-/// Parse a hex-encoded contract address.
-pub fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, Error> {
-    Ok(ContractAddress::from(parse_fixed_hex::<32>(
-        hex_str,
-        "contract address",
-    )?))
+/// Parse a C `StrKey` or legacy hex contract address, including in typed calldata.
+pub fn parse_contract_address(value: &str) -> Result<ContractAddress, Error> {
+    groundhog_signing::strkey::parse_contract_address(value).map_err(|error| {
+        Error::InvalidArgument {
+            argument: "contract address".into(),
+            message: error.to_string(),
+        }
+    })
+}
+
+fn parse_public_key(value: &str) -> Result<Ed25519PublicKey, Error> {
+    groundhog_signing::strkey::parse_public_key(value)
+        .map(Ed25519PublicKey::from)
+        .map_err(|error| Error::InvalidArgument {
+            argument: "ed25519 public key".into(),
+            message: error.to_string(),
+        })
 }
 
 /// Format a contract address as 0x-prefixed lowercase hex.
@@ -1204,10 +1215,7 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Err
         }
         "String" | "str" => encode_local_xdr_value(value.to_string(), path),
         "ContractAddress" => encode_local_xdr_value(parse_contract_address(value)?, path),
-        "Ed25519PublicKey" => encode_local_xdr_value(
-            Ed25519PublicKey::from(parse_fixed_hex::<32>(value, "ed25519 public key")?),
-            path,
-        ),
+        "Ed25519PublicKey" => encode_local_xdr_value(parse_public_key(value)?, path),
         "SHA256Hash" => encode_local_xdr_value(
             SHA256Hash::from(parse_fixed_hex::<32>(value, "sha256 hash")?),
             path,

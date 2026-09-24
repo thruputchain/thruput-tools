@@ -267,6 +267,14 @@ pub enum CliError {
     )]
     #[hint(text = KEY_NAME_HINT)]
     KeyNameInvalid,
+    #[error("expected an S StrKey or 32-byte hex Ed25519 seed on stdin")]
+    #[hint(
+        "provide one private seed through stdin or the hidden prompt; never pass it as a command argument"
+    )]
+    InvalidSecretSeed,
+    #[error("dev-N key names are reserved for local bootstrap identities")]
+    #[hint("choose a name other than dev-N for an imported key")]
+    ReservedDevKeyName,
     #[error("`--json` is not supported for `{0}`")]
     #[hint("run `groundhog {0}` without `--json`")]
     JsonUnsupported(&'static str),

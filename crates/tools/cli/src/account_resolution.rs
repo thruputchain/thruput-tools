@@ -236,25 +236,9 @@ fn resolve_saved_wallet_for_signer(
 }
 
 fn parse_owner_public_key(key_name: &str, value: &str) -> Result<Vec<u8>, CliError> {
-    let hex = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-        .ok_or_else(|| {
-            saved_wallet_owner_public_key_invalid(
-                key_name,
-                "must be a 0x-prefixed 64-character hex string",
-            )
-        })?;
-    let bytes = hex::decode(hex).map_err(|error| {
-        saved_wallet_owner_public_key_invalid(key_name, format!("not valid hex: {error}"))
-    })?;
-    if bytes.len() != 32 {
-        return Err(saved_wallet_owner_public_key_invalid(
-            key_name,
-            "must be 32 bytes",
-        ));
-    }
-    Ok(bytes)
+    groundhog_signing::strkey::parse_public_key(value)
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| saved_wallet_owner_public_key_invalid(key_name, error.to_string()))
 }
 
 fn saved_wallet_owner_public_key_invalid(key_name: &str, message: impl Into<String>) -> CliError {
@@ -298,6 +282,11 @@ pub(crate) fn lookup_dev_account_address(
         .into())
 }
 
+/// Recognize explicit address prefixes without validating the address itself.
+pub(crate) fn looks_like_address_literal(value: &str) -> bool {
+    value.starts_with("0x") || value.starts_with("0X") || value.starts_with('C')
+}
+
 /// Resolve a saved wallet, contract alias, direct address, or local dev account.
 pub(crate) fn resolve_address_target(
     profile: &ResolvedProfile,
@@ -309,7 +298,7 @@ pub(crate) fn resolve_address_target(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    if target.starts_with("0x") || target.starts_with("0X") {
+    if looks_like_address_literal(target) {
         return parse_target_address(target, target);
     }
     if let Some(index) = dev_keys::dev_key_index(target) {
@@ -346,7 +335,7 @@ pub(crate) fn resolve_contract_target(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    if target.starts_with("0x") || target.starts_with("0X") {
+    if looks_like_address_literal(target) {
         return parse_target_address(target, target);
     }
     Err(CliError::UnknownContractAlias {
@@ -527,6 +516,54 @@ mod tests {
     use crate::config::SavedWalletBinding;
 
     use super::*;
+
+    #[test]
+    fn saved_strkey_wallet_selects_the_matching_signer_and_rejects_another() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let other = groundhog_signing::derive_default_dev_account_signer(1);
+        let address = groundhog_xdr::types::ContractAddress::from([42; 32]);
+        let binding = SavedWalletBinding {
+            address: groundhog_signing::strkey::format_contract_address(&address),
+            owner_public_key: groundhog_signing::strkey::format_public_key(
+                &signer.verifying_key_bytes(),
+            ),
+        };
+        let profile = test_profile("alice", None, BTreeMap::from([("wallet".into(), binding)]));
+        assert_eq!(
+            resolve_wallet_selection(&profile, "alice", &signer, Some("wallet"))
+                .unwrap()
+                .1,
+            address
+        );
+        assert_eq!(
+            resolve_wallet_selection(&profile, "alice", &signer, None)
+                .unwrap()
+                .1,
+            address
+        );
+        assert!(resolve_wallet_selection(&profile, "bob", &other, Some("wallet")).is_err());
+    }
+
+    #[test]
+    fn strkey_targets_and_saved_wallet_owner_are_distinct() {
+        let profile = test_profile("alice", None, BTreeMap::new());
+        let address = groundhog_signing::strkey::format_contract_address(&[42; 32].into());
+        let public = groundhog_signing::strkey::format_public_key(&[42; 32]);
+        assert_eq!(
+            resolve_address_target(&profile, &address).unwrap(),
+            [42; 32].into()
+        );
+        assert_eq!(
+            resolve_contract_target(&profile, &address).unwrap(),
+            [42; 32].into()
+        );
+        assert!(resolve_contract_target(&profile, &public).is_err());
+        assert_eq!(
+            parse_owner_public_key("alice", &public).unwrap(),
+            vec![42; 32]
+        );
+        assert!(parse_owner_public_key("alice", &address).is_err());
+    }
 
     #[test]
     fn address_target_prefers_saved_wallet_over_contract_alias() {

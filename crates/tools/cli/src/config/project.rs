@@ -202,8 +202,7 @@ pub fn save_profile_contract_alias(
     }
     if !is_valid_address(address.trim()) {
         return Err(CliError::Other(
-            "contract address must be a 0x-prefixed \
-             64-character hex string"
+            "contract address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
                 .into(),
         ));
     }
@@ -271,12 +270,13 @@ pub fn save_profile_wallet_address_with_default(
     }
     if !is_valid_address(address.trim()) {
         return Err(CliError::Other(
-            "wallet address must be a 0x-prefixed 64-character hex string".into(),
+            "wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
+                .into(),
         ));
     }
-    if !is_valid_address(owner_public_key.trim()) {
+    if groundhog_signing::strkey::parse_public_key(owner_public_key.trim()).is_err() {
         return Err(CliError::Other(
-            "wallet owner public key must be a 0x-prefixed 64-character hex string".into(),
+            "wallet owner public key must be a G StrKey or 64 hex characters, optionally prefixed with 0x".into(),
         ));
     }
 
@@ -728,10 +728,7 @@ pub fn apply_profile_overrides(
 }
 
 fn is_valid_address(addr: &str) -> bool {
-    let Some(hex) = addr.strip_prefix("0x") else {
-        return false;
-    };
-    hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())
+    groundhog_signing::strkey::parse_contract_address(addr).is_ok()
 }
 
 #[cfg(test)]
