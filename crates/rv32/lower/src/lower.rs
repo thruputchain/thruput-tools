@@ -66,7 +66,7 @@ pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
 
 /// Name of the finalized contract-spec section, mirroring
 /// `groundhog_spec_tool::FINAL_SECTION_NAME`.
-pub const FINAL_SPEC_SECTION: &str = "groundhogspecv0";
+pub const FINAL_SPEC_SECTION: &str = "groundhogspecv1";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
