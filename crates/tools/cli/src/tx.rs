@@ -4,6 +4,7 @@ use std::path::Path;
 use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
+use groundhog_json_rpc_types::hex::decode_fixed_hex;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
@@ -174,13 +175,13 @@ async fn fetch_transaction_page(
 }
 
 fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
-    serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
-        CliError::InvalidTransactionHash {
+    let bytes =
+        decode_fixed_hex::<32>(input).map_err(|error| CliError::InvalidTransactionHash {
             input: input.to_owned(),
             display_input: terminal_safe(input),
             message: error.to_string(),
-        }
-    })
+        })?;
+    Ok(TxHash(groundhog_xdr::types::SHA256Hash::from(bytes).into()))
 }
 
 async fn fetch_transaction(
