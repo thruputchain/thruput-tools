@@ -116,9 +116,7 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
         return Err(CliError::KeyExists(name.to_owned()));
     }
     let input = if std::io::stdin().is_terminal() {
-        Zeroizing::new(rpassword::prompt_password(
-            "Ed25519 secret seed (S StrKey or hex): ",
-        )?)
+        print.read_secret("Ed25519 secret seed (S StrKey or hex): ")?
     } else {
         // Bound untrusted piped input before allocating or decoding it.
         let mut input = Zeroizing::new(String::new());

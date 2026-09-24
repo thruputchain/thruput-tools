@@ -370,7 +370,16 @@ fn spawn_with_terminal(command: Command) -> (std::process::Child, File) {
 }
 
 #[cfg(unix)]
-fn spawn_with_terminal_width(mut command: Command, columns: u16) -> (std::process::Child, File) {
+fn spawn_with_terminal_width(command: Command, columns: u16) -> (std::process::Child, File) {
+    spawn_with_terminal_outputs(command, columns, false)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_outputs(
+    mut command: Command,
+    columns: u16,
+    terminal_stdout: bool,
+) -> (std::process::Child, File) {
     let mut size = libc::winsize {
         ws_row: 24,
         ws_col: columns,
@@ -398,9 +407,14 @@ fn spawn_with_terminal_width(mut command: Command, columns: u16) -> (std::proces
     let slave_stdin = slave
         .try_clone()
         .expect("bug: pseudo-terminal descriptor should be cloneable");
+    let stdout = if terminal_stdout {
+        Stdio::from(slave.try_clone().unwrap())
+    } else {
+        Stdio::piped()
+    };
     command
         .stdin(Stdio::from(slave_stdin))
-        .stdout(Stdio::piped())
+        .stdout(stdout)
         .stderr(Stdio::from(slave));
     let child = command
         .spawn()
@@ -2613,27 +2627,397 @@ fn new_with_stub_template() {
     assert!(imp.contains("pub struct Contract"));
 }
 
-#[test]
-fn init_json_delegates_to_status() {
-    let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .arg("--json")
+fn init_command(root: &std::path::Path) -> Command {
+    let mut command = groundhog();
+    command
         .arg("init")
-        .current_dir(tmp.path())
-        .env("CARGO_HOME", tmp.path().join("cargo-home"))
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
+        .current_dir(root)
+        .env("XDG_CONFIG_HOME", root)
+        .env("CARGO_HOME", root.join("cargo-home"));
+    command
+}
+
+fn init_report(output: &std::process::Output, complete: bool) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(i32::from(!complete)),
+        "{output:?}"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+    // from_slice rejects trailing records as well as human output on stdout.
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "init");
+    assert_eq!(report["ok"], complete);
+    assert_eq!(report["data"]["schemaVersion"], 1);
+    assert_eq!(report["data"]["complete"], complete);
+    if !complete {
+        assert_eq!(report["error"]["code"], "init_incomplete");
+    }
+    report
+}
+
+#[test]
+fn init_json_requires_key_consent_and_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let fresh = init_command(tmp.path()).arg("--json").output().unwrap();
+    let fresh = init_report(&fresh, false);
+    assert_eq!(fresh["data"]["cargoAvailable"], true);
+    assert_eq!(fresh["data"]["profilesConfigured"], true);
+    assert_eq!(fresh["data"]["selectedKey"], serde_json::Value::Null);
+    assert_eq!(fresh["data"]["keyGenerated"], false);
+    assert_eq!(fresh["data"]["missing"], serde_json::json!(["signingKey"]));
+    assert!(tmp.path().join("groundhog/config.toml").exists());
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+
+    let generated = init_command(tmp.path())
+        .args(["--non-interactive", "--generate-key", "--json"])
         .output()
         .unwrap();
+    let generated = init_report(&generated, true);
+    assert_eq!(generated["data"]["selectedKey"], "default");
+    assert_eq!(generated["data"]["keyGenerated"], true);
+    assert_eq!(generated["data"]["missing"], serde_json::json!([]));
+    let key_path = tmp.path().join("groundhog/keys/default.json");
+    let key_before = std::fs::read(&key_path).unwrap();
+    let config_path = tmp.path().join("groundhog/config.toml");
+    let config_before = std::fs::read(&config_path).unwrap();
+    for flags in [vec!["--json"], vec!["--json", "--generate-key"]] {
+        let repeated = init_command(tmp.path()).args(flags).output().unwrap();
+        let repeated = init_report(&repeated, true);
+        assert_eq!(repeated["data"]["selectedKey"], "default");
+        assert_eq!(repeated["data"]["keyGenerated"], false);
+        assert!(
+            std::fs::read(&key_path).unwrap() == key_before,
+            "init must preserve the stored key"
+        );
+        assert_eq!(std::fs::read(&config_path).unwrap(), config_before);
+    }
+    assert!(!tmp.path().join("my-contract").exists());
+}
 
-    assert!(!output.status.success());
+#[test]
+fn init_quiet_does_not_authorize_generation_and_json_takes_precedence() {
+    let tmp = TempDir::new().unwrap();
+    let output = init_command(tmp.path()).arg("--quiet").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    let output = init_command(tmp.path())
+        .args(["--quiet", "--json"])
+        .output()
+        .unwrap();
+    let report = init_report(&output, false);
+    assert_eq!(report["data"]["keyGenerated"], false);
+    let output = init_command(tmp.path())
+        .args(["--quiet", "--generate-key"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let output = init_command(tmp.path())
+        .args(["--quiet", "--json"])
+        .output()
+        .unwrap();
+    init_report(&output, true);
+}
 
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "status");
-    assert_eq!(stdout["data"]["environment"]["cargo"], true);
-    assert!(stdout["data"].get("credentials").is_none());
-    assert!(!stdout["warnings"].as_array().unwrap().is_empty());
+#[test]
+fn init_does_not_replace_stored_keys_or_missing_selections() {
+    for selection in [None, Some("ghost")] {
+        let tmp = TempDir::new().unwrap();
+        generate_key_public_key(tmp.path(), "alice");
+        let key_path = tmp.path().join("groundhog/keys/alice.json");
+        let before = std::fs::read(&key_path).unwrap();
+        write_global_config(
+            tmp.path(),
+            &selection
+                .map(|name| format!("default_key = \"{name}\"\n"))
+                .unwrap_or_default(),
+        );
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        let report = init_report(&output, false);
+        assert_eq!(report["data"]["keyGenerated"], false);
+        assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+        assert!(
+            std::fs::read(&key_path).unwrap() == before,
+            "init must preserve the stored key"
+        );
+        assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    }
+}
+
+#[test]
+fn init_rejects_unusable_keypairs_and_mismatched_public_summaries() {
+    for mismatched_public_key in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        init_report(&output, true);
+        let key_path = tmp.path().join("groundhog/keys/default.json");
+        let mut key: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+        if mismatched_public_key {
+            generate_key_public_key(tmp.path(), "other");
+            let other: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(tmp.path().join("groundhog/keys/other.json")).unwrap(),
+            )
+            .unwrap();
+            key["public_key_hex"] = other["public_key_hex"].clone();
+        } else {
+            key["keypair_hex"] = serde_json::json!("invalid");
+        }
+        let before = serde_json::to_vec(&key).unwrap();
+        std::fs::write(&key_path, &before).unwrap();
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        let report = init_report(&output, false);
+        assert_eq!(report["data"]["selectedKey"], "default");
+        assert_eq!(report["data"]["keyGenerated"], false);
+        assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+        assert!(
+            std::fs::read(&key_path).unwrap() == before,
+            "init must preserve the unusable key file"
+        );
+    }
+}
+
+#[test]
+fn init_dangling_selection_prevents_generation_even_without_stored_keys() {
+    for profile_selection in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let config = if profile_selection {
+            "default_profile = \"local\"\n[profile.local]\ndefault_key = \"ghost\"\n"
+        } else {
+            "default_key = \"ghost\"\n"
+        };
+        write_global_config(tmp.path(), config);
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        let report = init_report(&output, false);
+        assert_eq!(report["data"]["keyGenerated"], false);
+        assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+        assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    }
+}
+
+#[test]
+fn init_dangling_project_key_does_not_fall_back_to_global_key() {
+    let tmp = TempDir::new().unwrap();
+    generate_key_public_key(tmp.path(), "alice");
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"local\"\n[profile.local]\ndefault_key = \"ghost\"\n",
+    )
+    .unwrap();
+    let output = init_command(tmp.path())
+        .args(["--generate-key", "--json"])
+        .output()
+        .unwrap();
+    let report = init_report(&output, false);
+    assert_eq!(report["data"]["keyGenerated"], false);
+    assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+}
+
+#[test]
+fn init_reports_missing_cargo_and_unresolvable_profile() {
+    let tmp = TempDir::new().unwrap();
+    generate_key_public_key(tmp.path(), "alice");
+    let output = init_command(tmp.path())
+        .arg("--json")
+        .env("PATH", tmp.path().join("empty-path"))
+        .output()
+        .unwrap();
+    let report = init_report(&output, false);
+    assert_eq!(report["data"]["cargoAvailable"], false);
+    assert_eq!(report["data"]["missing"], serde_json::json!(["cargo"]));
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"missing\"\n[profile.local]\nnetwork = \"local\"\n",
+    )
+    .unwrap();
+    let output = init_command(tmp.path()).arg("--json").output().unwrap();
+    let report = init_report(&output, false);
+    assert!(
+        report["data"]["missing"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("profile"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_non_interactive_never_waits_for_terminal_answers() {
+    let tmp = TempDir::new().unwrap();
+    for generate in [false, true] {
+        let mut command = init_command(tmp.path());
+        command.arg("--non-interactive");
+        if generate {
+            command.arg("--generate-key");
+        }
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(10));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert_eq!(status.success(), generate, "{output}");
+        assert!(!output.contains("Generate a"), "{output}");
+        assert!(!output.contains("Would you"), "{output}");
+        assert!(!tmp.path().join("my-contract").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn global_non_interactive_keeps_terminal_output_plain_and_visible() {
+    let tmp = TempDir::new().unwrap();
+    let setup = init_command(tmp.path())
+        .args(["--non-interactive", "--generate-key"])
+        .output()
+        .unwrap();
+    assert!(setup.status.success());
+    for (arguments, expected) in [
+        (vec!["--non-interactive", "status"], "default"),
+        (
+            vec!["new", "plain-project", "--non-interactive"],
+            "plain-project",
+        ),
+        (vec!["config", "get", "--non-interactive"], "local"),
+    ] {
+        let is_status = arguments.contains(&"status");
+        let mut command = groundhog();
+        command
+            .args(arguments)
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .env("TERM", "xterm")
+            .env_remove("NO_COLOR");
+        let (child, terminal) = spawn_with_terminal_outputs(command, 120, true);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(10));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        if is_status {
+            // Diagnostics may report missing optional local-node tooling.
+            assert!(matches!(status.code(), Some(0 | 1)), "{output}");
+        } else {
+            assert!(status.success(), "{output}");
+        }
+        assert!(output.contains(expected), "{output}");
+        assert!(!output.contains('\u{1b}'), "{output}");
+        assert!(!output.contains('╭') && !output.contains('│'), "{output}");
+    }
+    assert!(tmp.path().join("plain-project/groundhog.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn global_non_interactive_terminal_key_removal_requires_force() {
+    let tmp = TempDir::new().unwrap();
+    generate_key_public_key(tmp.path(), "alice");
+    let path = tmp.path().join("groundhog/keys/alice.json");
+    let before = std::fs::read(&path).unwrap();
+    for (force, json) in [(false, false), (false, true), (true, false)] {
+        let mut command = groundhog();
+        command
+            .args(["keys", "rm", "alice", "--non-interactive"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path());
+        if json {
+            command.arg("--json");
+        }
+        if force {
+            command.arg("--force");
+        }
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(5));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert_eq!(status.success(), force);
+        if !force {
+            if json {
+                let report: serde_json::Value = serde_json::from_str(&output).unwrap();
+                assert_eq!(report["error"]["code"], "confirmation_required");
+            } else {
+                assert!(output.contains("--force"), "{output}");
+                assert!(!output.contains("Remove key `alice`?"), "{output}");
+                assert!(!output.contains("[y/N]"), "{output}");
+            }
+            assert!(
+                std::fs::read(&path).unwrap() == before,
+                "refusal must preserve the key"
+            );
+        }
+    }
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn key_import_refuses_terminal_input_in_non_interactive_modes() {
+    for flags in [vec!["--non-interactive"], vec!["--quiet"], vec!["--json"]] {
+        let tmp = TempDir::new().unwrap();
+        let mut command = groundhog();
+        command
+            .args(["keys", "import", "alice"])
+            .args(&flags)
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path());
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(5));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert!(!status.success());
+        assert!(!output.contains("Ed25519 secret seed"));
+        assert!(!tmp.path().join("groundhog/keys/alice.json").exists());
+        if flags == ["--json"] {
+            let report: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(report["error"]["code"], "interactive_input_required");
+        }
+    }
+}
+
+#[test]
+fn global_non_interactive_key_import_accepts_piped_seed() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = groundhog()
+        .args(["--non-interactive", "keys", "import", "alice", "--json"])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let seed = "42".repeat(32);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(seed.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&seed));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "keys.import");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["data"]["key"]["name"], "alice");
+    assert!(tmp.path().join("groundhog/keys/alice.json").exists());
 }
 
 #[test]
@@ -2659,7 +3043,7 @@ fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
         .unwrap();
 
     let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(1));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Setup"));
@@ -2669,12 +3053,12 @@ fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
     assert!(stderr.contains("[3/4] Signing key"));
     assert!(!stderr.contains("download credentials"));
     assert!(stderr.contains("[4/4] Project"));
-    assert!(stderr.contains("Setup Complete"));
+    assert!(!stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Setup Incomplete"));
     assert!(stderr.contains("Config:"));
-    assert!(stderr.contains("Profile:"));
+    assert!(stderr.contains("Default profile:"));
     assert!(stderr.contains("Local RPC:"));
-    assert!(stderr.contains("Next:"));
-    assert!(stderr.contains("groundhog new my-contract"));
+    assert!(stderr.contains("--generate-key"));
     assert!(!tmp.path().join("groundhog/keys/default.json").exists());
     assert!(!tmp.path().join("should-not-exist").exists());
 }
@@ -2720,7 +3104,7 @@ fn init_boxes_respect_stderr_terminal_width() {
     let tmp = TempDir::new().unwrap();
     let config = tmp.path().join("long-config-directory-".repeat(5));
     let setup = groundhog()
-        .args(["init", "--quiet"])
+        .args(["init", "--quiet", "--generate-key"])
         .current_dir(tmp.path())
         .env("XDG_CONFIG_HOME", &config)
         .output()
@@ -2759,7 +3143,7 @@ fn init_human_output_builds_existing_project() {
     )
     .unwrap();
     let mut child = groundhog()
-        .arg("init")
+        .args(["init", "--generate-key"])
         .current_dir(&project)
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())

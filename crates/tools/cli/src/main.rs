@@ -24,6 +24,9 @@ struct GlobalArgs {
     /// Suppress status messages
     #[arg(long, short, global = true)]
     quiet: bool,
+    /// Disable prompts and terminal UI while retaining ordinary output
+    #[arg(long, global = true)]
+    non_interactive: bool,
     /// Emit structured JSON output
     #[arg(long, global = true)]
     json: bool,
@@ -113,15 +116,15 @@ enum Command {
     New(NewArgs),
     /// Serve the bundled developer documentation on localhost
     Docs(DocsArgs),
-    /// Interactive first-run setup wizard
-    #[command(long_about = "Guided setup for new users: checks tools, \
-                      generates a signing key, \
-                      and optionally scaffolds a starter project.\n\n\
-                      With --json, delegates to `groundhog status \
-                      --json`.\n\n\
-                      Re-running when already configured is a \
-                      no-op.")]
-    Init,
+    /// Set up profiles and a signing key, with optional interactive scaffolding
+    #[command(long_about = "Initialize global profiles and check setup readiness. \
+        Interactive sessions offer key generation and optional scaffolding.\n\n\
+        Use --non-interactive to skip all questions and --generate-key to authorize \
+        initial key creation. Existing keys and explicit selections are preserved. \
+        Without a TTY, or with --quiet/--json, questions are skipped.\n\n\
+        --json emits one setup result; use status --json for read-only diagnostics. \
+        Exit 1 means setup is incomplete or failed. Scripts create projects with groundhog new.")]
+    Init(InitArgs),
     /// Show RV32, devnode, keys, and project status
     #[command(long_about = "Non-interactive diagnostic. Reports \
                       the RV32 toolchain, hog-devnode availability, keys, \
@@ -256,12 +259,12 @@ impl Command {
     /// Canonical command name for JSON envelopes.
     ///
     /// Used by both success and error JSON output so they
-    /// always agree. Init returns "status" because
-    /// `init --json` delegates to `status --json`.
+    /// always agree.
     fn command_name(&self) -> &'static str {
         match self {
             Self::New(..) => "new",
-            Self::Init | Self::Status(..) => "status",
+            Self::Init(..) => "init",
+            Self::Status(..) => "status",
             Self::Build(..) => "build",
             Self::Test(..) => "test",
             Self::Deploy(..) => "deploy",
@@ -290,7 +293,7 @@ impl Command {
         match self {
             Self::New(args) => args.run(ctx),
             Self::Docs(args) => args.run(ctx),
-            Self::Init => groundhog_cli::init::run(&invocation_cwd()?, ctx.cmd_name, &ctx.print),
+            Self::Init(args) => args.run(ctx),
             Self::Status(args) => args.run(ctx),
             Self::Config { command } => command.run(ctx),
             Self::Toolchain { command } => command.run(ctx),
@@ -348,6 +351,26 @@ struct DocsArgs {
 impl DocsArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         groundhog_cli::docs::run(self.dir.as_deref(), self.port, ctx.cmd_name, &ctx.print)
+    }
+}
+
+#[derive(Args)]
+struct InitArgs {
+    /// Create the initial key only when no keys or explicit key selections exist
+    #[arg(long)]
+    generate_key: bool,
+}
+
+impl InitArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::init::run(
+            &invocation_cwd()?,
+            &groundhog_cli::init::InitOptions {
+                generate_key: self.generate_key,
+            },
+            ctx.cmd_name,
+            &ctx.print,
+        )
     }
 }
 
@@ -1757,6 +1780,7 @@ fn main() {
     };
     let ctx = Ctx {
         print: Print::new(cli.global.quiet, cli.global.json)
+            .with_non_interactive(cli.global.non_interactive)
             .with_command_trace(cli.global.show_cargo_commands),
         cmd_name: cli.command.command_name(),
         offline: cli.global.offline

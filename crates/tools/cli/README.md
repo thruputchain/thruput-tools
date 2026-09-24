@@ -161,19 +161,64 @@ through feature unification. The `.cargo/contract.toml` overlay supplies
 `panic=immediate-abort` lives in `.cargo/config.toml` alongside the rest of
 the target rustflags.
 
+## Interaction and output
+
+`--non-interactive` is a global flag, accepted before or after subcommands.
+It disables CLI prompts, boxes, styled tables, and progress-line updates while
+retaining ordinary status and data output. It does not mean yes: commands that
+require confirmation still need their explicit `--force` option. `init` needs
+`--generate-key` to create an initial key. `--quiet` suppresses status output;
+`--json` selects structured output. Neither grants consent.
+
+`keys import` accepts piped stdin in automation. When stdin is a terminal and
+prompting is disabled (including quiet or JSON mode), it fails promptly with
+`interactive_input_required` instead of opening a password prompt. Do not put
+private seeds in command arguments.
+
+Cargo and test subprocesses receive no terminal stdin under `--non-interactive`,
+and CLI-controlled Cargo color is disabled. Explicit long-running commands such
+as `node` or `test --watch` still run until stopped; this flag is not a timeout.
+
 ## Commands
 
 ### `groundhog init`
 
-Interactive first-run setup wizard. Checks your toolchain,
-generates a signing key, configures profiles, and optionally scaffolds a starter
-project. Re-running when already
-configured is a no-op.
+Initializes global profiles and checks for Cargo and a usable selected stored
+signing key. Interactive sessions offer initial key generation and optional
+project scaffolding. Existing keys, explicit key selections, and profile
+settings are preserved.
 
 ```bash
-groundhog init          # guided setup
-groundhog init --json   # delegates to `groundhog status --json`
+groundhog init                         # guided setup
+groundhog init --non-interactive        # initialize profiles, skip all questions
+groundhog init --non-interactive --generate-key --json
 ```
+
+`--generate-key` authorizes creating the initial `default` key only when no
+stored keys or explicit key selections exist. To repair an existing selection,
+use `groundhog keys use <name>` or change the profile's `default_key` with
+`groundhog config`. A missing profile key does not fall back to the global key.
+
+Without interactive stdin and stderr, or with `--quiet` or `--json`, questions
+are skipped. Piped answers are ignored. `--quiet` never authorizes key creation.
+Use `groundhog new` to create projects in scripts.
+
+Setup exits 0 when Cargo, the active profile, and a selected stored signing key
+are available. Otherwise it exits 1 and reports incomplete setup; global profiles
+may already have been initialized. Skipping optional scaffolding is not a
+failure. This is setup readiness, not full toolchain or network validation;
+use `groundhog status` for diagnostics.
+
+`--json` performs setup and emits one stdout envelope with `command: "init"`
+and `data.schemaVersion: 1`. Its data includes `complete`, `cargoAvailable`,
+`profilesConfigured`, `selectedKey`, `keyGenerated`, and `missing` (entries
+`cargo`, `profile`, or `signingKey`). Incomplete setup has `ok: false` and error
+code `init_incomplete`. Preflight errors such as corrupt configuration or key
+files use the standard stderr error envelope.
+
+This replaces the former `init --json` alias for status. Use `groundhog status
+--json` for read-only diagnostics. `init --quiet` also no longer creates a key
+implicitly; scripts that need a new key must pass `--generate-key`.
 
 ### `groundhog status`
 

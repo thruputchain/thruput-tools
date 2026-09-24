@@ -2,11 +2,12 @@
 //!
 //! Walks a new user through environment setup, key generation, and optional
 //! project scaffolding. When everything is already configured, prints a short
-//! summary and exits. `init --json` delegates to `status --json`.
+//! summary and exits. Automated setup emits its own versioned JSON result.
 
-use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
+use crate::init_json::{INIT_JSON_SCHEMA_VERSION, InitReport, InitRequirement};
+use crate::result::{CommandError, CommandResult};
 use crate::{CliError, Print};
 
 const INIT_STEPS: usize = 4;
@@ -19,66 +20,153 @@ const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 
-/// Run the interactive first-run wizard.
-pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    if print.is_json() {
-        return crate::status::run(project_start, None, cmd, print);
-    }
+/// Explicit choices for setup; output flags never authorize key generation.
+#[derive(Debug, Default)]
+pub struct InitOptions {
+    /// Authorize initial key creation without an interactive confirmation.
+    pub generate_key: bool,
+}
 
-    let report = crate::checks::collect_report(project_start, None)?;
-    let has_project = report.project.config_path.is_some();
-    let usable_default_key = usable_default_key_for_init(&report);
-
+/// Initialize global profiles and report whether required setup is complete.
+pub fn run(
+    project_start: &Path,
+    options: &InitOptions,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    // Validate existing state before writing configuration.
+    crate::checks::collect_report(project_start, None)?;
     crate::config::initialize_global_profiles()?;
+    let report = crate::checks::collect_report(project_start, None)?;
     let mut ui = InitUi::new(print);
     ui.render_intro();
-
-    if report.environment.cargo && usable_default_key.is_some() {
-        report_ready(project_start, usable_default_key, &mut ui)?;
-        return Ok(());
+    let setup = setup_report(&report, false);
+    if setup.complete {
+        return finish_setup(project_start, &report, setup, None, true, cmd, &ui);
     }
 
-    if !report.environment.cargo {
-        return Err(CliError::CargoNotFound);
+    // Do not create keys or projects while basic prerequisites need repair.
+    if !setup.cargo_available || !setup.profiles_configured {
+        return finish_setup(project_start, &report, setup, None, false, cmd, &ui);
     }
 
     ui.begin_step(InitStep::Environment);
     handle_environment_step(&mut ui);
     ui.finish_step(InitStep::Environment, StepState::Done);
-
     ui.begin_step(InitStep::Profiles);
     handle_profile_step(project_start, &mut ui)?;
     ui.finish_step(InitStep::Profiles, StepState::Done);
-
     ui.begin_step(InitStep::SigningKey);
-    handle_key_step(&report, usable_default_key, &mut ui)?;
-
+    let key_generated = handle_key_step(&report, options, &mut ui)?;
     ui.begin_step(InitStep::Project);
-    let project_context = handle_scaffold_step(has_project, project_start, &report, &mut ui)?;
-
-    let final_report = crate::checks::collect_report(project_start, None)?;
-    let final_default_key = usable_default_key_for_init(&final_report);
-    print_init_summary(
+    let project_context = handle_scaffold_step(
+        report.project.config_path.is_some(),
         project_start,
-        final_default_key,
-        project_context.as_ref(),
-        &ui,
+        &report,
+        &mut ui,
     )?;
-    Ok(())
+    let final_report = crate::checks::collect_report(project_start, None)?;
+    let setup = setup_report(&final_report, key_generated);
+    finish_setup(
+        project_start,
+        &final_report,
+        setup,
+        project_context.as_ref(),
+        false,
+        cmd,
+        &ui,
+    )
 }
 
-fn report_ready(
-    project_start: &Path,
-    usable_default_key: Option<&crate::checks::KeySummary>,
-    ui: &mut InitUi<'_>,
-) -> Result<(), CliError> {
-    ui.completion_review(
-        "Groundhog Ready",
-        &summary_items(project_start, usable_default_key, None)?,
-        NextSteps::Status,
-    );
+fn setup_report(report: &crate::checks::StatusReport, key_generated: bool) -> InitReport {
+    let profiles_configured = report.project.profile_name.is_some()
+        && !report.project.findings.iter().any(|finding| {
+            matches!(
+                finding.code,
+                "profile_not_found" | "profile_config_invalid" | "no_active_profile"
+            )
+        });
+    let mut missing = Vec::new();
+    if !report.environment.cargo {
+        missing.push(InitRequirement::Cargo);
+    }
+    if !profiles_configured {
+        missing.push(InitRequirement::Profile);
+    }
+    if usable_default_key_for_init(report).is_none() {
+        missing.push(InitRequirement::SigningKey);
+    }
+    InitReport {
+        schema_version: INIT_JSON_SCHEMA_VERSION,
+        complete: missing.is_empty(),
+        cargo_available: report.environment.cargo,
+        profiles_configured,
+        selected_key: report.effective_default_key.clone(),
+        key_generated,
+        missing,
+    }
+}
 
-    Ok(())
+fn finish_setup(
+    project_start: &Path,
+    report: &crate::checks::StatusReport,
+    setup: InitReport,
+    project: Option<&ProjectContext>,
+    already_ready: bool,
+    cmd: &'static str,
+    ui: &InitUi<'_>,
+) -> Result<(), CliError> {
+    let complete = setup.complete;
+    let hints = setup.missing.iter().map(|requirement| match requirement {
+        InitRequirement::Cargo => "Install Rust and put cargo on PATH.",
+        InitRequirement::Profile => "Repair the active profile with groundhog config, or select a valid profile.",
+        InitRequirement::SigningKey if can_generate_initial_key(report) =>
+            "Run groundhog init --non-interactive --generate-key to create the initial signing key.",
+        InitRequirement::SigningKey =>
+            "Select a valid stored key with groundhog keys use <name>; repair any profile default_key override with groundhog config. Restore or replace corrupt key files explicitly.",
+    }).collect::<Vec<_>>().join(" ");
+    if ui.print.is_json() {
+        let envelope = if complete {
+            CommandResult::new(cmd, setup)
+        } else {
+            CommandResult::failure_with_error(
+                cmd,
+                setup,
+                CommandError::new(
+                    "init_incomplete",
+                    "Setup incomplete",
+                    serde_json::Value::Null,
+                )
+                .with_hint(&hints),
+            )
+        };
+        ui.print.json(&envelope)?;
+    } else if complete {
+        let next_steps = if already_ready {
+            NextSteps::Status
+        } else if let Some(project) = project {
+            NextSteps::BuildProject(project)
+        } else {
+            NextSteps::NewProject
+        };
+        ui.completion_review(
+            if already_ready {
+                "Groundhog Ready"
+            } else {
+                "Setup Complete"
+            },
+            &summary_items(project_start, usable_default_key_for_init(report), project)?,
+            next_steps,
+        );
+    } else {
+        ui.print.status("Setup Incomplete");
+        ui.print.status(&hints);
+    }
+    if complete {
+        Ok(())
+    } else {
+        Err(CliError::CommandReportedFailure)
+    }
 }
 
 fn handle_environment_step(ui: &mut InitUi<'_>) {
@@ -99,50 +187,52 @@ fn handle_profile_step(project_start: &Path, ui: &mut InitUi<'_>) -> Result<(), 
     Ok(())
 }
 
+fn usable_default_key_for_init(
+    report: &crate::checks::StatusReport,
+) -> Option<&crate::checks::KeySummary> {
+    let key = report.effective_default_key_summary()?;
+    // A public summary alone does not establish that the private key is usable.
+    let signer = crate::keys::load_local_signer(&key.name).ok()?;
+    let address = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        signer.verifying_key_bytes(),
+        groundhog_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
+    )
+    .address();
+    (groundhog_json_rpc_types::hex::prefixed_hex(address.as_ref()) == key.address).then_some(key)
+}
+
+fn can_generate_initial_key(report: &crate::checks::StatusReport) -> bool {
+    report.keys.keys.is_empty()
+        && report.keys.global_default_key.is_none()
+        && report.project.profile_key.is_none()
+}
+
 fn handle_key_step(
     report: &crate::checks::StatusReport,
-    usable_default_key: Option<&crate::checks::KeySummary>,
+    options: &InitOptions,
     ui: &mut InitUi<'_>,
-) -> Result<(), CliError> {
-    if report.keys.keys.is_empty() {
-        ui.note("No signing key found");
-        if ui.print.ask("Generate a local signing key now?", true)? {
-            crate::keys::generate(&None, false, "keys.generate", ui.print)?;
-            ui.success("Generated local signing key");
-            ui.finish_step(InitStep::SigningKey, StepState::Done);
-        } else {
-            ui.finish_step(InitStep::SigningKey, StepState::Skipped);
-        }
-    } else if let Some(key) = usable_default_key {
+) -> Result<bool, CliError> {
+    if let Some(key) = usable_default_key_for_init(report) {
         ui.success(format_args!(
             "Default key: `{}` ({})",
             key.name, key.address
         ));
         ui.finish_step(InitStep::SigningKey, StepState::Done);
-    } else {
-        ui.note(
-            "You have keys but no usable default is selected. Set one \
-             with `groundhog keys use <name>`.",
-        );
-        ui.finish_step(InitStep::SigningKey, StepState::Skipped);
+        return Ok(false);
     }
-
-    Ok(())
-}
-
-fn usable_default_key_for_init(
-    report: &crate::checks::StatusReport,
-) -> Option<&crate::checks::KeySummary> {
-    if let Some(key) = report.effective_default_key_summary() {
-        return Some(key);
+    let can_generate = can_generate_initial_key(report);
+    if can_generate
+        && (options.generate_key || ui.print.ask("Generate a local signing key now?", true)?)
+    {
+        // The enclosing init result owns JSON output, not the nested command.
+        crate::keys::generate(&None, false, "keys.generate", &Print::quiet())?;
+        ui.success("Generated local signing key");
+        ui.finish_step(InitStep::SigningKey, StepState::Done);
+        return Ok(true);
     }
-
-    let global_default = report.keys.global_default_key.as_deref()?;
-    report
-        .keys
-        .keys
-        .iter()
-        .find(|key| key.name == global_default)
+    ui.note("No usable selected signing key; key setup remains incomplete");
+    ui.finish_step(InitStep::SigningKey, StepState::Skipped);
+    Ok(false)
 }
 
 fn handle_scaffold_step(
@@ -164,12 +254,7 @@ fn handle_scaffold_step(
     }
 
     let created_project = if ui.print.ask("Create a starter project?", false)? {
-        ui.print.prompt("Project name: ")?;
-        let mut name = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut name)
-            .map_err(CliError::Io)?;
+        let name = ui.print.read_line("Project name: ")?;
         let name = name.trim();
         if name.is_empty() {
             ui.note("Skipping starter project");
@@ -431,25 +516,6 @@ impl<'a> InitUi<'a> {
     fn line_fill(ch: char, len: usize) -> String {
         std::iter::repeat_n(ch, len).collect()
     }
-}
-
-fn print_init_summary(
-    project_start: &Path,
-    usable_default_key: Option<&crate::checks::KeySummary>,
-    project_context: Option<&ProjectContext>,
-    ui: &InitUi<'_>,
-) -> Result<(), CliError> {
-    let next_steps = if let Some(project) = project_context {
-        NextSteps::BuildProject(project)
-    } else {
-        NextSteps::NewProject
-    };
-    ui.completion_review(
-        "Setup Complete",
-        &summary_items(project_start, usable_default_key, project_context)?,
-        next_steps,
-    );
-    Ok(())
 }
 
 fn summary_items(

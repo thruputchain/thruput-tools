@@ -643,6 +643,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn process_group_with_running_member_is_live() {
         use std::os::unix::process::CommandExt;
 
@@ -662,6 +663,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[serial_test::serial]
     fn process_group_of_only_zombies_is_gone() {
         use std::os::unix::process::CommandExt;
 

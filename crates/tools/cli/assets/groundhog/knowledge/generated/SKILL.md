@@ -318,6 +318,14 @@ verify the first execution result before submitting the second operation.
 
 ## Local Development
 
+For first-run setup in automation, use `groundhog init --non-interactive --json`.
+It initializes global profiles and reports incomplete setup with exit 1 when
+Cargo, the active profile, or a selected stored signing key is unavailable.
+Add `--generate-key` only when authorized to create the initial signing key;
+existing keys and explicit key selections are preserved. `--quiet` does not
+accept wizard defaults. `init --json` performs setup; use `status --json` for
+read-only diagnostics. Create scripted projects separately with `groundhog new`.
+
 Use the CLI to start the supported local stack:
 
 ```console
@@ -349,6 +357,12 @@ groundhog call --help
 groundhog view --help
 groundhog codegen ts --help
 ```
+
+Use global `--non-interactive` to disable CLI prompts and terminal UI while
+retaining ordinary output. It does not grant consent: protected actions still
+require `--force`, and initial key creation requires `init --generate-key`.
+`keys import` needs piped stdin when prompts are disabled; never place seeds
+in arguments. Cargo/test subprocesses cannot read terminal stdin in this mode.
 
 Use `--json` for agent-consumed command results. Respect commands that require
 explicit confirmation, and never add a confirmation override unless the user
