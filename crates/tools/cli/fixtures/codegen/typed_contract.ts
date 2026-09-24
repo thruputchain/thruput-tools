@@ -44,7 +44,7 @@ export const spec: ContractSpec = {
       name: s("ExampleContract"),
       vers: s("0.1.0"),
       throws: [
-        { selector: 0x1234n, ty: { v: ContractTypeKind.Named, named: s("ExampleError") } },
+        { selector: 0x1234n, ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") } } },
       ],
       methods: [
         {

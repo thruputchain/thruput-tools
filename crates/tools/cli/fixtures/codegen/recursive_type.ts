@@ -35,7 +35,7 @@ export const spec: ContractSpec = {
         {
           name: s("depth"),
           args: [
-            { name: s("tree"), ty: { v: ContractTypeKind.Named, named: s("Tree") } },
+            { name: s("tree"), ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } },
           ],
           return_type: { v: ContractTypeKind.U32 },
         },
@@ -49,8 +49,8 @@ export const spec: ContractSpec = {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") },
         fields: [
           { name: s("value"), ty: { v: ContractTypeKind.U32 } },
-          { name: s("left"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: s("Tree") } } },
-          { name: s("right"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: s("Tree") } } },
+          { name: s("left"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } } },
+          { name: s("right"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } } },
         ],
       },
     },

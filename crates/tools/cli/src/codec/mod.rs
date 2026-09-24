@@ -2,7 +2,7 @@
 
 use crate::CliError;
 use groundhog_contract_spec::ContractType;
-use groundhog_contract_spec::{ContractSpecId, ContractSpecString, ContractTypeDef};
+use groundhog_contract_spec::{ContractSpecString, ContractTypeDef};
 use groundhog_xdr::types::ContractAddress;
 use serde_json::Value;
 
@@ -37,9 +37,6 @@ pub(crate) fn spec_string_text(value: &ContractSpecString) -> Result<&str, CliEr
     groundhog_client::codec::spec_string_text(value).map_err(Into::into)
 }
 
-pub(crate) fn spec_id_text(id: &ContractSpecId) -> Result<String, CliError> {
-    groundhog_client::codec::spec_id_text(id).map_err(Into::into)
-}
 
 pub(crate) fn build_type_def_index(
     type_defs: &[ContractTypeDef],

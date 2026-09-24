@@ -779,10 +779,12 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             ))
         }
         ContractType::Named { named } => {
-            let name = spec_string_text(&named.declared)?;
+            // The whole id, matching what the type defs in this same literal
+            // declare themselves under. A bare declared name here would never
+            // match one of those, so no named reference would resolve.
             Ok(format!(
-                "{{ v: ContractTypeKind.Named, named: s({}) }}",
-                ts_string_literal(name)
+                "{{ v: ContractTypeKind.Named, named: {} }}",
+                ts_spec_id_literal(named)?
             ))
         }
         ContractType::SignedToken {
@@ -2153,7 +2155,9 @@ mod tests {
         assert_eq!(
             spec_type_to_ts_literal(&typed).unwrap(),
             "{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
-             { preimage_type: { v: ContractTypeKind.Named, named: s(\"Auth\") } } }"
+             { preimage_type: { v: ContractTypeKind.Named, named: { crate_name: \
+             s(\"demo\"), major: s(\"1\"), module_path: s(\"demo\"), declared: \
+             s(\"Auth\") } } } }"
         );
 
         let list = ContractType::Vector {
