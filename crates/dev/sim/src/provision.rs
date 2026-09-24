@@ -38,8 +38,6 @@ const HOG_TOKEN_ADDRESS: [u8; 32] = {
     bytes[31] = 1;
     bytes
 };
-const HOG_DECIMALS: usize = 7;
-const HOG_SCALE: u128 = 10_000_000;
 const PROVISION_RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct ActorProvisionInputs<'a> {
     pub(crate) manifest: &'a SimulationManifest,
@@ -646,61 +644,10 @@ fn deploy_nonce_from_u64(nonce: u64) -> SHA256Hash {
 }
 
 fn parse_hog_amount(input: &str) -> Result<u128, SimError> {
-    let input = input.trim();
-    if input.is_empty() || input.starts_with('-') || input.starts_with('+') {
-        return Err(SimError::Executor(
-            "actor provisioning airdropHog must be a positive HOG amount".into(),
-        ));
-    }
-    let mut parts = input.split('.');
-    let whole = parts.next().unwrap_or_default();
-    let fractional = parts.next();
-    if parts.next().is_some() || whole.is_empty() || !whole.chars().all(|c| c.is_ascii_digit()) {
-        return Err(SimError::Executor(format!(
-            "invalid actor provisioning airdropHog amount `{input}`"
-        )));
-    }
-    let whole = whole.parse::<u128>().map_err(|error| {
+    groundhog_signing::parse_hog_amount(input).map_err(|error| {
         SimError::Executor(format!(
-            "invalid actor provisioning airdropHog amount `{input}`: {error}"
-        ))
-    })?;
-    let fractional = match fractional {
-        Some(value) => parse_fractional_hog(input, value)?,
-        None => 0,
-    };
-    let raw = whole
-        .checked_mul(HOG_SCALE)
-        .and_then(|value| value.checked_add(fractional))
-        .ok_or_else(|| {
-            SimError::Executor(format!(
-                "actor provisioning airdropHog amount `{input}` is too large"
-            ))
-        })?;
-    if raw == 0 {
-        return Err(SimError::Executor(
-            "actor provisioning airdropHog must be greater than zero".into(),
-        ));
-    }
-    Ok(raw)
-}
-
-fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, SimError> {
-    if fractional.is_empty()
-        || fractional.len() > HOG_DECIMALS
-        || !fractional.chars().all(|c| c.is_ascii_digit())
-    {
-        return Err(SimError::Executor(format!(
-            "invalid actor provisioning airdropHog amount `{input}`; at most {HOG_DECIMALS} decimal places are supported"
-        )));
-    }
-    let mut padded = fractional.to_owned();
-    while padded.len() < HOG_DECIMALS {
-        padded.push('0');
-    }
-    padded.parse::<u128>().map_err(|error| {
-        SimError::Executor(format!(
-            "invalid actor provisioning airdropHog amount `{input}`: {error}"
+            "invalid actor provisioning airdropHog amount `{}`: {error}",
+            input.trim()
         ))
     })
 }
