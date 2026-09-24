@@ -3,7 +3,7 @@ use std::path::Path;
 
 use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::ContractAddress;
-use groundhog_json_rpc_types::hex::HexBytes;
+use groundhog_json_rpc_types::hex::{FixedHexError, HexBytes, decode_fixed_hex};
 use groundhog_json_rpc_types::state::StorageItemRead;
 use serde_json::json;
 
@@ -96,18 +96,15 @@ fn print_storage_read(
 }
 
 fn parse_storage_key(raw: &str) -> Result<HexBytes, CliError> {
-    let stripped = raw
-        .strip_prefix("0x")
-        .or_else(|| raw.strip_prefix("0X"))
-        .unwrap_or(raw);
-    let bytes = hex::decode(stripped).map_err(|e| CliError::InvalidStorageKey(format!("{e}")))?;
-    if bytes.len() != 32 {
-        return Err(CliError::InvalidStorageKey(format!(
-            "storage key must be exactly 32 bytes / 64 hex characters; got {} bytes",
-            bytes.len()
-        )));
-    }
-    Ok(HexBytes(bytes))
+    let bytes = decode_fixed_hex::<32>(raw).map_err(|error| {
+        CliError::InvalidStorageKey(match error {
+            FixedHexError::InvalidHex(error) => error.to_string(),
+            FixedHexError::InvalidLength { len, .. } => {
+                format!("storage key must be exactly 32 bytes / 64 hex characters; got {len} bytes")
+            }
+        })
+    })?;
+    Ok(HexBytes(bytes.to_vec()))
 }
 
 #[cfg(test)]

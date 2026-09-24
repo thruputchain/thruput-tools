@@ -96,8 +96,11 @@ pub(crate) fn decode_abort(
                     &payload,
                 )
                 .map(|mut decoded| {
-                    decoded.exception_crate = Some(ambient.crate_name);
-                    decoded.exception_version = Some(ambient.major_version);
+                    // Both come off the entry's own id now; describe used to
+                    // repeat them beside it because a joined name could not be
+                    // taken apart. The segments are already 'static.
+                    decoded.exception_crate = Some(ambient.root.crate_name);
+                    decoded.exception_version = Some(ambient.root.major);
                     decoded
                 });
             }

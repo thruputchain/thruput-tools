@@ -50,7 +50,7 @@ export const spec: ContractSpec = {
       name: s("ERC20"),
       vers: s("0.1.0"),
       throws: [
-        { selector: 0xb19947acb2fa14ffn, ty: { v: ContractTypeKind.Named, named: s("ERC20Error") } },
+        { selector: 0xb19947acb2fa14ffn, ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ERC20Error") } } },
       ],
       methods: [
         {
@@ -81,7 +81,7 @@ export const spec: ContractSpec = {
     {
       v: ContractTypeDefKind.TypeDefEnum,
       enum_def: {
-        name: s("ERC20Error"),
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ERC20Error") },
         variants: [
           { name: s("AlreadyInitialized"), value: 1n },
           { name: s("MustBeContractOwner"), value: 2n },

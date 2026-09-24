@@ -3290,10 +3290,7 @@ mod tests {
     }
 
     fn process_group_exists(process_group: i32) -> bool {
-        // SAFETY: kill(2) with signal 0 only checks for process-group
-        // existence and does not deliver a signal.
-        let result = unsafe { libc::kill(-process_group, 0) };
-        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        crate::process::process_group_has_live_member(process_group).unwrap_or(false)
     }
 
     fn executable_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {

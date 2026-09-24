@@ -487,6 +487,11 @@ struct TestArgs {
     /// Use one exact managed hog-devnode version for the integration node
     #[arg(long, requires = "integration")]
     hog_devnode_version: Option<String>,
+    /// Override a genesis network parameter on the integration node (repeatable;
+    /// decimal, hex, or K/M/G values). Mirrors `groundhog node --network-config`.
+    #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
+          value_parser = groundhog_cli::node::parse_network_config_override)]
+    network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     /// Config profile to use
     #[arg(long = "profile")]
     profile: Option<String>,
@@ -521,6 +526,7 @@ impl TestArgs {
                 &groundhog_cli::test_cmd::IntegrationTestOptions {
                     hogd_protocol: self.hogd_protocol,
                     hog_devnode_version: self.hog_devnode_version,
+                    network_config_overrides: self.network_config,
                     offline: ctx.offline,
                     verbose: self.verbose,
                 },
@@ -2765,5 +2771,39 @@ mod tests {
             }
             _ => panic!("expected test command"),
         }
+    }
+
+    #[test]
+    fn test_integration_network_config_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "groundhog",
+            "test",
+            "--integration",
+            "--network-config",
+            "max_rv32_memory_bytes=16M",
+            "--network-config",
+            "max_bytestring_len=32K",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Test(TestArgs { network_config, .. }) => assert_eq!(
+                network_config,
+                [
+                    (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
+                    (ConfigParamName::MaxBytestringLen, 32_768),
+                ]
+            ),
+            _ => panic!("expected test command"),
+        }
+        // The override only reaches a node, so it needs --integration.
+        assert!(
+            Cli::try_parse_from([
+                "groundhog",
+                "test",
+                "--network-config",
+                "max_rv32_memory_bytes=16M",
+            ])
+            .is_err()
+        );
     }
 }
