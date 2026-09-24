@@ -14,6 +14,9 @@ env:
   # Fallback if the CI runner overwrites .cargo/config.toml
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
 
+permissions:
+  contents: read
+
 jobs:
   # Mechanism lives in groundhogchain/actions; policy (deny.toml,
   # .github/zizmor.yml, .github/actionlint.yaml) stays here.
