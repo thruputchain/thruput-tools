@@ -375,6 +375,9 @@ pub enum CliError {
          matches the requested command"
     )]
     ProfileConfigInvalid { profile: String, message: String },
+    #[error("interactive input is unavailable")]
+    #[hint("provide the required input explicitly; for key import, pipe the seed on stdin")]
+    InteractiveInputRequired,
     #[error("confirmation required to {action}")]
     #[hint("review the warning and rerun with `--force` to confirm non-interactively")]
     #[details(expr = Some(json!({ "action": action, "requiredFlag": "--force" })))]

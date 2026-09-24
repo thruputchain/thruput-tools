@@ -30,6 +30,7 @@ pub(crate) mod faucet_client;
 pub(crate) mod hog;
 pub(crate) mod http_client;
 pub mod init;
+pub mod init_json;
 pub mod keys;
 pub(crate) mod keys_json;
 pub(crate) mod network_descriptor;
@@ -84,9 +85,11 @@ pub fn require_cargo() -> Result<(), CliError> {
 /// Piping stderr is what lets cargo's output be relayed and kept at the same
 /// time, and it is also what makes cargo drop color, so restore it when our
 /// own stderr is a terminal and the user has not already chosen.
-pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command) {
-    use std::io::IsTerminal;
-    if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
+/// Explicit non-interactive mode disables color even when inherited settings enable it.
+pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command, print: &Print) {
+    if print.is_non_interactive() {
+        cmd.env("CARGO_TERM_COLOR", "never");
+    } else if print.is_human_tty() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
         cmd.env("CARGO_TERM_COLOR", "always");
     }
 }
@@ -143,6 +146,10 @@ pub fn run_cargo(
     cmd: &mut std::process::Command,
     print: &Print,
 ) -> Result<(String, String), CliError> {
+    if print.is_non_interactive() {
+        keep_cargo_color(cmd, print);
+        cmd.stdin(std::process::Stdio::null());
+    }
     print.trace_command(cmd);
     if print.is_json() {
         let output = cmd.output()?;
@@ -163,7 +170,7 @@ pub fn run_cargo(
         // example a link error naming the Groundhog linker script). Piping
         // stderr would otherwise turn cargo's color off, so ask for it back
         // when our own stderr is a terminal and the user has not chosen.
-        keep_cargo_color(cmd);
+        keep_cargo_color(cmd, print);
         cmd.stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn()?;
         let stderr_pipe = child
@@ -192,5 +199,34 @@ pub fn run_cargo(
             });
         }
         Ok((String::new(), String::new()))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod subprocess_tests {
+    use super::{Print, run_cargo};
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn non_interactive_cargo_disables_color_and_stdin() {
+        for json in [false, true] {
+            let mut input = tempfile::NamedTempFile::new().unwrap();
+            writeln!(input, "unexpected input").unwrap();
+            let mut command = Command::new("sh");
+            command
+                .args([
+                    "-c",
+                    "test \"$CARGO_TERM_COLOR\" = never && ! read -r answer",
+                ])
+                .env("CARGO_TERM_COLOR", "always")
+                .stdin(Stdio::from(input.reopen().unwrap()));
+
+            run_cargo(
+                &mut command,
+                &Print::new(false, json).with_non_interactive(true),
+            )
+            .unwrap();
+        }
     }
 }

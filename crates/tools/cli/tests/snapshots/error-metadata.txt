@@ -243,6 +243,10 @@ ProfileConfigInvalid
   code: profile_config_invalid
   hint text: update the selected profile in project or global config, or choose a profile that matches the requested command
 
+InteractiveInputRequired
+  code: interactive_input_required
+  hint text: provide the required input explicitly; for key import, pipe the seed on stdin
+
 ConfirmationRequired
   code: confirmation_required
   hint text: review the warning and rerun with `--force` to confirm non-interactively

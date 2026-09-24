@@ -1,4 +1,5 @@
 use groundhog_cli::Print;
+use groundhog_cli::init::InitOptions;
 use serial_test::serial;
 use std::env;
 use std::fs;
@@ -60,7 +61,7 @@ fn init_configures_profiles_and_succeeds() {
     groundhog_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet())
         .unwrap();
 
-    let result = groundhog_cli::init::run(tmp.path(), "status", &quiet());
+    let result = groundhog_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet());
 
     result.unwrap();
     assert!(!cargo_home.join("config.toml").exists());
@@ -142,7 +143,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     .unwrap();
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
-    groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
+    groundhog_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet()).unwrap();
 
     let global_config = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
     assert!(global_config.contains("default_profile = \"devnet\""));
@@ -197,7 +198,7 @@ fn init_preserves_ignored_legacy_executor_config() {
     groundhog_cli::keys::generate(&Some("default".into()), false, "keys.generate", &quiet())
         .unwrap();
 
-    groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
+    groundhog_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet()).unwrap();
 
     let contents = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
     assert!(contents.contains(legacy));
@@ -210,7 +211,7 @@ fn init_preserves_ignored_legacy_executor_config() {
 
 #[test]
 #[serial]
-fn quiet_init_without_credentials_generates_default_key_only() {
+fn quiet_init_does_not_generate_a_key_without_consent() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
@@ -219,13 +220,14 @@ fn quiet_init_without_credentials_generates_default_key_only() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
+    assert!(
+        groundhog_cli::init::run(tmp.path(), &InitOptions::default(), "init", &quiet()).is_err()
+    );
 
     let contents = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
     assert!(!contents.contains("[executor]"));
     let keys = groundhog_cli::keys::load_key_summaries().unwrap();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].name, "default");
+    assert!(keys.is_empty());
     assert!(!tmp.path().join("my-contract").exists());
 
     unsafe {
@@ -236,7 +238,7 @@ fn quiet_init_without_credentials_generates_default_key_only() {
 
 #[test]
 #[serial]
-fn init_uses_global_default_when_project_key_is_dangling() {
+fn init_rejects_dangling_project_key_despite_global_default() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
     let project = tmp.path().join("proj");
@@ -244,7 +246,7 @@ fn init_uses_global_default_when_project_key_is_dangling() {
     fs::create_dir(&project).unwrap();
     fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\ndefault_key = \"ghost\"\n",
+        "default_profile = \"default\"\n[profile.default]\ndefault_key = \"ghost\"\n",
     )
     .unwrap();
 
@@ -255,7 +257,7 @@ fn init_uses_global_default_when_project_key_is_dangling() {
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
-    groundhog_cli::init::run(&project, "status", &quiet()).unwrap();
+    assert!(groundhog_cli::init::run(&project, &InitOptions::default(), "init", &quiet()).is_err());
 
     unsafe {
         env::remove_var("CARGO_HOME");

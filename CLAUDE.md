@@ -381,6 +381,16 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 ### CLI Output
 
+- Interaction policy belongs in `Print`. Global `--non-interactive` disables
+  prompts and terminal rendering without suppressing ordinary output or granting
+  consent. Use `can_prompt`, `confirm`, `ask`, `read_line`, and `read_secret`
+  for interactive input; use `is_human_tty` / `is_human_stdout_tty` for styling.
+  Do not add command-local terminal detection or password prompts. Reading
+  explicit piped input (such as key import) is distinct from prompting.
+- Child-process runners must honor `Print::is_non_interactive`: do not inherit
+  terminal stdin or force terminal color. Long-running services/watch modes
+  remain explicit command behavior, not interactive prompts.
+
 - Commands in `groundhog-cli` use the `Print` struct (`print.status()`,
   `print.warn()`, `print.prompt()`), not raw `eprintln!`.
   Standalone build tools such as `groundhog-agent-knowledge` may report errors

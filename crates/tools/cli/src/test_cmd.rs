@@ -278,7 +278,7 @@ fn run_integration_with_dev_node(
         .clone()
         .or_else(|| std::env::var(HOGD_PROTOCOL_ENV).ok());
 
-    crate::node::init_node_tracing(integration.verbose, print.is_json());
+    crate::node::init_node_tracing(integration.verbose, print);
     print.status(format_args!(
         "Starting ephemeral local node for {:?} integration tests...",
         build.artifact.kind
@@ -1709,6 +1709,10 @@ fn run_test_command(
     print: &Print,
     filter: SelectedFilter<'_>,
 ) -> Result<TestRunOutput, CliError> {
+    if print.is_non_interactive() {
+        crate::keep_cargo_color(cargo_cmd, print);
+        cargo_cmd.stdin(Stdio::null());
+    }
     let mut child = cargo_cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1929,6 +1933,35 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn non_interactive_tests_disable_color_and_stdin() {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        let mut input = tempfile::NamedTempFile::new().unwrap();
+        writeln!(input, "unexpected input").unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "test \"$CARGO_TERM_COLOR\" = never && ! read -r answer",
+            ])
+            .env("CARGO_TERM_COLOR", "always")
+            .stdin(Stdio::from(input.reopen().unwrap()));
+
+        let output = super::run_test_command(
+            &mut command,
+            &Print::new(false, true).with_non_interactive(true),
+            SelectedFilter {
+                name: None,
+                exact: false,
+            },
+        )
+        .unwrap();
+        assert!(output.success, "{output:?}");
+    }
 
     fn test_watch_context(root: &std::path::Path) -> WatchContext {
         WatchContext {
