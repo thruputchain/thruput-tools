@@ -106,7 +106,7 @@ qualification establishes a concrete dependency.
 | 0. Re-establish the contract | RPC/signing + hogd/interface: reconstruct native codecs on current main; pin bundle; lock explicit funding amount, identity selection, and compatibility behavior | Rust native transfer, unfunded failure, prefunded deploy and address/receipt checks against an isolated released node; recorded artifact versions/hashes |
 | 1. Atomic funded deployment | integration_test_contracts + hogd, then producer release and SDK bindings | Native/reference parity; successful exact funding/deploy; failure rolls both back; auth, duplicates, changed-cost, gas and missing-code cases; published bundle qualification and activation contract |
 | 2. Shared wallet routing | signing + shared Rust client + CLI account resolution | Native pubkey execute/deploy builders, strict single-child return decoding; explicit legacy adapter; stable signed hash before submission; current downstream consumers compile |
-| 3. Native account setup and funding | CLI wallet/config, init/checks/status, airdrop | New ordinary keys derive/save nonce-0 native accounts without deploying a wallet; separate explicit funding; Local and hosted faucet funding succeeds; saved bindings and dev-N retain identity |
+| 3. Native account setup and funding | CLI wallet/config, init/checks/status, airdrop | `wallet create` derives/saves an empty native account for a fresh ordinary key, without deploying or funding it; `airdrop` explicitly funds the selected account; local and hosted funding succeeds; saved bindings and dev-N retain identity |
 | 4. Transaction commands and testkit | deploy/call/transfer + Rust testkit + bundled starter guidance | Native and legacy runtime matrix passes; dry-run/confirmation/JSON describe actual effects; receipts preserve return values and wallet errors; restart and ambiguous-submission recovery |
 | 5. Bootstrap and consumers | GH-373: hogd local/hosted genesis, faucet, manifests, gateway/supervisor funding, bench, sim, E2E and ops renderers | Fresh native bootstrap and hosted funding; versioned schema transition; explicit retained-state policy; all controlled consumers accept the new manifests |
 | 6. Artifact retirement and release | packaging + toolchain catalog + docs/examples | Compatible producer bundles published first; consumers qualified on supported targets; dev_wallet removed from runtime requirements; genesis_root retained; offline restart and state recovery |
@@ -118,6 +118,44 @@ Each natural
 implementation slice receives independent review, followed by a final end-to-end
 review before delivery. Do not resurrect old source wholesale across intervening
 client, config, terminal-policy, and test changes.
+
+### Account creation and funding UX
+
+Keep account creation and faucet funding as separate user actions:
+
+```sh
+groundhog wallet create
+groundhog airdrop
+```
+
+For a fresh ordinary key, `wallet create` derives and saves its nonce-0 native
+account binding. It submits no wallet-deployment transaction and requests no
+funds. Creation must succeed without an available faucet or a funded sender.
+Report the account address and an explicit funding next step; do not manufacture
+a creation transaction hash, block height, or unqueried balance.
+
+`airdrop` is the explicit request for faucet funds. Its existing optional
+recipient already defaults to the effective wallet; extend that shared
+resolution to native bindings while preserving current selection rules.
+If the newly created binding is not the effective wallet, the creation output
+must suggest `groundhog airdrop <wallet-name>` so the next step funds that
+account. Show the faucet's actual amount and normal confirmation behavior.
+
+Repeat creation must preserve an existing native address and any funds already
+there. "Empty wallet" describes a fresh account, not a promise to reset its
+balance. Native creation must reject the legacy `--prefund` option with an
+`airdrop` hint rather than silently funding or ignoring the option.
+
+Acceptance tests must prove that fresh creation writes the correct binding with
+no transaction submission or faucet call, an unavailable faucet does not prevent
+creation, explicit airdrop funds the intended native account on local and hosted
+networks, and repeating creation neither changes identity nor requests funds.
+Update init guidance, help, JSON reports, and examples to use this two-command
+flow. Preserve existing saved legacy and manifest-backed dev-N identities.
+
+This decision concerns funding the user's account. Atomic `deploy_funded`
+separately transfers an explicitly authorized amount from that funded account
+to a new contract's address and deploys its code; it does not obtain faucet funds.
 
 ### Identity and client rules
 
