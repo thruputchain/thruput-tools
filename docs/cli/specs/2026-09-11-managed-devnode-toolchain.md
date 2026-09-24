@@ -65,14 +65,20 @@ Explicit binary, environment, and sibling paths continue bypassing acquisition.
 
 ## Trusted catalog provenance
 
-Platform bundle 0.1.27 pins public hog-devnode `0.1.27-rc.7`; the CLI uses
-that exact component version, not the platform version.
-Its manifest was retrieved from authenticated packaging workflow artifact
-`public-hog-devnode-v0.1.27-rc.7`, run `34737642408`, artifact `10311661280`.
-The run succeeded at packaging commit
-`8680a36d313c704d7cfaf5f8f408c129e3b43977`.
-The authenticated manifest and public HTTPS manifest have identical SHA-256:
-`5e71d0df7e65e0858d1e5e92ad0a19a1c8d6d3aa65b609f00ae6a0b87cab0673`.
+The CLI pins public hog-devnode `0.1.28-rc.3`, the first published devnode
+whose protocol token (`hogp/d2872e9900ce157`) matches the groundhog-xdr 0.39.0
+crates this workspace builds against; rc.7 advertised `hogp/63c9284d8d5727e`
+and failed the supervisor's handshake. The CLI uses that exact component
+version, not the platform version.
+Its manifest was published by packaging run `36010846127` at authorization
+commit `6e5679d223b6db746b8b86980a3201353f61f5d9` (workflow artifact
+`public-hog-devnode-v0.1.28-rc.3`, artifact `10812866713`). The public HTTPS
+manifest has SHA-256
+`8ea048e801e9d9aaacdeadee4add403d9a85865f2c0fe6294602346e55bdf6bb`.
+Both Linux archive digests equal the authenticated hogd `v0.1.28-rc.3` release
+asset digests, and the macOS entry names the authenticated release asset
+digest as its source, with a `SUCCEEDED` stapled, notarized Xcode Cloud
+build signed by the same Team ID as rc.7.
 
 The catalog copies each target's archive, objectKey, size, sha256, layoutVersion,
 files, and compatibility fields, plus source repository/ref, into catalog
@@ -83,11 +89,14 @@ the trust handoff. All three public target archives passed the real installer.
 
 ## Release qualification
 
-The rc.7 bundle resolves the earlier missing `schedulerGateway` manifest
-endpoint. Its protocol matches current main. The real managed startup smoke
-now passes on macOS, native Linux ARM64, and emulated Linux x86_64 without
-a binary or protocol override, including RPC,
-clean shutdown, offline persistent restart, and local status discovery.
+The rc.3 bundle keeps rc.7's `schedulerGateway` manifest endpoint and moves
+the protocol to the one current main builds against. For rc.3 the real managed
+startup smoke passed on native Linux x86_64 (glibc 2.39) without a binary or
+protocol override, including RPC, clean shutdown, offline persistent restart,
+parent SIGKILL cleanup, and local status discovery; all three public archives
+passed the real installer. rc.7 was additionally qualified on macOS and native
+Linux ARM64; the publish workflow's startup smoke is the gate for rc.3 on its
+runner.
 
 The pre-publication workflow now runs, before creating a tag or publishing:
 
