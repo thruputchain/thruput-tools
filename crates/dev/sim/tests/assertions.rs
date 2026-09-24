@@ -376,5 +376,5 @@ fn manifest_with_assertions(assertions: &serde_json::Value) -> SimulationManifes
         "workloads": [{"name": "chain-tip", "weight": 1}],
         "assertions": assertions
     }))
-    .expect("manifest fixture should parse")
+    .expect("bug: manifest fixture should parse")
 }

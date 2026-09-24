@@ -8,13 +8,13 @@ use groundhog_sim::result::{AssertionStatus, SIM_RESULT_SCHEMA_VERSION, SimResul
 
 #[tokio::test]
 async fn load_result_rejects_future_schema_version() {
-    let file = NamedTempFile::new().expect("temp file should be created");
+    let file = NamedTempFile::new().expect("bug: temp file should be created");
     tokio::fs::write(
         file.path(),
         serde_json::to_vec(&minimal_result_json(99)).unwrap(),
     )
     .await
-    .expect("result should write");
+    .expect("bug: result should write");
 
     let err = load_result(file.path())
         .await
@@ -28,12 +28,12 @@ async fn load_result_rejects_future_schema_version() {
 
 #[tokio::test]
 async fn load_result_rejects_legacy_wasm_result_by_schema_version() {
-    let file = NamedTempFile::new().expect("temp file should be created");
+    let file = NamedTempFile::new().expect("bug: temp file should be created");
     let mut value = minimal_result_json(3);
     value["contracts"] = json!([{"artifactKind": "wasm"}]);
     tokio::fs::write(file.path(), serde_json::to_vec(&value).unwrap())
         .await
-        .expect("result should write");
+        .expect("bug: result should write");
 
     let error = load_result(file.path())
         .await
@@ -47,27 +47,27 @@ async fn load_result_rejects_legacy_wasm_result_by_schema_version() {
 
 #[tokio::test]
 async fn load_result_accepts_legacy_target_ownership_without_process() {
-    let file = NamedTempFile::new().expect("temp file should be created");
+    let file = NamedTempFile::new().expect("bug: temp file should be created");
     tokio::fs::write(
         file.path(),
         serde_json::to_vec(&minimal_result_json(SIM_RESULT_SCHEMA_VERSION)).unwrap(),
     )
     .await
-    .expect("result should write");
+    .expect("bug: result should write");
 
     let result = load_result(file.path())
         .await
-        .expect("legacy ownership result should load");
+        .expect("bug: legacy ownership result should load");
 
     assert!(result.target_ownership.process.is_none());
 }
 
 #[tokio::test]
 async fn load_result_accepts_augmented_baseline_diff_results() {
-    let dir = tempdir().expect("temp dir should be created");
+    let dir = tempdir().expect("bug: temp dir should be created");
     let baseline = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
     let current = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
-    let mut current_json = serde_json::to_value(&current).expect("result should serialize");
+    let mut current_json = serde_json::to_value(&current).expect("bug: result should serialize");
     current_json["baselineDiff"] = json!({
         "path": "baselines/result.json",
         "diff": ResultDiff::from_results(&baseline, &current)
@@ -75,26 +75,26 @@ async fn load_result_accepts_augmented_baseline_diff_results() {
     current_json["baselineDiff"]["diff"]["schemaVersion"] = json!(1);
     current_json["baselineDiff"]["diff"]
         .as_object_mut()
-        .expect("diff should be an object")
+        .expect("bug: diff should be an object")
         .remove("simulationConfigMatch");
     current_json["baselineDiff"]["diff"]
         .as_object_mut()
-        .expect("diff should be an object")
+        .expect("bug: diff should be an object")
         .remove("runtimeConfigMatch");
     tokio::fs::write(
         dir.path().join("result.json"),
-        serde_json::to_vec(&current_json).expect("result should encode"),
+        serde_json::to_vec(&current_json).expect("bug: result should encode"),
     )
     .await
-    .expect("result should write");
+    .expect("bug: result should write");
 
     let loaded = load_result(dir.path())
         .await
-        .expect("augmented result should load");
+        .expect("bug: augmented result should load");
     let loaded_baseline_diff = loaded
         .baseline_diff
         .as_ref()
-        .expect("baseline diff should deserialize");
+        .expect("bug: baseline diff should deserialize");
     assert_eq!(loaded_baseline_diff.path, "baselines/result.json");
     assert_eq!(loaded_baseline_diff.diff.schema_version, 1);
     assert!(loaded_baseline_diff.diff.simulation_config_match.is_none());
@@ -103,7 +103,7 @@ async fn load_result_accepts_augmented_baseline_diff_results() {
     // A loaded augmented result must itself re-serialize without losing the
     // embedded baselineDiff, so it can serve as a baseline for a later run.
     let reserialized_json =
-        serde_json::to_value(&loaded).expect("loaded result should re-serialize");
+        serde_json::to_value(&loaded).expect("bug: loaded result should re-serialize");
     assert!(
         reserialized_json["baselineDiff"]["diff"]
             .get("simulationConfigMatch")
@@ -114,8 +114,8 @@ async fn load_result_accepts_augmented_baseline_diff_results() {
             .get("runtimeConfigMatch")
             .is_none()
     );
-    let reserialized: SimResult =
-        serde_json::from_value(reserialized_json).expect("re-serialized result should deserialize");
+    let reserialized: SimResult = serde_json::from_value(reserialized_json)
+        .expect("bug: re-serialized result should deserialize");
     assert_eq!(reserialized, loaded);
 }
 
@@ -178,7 +178,7 @@ fn compare_reports_workload_latency_assertion_and_chain_deltas() {
     let count_delta = diff
         .workload_count_deltas
         .get(&WorkloadKind::ChainTip)
-        .expect("chain-tip count delta should exist");
+        .expect("bug: chain-tip count delta should exist");
     assert_eq!(count_delta.completed, 3);
     assert_eq!(count_delta.skipped, 1);
     assert_eq!(
@@ -189,7 +189,7 @@ fn compare_reports_workload_latency_assertion_and_chain_deltas() {
         diff.latency_deltas_ms[&WorkloadKind::ChainTip]
             .latency_ms
             .as_ref()
-            .expect("latency delta should exist")
+            .expect("bug: latency delta should exist")
             .p99_ms,
         8
     );
@@ -201,14 +201,14 @@ fn compare_reports_workload_latency_assertion_and_chain_deltas() {
     assert_eq!(
         diff.chain_progress_delta
             .as_ref()
-            .expect("chain delta should exist")
+            .expect("bug: chain delta should exist")
             .last_height,
         8
     );
     assert_eq!(
         diff.chain_progress_delta
             .as_ref()
-            .expect("chain delta should exist")
+            .expect("bug: chain delta should exist")
             .max_stall_ms,
         Some(3_000)
     );
@@ -251,11 +251,11 @@ fn compare_falls_back_to_exact_manifest_match_for_legacy_results() {
     let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
     a_json["manifestHashes"]
         .as_object_mut()
-        .expect("manifest hashes should be an object")
+        .expect("bug: manifest hashes should be an object")
         .remove("simulationConfigSha256");
     b_json["manifestHashes"]
         .as_object_mut()
-        .expect("manifest hashes should be an object")
+        .expect("bug: manifest hashes should be an object")
         .remove("simulationConfigSha256");
 
     let matching = ResultDiff::from_results(
@@ -277,11 +277,11 @@ fn compare_falls_back_to_exact_runtime_match_for_legacy_results() {
     let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
     a_json["manifestHashes"]
         .as_object_mut()
-        .expect("manifest hashes should be an object")
+        .expect("bug: manifest hashes should be an object")
         .remove("runtimeConfigSha256");
     b_json["manifestHashes"]
         .as_object_mut()
-        .expect("manifest hashes should be an object")
+        .expect("bug: manifest hashes should be an object")
         .remove("runtimeConfigSha256");
 
     let matching = ResultDiff::from_results(
@@ -467,7 +467,7 @@ fn compare_diff_carries_schema_version_in_json() {
     let result = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
 
     let diff = ResultDiff::from_results(&result, &result);
-    let json = serde_json::to_value(&diff).expect("diff should serialize");
+    let json = serde_json::to_value(&diff).expect("bug: diff should serialize");
 
     assert_eq!(json["schemaVersion"], json!(COMPARE_DIFF_SCHEMA_VERSION));
 }
@@ -524,7 +524,7 @@ fn chain_progress_delta_saturates_on_overflow() {
     let delta = diff
         .chain_progress_delta
         .as_ref()
-        .expect("chain delta should exist");
+        .expect("bug: chain delta should exist");
     assert_eq!(delta.first_height, i64::MIN);
     assert_eq!(delta.last_height, i64::MIN);
     assert_eq!(delta.max_height, i64::MIN);
@@ -585,7 +585,7 @@ fn compare_ignores_contract_record_differences_for_now() {
 }
 
 fn result_from_json(value: serde_json::Value) -> SimResult {
-    serde_json::from_value(value).expect("result fixture should parse")
+    serde_json::from_value(value).expect("bug: result fixture should parse")
 }
 
 fn latency_json(sample_count: u64, base: u64) -> serde_json::Value {

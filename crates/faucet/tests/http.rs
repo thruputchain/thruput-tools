@@ -588,15 +588,15 @@ async fn concurrent_same_key_pending_retries_poll_once_without_consuming_capacit
     for retry in retries {
         let response = tokio::time::timeout(Duration::from_secs(1), retry)
             .await
-            .expect("same-key retry should not wait for execution capacity")
-            .expect("same-key retry task should complete");
+            .expect("bug: same-key retry should not wait for execution capacity")
+            .expect("bug: same-key retry task should complete");
         assert_eq!(response.status(), StatusCode::ACCEPTED);
     }
     assert_eq!(airdrop.calls(), 0);
     assert_eq!(airdrop.poll_calls(), 1);
 
     poll_gate.add_permits(1);
-    let response = owner.await.expect("poll owner task should complete");
+    let response = owner.await.expect("bug: poll owner task should complete");
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -635,7 +635,7 @@ async fn airdrop_execution_capacity_bounds_detached_workers() {
         }
     })
     .await
-    .expect("detached workers should reach the submitter");
+    .expect("bug: detached workers should reach the submitter");
     for task in &tasks {
         task.abort();
     }
@@ -684,7 +684,7 @@ async fn airdrop_execution_capacity_bounds_detached_workers() {
         }
     })
     .await
-    .expect("detached workers should finish after capacity is released");
+    .expect("bug: detached workers should finish after capacity is released");
 
     submit_gate.add_permits(1);
     let response = tokio::time::timeout(
@@ -699,7 +699,7 @@ async fn airdrop_execution_capacity_bounds_detached_workers() {
         )),
     )
     .await
-    .expect("capacity-rejected request should remain retryable")
+    .expect("bug: capacity-rejected request should remain retryable")
     .expect("bug: retry request should complete");
     assert_eq!(response.status(), StatusCode::OK);
 }
@@ -722,7 +722,9 @@ async fn airdrop_execution_timeout_releases_capacity_without_resubmitting() {
     }
 
     tokio::time::advance(Duration::from_mins(10) + Duration::from_secs(1)).await;
-    let response = request.await.expect("timed-out request should complete");
+    let response = request
+        .await
+        .expect("bug: timed-out request should complete");
 
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
     let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be retained");
@@ -973,7 +975,7 @@ async fn airdrop_socket_ip_override_uses_finite_override() {
     let response = app(config.clone())
         .oneshot(request)
         .await
-        .expect("request should complete");
+        .expect("bug: request should complete");
     let mut second_body = airdrop_body();
     second_body["recipient"] = serde_json::json!(format!("0x{}", "12".repeat(32)));
     second_body["clientNonce"] = serde_json::json!("0x02");

@@ -3,7 +3,7 @@ use groundhog_json_rpc_types::error::TxInvalidDetail;
 use groundhog_rv32_lower::LowerError;
 
 fn hint(error: &CliError) -> String {
-    error.hint().expect("hint expected").into_owned()
+    error.hint().expect("bug: hint expected").into_owned()
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn pre_submission_rejections_hint_at_the_violated_bound() {
     assert!(hint(&code).contains("reduce code size"));
     assert_eq!(code.code(), "transaction_rejected_before_submission");
     assert_eq!(
-        code.details_json().expect("details expected")["reason"],
+        code.details_json().expect("bug: details expected")["reason"],
         "rv32CodeTooLarge"
     );
 
@@ -72,7 +72,7 @@ fn package_metadata_invalid_names_the_key_and_package() {
     );
     assert!(hint(&error).contains("128K"));
     assert_eq!(
-        error.details_json().expect("details expected")["key"],
+        error.details_json().expect("bug: details expected")["key"],
         "initial_memory_bytes"
     );
 }
@@ -109,7 +109,7 @@ fn rv32_lower_failed_details_json_keeps_the_message_field() {
     let message = inner.to_string();
     let details = CliError::Rv32LowerFailed(inner)
         .details_json()
-        .expect("details expected");
+        .expect("bug: details expected");
     assert_eq!(details["message"], message);
 }
 

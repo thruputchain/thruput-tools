@@ -279,14 +279,14 @@ fn manifest_flags_read_only_resolve_flags_from_cargo_args() {
         "-p".into(),
         "demo".into(),
     ]);
-    assert_eq!(
-        flags,
-        ManifestFlags {
-            locked: true,
-            offline: false,
-            frozen: true,
-        }
-    );
+    let mut command = Command::new("cargo");
+    flags.apply_to_command(&mut command);
+
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(args, vec!["--locked", "--frozen"]);
 }
 
 #[test]

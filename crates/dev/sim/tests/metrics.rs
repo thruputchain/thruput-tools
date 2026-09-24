@@ -16,7 +16,7 @@ fn aggregates_workload_counts_errors_and_latency() {
     let chain_tip = finished
         .workload_metrics
         .get(&WorkloadKind::ChainTip)
-        .expect("chain-tip metrics should exist");
+        .expect("bug: chain-tip metrics should exist");
 
     assert_eq!(chain_tip.counts.completed, 2);
     assert_eq!(chain_tip.counts.failed, 1);
@@ -72,13 +72,13 @@ fn aggregates_receipt_poll_presence_and_submit_to_receipt_latency() {
     let receipt_poll = finished
         .workload_metrics
         .get(&WorkloadKind::ReceiptPoll)
-        .expect("receipt-poll metrics should exist");
+        .expect("bug: receipt-poll metrics should exist");
 
     assert_eq!(
         receipt_poll
             .receipt_poll
             .as_ref()
-            .expect("receipt-poll summary should exist"),
+            .expect("bug: receipt-poll summary should exist"),
         &ReceiptPollSummary {
             present: 1,
             absent: 1,
@@ -115,7 +115,7 @@ fn summarizes_chain_progress() {
     let progress = metrics
         .finish()
         .chain_progress
-        .expect("progress should exist");
+        .expect("bug: progress should exist");
     assert_eq!(progress.first_height, 7);
     assert_eq!(progress.last_height, 9);
     assert_eq!(progress.max_height, 9);
@@ -164,7 +164,7 @@ fn resource_timeline_segments_restart_sawtooth_and_sums_cpu_per_segment() {
     let timeline = metrics
         .finish()
         .resource_timeline
-        .expect("resource timeline should exist");
+        .expect("bug: resource timeline should exist");
 
     assert_eq!(timeline.sample_interval_ms, 1_000);
     assert_eq!(timeline.sample_count, 4);

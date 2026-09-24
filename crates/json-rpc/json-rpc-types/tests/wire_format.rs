@@ -370,7 +370,7 @@ fn event_query_wire_format_uses_rpc_hex_projections() {
 #[test]
 fn request_types_reject_unknown_fields() {
     fn rejects<T: serde::de::DeserializeOwned + std::fmt::Debug>(valid: &Value, path: &[&str]) {
-        serde_json::from_value::<T>(valid.clone()).expect("valid request should parse");
+        serde_json::from_value::<T>(valid.clone()).expect("bug: valid request should parse");
         let mut bad = valid.clone();
         let mut target = &mut bad;
         for key in path {
