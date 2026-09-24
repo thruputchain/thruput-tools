@@ -123,14 +123,14 @@ impl From<groundhog_trace::DbConflictCode> for ConflictCode {
     fn from(code: groundhog_trace::DbConflictCode) -> Self {
         use groundhog_trace::DbConflictCode as Xdr;
         match code {
-            Xdr::kDbConflictExclusiveLock => Self::ExclusiveLock,
-            Xdr::kDbConflictTypeMismatch => Self::TypeMismatch,
-            Xdr::kDbConflictValueMismatch => Self::ValueMismatch,
-            Xdr::kDbConflictBoundsExceeded => Self::BoundsExceeded,
-            Xdr::kDbConflictOverflow => Self::Overflow,
-            Xdr::kDbConflictReplayProtection => Self::ReplayProtection,
-            Xdr::kDbConflictQueueConsumer => Self::QueueConsumer,
-            Xdr::kDbConflictCapacityExceeded => Self::CapacityExceeded,
+            Xdr::ExclusiveLockDenied => Self::ExclusiveLock,
+            Xdr::TypeMismatch => Self::TypeMismatch,
+            Xdr::ValueMismatch => Self::ValueMismatch,
+            Xdr::BoundsExceeded => Self::BoundsExceeded,
+            Xdr::Overflow => Self::Overflow,
+            Xdr::ReplayProtection => Self::ReplayProtection,
+            Xdr::QueueConsumer => Self::QueueConsumer,
+            Xdr::CapacityExceeded => Self::CapacityExceeded,
             _ => Self::Other,
         }
     }
