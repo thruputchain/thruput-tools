@@ -2192,7 +2192,7 @@ mod tests {
             type_defs: vec![
                 ContractTypeDef::TypeDefStruct {
                     struct_def: ContractStructDef {
-                        name: spec_string_bytes("Payload"),
+                        name: spec_id("Payload"),
                         fields: vec![
                             contract_field("count", ContractType::U32),
                             contract_field(
@@ -2211,7 +2211,7 @@ mod tests {
                 },
                 ContractTypeDef::TypeDefEnum {
                     enum_def: ContractEnumDef {
-                        name: spec_string_bytes("Mode"),
+                        name: spec_id("Mode"),
                         variants: vec![
                             ContractEnumVariant {
                                 name: spec_string_bytes("Ready"),
@@ -2228,7 +2228,7 @@ mod tests {
                 },
                 ContractTypeDef::TypeDefUnion {
                     union_def: ContractUnionDef {
-                        name: spec_string_bytes("Envelope"),
+                        name: spec_id("Envelope"),
                         cases: vec![
                             ContractUnionCase {
                                 name: spec_string_bytes("Empty"),
@@ -2280,7 +2280,7 @@ mod tests {
             type_defs: vec![
                 ContractTypeDef::TypeDefEnum {
                     enum_def: ContractEnumDef {
-                        name: spec_string_bytes("NumericEnum"),
+                        name: spec_id("NumericEnum"),
                         variants: vec![
                             ContractEnumVariant {
                                 name: spec_string_bytes("1"),
@@ -2297,7 +2297,7 @@ mod tests {
                 },
                 ContractTypeDef::TypeDefUnion {
                     union_def: ContractUnionDef {
-                        name: spec_string_bytes("NumericUnion"),
+                        name: spec_id("NumericUnion"),
                         cases: vec![
                             ContractUnionCase {
                                 name: spec_string_bytes("1"),
@@ -2396,12 +2396,23 @@ mod tests {
 
     fn named_type(name: &str) -> ContractType {
         ContractType::Named {
-            named: spec_string_bytes(name),
+            named: spec_id(name),
         }
     }
 
     fn spec_string_bytes(value: &str) -> ContractSpecString {
         value.try_into().expect("bug: test string should fit")
+    }
+
+    /// A fixture id: one crate, one module, so the declared name is what
+    /// tells these types apart -- which is all these tests turn on.
+    fn spec_id(declared: &str) -> groundhog_contract_spec::ContractSpecId {
+        groundhog_contract_spec::ContractSpecId {
+            crate_name: spec_string_bytes("demo"),
+            major: spec_string_bytes("1"),
+            module_path: spec_string_bytes("demo"),
+            declared: spec_string_bytes(declared),
+        }
     }
 
     struct CurrentDirGuard {

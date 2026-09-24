@@ -890,7 +890,7 @@ fn invalid_spec(path: &str, message: &str) -> CliError {
 mod tests {
     use groundhog_contract_spec::{
         ContractEnumDef, ContractEnumVariant, ContractEventDef, ContractField, ContractSpec,
-        ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
+        ContractSpecId, ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
     };
     use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
     use groundhog_json_rpc_types::hex::{HexBytes, Topic};
@@ -907,6 +907,17 @@ mod tests {
         ContractSpecString::try_from(value).expect("fixture spec string should fit")
     }
 
+    /// A fixture id: one crate, one module, so the declared name is what
+    /// tells these types apart -- which is what these tests turn on.
+    fn spec_id(declared: &str) -> ContractSpecId {
+        ContractSpecId {
+            crate_name: spec_string("demo"),
+            major: spec_string("1"),
+            module_path: spec_string("demo"),
+            declared: spec_string(declared),
+        }
+    }
+
     fn field(name: &str, ty: ContractType) -> ContractField {
         ContractField {
             name: spec_string(name),
@@ -919,7 +930,7 @@ mod tests {
             interfaces: VecM(vec![]),
             type_defs: VecM(vec![]),
             events: VecM(vec![ContractEventDef {
-                name: spec_string("PingEvent"),
+                name: spec_id("PingEvent"),
                 signature: [0x11; 32].into(),
                 topics: VecM(vec![field("tag", ContractType::U64)]),
                 fields: VecM(vec![field("value", field_type)]),
@@ -929,20 +940,20 @@ mod tests {
 
     fn named_chain(definitions: usize) -> ContractSpec {
         let mut spec = event_spec(ContractType::Named {
-            named: spec_string("Type0"),
+            named: spec_id("Type0"),
         });
         spec.type_defs = VecM(
             (0..definitions)
                 .map(|index| ContractTypeDef::TypeDefStruct {
                     struct_def: ContractStructDef {
-                        name: spec_string(&format!("Type{index}")),
+                        name: spec_id(&format!("Type{index}")),
                         fields: VecM(vec![field(
                             "value",
                             if index + 1 == definitions {
                                 ContractType::U64
                             } else {
                                 ContractType::Named {
-                                    named: spec_string(&format!("Type{}", index + 1)),
+                                    named: spec_id(&format!("Type{}", index + 1)),
                                 }
                             },
                         )]),
@@ -1061,12 +1072,12 @@ mod tests {
     #[test]
     fn event_decoding_rejects_unknown_enum_but_call_codec_remains_permissive() {
         let enum_type = ContractType::Named {
-            named: spec_string("Mode"),
+            named: spec_id("Mode"),
         };
         let mut contract_spec = event_spec(enum_type.clone());
         contract_spec.type_defs = VecM(vec![ContractTypeDef::TypeDefEnum {
             enum_def: ContractEnumDef {
-                name: spec_string("Mode"),
+                name: spec_id("Mode"),
                 variants: VecM(vec![ContractEnumVariant {
                     name: spec_string("Ready"),
                     value: 1,
@@ -1140,7 +1151,7 @@ mod tests {
     fn validation_rejects_duplicate_signatures_and_excess_indexed_fields() {
         let mut duplicate_signature = event_spec(ContractType::U64);
         let mut second_event = duplicate_signature.events[0].clone();
-        second_event.name = spec_string("PongEvent");
+        second_event.name = spec_id("PongEvent");
         duplicate_signature.events.0.push(second_event);
         assert!(matches!(
             validate_spec(&duplicate_signature).unwrap_err(),
@@ -1164,7 +1175,7 @@ mod tests {
     #[test]
     fn validation_rejects_unresolved_types_and_duplicate_field_names() {
         let unresolved = event_spec(ContractType::Named {
-            named: spec_string("Missing"),
+            named: spec_id("Missing"),
         });
         assert!(matches!(
             validate_spec(&unresolved).unwrap_err(),
@@ -1308,7 +1319,7 @@ mod tests {
             unreachable!()
         };
         struct_def.fields.0[0].ty = ContractType::Named {
-            named: spec_string("Type0"),
+            named: spec_id("Type0"),
         };
 
         assert!(matches!(

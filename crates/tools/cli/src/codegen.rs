@@ -2051,6 +2051,18 @@ mod tests {
         s.try_into().unwrap()
     }
 
+    /// A fixture id: one crate, one module, so the declared name is what
+    /// tells these types apart -- which is what these tests turn on. The
+    /// generated output takes the declared segment, so it reads as before.
+    fn spec_id(declared: &str) -> ContractSpecId {
+        ContractSpecId {
+            crate_name: spec_string("demo"),
+            major: spec_string("1"),
+            module_path: spec_string("demo"),
+            declared: spec_string(declared),
+        }
+    }
+
     #[test]
     fn camel_case_leaves_single_word_names_unchanged() {
         assert_eq!(to_camel_case("transfer"), "transfer");
@@ -2127,7 +2139,7 @@ mod tests {
         let typed = ContractType::SignedToken {
             signed_token_preimage: ContractSignedTokenPreimage {
                 preimage_type: Some(Box::new(ContractType::Named {
-                    named: spec_string("Auth"),
+                    named: spec_id("Auth"),
                 })),
             },
         };
@@ -2201,7 +2213,7 @@ mod tests {
         // which is what a container-only walk misses.
         let auth_def = ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("Auth"),
+                name: spec_id("Auth"),
                 fields: vec![ContractField {
                     name: spec_string("token"),
                     ty: token.clone(),
@@ -2224,14 +2236,14 @@ mod tests {
             (
                 "named",
                 ContractType::Named {
-                    named: spec_string("Auth"),
+                    named: spec_id("Auth"),
                 },
             ),
             (
                 "named inside a container",
                 ContractType::Option {
                     option_inner: Box::new(ContractType::Named {
-                        named: spec_string("Auth"),
+                        named: spec_id("Auth"),
                     }),
                 },
             ),
@@ -2260,12 +2272,12 @@ mod tests {
         // rather than recurse forever, and a token-free cycle must pass.
         let node_def = ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("Node"),
+                name: spec_id("Node"),
                 fields: vec![ContractField {
                     name: spec_string("next"),
                     ty: ContractType::Option {
                         option_inner: Box::new(ContractType::Named {
-                            named: spec_string("Node"),
+                            named: spec_id("Node"),
                         }),
                     },
                 }]
@@ -2276,7 +2288,7 @@ mod tests {
         let index: BTreeMap<&str, &ContractTypeDef> = [("Node", &node_def)].into_iter().collect();
         assert!(!type_carries_signed_token(
             &ContractType::Named {
-                named: spec_string("Node"),
+                named: spec_id("Node"),
             },
             &index,
             &mut BTreeSet::new(),
@@ -2300,7 +2312,7 @@ mod tests {
         );
         spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("SignedToken"),
+                name: spec_id("SignedToken"),
                 fields: vec![ContractField {
                     name: spec_string("id"),
                     ty: ContractType::U64,
@@ -2403,7 +2415,7 @@ mod tests {
     #[test]
     fn maps_named_type() {
         let ty = ContractType::Named {
-            named: spec_string("ERC20Error"),
+            named: spec_id("ERC20Error"),
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "ERC20Error");
     }
@@ -2412,7 +2424,7 @@ mod tests {
     fn generates_struct_interface() {
         let def = ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("TokenInfo"),
+                name: spec_id("TokenInfo"),
                 fields: vec![
                     ContractField {
                         name: spec_string("owner"),
@@ -2441,7 +2453,7 @@ mod tests {
     fn generates_enum() {
         let def = ContractTypeDef::TypeDefEnum {
             enum_def: ContractEnumDef {
-                name: spec_string("ERC20Error"),
+                name: spec_id("ERC20Error"),
                 variants: vec![
                     ContractEnumVariant {
                         name: spec_string("AlreadyInitialized"),
@@ -2466,7 +2478,7 @@ mod tests {
     fn generates_discriminated_union() {
         let def = ContractTypeDef::TypeDefUnion {
             union_def: ContractUnionDef {
-                name: spec_string("Result"),
+                name: spec_id("Result"),
                 cases: vec![
                     ContractUnionCase {
                         name: spec_string("Ok"),
@@ -2514,7 +2526,7 @@ export type Result =
     /// An event with one topic field and one payload field.
     fn ping_event_def() -> ContractEventDef {
         ContractEventDef {
-            name: spec_string("PingEvent"),
+            name: spec_id("PingEvent"),
             signature: [0xAB; 32].into(),
             topics: vec![ContractField {
                 name: spec_string("tag"),
@@ -2656,7 +2668,7 @@ export type Result =
         // event with that exact name would collide in TS's type namespace.
         let mut spec = spec_with_events();
         let mut event = ping_event_def();
-        event.name = spec_string("CounterEvent");
+        event.name = spec_id("CounterEvent");
         spec.events = vec![event].try_into().unwrap();
         let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
@@ -2669,7 +2681,7 @@ export type Result =
         let mut spec = spec_with_events();
         spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("PingEvent"),
+                name: spec_id("PingEvent"),
                 fields: vec![].try_into().unwrap(),
             },
         }]
@@ -2688,7 +2700,7 @@ export type Result =
             let mut spec = erc20_spec();
             spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
                 struct_def: ContractStructDef {
-                    name: spec_string(&name),
+                    name: spec_id(&name),
                     fields: vec![].try_into().unwrap(),
                 },
             });
@@ -2707,7 +2719,7 @@ export type Result =
             let mut spec = erc20_spec();
             spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
                 struct_def: ContractStructDef {
-                    name: spec_string(name),
+                    name: spec_id(name),
                     fields: vec![ContractField {
                         name: spec_string("value"),
                         ty: ContractType::U64,
@@ -2855,7 +2867,7 @@ export type Result =
         let mut spec = counter_spec();
         spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("Uint8Array"),
+                name: spec_id("Uint8Array"),
                 fields: vec![ContractField {
                     name: spec_string("bytes"),
                     ty: ContractType::Bytes,
@@ -2877,7 +2889,7 @@ export type Result =
     fn event_shadowing_emitted_record_errors() {
         let mut spec = spec_with_events();
         let mut event = ping_event_def();
-        event.name = spec_string("Record");
+        event.name = spec_id("Record");
         event.topics.0[0].ty = ContractType::String;
         spec.events = vec![event].try_into().unwrap();
 
@@ -3106,7 +3118,7 @@ export type Result =
                 throws: vec![ContractExceptionType {
                     selector: 0xb199_47ac_b2fa_14ff,
                     ty: ContractType::Named {
-                        named: spec_string("ERC20Error"),
+                        named: spec_id("ERC20Error"),
                     },
                 }]
                 .try_into()
@@ -3151,7 +3163,7 @@ export type Result =
             .unwrap(),
             type_defs: vec![ContractTypeDef::TypeDefEnum {
                 enum_def: ContractEnumDef {
-                    name: spec_string("ERC20Error"),
+                    name: spec_id("ERC20Error"),
                     variants: vec![
                         ContractEnumVariant {
                             name: spec_string("AlreadyInitialized"),
@@ -3301,7 +3313,7 @@ export type Result =
                     args: vec![ContractField {
                         name: spec_string("tree"),
                         ty: ContractType::Named {
-                            named: spec_string("Tree"),
+                            named: spec_id("Tree"),
                         },
                     }]
                     .try_into()
@@ -3315,7 +3327,7 @@ export type Result =
             .unwrap(),
             type_defs: vec![ContractTypeDef::TypeDefStruct {
                 struct_def: ContractStructDef {
-                    name: spec_string("Tree"),
+                    name: spec_id("Tree"),
                     fields: vec![
                         ContractField {
                             name: spec_string("value"),
@@ -3325,7 +3337,7 @@ export type Result =
                             name: spec_string("left"),
                             ty: ContractType::Option {
                                 option_inner: Box::new(ContractType::Named {
-                                    named: spec_string("Tree"),
+                                    named: spec_id("Tree"),
                                 }),
                             },
                         },
@@ -3333,7 +3345,7 @@ export type Result =
                             name: spec_string("right"),
                             ty: ContractType::Option {
                                 option_inner: Box::new(ContractType::Named {
-                                    named: spec_string("Tree"),
+                                    named: spec_id("Tree"),
                                 }),
                             },
                         },
@@ -3400,7 +3412,7 @@ export type Result =
     fn generates_signed_bigint_enum_values() {
         let def = ContractTypeDef::TypeDefEnum {
             enum_def: ContractEnumDef {
-                name: spec_string("SignedValues"),
+                name: spec_id("SignedValues"),
                 variants: vec![
                     ContractEnumVariant {
                         name: spec_string("Negative"),
@@ -3425,7 +3437,7 @@ export type Result =
     fn duplicate_enum_values_are_rejected() {
         let def = ContractTypeDef::TypeDefEnum {
             enum_def: ContractEnumDef {
-                name: spec_string("DuplicateValues"),
+                name: spec_id("DuplicateValues"),
                 variants: vec![
                     ContractEnumVariant {
                         name: spec_string("First"),
@@ -3458,7 +3470,7 @@ export type Result =
     fn duplicate_union_discriminants_are_rejected() {
         let def = ContractTypeDef::TypeDefUnion {
             union_def: ContractUnionDef {
-                name: spec_string("DuplicateDiscriminants"),
+                name: spec_id("DuplicateDiscriminants"),
                 cases: vec![
                     ContractUnionCase {
                         name: spec_string("First"),
@@ -3493,7 +3505,7 @@ export type Result =
     fn empty_union_is_rejected() {
         let def = ContractTypeDef::TypeDefUnion {
             union_def: ContractUnionDef {
-                name: spec_string("Empty"),
+                name: spec_id("Empty"),
                 cases: vec![].try_into().unwrap(),
             },
         };
@@ -3515,7 +3527,7 @@ export type Result =
     fn generates_direct_topic_types_filters_and_metadata() {
         let mut spec = spec_with_events();
         spec.events = vec![ContractEventDef {
-            name: spec_string("Changed"),
+            name: spec_id("Changed"),
             signature: [0xCD; 32].into(),
             topics: vec![
                 ContractField {
@@ -3619,9 +3631,9 @@ export type Result =
     #[test]
     fn duplicate_event_signatures_are_rejected() {
         let mut first = spec_with_events().events[0].clone();
-        first.name = spec_string("First");
+        first.name = spec_id("First");
         let mut second = first.clone();
-        second.name = spec_string("Second");
+        second.name = spec_id("Second");
         let spec = ContractSpec {
             interfaces: vec![ContractSpecInterface {
                 name: spec_string("Counter"),
@@ -3684,7 +3696,7 @@ export type Result =
                 args: vec![ContractField {
                     name: spec_string("value"),
                     ty: ContractType::Named {
-                        named: spec_string("Missing"),
+                        named: spec_id("Missing"),
                     },
                 }]
                 .try_into()
@@ -3715,7 +3727,7 @@ export type Result =
 
         let escaped_struct = ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
-                name: spec_string("Escaped"),
+                name: spec_id("Escaped"),
                 fields: vec![ContractField {
                     name: spec_string("quoted\" field"),
                     ty: ContractType::Bool,
@@ -3765,7 +3777,7 @@ export type Result =
                 throws: vec![ContractExceptionType {
                     selector: 0x1234,
                     ty: ContractType::Named {
-                        named: spec_string("ExampleError"),
+                        named: spec_id("ExampleError"),
                     },
                 }]
                 .try_into()
@@ -3806,7 +3818,7 @@ export type Result =
             .unwrap(),
             type_defs: vec![ContractTypeDef::TypeDefUnion {
                 union_def: ContractUnionDef {
-                    name: spec_string("ExampleError"),
+                    name: spec_id("ExampleError"),
                     cases: vec![
                         ContractUnionCase {
                             name: spec_string("InvalidValue"),
@@ -3828,7 +3840,7 @@ export type Result =
             .try_into()
             .unwrap(),
             events: vec![ContractEventDef {
-                name: spec_string("ChangedEvent"),
+                name: spec_id("ChangedEvent"),
                 signature: [0x5a; 32].into(),
                 topics: vec![
                     ContractField {
