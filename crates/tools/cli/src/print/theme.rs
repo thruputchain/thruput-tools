@@ -2,6 +2,11 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::policy::Policy;
 
+// ANSI palette slots can be remapped to unrelated hues by terminal themes.
+const SUCCESS: Color = Color::Rgb(79, 232, 143);
+const WARNING: Color = Color::Rgb(251, 191, 36);
+const ERROR: Color = Color::Rgb(248, 113, 113);
+
 /// Human outcome labels; these do not determine a command's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
@@ -56,9 +61,9 @@ impl Outcome {
 
     fn color(self) -> Color {
         match self {
-            Self::Success | Self::Ready => Color::Green,
-            Self::Warning | Self::Partial | Self::Unconfirmed => Color::Yellow,
-            Self::Error => Color::Red,
+            Self::Success | Self::Ready => SUCCESS,
+            Self::Warning | Self::Partial | Self::Unconfirmed => WARNING,
+            Self::Error => ERROR,
             _ => Color::Cyan,
         }
     }
@@ -69,10 +74,10 @@ pub(super) struct Theme(pub Policy);
 
 impl Theme {
     pub fn border(self) -> Style {
-        self.style(Color::Green, Modifier::empty())
+        self.style(SUCCESS, Modifier::empty())
     }
     pub fn title(self) -> Style {
-        self.style(Color::Green, Modifier::BOLD)
+        self.style(SUCCESS, Modifier::BOLD)
     }
     pub fn label(self) -> Style {
         self.style(Color::Reset, Modifier::DIM)

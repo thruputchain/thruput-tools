@@ -113,10 +113,16 @@ mod tests {
     #[test]
     fn only_diagnostic_headings_receive_severity_color() {
         for (text, color) in [
-            ("warning: something needs attention", Color::Yellow),
-            ("  warning[unused_imports]: unused import", Color::Yellow),
-            ("error[E0425]: cannot find value", Color::Red),
-            ("error: could not compile", Color::Red),
+            (
+                "warning: something needs attention",
+                Color::Rgb(251, 191, 36),
+            ),
+            (
+                "  warning[unused_imports]: unused import",
+                Color::Rgb(251, 191, 36),
+            ),
+            ("error[E0425]: cannot find value", Color::Rgb(248, 113, 113)),
+            ("error: could not compile", Color::Rgb(248, 113, 113)),
         ] {
             let rendered = line(text, theme(true));
             assert_eq!(rendered.to_string(), text);

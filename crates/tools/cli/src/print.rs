@@ -216,6 +216,11 @@ impl Print {
         self.output_policy().color
     }
 
+    /// Whether stderr supports the shared human layout, including monochrome terminals.
+    pub(crate) fn has_human_ui(&self) -> bool {
+        self.output_policy().width.is_some()
+    }
+
     /// Trace a subprocess invocation to stderr when command tracing is on.
     ///
     /// Opt-in diagnostic (see the global `--show-cargo-commands` flag). Writes

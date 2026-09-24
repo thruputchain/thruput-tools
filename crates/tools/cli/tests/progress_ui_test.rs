@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-//! Exercise real terminal output against fake Cargo, including DSR replies and scrollback.
+//! Exercise command-scoped progress, including DSR replies, signals, and scrollback.
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -18,6 +18,8 @@ use std::{
 };
 use tempfile::TempDir;
 
+#[path = "support/query_ui.rs"]
+mod queries;
 mod support;
 
 struct Fixture {
@@ -499,7 +501,11 @@ fn resize_falls_back_without_erasing_diagnostics_or_losing_utf8() {
 fn ctrl_c_retains_foreground_signal_behaviour_and_no_success_card() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("hang"));
-    pty.until(|pty| pty.queries > 0 && pty.parser.screen().contents().contains("Compiling"));
+    pty.until(|pty| {
+        pty.queries > 0
+            && pty.parser.screen().contents().contains("Compiling")
+            && fixture.root.join("cargo.pid").exists()
+    });
     pty.master.write_all(b"\x03").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
@@ -608,7 +614,7 @@ fn monochrome_progress_and_explicit_cargo_color_use_the_correct_modes() {
     let mut pty = Pty::spawn(command);
     assert!(pty.finish().success());
     assert!(pty.queries > 0);
-    assert!(!String::from_utf8_lossy(&pty.raw).contains("38;5;"));
+    assert!(!String::from_utf8_lossy(&pty.raw).contains("\x1b[38;"));
 
     let mut command = fixture.command("slow");
     command.env("CARGO_TERM_COLOR", "always");
@@ -651,7 +657,7 @@ fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
     assert!(pty.style_in_history("Wrote ", 0).0);
     assert_eq!(
         pty.style_in_history("warning: diagnostic-body", 0),
-        (false, vt100::Color::Idx(3))
+        (false, vt100::Color::Rgb(251, 191, 36))
     );
     assert_eq!(
         pty.style_in_history("warning: diagnostic-body", 9),
@@ -659,7 +665,7 @@ fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
     );
     assert_eq!(
         pty.style_in_history("error[E0425]: diagnostic-error", 0),
-        (false, vt100::Color::Idx(1))
+        (false, vt100::Color::Rgb(248, 113, 113))
     );
     assert_eq!(
         pty.style_in_history("error[E0425]: diagnostic-error", 14),

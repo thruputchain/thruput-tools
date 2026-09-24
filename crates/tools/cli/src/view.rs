@@ -39,6 +39,7 @@ pub fn run(
     print: &Print,
 ) -> Result<(), CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let task = crate::print::progress::Task::start(print, "Preparing view", true);
     let prepared = prepare_view(
         contract,
         method,
@@ -53,7 +54,8 @@ pub fn run(
         &rt,
     )?;
 
-    let task = print.start_task(format_args!("Viewing `{}`", prepared.method));
+    task.print()
+        .phase(format_args!("Viewing `{}`", prepared.method));
 
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
     let return_value = decoded_return_value(&prepared, &response);
@@ -61,9 +63,9 @@ pub fn run(
     let abort = decoded_abort
         .as_ref()
         .and_then(|result| result.as_ref().ok());
+    let warnings = task.finish();
 
     if !print.is_json() {
-        task.clear();
         print_view_response(
             &prepared,
             &response,
@@ -71,6 +73,9 @@ pub fn run(
             decoded_abort.as_ref(),
             print,
         );
+        for warning in warnings {
+            print.warn(warning);
+        }
     }
     print.json(&CommandResult::new(
         cmd,
@@ -216,6 +221,70 @@ async fn fetch_view(rpc_url: &str, request: ViewRequest) -> Result<ViewResponse,
 }
 
 fn print_view_response(
+    prepared: &PreparedView,
+    response: &ViewResponse,
+    decoded_return_value: Option<&serde_json::Value>,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
+    if !print.has_human_ui() {
+        print_plain_view_response(
+            prepared,
+            response,
+            decoded_return_value,
+            decoded_abort,
+            print,
+        );
+        return;
+    }
+    let mut fields = vec![
+        ("Contract".into(), prepared.contract_address_hex.clone()),
+        ("Entrypoint".into(), prepared.entrypoint_id.clone()),
+        ("Height".into(), response.height.to_string()),
+        ("RPC URL".into(), prepared.rpc_url.clone()),
+    ];
+    if prepared.resolved.metadata.is_some() {
+        fields.insert(1, ("Method".into(), prepared.method.clone()));
+    }
+    if let Some(caller) = &prepared.request.caller {
+        fields.push(("Caller".into(), format_contract_address(caller)));
+    }
+    let mut warnings = Vec::new();
+    let (outcome, title) = match &response.output {
+        RootInvocationOutput::Return { return_data } => {
+            fields.push(match decoded_return_value {
+                Some(value) => ("Value".into(), value.to_string()),
+                None => ("Return (hex)".into(), prefixed_hex(&return_data.0)),
+            });
+            (crate::print::Outcome::Success, "View succeeded")
+        }
+        RootInvocationOutput::Abort { abort_data } => {
+            if let Some(Ok(abort)) = decoded_abort {
+                if let Some(label) = abort.exception_label() {
+                    fields.push(("Abort type".into(), label));
+                }
+                fields.push(("Abort value".into(), abort.value.to_string()));
+            } else {
+                fields.push(("Abort (hex)".into(), prefixed_hex(&abort_data.0)));
+                if let Some(Err(error)) = decoded_abort {
+                    warnings.push(format!("Could not decode abort data: {error}"));
+                }
+            }
+            (crate::print::Outcome::Warning, "View aborted")
+        }
+        RootInvocationOutput::Fault => (crate::print::Outcome::Error, "View faulted"),
+        _ => (crate::print::Outcome::Warning, "Unsupported view output"),
+    };
+    if !response.events.is_empty() {
+        fields.push(("Events".into(), response.events.len().to_string()));
+        for (index, event) in response.events.iter().enumerate() {
+            fields.push((format!("Event {index}"), format_event(event)));
+        }
+    }
+    print.outcome_report(outcome, title, &fields, &warnings);
+}
+
+fn print_plain_view_response(
     prepared: &PreparedView,
     response: &ViewResponse,
     decoded_return_value: Option<&serde_json::Value>,

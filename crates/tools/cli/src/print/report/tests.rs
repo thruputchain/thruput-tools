@@ -99,8 +99,12 @@ fn card_uses_ratatui_theme_cells_and_crossterm_styling() {
 #[test]
 fn outcome_card_titles_use_severity_color_without_changing_the_border() {
     for (outcome, label, color) in [
-        (Outcome::Error, "✗ error:", "38;5;1m"),
-        (Outcome::Partial, "⚠ Partially completed:", "38;5;3m"),
+        (Outcome::Error, "✗ error:", "38;2;248;113;113m"),
+        (
+            Outcome::Partial,
+            "⚠ Partially completed:",
+            "38;2;251;191;36m",
+        ),
     ] {
         let mut report = Report::new(policy(80, true));
         report.outcome_card(
@@ -111,7 +115,7 @@ fn outcome_card_titles_use_severity_color_without_changing_the_border() {
         let lines = report.into_lines();
         assert!(plain(&lines[0]).contains(label));
         assert!(lines[0].contains(color));
-        assert!(lines.last().unwrap().contains("38;5;2m"));
+        assert!(lines.last().unwrap().contains("38;2;79;232;143m"));
     }
 }
 

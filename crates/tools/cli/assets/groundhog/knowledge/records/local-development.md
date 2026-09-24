@@ -45,6 +45,13 @@ to show each value's global or project origin and how the profile was selected.
 validation states, and shows invalid or missing profile warnings below the list.
 These commands keep data on stdout and retain plain and JSON output modes.
 
+`groundhog balance` and `groundhog view` show delayed progress while waiting for
+RPC, followed by result cards on stderr. Balance cards include HOG and raw amounts,
+the address, height, profile, and RPC URL. View cards distinguish returns, aborts,
+and faults, and include decoded or raw values and emitted events. Abort decode
+warnings appear below the card. Plain, quiet, and JSON modes retain their existing
+output and exit-status rules.
+
 On compatible foreground terminals, `groundhog build` shows delayed phase and
 elapsed-time progress, then an artifact summary with compiler diagnostics and
 Groundhog warnings below it. Compiler messages retain source locations, snippets,
