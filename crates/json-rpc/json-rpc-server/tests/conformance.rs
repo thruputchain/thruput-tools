@@ -417,7 +417,7 @@ async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes
 }
 
 #[tokio::test]
-async fn empty_event_filters_are_rejected_before_dispatch_for_all_shapes() {
+async fn event_filters_require_a_named_contract_for_all_shapes() {
     for backend in all_shapes() {
         let calls = backend.contract_events_calls.clone();
         let svc = server(backend);
