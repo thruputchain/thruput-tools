@@ -729,7 +729,9 @@ mod tests {
                 jsonrpsee::server::ServerConfig::builder()
                     .max_connections(config.max_connections)
                     .max_response_body_size(max_response_body_size)
-                    .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
+                    .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
+                        groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
+                    ))
                     .build(),
             )
             .set_http_middleware(crate::middleware::http_middleware(
@@ -765,6 +767,67 @@ mod tests {
             .into_rpc(),
         );
         (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn rpc_array_limit_rejects_oversized_receipt_reads_before_dispatch() {
+        use groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (indexer_addr, indexer) = start_fake_indexer(
+            TxInfoResult::Default {
+                outcome: TxInfoOutcome::TxInfoNotFound.0,
+            },
+            calls.clone(),
+        )
+        .await;
+        let ctx = Arc::new(test_context(None, indexer_addr).await);
+        let (addr, handle) = watchdog(start_status_http_server(ctx.clone())).await;
+        let client = reqwest::Client::new();
+        for count in [MAX_RPC_BATCH_REQUESTS, MAX_RPC_BATCH_REQUESTS + 1] {
+            let request: Vec<_> = (0..count)
+                .map(|id| {
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "method": "groundhog_getTransactionReceipt", "params": [test_hash()],
+                    })
+                })
+                .collect();
+            let response: serde_json::Value = watchdog(async {
+                client
+                    .post(format!("http://{addr}"))
+                    .json(&request)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap()
+            })
+            .await;
+            if count == MAX_RPC_BATCH_REQUESTS {
+                let results = response.as_array().unwrap();
+                assert_eq!(results.len(), count as usize);
+                for (id, result) in results.iter().enumerate() {
+                    assert_eq!(
+                        result,
+                        &serde_json::json!({
+                            "jsonrpc": "2.0", "id": id, "result": null,
+                        })
+                    );
+                }
+            } else {
+                assert_eq!(response["error"]["code"], -32010);
+            }
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                MAX_RPC_BATCH_REQUESTS as usize
+            );
+        }
+        handle.stop().unwrap();
+        watchdog(handle.stopped()).await;
+        ctx.abort_request_workers();
+        indexer.abort();
     }
 
     #[tokio::test]

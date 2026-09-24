@@ -250,7 +250,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_cfg = jsonrpsee::server::ServerConfig::builder()
         .max_connections(ctx.config.max_connections)
         .max_response_body_size(max_response_body_size)
-        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
+        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
+            groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
+        ))
         .build();
     let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
     let rpc_metrics = metrics.clone();
