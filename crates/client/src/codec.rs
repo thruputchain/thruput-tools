@@ -358,7 +358,7 @@ pub fn format_contract_address(address: &ContractAddress) -> String {
 /// this rendering joins the segments and so cannot be taken apart again.
 /// The shape matches `groundhog_spec_tool`'s `spec_id_lossy`, so the CLI and
 /// the spec tool name the same type the same way.
-fn spec_id_text(id: &ContractSpecId) -> Result<String, Error> {
+pub fn spec_id_text(id: &ContractSpecId) -> Result<String, Error> {
     let crate_name = spec_string_text(&id.crate_name)?;
     let major = spec_string_text(&id.major)?;
     let module_path = spec_string_text(&id.module_path)?;
