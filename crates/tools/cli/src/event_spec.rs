@@ -4,8 +4,8 @@ use std::io::{Read as _, Take};
 use std::path::Path;
 
 use groundhog_contract_spec::{
-    ContractEventDef, ContractField, ContractSpec, ContractSpecString, ContractType,
-    ContractTypeDef, ContractUnionCaseType,
+    ContractEventDef, ContractField, ContractSpec, ContractSpecId, ContractSpecString,
+    ContractType, ContractTypeDef, ContractUnionCaseType,
 };
 use groundhog_json_rpc_types::events::IdentifiedEvent;
 use groundhog_json_rpc_types::hex::Topic;
@@ -98,7 +98,7 @@ impl ValidatedEventSpec {
             return unknown_event(raw);
         };
         let event_def = &self.spec.events[*index];
-        let event_name = spec_string_text(&event_def.name)
+        let event_name = spec_string_text(&event_def.name.declared)
             .expect("bug: validated event name must be text")
             .to_owned();
 
@@ -284,7 +284,7 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
     let mut remaining_visits = MAX_VALIDATION_VISITS;
 
     for (index, event) in spec.events.iter().enumerate() {
-        let name = required_name(&event.name, "event name", false)?;
+        let name = required_name(&event.name.declared, "event name", false)?;
         if events_by_name.insert(name.to_owned(), index).is_some() {
             return Err(SpecError::Duplicate {
                 context: "event name",
@@ -405,7 +405,7 @@ fn check_member_limit(count: usize) -> Result<(), SpecError> {
 
 fn event_type_def_index(
     definitions: &[ContractTypeDef],
-) -> Result<BTreeMap<String, &ContractTypeDef>, SpecError> {
+) -> Result<BTreeMap<ContractSpecId, &ContractTypeDef>, SpecError> {
     let mut index = BTreeMap::new();
     for definition in definitions {
         let name = match definition {
@@ -418,11 +418,11 @@ fn event_type_def_index(
                 });
             }
         };
-        let name = required_name(name, "type definition name", false)?;
-        if index.insert(name.to_owned(), definition).is_some() {
+        let id = required_id(name, "type definition name")?;
+        if index.insert(id.clone(), definition).is_some() {
             return Err(SpecError::Duplicate {
                 context: "type definition name",
-                name: name.to_owned(),
+                name: id_label(id),
             });
         }
     }
@@ -432,7 +432,7 @@ fn event_type_def_index(
 fn validate_fields(
     fields: &[ContractField],
     context: &'static str,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
     remaining_visits: &mut usize,
     count_values: bool,
 ) -> Result<usize, SpecError> {
@@ -460,8 +460,8 @@ fn validate_fields(
 
 fn validate_type(
     ty: &ContractType,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
@@ -561,24 +561,22 @@ fn validate_type(
 /// `visiting` holds the names on the current path; the name is removed again
 /// on the way out so a type reached twice through sibling fields still passes.
 fn validate_named_type(
-    named: &ContractSpecString,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    named: &ContractSpecId,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
 ) -> Result<usize, SpecError> {
-    let name = required_name(named, "named type", false)?;
-    if !visiting.insert(name.to_owned()) {
+    let id = required_id(named, "named type")?;
+    if !visiting.insert(id.clone()) {
         return Err(SpecError::CyclicType {
-            name: name.to_owned(),
+            name: id_label(id),
         });
     }
     let definition = type_defs
-        .get(name)
-        .ok_or_else(|| SpecError::UnresolvedType {
-            name: name.to_owned(),
-        })?;
+        .get(id)
+        .ok_or_else(|| SpecError::UnresolvedType { name: id_label(id) })?;
     let result = validate_type_definition(
         definition,
         type_defs,
@@ -587,7 +585,7 @@ fn validate_named_type(
         depth,
         count_values,
     );
-    visiting.remove(name);
+    visiting.remove(id);
     result
 }
 
@@ -603,8 +601,8 @@ fn validate_type_limits(remaining_visits: &mut usize, depth: usize) -> Result<()
 
 fn validate_type_definition(
     definition: &ContractTypeDef,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
@@ -713,8 +711,8 @@ fn validate_type_definition(
 fn validate_named_fields(
     fields: &[ContractField],
     context: &'static str,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
@@ -739,6 +737,41 @@ fn validate_named_fields(
         )?;
     }
     Ok(values)
+}
+
+/// An id rendered for a diagnostic, in the shape the codec uses.
+///
+/// Lossy: every caller has run `required_id` first, which rejects a segment
+/// that is not text, so the replacement characters are unreachable in
+/// practice and a diagnostic is the wrong place to fail a second time.
+fn id_label(id: &ContractSpecId) -> String {
+    let seg = |s: &ContractSpecString| String::from_utf8_lossy(s.as_ref()).into_owned();
+    format!(
+        "{}::{} ({}@{})",
+        seg(&id.module_path),
+        seg(&id.declared),
+        seg(&id.crate_name),
+        seg(&id.major)
+    )
+}
+
+/// Validate a spec id and hand back the id itself.
+///
+/// Keyed lookups take the whole id -- a declared name alone is not an
+/// identity, so two types that share one in different modules are different
+/// types and must not collide in an index.
+fn required_id<'a>(
+    id: &'a ContractSpecId,
+    context: &'static str,
+) -> Result<&'a ContractSpecId, SpecError> {
+    for segment in [&id.crate_name, &id.major, &id.module_path] {
+        spec_string_text(segment).map_err(|error| SpecError::InvalidName {
+            context,
+            detail: error.to_string(),
+        })?;
+    }
+    required_name(&id.declared, context, false)?;
+    Ok(id)
 }
 
 fn required_name<'a>(
@@ -788,7 +821,7 @@ fn decode_known_event(
     data: &[u8],
     type_defs: &TypeDefIndex<'_>,
 ) -> Result<DecodedEventReport, CliError> {
-    let name = spec_string_text(&event.name)?.to_owned();
+    let name = spec_string_text(&event.name.declared)?.to_owned();
     let expected_topics = event.topics.len() + 1;
     if topics.len() != expected_topics {
         return Err(CliError::CallDecode {

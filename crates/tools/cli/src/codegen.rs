@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use groundhog_contract_spec::{
     ContractEnumDef, ContractEventDef, ContractExceptionType, ContractField, ContractSpec,
-    ContractSpecInterface, ContractSpecMethod, ContractStructDef, ContractType, ContractTypeDef,
-    ContractUnionCaseType, ContractUnionDef,
+    ContractSpecId, ContractSpecInterface, ContractSpecMethod, ContractStructDef, ContractType,
+    ContractTypeDef, ContractUnionCaseType, ContractUnionDef,
 };
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
@@ -67,7 +67,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
             Ok(format!("readonly [{}]", items.join(", ")))
         }
-        ContractType::Named { named } => Ok(spec_string_text(named)?.to_owned()),
+        ContractType::Named { named } => Ok(spec_string_text(&named.declared)?.to_owned()),
         ContractType::SignedToken {
             signed_token_preimage,
         } => match signed_token_preimage.preimage_type.as_deref() {
@@ -94,7 +94,7 @@ fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
 
 /// Emit a TypeScript interface for a contract struct definition.
 fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
-    let name = spec_string_text(&def.name)?;
+    let name = spec_string_text(&def.name.declared)?;
     let mut fields = String::new();
     for field in def.fields.iter() {
         let field_name = spec_string_text(&field.name)?;
@@ -109,7 +109,7 @@ fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
 
 /// Emit a TypeScript enum for a contract enum definition.
 fn emit_enum(def: &ContractEnumDef) -> Result<String, CliError> {
-    let name = spec_string_text(&def.name)?;
+    let name = spec_string_text(&def.name.declared)?;
     let mut variants = String::new();
     for variant in def.variants.iter() {
         let variant_name = spec_string_text(&variant.name)?;
@@ -130,7 +130,7 @@ fn emit_enum(def: &ContractEnumDef) -> Result<String, CliError> {
 
 /// Emit a TypeScript discriminated union for a contract union definition.
 fn emit_union(def: &ContractUnionDef) -> Result<String, CliError> {
-    let name = spec_string_text(&def.name)?;
+    let name = spec_string_text(&def.name.declared)?;
     let mut cases: Vec<String> = Vec::new();
 
     for case in def.cases.iter() {
@@ -465,12 +465,27 @@ fn emit_spec_literal(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
     Ok(())
 }
 
+/// A spec id as a runtime literal, mirroring the XDR struct field for field.
+///
+/// The generated spec object is data the TypeScript codec resolves named
+/// references through, so the id travels whole: flattening it here would hand
+/// every consumer back the ambiguity the segments remove.
+fn ts_spec_id_literal(id: &ContractSpecId) -> Result<String, CliError> {
+    Ok(format!(
+        "{{ crate_name: s({}), major: s({}), module_path: s({}), declared: s({}) }}",
+        ts_string_literal(spec_string_text(&id.crate_name)?),
+        ts_string_literal(spec_string_text(&id.major)?),
+        ts_string_literal(spec_string_text(&id.module_path)?),
+        ts_string_literal(spec_string_text(&id.declared)?),
+    ))
+}
+
 /// Emit a single event entry inside the spec literal.
 fn emit_spec_event_literal(out: &mut String, event: &ContractEventDef) -> Result<(), CliError> {
-    let name = spec_string_text(&event.name)?;
+    let name = ts_spec_id_literal(&event.name)?;
     let sig_hex = hex::encode(event.signature.into_inner());
     let _ = writeln!(out, "    {{");
-    let _ = writeln!(out, "      name: s({}),", ts_string_literal(name));
+    let _ = writeln!(out, "      name: {name},");
     let _ = writeln!(out, "      signature: topic(fromHex(\"{sig_hex}\")),");
 
     let _ = writeln!(out, "      topics: [");
@@ -575,11 +590,11 @@ fn emit_spec_method_literal(out: &mut String, method: &ContractSpecMethod) -> Re
 fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result<(), CliError> {
     match def {
         ContractTypeDef::TypeDefStruct { struct_def } => {
-            let name = spec_string_text(&struct_def.name)?;
+            let name = ts_spec_id_literal(&struct_def.name)?;
             let _ = writeln!(out, "    {{");
             let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefStruct,");
             let _ = writeln!(out, "      struct_def: {{");
-            let _ = writeln!(out, "        name: s({}),", ts_string_literal(name));
+            let _ = writeln!(out, "        name: {name},");
             let _ = writeln!(out, "        fields: [");
             for field in struct_def.fields.iter() {
                 let fname = spec_string_text(&field.name)?;
@@ -595,11 +610,11 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
             let _ = writeln!(out, "    }},");
         }
         ContractTypeDef::TypeDefEnum { enum_def } => {
-            let name = spec_string_text(&enum_def.name)?;
+            let name = ts_spec_id_literal(&enum_def.name)?;
             let _ = writeln!(out, "    {{");
             let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefEnum,");
             let _ = writeln!(out, "      enum_def: {{");
-            let _ = writeln!(out, "        name: s({}),", ts_string_literal(name));
+            let _ = writeln!(out, "        name: {name},");
             let _ = writeln!(out, "        variants: [");
             for variant in enum_def.variants.iter() {
                 let vname = spec_string_text(&variant.name)?;
@@ -615,11 +630,11 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
             let _ = writeln!(out, "    }},");
         }
         ContractTypeDef::TypeDefUnion { union_def } => {
-            let name = spec_string_text(&union_def.name)?;
+            let name = ts_spec_id_literal(&union_def.name)?;
             let _ = writeln!(out, "    {{");
             let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefUnion,");
             let _ = writeln!(out, "      union_def: {{");
-            let _ = writeln!(out, "        name: s({}),", ts_string_literal(name));
+            let _ = writeln!(out, "        name: {name},");
             let _ = writeln!(out, "        cases: [");
             for case in union_def.cases.iter() {
                 let cname = spec_string_text(&case.name)?;
@@ -764,7 +779,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             ))
         }
         ContractType::Named { named } => {
-            let name = spec_string_text(named)?;
+            let name = spec_string_text(&named.declared)?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Named, named: s({}) }}",
                 ts_string_literal(name)
@@ -959,7 +974,7 @@ fn emit_event_sections(out: &mut String, spec: &ContractSpec) -> Result<(), CliE
 }
 
 fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Result<(), CliError> {
-    let name = spec_string_text(&event.name)?;
+    let name = spec_string_text(&event.name.declared)?;
     let mut topic_fields = Vec::new();
     let mut filter_fields = Vec::new();
     for field in event.topics.iter() {
@@ -1063,7 +1078,7 @@ fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
     let event_names: Vec<&str> = spec
         .events
         .iter()
-        .map(|e| spec_string_text(&e.name))
+        .map(|e| spec_string_text(&e.name.declared))
         .collect::<Result<_, _>>()?;
 
     let _ = writeln!(
@@ -1223,14 +1238,14 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
     for def in spec.type_defs.iter() {
         let (name, source) = match def {
             ContractTypeDef::TypeDefStruct { struct_def } => (
-                spec_string_text(&struct_def.name)?,
+                spec_string_text(&struct_def.name.declared)?,
                 "struct type definition",
             ),
             ContractTypeDef::TypeDefEnum { enum_def } => {
-                (spec_string_text(&enum_def.name)?, "enum type definition")
+                (spec_string_text(&enum_def.name.declared)?, "enum type definition")
             }
             ContractTypeDef::TypeDefUnion { union_def } => {
-                (spec_string_text(&union_def.name)?, "union type definition")
+                (spec_string_text(&union_def.name.declared)?, "union type definition")
             }
             _ => {
                 return Err(CliError::SpecFailed(
@@ -1332,7 +1347,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .collect();
     let mut event_signatures = BTreeMap::new();
     for event in spec.events.iter() {
-        let event_name = spec_string_text(&event.name)?;
+        let event_name = spec_string_text(&event.name.declared)?;
         validate_ts_identifier(event_name, &format!("event \"{event_name}\""))?;
         for (name, source) in [
             (event_name.to_owned(), format!("event \"{event_name}\"")),
@@ -1557,7 +1572,7 @@ fn validate_type_def(
 ) -> Result<(), CliError> {
     match def {
         ContractTypeDef::TypeDefStruct { struct_def } => {
-            let name = spec_string_text(&struct_def.name)?;
+            let name = spec_string_text(&struct_def.name.declared)?;
             validate_fields(
                 struct_def.fields.iter(),
                 defined_types,
@@ -1565,7 +1580,7 @@ fn validate_type_def(
             )
         }
         ContractTypeDef::TypeDefEnum { enum_def } => {
-            let name = spec_string_text(&enum_def.name)?;
+            let name = spec_string_text(&enum_def.name.declared)?;
             let mut members = BTreeSet::new();
             let mut values = BTreeSet::new();
             for variant in enum_def.variants.iter() {
@@ -1586,7 +1601,7 @@ fn validate_type_def(
             Ok(())
         }
         ContractTypeDef::TypeDefUnion { union_def } => {
-            let name = spec_string_text(&union_def.name)?;
+            let name = spec_string_text(&union_def.name.declared)?;
             if union_def.cases.is_empty() {
                 return Err(CliError::SpecFailed(format!(
                     "union \"{name}\" must declare at least one case"
@@ -1712,7 +1727,7 @@ fn validate_contract_type(
             Ok(())
         }
         ContractType::Named { named } => {
-            let name = spec_string_text(named)?;
+            let name = spec_string_text(&named.declared)?;
             if defined_types.contains(name) {
                 Ok(())
             } else {
@@ -1761,7 +1776,7 @@ fn method_type_stem(interface_name: &str, public_method_name: &str) -> String {
 
 fn exception_name(ty: &ContractType) -> Result<String, CliError> {
     if let ContractType::Named { named } = ty {
-        Ok(ts_string_literal(spec_string_text(named)?))
+        ts_spec_id_literal(named)
     } else {
         Ok("null".into())
     }
@@ -1839,9 +1854,9 @@ fn spec_uses_type(spec: &ContractSpec, predicate: impl Fn(&ContractType) -> bool
 
 fn type_def_name(def: &ContractTypeDef) -> Result<&str, CliError> {
     match def {
-        ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name),
-        ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name),
-        ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name),
+        ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name.declared),
+        ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name.declared),
+        ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name.declared),
         _ => Err(CliError::SpecFailed(
             "type definition contains an unsupported kind".into(),
         )),
@@ -1872,7 +1887,7 @@ fn type_carries_signed_token(
             .iter()
             .any(|item| type_carries_signed_token(item, type_defs, visiting)),
         ContractType::Named { named } => {
-            let Ok(name) = spec_string_text(named) else {
+            let Ok(name) = spec_string_text(&named.declared) else {
                 return false;
             };
             if !visiting.insert(name.to_owned()) {
