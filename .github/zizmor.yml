@@ -1,9 +1,10 @@
-# zizmor configuration. https://docs.zizmor.sh/configuration/
+# zizmor exceptions
 #
-# `unpinned-uses` default: hash-pinning policy for every action
+# https://docs.zizmor.sh/configuration/
 
 rules:
-  # Style: prefers '$/...' over './...' for same-repo composite actions.
+  # Style: prefers '$/...' over './...' for same-repo composite actions,
+  # but that offends actionlint.
   self-repository:
     ignore:
       - publish.yml
@@ -14,14 +15,8 @@ rules:
     ignore:
       - release.yml
 
-  # These three read the referenced repository's refs over git. Our workflows
-  # reference the private groundhogchain/actions, and a consumer's
-  # github.token cannot read it, so they abort the whole run with 403 rather
-  # than reporting findings. Everything else still runs in CI, including
-  # unpinned-uses and known-vulnerable-actions.
-  #
-  # Run them locally with a token that can read that repo (see
-  # rustsec/POLICY.md). Retire these once groundhogchain/actions is public.
+  # These checks must read referenced repos, and groundhogchain/actions is
+  # private.
   impostor-commit:
     disable: true
   stale-action-refs:

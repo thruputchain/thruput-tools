@@ -18,32 +18,25 @@ permissions:
   contents: read
 
 jobs:
-  # Mechanism lives in groundhogchain/actions; policy (deny.toml,
-  # .github/zizmor.yml, .github/actionlint.yaml) stays here.
+  # Check rust dependencies against policy
   dependency-policy:
     permissions:
       contents: read
     uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@2c5fd2d95a58f11da1e362b08c57a08fb7dfec51
     with:
-      # Kept on the Namespace runner: this repo resolves crates from the
-      # private registry, and that path is proven there today.
       runs-on: namespace-profile-hogd-linux-2604
       registry-name: groundhog
     secrets:
       registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
 
+  # Lint our workflows
   workflow-lint:
     permissions:
       contents: read
     uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@2c5fd2d95a58f11da1e362b08c57a08fb7dfec51
 
-  # Gated on dependency-policy: cargo-deny inspects the graph without
-  # compiling it, so these run only once the dependencies are known
-  # good. Otherwise every dependency's build scripts and proc-macros
-  # execute here, with these jobs' secrets in scope, while the check
-  # that might object is still running.
   clippy:
-    needs: dependency-policy
+    needs: dependency-policy # Check deps before building anything
     name: Clippy
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
@@ -61,7 +54,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    needs: dependency-policy
+    needs: dependency-policy # Check deps before building anything
     name: Test
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
@@ -130,7 +123,7 @@ jobs:
           done
 
   cli-smoke:
-    needs: dependency-policy
+    needs: dependency-policy # Check deps before building anything
     name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:

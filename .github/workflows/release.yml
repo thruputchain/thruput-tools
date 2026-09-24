@@ -17,8 +17,8 @@ env:
     groundhog-cli
     groundhog-rv32-lower
 
-# Default for any job added later; `publish` raises it to write itself.
 permissions:
+  # The publish job raises this to "write"
   contents: read
 
 jobs:
