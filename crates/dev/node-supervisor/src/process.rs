@@ -461,8 +461,8 @@ impl SupervisedChild {
 /// An orphaned descendant waits on PID 1 for that, and in some containers PID 1
 /// reaps late or never, so `kill(-pgid, 0)` alone would report a stopped node
 /// as still running. A zombie holds no ports, files, or locks, so on Linux a
-/// group whose only members are zombies is reported as gone. Where the members
-/// cannot be inspected, the group is reported as live.
+/// group whose only members are zombies is reported as gone. Anything the scan
+/// cannot inspect counts as a live member, so an uncertain answer is "live".
 #[cfg(unix)]
 pub(crate) fn process_group_has_live_member(process_group: i32) -> std::io::Result<bool> {
     // SAFETY: kill(2) with signal 0 performs existence/permission checks
@@ -486,6 +486,11 @@ pub(crate) fn process_group_has_live_member(process_group: i32) -> std::io::Resu
 
 /// Scan `/proc` for a member of `process_group` with a thread that has not exited.
 ///
+/// Only a process shown to have vanished or to belong to another group is ruled
+/// out. A process whose stat cannot be read might be a live member, so it makes
+/// the group live; with a restricted procfs this falls back to what `kill`
+/// reported.
+///
 /// A thread-group leader that exits before its other threads reports the zombie
 /// state while those threads run, so a zombie leader is checked thread by thread.
 #[cfg(target_os = "linux")]
@@ -494,7 +499,10 @@ fn linux_process_group_has_running_member(process_group: i32) -> bool {
         return true;
     };
 
-    entries.flatten().any(|entry| {
+    entries.into_iter().any(|entry| {
+        let Ok(entry) = entry else {
+            return true;
+        };
         let is_pid = entry
             .file_name()
             .to_str()
@@ -503,28 +511,75 @@ fn linux_process_group_has_running_member(process_group: i32) -> bool {
             return false;
         }
 
-        let Some((state, member_group)) = read_linux_stat(&entry.path().join("stat")) else {
-            return false;
-        };
-        if member_group != process_group {
-            return false;
+        match read_linux_stat(&entry.path().join("stat")) {
+            LinuxStat::Vanished => false,
+            LinuxStat::Unreadable => true,
+            LinuxStat::Read {
+                process_group: member_group,
+                ..
+            } if member_group != process_group => false,
+            LinuxStat::Read { state, .. } if !linux_state_has_exited(state) => true,
+            LinuxStat::Read { .. } => linux_exited_leader_has_running_thread(&entry.path()),
         }
-        if !linux_state_has_exited(state) {
-            return true;
-        }
-
-        std::fs::read_dir(entry.path().join("task")).is_ok_and(|tasks| {
-            tasks.flatten().any(|task| {
-                read_linux_stat(&task.path().join("stat"))
-                    .is_some_and(|(state, _)| !linux_state_has_exited(state))
-            })
-        })
     })
 }
 
 #[cfg(target_os = "linux")]
-fn read_linux_stat(path: &std::path::Path) -> Option<(char, i32)> {
-    parse_linux_stat_state_and_group(&std::fs::read_to_string(path).ok()?)
+fn linux_exited_leader_has_running_thread(process_dir: &std::path::Path) -> bool {
+    let tasks = match std::fs::read_dir(process_dir.join("task")) {
+        Ok(tasks) => tasks,
+        Err(error) => return !linux_read_error_means_vanished(&error),
+    };
+
+    tasks.into_iter().any(|task| {
+        let Ok(task) = task else {
+            return true;
+        };
+        match read_linux_stat(&task.path().join("stat")) {
+            LinuxStat::Vanished => false,
+            LinuxStat::Unreadable => true,
+            LinuxStat::Read { state, .. } => !linux_state_has_exited(state),
+        }
+    })
+}
+
+/// What reading one `/proc` stat file showed about a process or thread.
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+enum LinuxStat {
+    /// The process or thread exited and was reaped before it could be read.
+    Vanished,
+    /// The file exists but could not be read or parsed.
+    Unreadable,
+    Read {
+        state: char,
+        process_group: i32,
+    },
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_stat(path: &std::path::Path) -> LinuxStat {
+    classify_linux_stat_read(std::fs::read_to_string(path))
+}
+
+#[cfg(target_os = "linux")]
+fn classify_linux_stat_read(read: std::io::Result<String>) -> LinuxStat {
+    match read {
+        Ok(stat) => parse_linux_stat_state_and_group(&stat).map_or(
+            LinuxStat::Unreadable,
+            |(state, process_group)| LinuxStat::Read {
+                state,
+                process_group,
+            },
+        ),
+        Err(error) if linux_read_error_means_vanished(&error) => LinuxStat::Vanished,
+        Err(_) => LinuxStat::Unreadable,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_read_error_means_vanished(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 /// Parse the state and process-group fields of a `/proc/<pid>/stat` line.
@@ -620,7 +675,10 @@ mod tests {
         let stat_path = std::path::PathBuf::from(format!("/proc/{pid}/stat"));
         let mut zombie = false;
         for _ in 0..500 {
-            zombie = super::read_linux_stat(&stat_path).is_some_and(|(state, _)| state == 'Z');
+            zombie = matches!(
+                super::read_linux_stat(&stat_path),
+                super::LinuxStat::Read { state: 'Z', .. }
+            );
             if zombie {
                 break;
             }
@@ -647,5 +705,37 @@ mod tests {
             Some(('Z', 4240))
         );
         assert_eq!(super::parse_linux_stat_state_and_group("4242 hog"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_stat_read_failure_is_vanished_only_when_the_process_is_gone() {
+        use std::io::{Error, ErrorKind};
+
+        use super::{LinuxStat, classify_linux_stat_read};
+
+        assert_eq!(
+            classify_linux_stat_read(Err(Error::from(ErrorKind::NotFound))),
+            LinuxStat::Vanished
+        );
+        assert_eq!(
+            classify_linux_stat_read(Err(Error::from_raw_os_error(libc::ESRCH))),
+            LinuxStat::Vanished
+        );
+        assert_eq!(
+            classify_linux_stat_read(Err(Error::from(ErrorKind::PermissionDenied))),
+            LinuxStat::Unreadable
+        );
+        assert_eq!(
+            classify_linux_stat_read(Ok("4242 hog".to_string())),
+            LinuxStat::Unreadable
+        );
+        assert_eq!(
+            classify_linux_stat_read(Ok("4242 (hog) S 1 4240 4240".to_string())),
+            LinuxStat::Read {
+                state: 'S',
+                process_group: 4240
+            }
+        );
     }
 }
