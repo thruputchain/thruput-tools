@@ -13,7 +13,19 @@ WalletCreatePrefundUnsupported
 
 NativeWalletDeploymentUnavailable
   code: native_wallet_deployment_unavailable
-  hint text: native calls and transfers are supported; funded deployment requires the backend release and CLI deployment migration
+  hint text: use --experimental-native-deploy --fund <HOG> only on a network known to support atomic deploy_funded; runtime support is not detected automatically
+
+NativeDeploymentFundingRequired
+  code: native_deployment_funding_required
+  hint text: choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate
+
+NativeDeploymentOptionsForLegacy
+  code: native_deployment_options_for_legacy
+  hint text: existing legacy wallets retain their own deployment funding behavior
+
+NativeDeploymentUnverified
+  code: native_deployment_unverified
+  details: message
 
 Docs
   code: docs_error

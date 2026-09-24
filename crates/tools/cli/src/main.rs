@@ -552,6 +552,12 @@ impl TestArgs {
 
 #[derive(Args)]
 struct DeployArgs {
+    /// Exact HOG to transfer to the new native contract atomically with deployment
+    #[arg(long, value_name = "HOG")]
+    fund: Option<String>,
+    /// Assert that this network supports the experimental native `deploy_funded` operation
+    #[arg(long)]
+    experimental_native_deploy: bool,
     /// Package to deploy (required at a workspace root)
     #[arg(short, long, conflicts_with = "artifact")]
     package: Option<String>,
@@ -585,6 +591,8 @@ impl DeployArgs {
         let cwd = invocation_cwd()?;
         groundhog_cli::deploy::run(
             self.artifact.as_deref(),
+            self.fund.as_deref(),
+            self.experimental_native_deploy,
             self.package.as_deref(),
             self.alias.as_deref(),
             self.dry_run,

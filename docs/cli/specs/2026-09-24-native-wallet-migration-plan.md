@@ -1,7 +1,7 @@
 # Native-wallet migration: funding decision and delivery plan
 
 Status: implementation started, 2026-09-24. The funding decision below was
-accepted for development. No tracker updates or releases have been made.
+accepted for development. Backend draft PRs are open; no releases have been made.
 Parent: [GH-371](https://linear.app/grndhg/issue/GH-371).
 Developer migration: [GH-372](https://linear.app/grndhg/issue/GH-372).
 Bootstrap retirement: [GH-373](https://linear.app/grndhg/issue/GH-373).
@@ -23,8 +23,9 @@ address. The current source establishes no general refund operation for an
 undeployed target, whose address is not the sender's pubkey account.
 
 Do not silently fall back from atomic deployment to two money-moving
-transactions on older nodes. Retain explicit legacy bindings and report an
-unsupported native deployment capability before submission.
+transactions on older nodes. Retain explicit legacy bindings and guard native deployment before submission
+unless the operator explicitly opts into a qualified experimental runtime.
+The current public RPC has no reliable capability signal.
 
 ## Current evidence and the pre-step
 
@@ -247,7 +248,11 @@ prints its precomputed hash, and checks the server's returned hash.
 
 The additive backend operation is implemented in the canonical contract at
 `e1b139fb8461e848cb1666b16c5ad0d9f31c45ba` and hogd commit
-`4d1d2f81ea8203654fa24c6dbe707b75fa09ae38`. These commits are local and unpublished.
+`4d1d2f81ea8203654fa24c6dbe707b75fa09ae38`. The changes are published as draft
+[canonical #56](https://github.com/groundhogchain/integration_test_contracts/pull/56)
+and [hogd #4144](https://github.com/groundhogchain/hogd/pull/4144). The backend
+head is `a525364926b64a0ea929b3a40940415d09b7850c` after test-only CI fixes for
+explicit optional guards and parity-harness event finalization. Neither is released.
 Generated bindings preserve `execute` (`c3edb11fdd6d5d58`) and `deploy`
 (`6be0cb0f6de0917a`); `deploy_funded` is `1f843596f5b57b18`.
 The Rust signing crate also provides the funded builder, with an explicit raw
@@ -323,8 +328,8 @@ The shared Rust client has additive native/legacy preparation and native
 single-child return decoding. Its existing `CallRequest`, `prepare_call` and
 `SubmittedCall { tx_hash }` APIs remain available. CLI calls and transfers select
 the transaction format from the saved binding, and native signing checks the
-configured network against the endpoint. Native contract deployment fails with
-an explicit migration guard before the legacy builder can run.
+configured network against the endpoint. The subsequent deployment slice below
+adds an explicitly opted-in native path while retaining the default guard.
 
 Local runtime qualification on the source-built hog-devnode described above:
 
@@ -337,11 +342,10 @@ Local runtime qualification on the source-built hog-devnode described above:
 
 These are source-build results, not qualification of a published bundle.
 Hosted airdrop is covered by a local HTTP/RPC fixture, not a public Devnet write.
-Native deploy/testkit migration, ordinary unsaved-key fallback, downstream
+Testkit migration, ordinary unsaved-key fallback, downstream
 consumer qualification and supported backend publication remain separate gates.
 Do not ship the native default before the complete supported deployment flow is
-available. Backend PR drafts are prepared separately for canonical contracts and
-hogd, with the canonical change required first.
+available. The backend draft PRs above require the canonical change first.
 
 The existing `scripts/smoke-local-dx.sh` still encodes legacy auto-prefunding
 and new-wallet deployment expectations. Updating and passing that complete
@@ -351,3 +355,63 @@ live checks above do not replace it.
 Validation for this slice passed: full workspace tests and build, all-target
 Clippy with warnings denied, formatting, generated knowledge consistency and
 CLI package inclusion. The CLI binary suite includes 298 passing tests.
+
+## Native CLI funded deployment slice
+
+Native `deploy` now requires `--experimental-native-deploy --fund <HOG>`.
+The amount is exact and positive, with no implicit deposit or estimator. The
+flag records `runtimeSupport: "operator_asserted"`; it is not a capability probe.
+The public version, chain-config and view methods cannot reliably prove that
+a chain has activated `deploy_funded`. A supported producer release and explicit
+activation contract remain prerequisites to enabling native deploy by default.
+
+The CLI prepares one signed transaction and shows its funding and identity
+before approval. It submits once, compares the returned hash, checks receipt
+identity and requires the exact predicted address before saving an alias.
+Send errors, lookup failures, timeouts and malformed success results retain the
+original hash, signed bytes, predicted address, endpoint, nonce, expiry and
+funding details. They never trigger prefunding or resubmission. Native aborts
+remain generic when the wallet does not expose the nested cause. Existing legacy
+deployment semantics are preserved. Deploy JSON advances to schema version 5.
+
+Process tests cover explicit opt-in and amount validation, legacy flag rejection,
+network mismatch, signed dry-run identity, admitted-send errors, mismatched
+submission/receipt hashes, lookup failures, missing/short/wrong return addresses,
+reverts and successful alias persistence. A polling timeout test checks that the
+CLI does not submit again.
+
+Live CLI qualification used the same source-built backend after restarting its
+retained local state (`chain_state: recovered`):
+
+- Dry-run returned a signed transaction and predicted address without submission.
+- Atomic deployment transferred five HOG and deployed Counter at height 7.
+  Receipt `9281d74d955ee3fd867cdd27883eaeb0f51bd5d06245aefd64f427bffc30b4c7`
+  returned the exact predicted address; its Transfer event named the sender and
+  target. The CLI saved the verified alias.
+- Native calls initialized Counter to 42 at height 8 and read 42 at height 9.
+  After initialization, the contract's free balance was 4.9918756 HOG; the
+  transfer amount and free balance differ because of storage collateral.
+- Legacy deployment still succeeded at height 10.
+- A separate one-raw-unit deployment reported `recentFailure` with an
+  `insufficientFunds` conflict. The CLI preserved its original signed bytes,
+  hash, target and funding details, submitted once and saved no alias. That
+  advisory failure is not a final rejection; its target was not funded or reused.
+
+This checks CLI behavior on a retained source-built test chain. It does not prove
+an old-to-new backend activation or a published bundle upgrade. Process tests
+also cover recovery with an explicitly selected profile and no default, and
+alias-write failure after verified on-chain success.
+
+Remaining GH-372 work: native testkit and ordinary unsaved-key routing, complete
+local DX smoke migration, downstream shared-client compatibility, supported
+bundle qualification and retained-state activation/recovery. GH-373 bootstrap,
+manifest, faucet and consumer migration, then artifact retirement, remain later
+slices. The experimental CLI implementation does not close those release gates.
+
+Validation for the native deployment slice: full Rust workspace tests passed
+(2,470 passed, 28 ignored), workspace build, all-target Clippy with warnings
+denied, formatting, generated knowledge consistency and CLI package inclusion.
+Eight native deployment process tests pass. Independent slice and final reviews
+are clean after preserving the explicit profile in recovery commands. Local
+backend wallet tests pass (38 passed, one existing skip); the backend CI rerun
+must confirm the debug event lifecycle and explicit optional guards.

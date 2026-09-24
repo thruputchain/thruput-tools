@@ -4964,8 +4964,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 4);
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 5);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     for old_key in ["dry_run", "rpc_url", "artifact_kind", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -7023,7 +7023,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
         stdout["data"]["artifactPath"].as_str().unwrap(),
@@ -7657,7 +7657,7 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");

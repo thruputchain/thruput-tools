@@ -91,15 +91,20 @@ including typed contract arguments. Saved wallet owners accept G StrKeys or
 hex public keys. These encodings preserve bytes and do not identify a network.
 Existing key files and public JSON-RPC wire encodings remain unchanged.
 
-### Native wallet creation
+### Native accounts
 
-For a stored non-dev signing key, `groundhog wallet create --key <key>` derives
-and saves a native pubkey account with nonce zero. Creation is offline and
-requests no funding; `--dry-run` derives without saving. Use the printed
-`groundhog airdrop <address> --profile=<profile>` command to request funds
-explicitly. `--prefund` is rejected. An identical repeat preserves the binding
-and default selection; an existing name for a different identity is rejected.
-Untyped saved wallets and manifest-backed dev-N accounts retain their legacy
-transaction format. Native calls and HOG transfers are supported. Native
-contract deployment is guarded pending the funded-deployment CLI migration
-and supported backend release.
+`groundhog wallet create --key <key>` saves a nonce-zero native account for a
+stored non-dev key offline, without funding. Dry-run does not save; `--prefund`
+is rejected. Repeat creation preserves identity and defaults. Explicitly fund
+with the printed `groundhog airdrop <address>` command. Saved untyped and
+manifest-backed dev-N wallets retain their legacy identity and format.
+
+Native calls and transfers are supported. Native deploy requires
+`--experimental-native-deploy --fund <HOG>`: operator-asserted support, since RPC
+cannot verify activation. Published bundle qualification remains a release gate.
+Legacy senders reject these flags. Funding transfers the exact positive amount
+to the contract atomically with deployment, without estimating a minimum.
+Initialization is separate. Dry-run submits nothing. Unverified outcomes retain
+hash, signed bytes and target. Inspect before retrying: timeout/`unknown` is
+inconclusive; rerunning creates a new nonce/address. Aliases require verified
+success and the exact predicted address.

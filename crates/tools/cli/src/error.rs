@@ -67,11 +67,22 @@ pub enum CliError {
     #[error("wallet create no longer accepts --prefund")]
     #[hint("create the empty wallet first, then run groundhog airdrop <wallet-name>")]
     WalletCreatePrefundUnsupported,
-    #[error("native wallet deployment is not yet enabled in this CLI")]
+    #[error("native funded deployment requires explicit experimental opt-in")]
     #[hint(
-        "native calls and transfers are supported; funded deployment requires the backend release and CLI deployment migration"
+        "use --experimental-native-deploy --fund <HOG> only on a network known to support atomic deploy_funded; runtime support is not detected automatically"
     )]
     NativeWalletDeploymentUnavailable,
+    #[error("native deployment requires an explicit --fund <HOG> amount")]
+    #[hint(
+        "choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate"
+    )]
+    NativeDeploymentFundingRequired,
+    #[error("--fund and --experimental-native-deploy require a native wallet")]
+    #[hint("existing legacy wallets retain their own deployment funding behavior")]
+    NativeDeploymentOptionsForLegacy,
+    #[error("native deployment response could not be verified: {message}")]
+    #[details]
+    NativeDeploymentUnverified { message: String },
     #[error(transparent)]
     #[code("docs_error")]
     Docs(#[from] crate::docs::DocsError),
