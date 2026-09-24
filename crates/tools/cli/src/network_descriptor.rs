@@ -43,6 +43,23 @@ pub(crate) struct RemoteAirdropDescriptor {
     pub(crate) amount_hog: String,
 }
 
+pub(crate) fn resolve_native_signing_context(
+    profile: &ResolvedProfile,
+    configured: &groundhog_xdr::types::NetworkHash,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<WalletSigningContext, CliError> {
+    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let network_info = fetch_rpc_network_info(runtime, rpc_url)?;
+    Ok(WalletSigningContext {
+        network_hash: validated_signing_network_hash(configured, &network_info)?,
+        entrypoints: WalletEntrypoints {
+            deploy: groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_FUNDED_ENTRYPOINT,
+            do_action: groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+            source: "native_default_wallet",
+        },
+    })
+}
+
 pub(crate) fn resolve_wallet_signing_context(
     profile: &ResolvedProfile,
     key_name: &str,
@@ -67,41 +84,6 @@ pub(crate) fn resolve_wallet_signing_context(
         entrypoints,
         network_hash,
     })
-}
-
-pub(crate) fn fetch_network_descriptor(
-    profile: &ResolvedProfile,
-    key_name: &str,
-) -> Result<NetworkDescriptor, CliError> {
-    let faucet_url = profile
-        .faucet_url
-        .as_deref()
-        .ok_or_else(|| descriptor_invalid("profile.faucetUrl", "is required".into()))?;
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-    let descriptor = fetch_network_descriptor_value(faucet_url)?;
-    validate_rpc_network_info(rpc_url, &descriptor)?;
-    let runtime_manifest = load_configured_runtime_manifest(profile, key_name)?;
-    let deploy = descriptor
-        .dev_wallet
-        .deploy_entrypoint_id()
-        .map_err(|error| descriptor_invalid("devWallet.deployEntrypoint", error.to_string()))?;
-    let do_action = descriptor
-        .dev_wallet
-        .do_action_entrypoint_id()
-        .map_err(|error| descriptor_invalid("devWallet.doActionEntrypoint", error.to_string()))?;
-    validate_descriptor(
-        key_name,
-        rpc_url,
-        &descriptor,
-        runtime_manifest.as_ref(),
-        deploy,
-        do_action,
-    )?;
-    parse_positive_raw_amount(
-        "walletCreate.prefundRawAmount",
-        &descriptor.wallet_create.prefund_raw_amount,
-    )?;
-    Ok(descriptor)
 }
 
 pub(crate) fn fetch_remote_airdrop_descriptor(

@@ -29,6 +29,83 @@ use jsonrpsee::core::client::{ClientT, Error as RpcError};
 pub struct UnsignedCall {
     transaction: Transaction,
     network_hash: NetworkHash,
+    native_return: bool,
+}
+
+/// Explicit wallet identity and invocation format. Legacy addresses are never
+/// reinterpreted as native accounts based on their owner key.
+#[derive(Debug, Clone, Copy)]
+pub enum Wallet<'a> {
+    /// Root pubkey account using the native `DefaultWallet` ABI.
+    Native(&'a signing::PubkeyAccount),
+    /// A deployed legacy wallet with its configured call entrypoint.
+    Legacy {
+        /// Deployed wallet address.
+        address: xdr::types::ContractAddress,
+        /// Legacy `do_action` entrypoint from the network's wallet interface.
+        entrypoint: xdr::contract::ContractEntrypointID,
+    },
+}
+
+/// A single child call through an explicitly selected wallet adapter.
+#[derive(Debug, Clone, Copy)]
+pub struct WalletCallRequest<'a> {
+    /// Native or legacy caller identity.
+    pub wallet: Wallet<'a>,
+    /// Child contract address.
+    pub target_address: xdr::types::ContractAddress,
+    /// Child contract method selector.
+    pub target_entrypoint: xdr::contract::ContractEntrypointID,
+    /// Encoded child arguments.
+    pub target_calldata: &'a [u8],
+    /// Wallet root gas budget.
+    pub gas_limit: u64,
+    /// Child gas budget.
+    pub target_gas_limit: u64,
+    /// Transaction expiration height.
+    pub block_expiry_height: i64,
+    /// Transaction uniquifier, independent of native account derivation.
+    pub nonce: u64,
+}
+
+/// Prepare a single native or legacy child call without submitting it.
+pub fn prepare_wallet_call(
+    request: WalletCallRequest<'_>,
+    network_hash: NetworkHash,
+) -> Result<UnsignedCall, SigningError> {
+    let transaction = match request.wallet {
+        Wallet::Native(account) => signing::default_wallet::build_default_wallet_call_transaction(
+            signing::default_wallet::BuildDefaultWalletCallTransaction {
+                account,
+                target_address: request.target_address,
+                target_entrypoint: request.target_entrypoint,
+                target_calldata: request.target_calldata,
+                target_gas_limit: request.target_gas_limit,
+                gas_limit: request.gas_limit,
+                block_expiry_height: request.block_expiry_height,
+                nonce: request.nonce,
+            },
+        )?,
+        Wallet::Legacy {
+            address,
+            entrypoint,
+        } => signing::build_dev_wallet_do_action_transaction(CallRequest {
+            wallet_address: address,
+            wallet_entrypoint: entrypoint,
+            target_address: request.target_address,
+            target_entrypoint: request.target_entrypoint,
+            target_calldata: request.target_calldata,
+            target_gas_limit: request.target_gas_limit,
+            gas_limit: request.gas_limit,
+            block_expiry_height: request.block_expiry_height,
+            nonce: request.nonce,
+        })?,
+    };
+    Ok(UnsignedCall {
+        transaction,
+        network_hash,
+        native_return: matches!(request.wallet, Wallet::Native(_)),
+    })
 }
 
 /// Build an unsigned invocation using the canonical wallet transaction builder.
@@ -40,6 +117,7 @@ pub fn prepare_call(
     Ok(UnsignedCall {
         transaction: groundhog_signing::build_dev_wallet_do_action_transaction(request)?,
         network_hash,
+        native_return: false,
     })
 }
 
@@ -58,7 +136,11 @@ impl UnsignedCall {
             SignTransactionParams::default(),
             &self.network_hash,
         )?;
-        Ok(SignedCall { tx_hash, tx_hex })
+        Ok(SignedCall {
+            tx_hash,
+            tx_hex,
+            native_return: self.native_return,
+        })
     }
 }
 
@@ -67,9 +149,24 @@ impl UnsignedCall {
 pub struct SignedCall {
     tx_hash: TxHash,
     tx_hex: String,
+    native_return: bool,
 }
 
 impl SignedCall {
+    /// Whether the root invocation uses the native wallet ABI.
+    pub fn is_native(&self) -> bool {
+        self.native_return
+    }
+
+    /// Extract the one child's return bytes after checking the receipt's success
+    /// status. The original wallet receipt remains available to the caller.
+    pub fn decode_return(&self, data: &[u8]) -> Result<Vec<u8>, SigningError> {
+        if self.native_return {
+            signing::default_wallet::decode_default_wallet_call_return(data)
+        } else {
+            Ok(data.to_vec())
+        }
+    }
     /// Canonical signed transaction encoded for `sendRawTransaction`.
     pub fn tx_hex(&self) -> &str {
         &self.tx_hex
@@ -248,6 +345,55 @@ mod tests {
         let elsewhere = elsewhere.sign(&key).unwrap();
         assert_eq!(elsewhere.tx_hash(), signed.tx_hash());
         assert_ne!(elsewhere.tx_hex(), signed.tx_hex());
+    }
+
+    #[test]
+    fn wallet_dispatch_preserves_legacy_bytes_and_unwraps_native_returns() {
+        let key = LocalSigner::from_secret_key([9; 32]);
+        let account = signing::PubkeyAccount::from_public_key_bytes(key.verifying_key_bytes(), 17);
+        let request = WalletCallRequest {
+            wallet: Wallet::Legacy {
+                address: ContractAddress::from([1; 32]),
+                entrypoint: ContractEntrypointID::from([2; 8]),
+            },
+            target_address: ContractAddress::from([3; 32]),
+            target_entrypoint: ContractEntrypointID::from([4; 8]),
+            target_calldata: &[5, 6],
+            gas_limit: 100,
+            target_gas_limit: 90,
+            block_expiry_height: 1000,
+            nonce: 7,
+        };
+        let network = NetworkHash::from(SHA256Hash::from([8; 32]));
+        let legacy = prepare_wallet_call(request, network.clone()).unwrap();
+        assert_eq!(legacy.transaction(), prepared().transaction());
+        let legacy = legacy.sign(&key).unwrap();
+        assert!(!legacy.is_native());
+        assert_eq!(legacy.decode_return(&[42]).unwrap(), [42]);
+        let native = prepare_wallet_call(
+            WalletCallRequest {
+                wallet: Wallet::Native(&account),
+                ..request
+            },
+            network,
+        )
+        .unwrap();
+        assert_eq!(
+            native.transaction().invocation.invoked_address,
+            account.address()
+        );
+        let signed = native.sign(&key).unwrap();
+        assert!(signed.is_native());
+        let bytes = xdrs::cxs::encode(&vec![vec![42u8]]).unwrap();
+        assert_eq!(signed.decode_return(&bytes).unwrap(), [42]);
+        for returns in [vec![], vec![vec![1u8], vec![2u8]]] {
+            assert!(
+                signed
+                    .decode_return(&xdrs::cxs::encode(&returns).unwrap())
+                    .is_err()
+            );
+        }
+        assert!(signed.decode_return(&[255]).is_err());
     }
 
     async fn client(module: RpcModule<()>) -> (rpc::HttpClient, jsonrpsee::server::ServerHandle) {

@@ -53,6 +53,26 @@ pub enum Network {
     Mainnet,
 }
 
+/// Transaction format used by a saved wallet. Untyped historical bindings are legacy.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletKind {
+    /// Deployed developer wallet with the historical ABI.
+    #[default]
+    DevWallet,
+    /// Pubkey account using the native `DefaultWallet`.
+    Native,
+}
+impl WalletKind {
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde skip predicate takes a reference"
+    )]
+    pub(crate) fn is_legacy(&self) -> bool {
+        *self == Self::DevWallet
+    }
+}
+
 /// Saved wallet binding for a local signing key.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct SavedWalletBinding {
@@ -61,6 +81,12 @@ pub struct SavedWalletBinding {
     /// Public key that owns the wallet contract.
     #[serde(default)]
     pub owner_public_key: String,
+    /// Explicit account format; absent on historical developer wallets.
+    #[serde(default, skip_serializing_if = "WalletKind::is_legacy")]
+    pub kind: WalletKind,
+    /// Native account derivation nonce, required for native bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_nonce: Option<u64>,
 }
 
 /// Active project profile resolved from `groundhog.toml`.
@@ -317,6 +343,129 @@ pub fn save_profile_wallet_address_with_default(
         Ok(())
     })?;
     Ok(path)
+}
+
+/// Save a native account without replacing an existing identity. Returns whether inserted.
+pub(crate) fn save_native_wallet(
+    start: &Path,
+    profile_name: &str,
+    name: &str,
+    key_name: &str,
+    binding: &SavedWalletBinding,
+) -> Result<bool, CliError> {
+    crate::account_resolution::validate_saved_wallet_binding(name, binding)?;
+    let path = profile_write_path(start)?;
+    let global_path = config_file_path()?;
+    let mut inserted = false;
+    let mut save = |document: &mut toml_edit::DocumentMut, global: &toml_edit::DocumentMut| {
+        let local = profile_from_document(document, profile_name)?.unwrap_or_default();
+        let inherited = if path == global_path {
+            ProjectProfile::default()
+        } else {
+            profile_from_document(global, profile_name)?.unwrap_or_default()
+        };
+        if let Some(existing) = local
+            .wallets
+            .get(name)
+            .or_else(|| inherited.wallets.get(name))
+        {
+            let validated =
+                crate::account_resolution::validate_saved_wallet_binding(name, existing)?;
+            if existing.kind == binding.kind
+                && existing.account_nonce == binding.account_nonce
+                && validated.address == crate::codec::parse_contract_address(&binding.address)?
+                && validated.owner_public_key
+                    == groundhog_signing::strkey::parse_public_key(&binding.owner_public_key)
+                        .map_err(|e| CliError::Other(e.to_string()))?
+            {
+                return Ok(());
+            }
+            return Err(CliError::WalletBindingConflict {
+                wallet_name: name.into(),
+            });
+        }
+        let effective_key = local
+            .default_key
+            .as_deref()
+            .or(inherited.default_key.as_deref())
+            .or_else(|| global.get("default_key").and_then(toml_edit::Item::as_str));
+        // Preserve the effective merged identity when adding another wallet for its owner.
+        let mut existing_wallets = inherited.wallets.clone();
+        existing_wallets.extend(local.wallets.clone());
+        let owner_matches: Vec<_> = existing_wallets
+            .iter()
+            .filter(|(_, wallet)| {
+                groundhog_signing::strkey::parse_public_key(&wallet.owner_public_key).ok()
+                    == groundhog_signing::strkey::parse_public_key(&binding.owner_public_key).ok()
+            })
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let default_to_save = if local.default_wallet.is_none()
+            && inherited.default_wallet.is_none()
+            && effective_key == Some(key_name)
+        {
+            match owner_matches.as_slice() {
+                [] => Some(name),
+                [existing] => Some(*existing),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let profile = document
+            .entry("profile")
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(profile_name)
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
+        if let Some(default) = default_to_save {
+            profile.insert("default_wallet", toml_edit::value(default));
+        }
+        let wallets = profile
+            .entry("wallets")
+            .or_insert(toml_edit::table())
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("wallets must be a table".into()))?;
+        wallets.insert(name, toml_edit::Item::Table(native_binding_table(binding)?));
+        inserted = true;
+        Ok(())
+    };
+    if path == global_path {
+        transact_profile_document(&path, |doc| {
+            let global = doc.clone();
+            save(doc, &global)
+        })?;
+    } else {
+        transact_document_with_peer(
+            &path,
+            ConfigFileKind::Project,
+            &global_path,
+            save,
+            |_, _| Ok(()),
+        )?;
+    }
+    Ok(inserted)
+}
+
+fn native_binding_table(binding: &SavedWalletBinding) -> Result<toml_edit::Table, CliError> {
+    let mut wallet = toml_edit::Table::new();
+    wallet.insert("address", toml_edit::value(&binding.address));
+    wallet.insert(
+        "owner_public_key",
+        toml_edit::value(&binding.owner_public_key),
+    );
+    wallet.insert("kind", toml_edit::value("native"));
+    wallet.insert(
+        "account_nonce",
+        toml_edit::value(
+            i64::try_from(binding.account_nonce.unwrap_or(0))
+                .map_err(|_| CliError::Other("account nonce exceeds TOML integer range".into()))?,
+        ),
+    );
+    Ok(wallet)
 }
 
 /// Remove a persisted wallet address from the selected project profile.

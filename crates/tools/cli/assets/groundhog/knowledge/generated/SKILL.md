@@ -400,6 +400,19 @@ including typed contract arguments. Saved wallet owners accept G StrKeys or
 hex public keys. These encodings preserve bytes and do not identify a network.
 Existing key files and public JSON-RPC wire encodings remain unchanged.
 
+### Native wallet creation
+
+For a stored non-dev signing key, `groundhog wallet create --key <key>` derives
+and saves a native pubkey account with nonce zero. Creation is offline and
+requests no funding; `--dry-run` derives without saving. Use the printed
+`groundhog airdrop <address> --profile=<profile>` command to request funds
+explicitly. `--prefund` is rejected. An identical repeat preserves the binding
+and default selection; an existing name for a different identity is rejected.
+Untyped saved wallets and manifest-backed dev-N accounts retain their legacy
+transaction format. Native calls and HOG transfers are supported. Native
+contract deployment is guarded pending the funded-deployment CLI migration
+and supported backend release.
+
 ## Sources and Escalation
 
 Use this source order:

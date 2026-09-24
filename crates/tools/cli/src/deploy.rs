@@ -520,6 +520,9 @@ fn prepare_deploy_transaction_plan(
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let sender = resolve_transaction_sender(profile, selected_wallet)?;
+    if sender.native_account.is_some() {
+        return Err(CliError::NativeWalletDeploymentUnavailable);
+    }
 
     let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;

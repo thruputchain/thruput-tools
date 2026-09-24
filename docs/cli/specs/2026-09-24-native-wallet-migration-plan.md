@@ -307,3 +307,47 @@ upgrades, shared-client routing, and CLI migration remain delivery gates.
 First implementation deliverable: the bounded slice-0 Rust qualification and
 canonical funded-deployment contract, followed by the reviewed backend primitive.
 No current-live-chain or new-bundle runtime claim is implied by this plan.
+
+## Empty creation and shared routing slice (local implementation)
+
+The CLI now saves native bindings with `kind = "native"` and `account_nonce = 0`.
+Untyped existing bindings remain legacy. Native owner, nonce and derived address
+are validated during sender selection and recipient lookup. Creation derives
+from the stored signer, does not contact RPC or faucet services, and performs a
+locked, idempotent config insertion that preserves existing identities and
+explicit or inherited defaults. Dry-run does not write config. `--prefund` is
+rejected; the funding hint identifies the exact account address and retains
+explicit target overrides.
+
+The shared Rust client has additive native/legacy preparation and native
+single-child return decoding. Its existing `CallRequest`, `prepare_call` and
+`SubmittedCall { tx_hash }` APIs remain available. CLI calls and transfers select
+the transaction format from the saved binding, and native signing checks the
+configured network against the endpoint. Native contract deployment fails with
+an explicit migration guard before the legacy builder can run.
+
+Local runtime qualification on the source-built hog-devnode described above:
+
+- A new CLI-created account had a queried balance of zero at height 1.
+- Explicit `airdrop` sent 10 HOG to the same address at height 2. Its observed
+  free balance was 9.9998766 HOG after storage collateral, not a fabricated 10.
+- Native `transfer` sent 1 HOG to the manifest-backed dev-1 wallet at height 3.
+- Legacy dev-1 deployed the Counter fixture at height 4.
+- Native CLI calls initialized Counter to 42 at height 5 and read 42 at height 6.
+
+These are source-build results, not qualification of a published bundle.
+Hosted airdrop is covered by a local HTTP/RPC fixture, not a public Devnet write.
+Native deploy/testkit migration, ordinary unsaved-key fallback, downstream
+consumer qualification and supported backend publication remain separate gates.
+Do not ship the native default before the complete supported deployment flow is
+available. Backend PR drafts are prepared separately for canonical contracts and
+hogd, with the canonical change required first.
+
+The existing `scripts/smoke-local-dx.sh` still encodes legacy auto-prefunding
+and new-wallet deployment expectations. Updating and passing that complete
+smoke is a release gate for the next transaction-command slice; the focused
+live checks above do not replace it.
+
+Validation for this slice passed: full workspace tests and build, all-target
+Clippy with warnings denied, formatting, generated knowledge consistency and
+CLI package inclusion. The CLI binary suite includes 298 passing tests.

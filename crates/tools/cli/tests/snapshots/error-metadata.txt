@@ -1,3 +1,20 @@
+InvalidWalletBinding
+  code: invalid_wallet_binding
+  details: walletName, message
+
+WalletBindingConflict
+  code: wallet_binding_conflict
+  hint text: choose a different --name; existing wallet identities are preserved
+  details: walletName
+
+WalletCreatePrefundUnsupported
+  code: wallet_create_prefund_unsupported
+  hint text: create the empty wallet first, then run groundhog airdrop <wallet-name>
+
+NativeWalletDeploymentUnavailable
+  code: native_wallet_deployment_unavailable
+  hint text: native calls and transfers are supported; funded deployment requires the backend release and CLI deployment migration
+
 Docs
   code: docs_error
 

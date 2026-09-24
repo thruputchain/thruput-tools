@@ -2,7 +2,7 @@ use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_client::codec::method_entrypoint_id;
-use groundhog_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
+use groundhog_client::{PollOptions, SignedCall, UnsignedCall, WalletCallRequest};
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
@@ -25,7 +25,7 @@ use crate::contract_spec::{
     InterfaceSpec, load_built_contract_spec, load_built_registered_interfaces,
 };
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
-use crate::network_descriptor::resolve_wallet_signing_context;
+
 use crate::result::CommandResult;
 use crate::tx_utils::{
     command_error_for_exec_status, decode_receipt_abort, format_tx_hash, nonce_from_timestamp,
@@ -137,11 +137,29 @@ pub fn run(
     let status_summary = summarize_exec_status(&receipt.status);
     let diagnostics = (!matches!(receipt.status, ExecStatus::Ok))
         .then(|| call_diagnostics_json(&prepared, transaction_detail.is_some()));
-    let decoded_return = receipt
-        .return_data
+    if matches!(receipt.status, ExecStatus::Ok)
+        && prepared.signed.is_native()
+        && receipt.return_data.is_none()
+    {
+        return Err(CliError::Other(format!(
+            "transaction {tx_hash_formatted} succeeded but its native wallet return is missing"
+        )));
+    }
+    let child_return = if matches!(receipt.status, ExecStatus::Ok) {
+        receipt.return_data.as_ref().map(|data| prepared.signed.decode_return(&data.0))
+            .transpose().map_err(|error| CliError::Other(format!("transaction {tx_hash_formatted} succeeded but its wallet return is invalid: {error}")))?
+    } else {
+        None
+    };
+    let decoded_return = child_return
         .as_ref()
-        .and_then(|data| decode_return(data.0.as_slice(), prepared.resolved.metadata.as_ref()));
-    let decoded_abort = decode_receipt_abort(&receipt, prepared.resolved.metadata.as_ref());
+        .and_then(|data| decode_return(data, prepared.resolved.metadata.as_ref()));
+    // Native failures originate in the wallet wrapper, not the child's abort enum.
+    let decoded_abort = if prepared.signed.is_native() {
+        None
+    } else {
+        decode_receipt_abort(&receipt, prepared.resolved.metadata.as_ref())
+    };
 
     // Print result
     match &receipt.status {
@@ -416,19 +434,13 @@ fn prepare_call_plan_with_runtime(
     let wallet_address = sender.wallet_address;
     let wallet_address_hex = format_contract_address(&wallet_address);
 
-    let wallet_context = resolve_wallet_signing_context(
-        &resolved_profile,
-        &sender.key_name,
-        sender.network_hash,
-        rt,
-    )?;
+    let wallet_context = sender.signing_context(&resolved_profile, rt)?;
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
-    let tx = groundhog_client::prepare_call(
-        CallRequest {
-            wallet_address,
-            wallet_entrypoint: wallet_context.entrypoints.do_action,
+    let tx = groundhog_client::prepare_wallet_call(
+        WalletCallRequest {
+            wallet: sender.wallet(wallet_context.entrypoints.do_action),
             target_address: contract_address,
             target_entrypoint: resolved.entrypoint,
             target_calldata: calldata.as_slice(),

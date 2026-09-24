@@ -1312,7 +1312,7 @@ enum WalletCommand {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
-    /// Prefund and create a wallet for a stored signing key
+    /// Save an empty native wallet for a stored signing key
     Create {
         /// Existing key name that should own the new wallet
         #[arg(long)]
@@ -1320,10 +1320,10 @@ enum WalletCommand {
         /// Saved wallet name; defaults to the resolved key name
         #[arg(long)]
         name: Option<String>,
-        /// Build and sign the wallet create transaction without submitting it
+        /// Derive the native wallet without saving it or contacting the network
         #[arg(long)]
         dry_run: bool,
-        /// Exact local wallet prefund in HOG; remote faucets control this amount
+        /// Removed: use groundhog airdrop after creating the wallet
         #[arg(long)]
         prefund: Option<String>,
         #[command(flatten)]

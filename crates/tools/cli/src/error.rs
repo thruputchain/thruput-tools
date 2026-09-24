@@ -54,6 +54,24 @@ const TOOLCHAIN_RETRY_HINT: &str =
 ///   their `camelCase` keys. A variant with no `#[details]` carries none.
 #[derive(Error, Debug, ErrorMeta)]
 pub enum CliError {
+    #[error("invalid wallet `{wallet_name}`: {message}")]
+    #[details]
+    InvalidWalletBinding {
+        wallet_name: String,
+        message: String,
+    },
+    #[error("wallet `{wallet_name}` already names a different account")]
+    #[hint("choose a different --name; existing wallet identities are preserved")]
+    #[details]
+    WalletBindingConflict { wallet_name: String },
+    #[error("wallet create no longer accepts --prefund")]
+    #[hint("create the empty wallet first, then run groundhog airdrop <wallet-name>")]
+    WalletCreatePrefundUnsupported,
+    #[error("native wallet deployment is not yet enabled in this CLI")]
+    #[hint(
+        "native calls and transfers are supported; funded deployment requires the backend release and CLI deployment migration"
+    )]
+    NativeWalletDeploymentUnavailable,
     #[error(transparent)]
     #[code("docs_error")]
     Docs(#[from] crate::docs::DocsError),

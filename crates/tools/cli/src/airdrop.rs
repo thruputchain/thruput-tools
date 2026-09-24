@@ -1008,6 +1008,8 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: format!("0x{}", "aB".repeat(32)),
                 owner_public_key: format!("0x{}", "ef".repeat(32)),
             },
@@ -1189,6 +1191,8 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: format!("0x{}", "ab".repeat(32)),
                 owner_public_key: format!("0x{}", "ef".repeat(32)),
             },

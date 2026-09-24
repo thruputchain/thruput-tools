@@ -235,6 +235,12 @@ pub struct ConfigGetReport {
 pub struct ConfigWalletBinding {
     pub address: String,
     pub owner_public_key: String,
+    /// Wallet transaction format.
+    #[serde(default, skip_serializing_if = "super::WalletKind::is_legacy")]
+    pub kind: super::WalletKind,
+    /// Native account derivation nonce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_nonce: Option<u64>,
 }
 
 /// Validation state of a profile row in `config profiles`.
@@ -497,6 +503,8 @@ impl ConfigGetReport {
                         ConfigWalletBinding {
                             address: wallet.address,
                             owner_public_key: wallet.owner_public_key,
+                            kind: wallet.kind,
+                            account_nonce: wallet.account_nonce,
                         },
                     )
                 })
