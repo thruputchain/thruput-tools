@@ -292,11 +292,15 @@ fn as_u16(value: usize) -> u16 {
     u16::try_from(value).expect("test value fits in u16")
 }
 
+fn nops(words: usize) -> Vec<u8> {
+    0x0000_0013u32.to_le_bytes().repeat(words) // ADDI x0, x0, 0 (NOP)
+}
+
 /// A baseline valid contract: 32-byte `.text`, `_start` at 0, two method
 /// entry points (method ids 0xAA @ pc 4 and 0x10 @ pc 16).
 fn happy_spec() -> ElfSpec {
     ElfSpec {
-        text: 0x0000_0013u32.to_le_bytes().repeat(8), // ADDI x0, x0, 0 (NOP)
+        text: nops(8),
         text_addr: 0,
         extras: Vec::new(),
         syms: vec![
@@ -785,7 +789,7 @@ fn rejects_data_section_in_the_null_guard() {
 #[test]
 fn code_at_the_protocol_default_lowers_without_a_warning() {
     let mut spec = happy_spec();
-    spec.text = 0x0000_0013u32.to_le_bytes().repeat(64 * 1024 / 4);
+    spec.text = nops(64 * 1024 / 4);
     let lowered = lower(&assemble(spec)).expect("at-default .text lowers");
     assert_eq!(lowered.code.len(), 64 * 1024);
     assert!(lowered.warnings.is_empty(), "{:?}", lowered.warnings);
@@ -798,7 +802,7 @@ fn code_over_the_protocol_default_lowers_with_a_warning() {
     // default is a warning, not a refusal: a chain configured above the
     // default admits it, and one that is not rejects it at deploy.
     let mut spec = happy_spec();
-    spec.text = 0x0000_0013u32.to_le_bytes().repeat(64 * 1024 / 4 + 1);
+    spec.text = nops(64 * 1024 / 4 + 1);
     let lowered = lower(&assemble(spec)).expect("over-default .text lowers");
     assert_eq!(lowered.code.len(), 65540);
     assert_eq!(
@@ -1283,12 +1287,17 @@ fn cli_rejects_bad_code_before_touching_outputs() {
                 let mut bytes = assemble(happy_spec());
                 let shoff = u32::from_le_bytes(bytes[32..36].try_into().unwrap()) as usize;
                 let needle = if nobits {
-                    bytes[shoff + 44..shoff + 48].copy_from_slice(&SHT_NOBITS.to_le_bytes());
+                    let text_type_offset = shoff + 40 + 4;
+                    bytes[text_type_offset..text_type_offset + 4]
+                        .copy_from_slice(&SHT_NOBITS.to_le_bytes());
                     "SHT_PROGBITS"
                 } else {
-                    let offset =
-                        u32::from_le_bytes(bytes[shoff + 56..shoff + 60].try_into().unwrap())
-                            as usize;
+                    let text_offset_field = shoff + 40 + 16;
+                    let offset = u32::from_le_bytes(
+                        bytes[text_offset_field..text_offset_field + 4]
+                            .try_into()
+                            .unwrap(),
+                    ) as usize;
                     bytes[offset..offset + 4].copy_from_slice(&[1, 0, 1, 0]);
                     "compressed instruction"
                 };

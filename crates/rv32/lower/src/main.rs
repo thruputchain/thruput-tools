@@ -117,8 +117,8 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
             "--out and --elf refer to the same file".to_string(),
         ));
     }
-    let mut metadata = cli.metadata.as_deref().map(open_output).transpose()?;
-    if let Some(handle) = &metadata {
+    let mut metadata_output = cli.metadata.as_deref().map(open_output).transpose()?;
+    if let Some(handle) = &metadata_output {
         if *handle == input {
             return Err(LowerError::Invalid(
                 "--metadata and --elf refer to the same file".to_string(),
@@ -139,7 +139,7 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
         }
     }
 
-    if let Some(handle) = &mut metadata {
+    if let Some(handle) = &mut metadata_output {
         let document = render_metadata(&MetadataInput {
             elf: &elf_bytes,
             artifact: &lowered.artifact,
