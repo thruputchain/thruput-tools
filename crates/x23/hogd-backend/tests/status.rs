@@ -72,7 +72,7 @@ fn recent_failure() -> TransactionStatus {
                 address: [0; 32].into(),
                 key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
             },
-            code: DbConflictCode::kDbConflictExclusiveLock,
+            code: DbConflictCode::ExclusiveLockDenied,
         },
     })
 }

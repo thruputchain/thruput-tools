@@ -561,6 +561,11 @@
             "type": "string"
           },
           {
+            "const": "insufficientFunds",
+            "description": "The native HOG balance at the diagnostic's address cannot cover the\ndebits in this block, or a newly created balance item cannot cover\nits own storage cost. Storage written under a contract's address is\ncharged to that contract's balance, so a deployment reports this at\nthe new contract's address when it holds no HOG.",
+            "type": "string"
+          },
+          {
             "const": "other",
             "description": "Unrecognized conflict code. Check for gateway updates.",
             "type": "string"

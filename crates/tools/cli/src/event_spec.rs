@@ -4,8 +4,8 @@ use std::io::{Read as _, Take};
 use std::path::Path;
 
 use groundhog_contract_spec::{
-    ContractEventDef, ContractField, ContractSpec, ContractSpecString, ContractType,
-    ContractTypeDef, ContractUnionCaseType,
+    ContractEventDef, ContractField, ContractSpec, ContractSpecId, ContractSpecString,
+    ContractType, ContractTypeDef, ContractUnionCaseType,
 };
 use groundhog_json_rpc_types::events::IdentifiedEvent;
 use groundhog_json_rpc_types::hex::Topic;
@@ -98,7 +98,7 @@ impl ValidatedEventSpec {
             return unknown_event(raw);
         };
         let event_def = &self.spec.events[*index];
-        let event_name = spec_string_text(&event_def.name)
+        let event_name = spec_string_text(&event_def.name.declared)
             .expect("bug: validated event name must be text")
             .to_owned();
 
@@ -284,7 +284,7 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
     let mut remaining_visits = MAX_VALIDATION_VISITS;
 
     for (index, event) in spec.events.iter().enumerate() {
-        let name = required_name(&event.name, "event name", false)?;
+        let name = required_name(&event.name.declared, "event name", false)?;
         if events_by_name.insert(name.to_owned(), index).is_some() {
             return Err(SpecError::Duplicate {
                 context: "event name",
@@ -405,7 +405,7 @@ fn check_member_limit(count: usize) -> Result<(), SpecError> {
 
 fn event_type_def_index(
     definitions: &[ContractTypeDef],
-) -> Result<BTreeMap<String, &ContractTypeDef>, SpecError> {
+) -> Result<BTreeMap<ContractSpecId, &ContractTypeDef>, SpecError> {
     let mut index = BTreeMap::new();
     for definition in definitions {
         let name = match definition {
@@ -418,11 +418,11 @@ fn event_type_def_index(
                 });
             }
         };
-        let name = required_name(name, "type definition name", false)?;
-        if index.insert(name.to_owned(), definition).is_some() {
+        let id = required_id(name, "type definition name")?;
+        if index.insert(id.clone(), definition).is_some() {
             return Err(SpecError::Duplicate {
                 context: "type definition name",
-                name: name.to_owned(),
+                name: id_label(id),
             });
         }
     }
@@ -432,7 +432,7 @@ fn event_type_def_index(
 fn validate_fields(
     fields: &[ContractField],
     context: &'static str,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
     remaining_visits: &mut usize,
     count_values: bool,
 ) -> Result<usize, SpecError> {
@@ -460,8 +460,8 @@ fn validate_fields(
 
 fn validate_type(
     ty: &ContractType,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
@@ -561,24 +561,20 @@ fn validate_type(
 /// `visiting` holds the names on the current path; the name is removed again
 /// on the way out so a type reached twice through sibling fields still passes.
 fn validate_named_type(
-    named: &ContractSpecString,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    named: &ContractSpecId,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
 ) -> Result<usize, SpecError> {
-    let name = required_name(named, "named type", false)?;
-    if !visiting.insert(name.to_owned()) {
-        return Err(SpecError::CyclicType {
-            name: name.to_owned(),
-        });
+    let id = required_id(named, "named type")?;
+    if !visiting.insert(id.clone()) {
+        return Err(SpecError::CyclicType { name: id_label(id) });
     }
     let definition = type_defs
-        .get(name)
-        .ok_or_else(|| SpecError::UnresolvedType {
-            name: name.to_owned(),
-        })?;
+        .get(id)
+        .ok_or_else(|| SpecError::UnresolvedType { name: id_label(id) })?;
     let result = validate_type_definition(
         definition,
         type_defs,
@@ -587,7 +583,7 @@ fn validate_named_type(
         depth,
         count_values,
     );
-    visiting.remove(name);
+    visiting.remove(id);
     result
 }
 
@@ -603,8 +599,8 @@ fn validate_type_limits(remaining_visits: &mut usize, depth: usize) -> Result<()
 
 fn validate_type_definition(
     definition: &ContractTypeDef,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
@@ -713,8 +709,8 @@ fn validate_type_definition(
 fn validate_named_fields(
     fields: &[ContractField],
     context: &'static str,
-    type_defs: &BTreeMap<String, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
     remaining_visits: &mut usize,
     depth: usize,
     count_values: bool,
@@ -739,6 +735,41 @@ fn validate_named_fields(
         )?;
     }
     Ok(values)
+}
+
+/// An id rendered for a diagnostic, in the shape the codec uses.
+///
+/// Lossy: every caller has run `required_id` first, which rejects a segment
+/// that is not text, so the replacement characters are unreachable in
+/// practice and a diagnostic is the wrong place to fail a second time.
+fn id_label(id: &ContractSpecId) -> String {
+    let seg = |s: &ContractSpecString| String::from_utf8_lossy(s.as_ref()).into_owned();
+    format!(
+        "{}::{} ({}@{})",
+        seg(&id.module_path),
+        seg(&id.declared),
+        seg(&id.crate_name),
+        seg(&id.major)
+    )
+}
+
+/// Validate a spec id and hand back the id itself.
+///
+/// Keyed lookups take the whole id -- a declared name alone is not an
+/// identity, so two types that share one in different modules are different
+/// types and must not collide in an index.
+fn required_id<'a>(
+    id: &'a ContractSpecId,
+    context: &'static str,
+) -> Result<&'a ContractSpecId, SpecError> {
+    for segment in [&id.crate_name, &id.major, &id.module_path] {
+        spec_string_text(segment).map_err(|error| SpecError::InvalidName {
+            context,
+            detail: error.to_string(),
+        })?;
+    }
+    required_name(&id.declared, context, false)?;
+    Ok(id)
 }
 
 fn required_name<'a>(
@@ -788,7 +819,7 @@ fn decode_known_event(
     data: &[u8],
     type_defs: &TypeDefIndex<'_>,
 ) -> Result<DecodedEventReport, CliError> {
-    let name = spec_string_text(&event.name)?.to_owned();
+    let name = spec_string_text(&event.name.declared)?.to_owned();
     let expected_topics = event.topics.len() + 1;
     if topics.len() != expected_topics {
         return Err(CliError::CallDecode {
@@ -857,7 +888,7 @@ fn invalid_spec(path: &str, message: &str) -> CliError {
 mod tests {
     use groundhog_contract_spec::{
         ContractEnumDef, ContractEnumVariant, ContractEventDef, ContractField, ContractSpec,
-        ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
+        ContractSpecId, ContractSpecString, ContractStructDef, ContractType, ContractTypeDef,
     };
     use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
     use groundhog_json_rpc_types::hex::{HexBytes, Topic};
@@ -874,6 +905,17 @@ mod tests {
         ContractSpecString::try_from(value).expect("fixture spec string should fit")
     }
 
+    /// A fixture id: one crate, one module, so the declared name is what
+    /// tells these types apart -- which is what these tests turn on.
+    fn spec_id(declared: &str) -> ContractSpecId {
+        ContractSpecId {
+            crate_name: spec_string("demo"),
+            major: spec_string("1"),
+            module_path: spec_string("demo"),
+            declared: spec_string(declared),
+        }
+    }
+
     fn field(name: &str, ty: ContractType) -> ContractField {
         ContractField {
             name: spec_string(name),
@@ -886,7 +928,7 @@ mod tests {
             interfaces: VecM(vec![]),
             type_defs: VecM(vec![]),
             events: VecM(vec![ContractEventDef {
-                name: spec_string("PingEvent"),
+                name: spec_id("PingEvent"),
                 signature: [0x11; 32].into(),
                 topics: VecM(vec![field("tag", ContractType::U64)]),
                 fields: VecM(vec![field("value", field_type)]),
@@ -896,20 +938,20 @@ mod tests {
 
     fn named_chain(definitions: usize) -> ContractSpec {
         let mut spec = event_spec(ContractType::Named {
-            named: spec_string("Type0"),
+            named: spec_id("Type0"),
         });
         spec.type_defs = VecM(
             (0..definitions)
                 .map(|index| ContractTypeDef::TypeDefStruct {
                     struct_def: ContractStructDef {
-                        name: spec_string(&format!("Type{index}")),
+                        name: spec_id(&format!("Type{index}")),
                         fields: VecM(vec![field(
                             "value",
                             if index + 1 == definitions {
                                 ContractType::U64
                             } else {
                                 ContractType::Named {
-                                    named: spec_string(&format!("Type{}", index + 1)),
+                                    named: spec_id(&format!("Type{}", index + 1)),
                                 }
                             },
                         )]),
@@ -1028,12 +1070,12 @@ mod tests {
     #[test]
     fn event_decoding_rejects_unknown_enum_but_call_codec_remains_permissive() {
         let enum_type = ContractType::Named {
-            named: spec_string("Mode"),
+            named: spec_id("Mode"),
         };
         let mut contract_spec = event_spec(enum_type.clone());
         contract_spec.type_defs = VecM(vec![ContractTypeDef::TypeDefEnum {
             enum_def: ContractEnumDef {
-                name: spec_string("Mode"),
+                name: spec_id("Mode"),
                 variants: VecM(vec![ContractEnumVariant {
                     name: spec_string("Ready"),
                     value: 1,
@@ -1107,7 +1149,7 @@ mod tests {
     fn validation_rejects_duplicate_signatures_and_excess_indexed_fields() {
         let mut duplicate_signature = event_spec(ContractType::U64);
         let mut second_event = duplicate_signature.events[0].clone();
-        second_event.name = spec_string("PongEvent");
+        second_event.name = spec_id("PongEvent");
         duplicate_signature.events.0.push(second_event);
         assert!(matches!(
             validate_spec(&duplicate_signature).unwrap_err(),
@@ -1131,11 +1173,11 @@ mod tests {
     #[test]
     fn validation_rejects_unresolved_types_and_duplicate_field_names() {
         let unresolved = event_spec(ContractType::Named {
-            named: spec_string("Missing"),
+            named: spec_id("Missing"),
         });
         assert!(matches!(
             validate_spec(&unresolved).unwrap_err(),
-            SpecError::UnresolvedType { name } if name == "Missing"
+            SpecError::UnresolvedType { name } if name == "demo::Missing (demo@1)"
         ));
 
         let mut duplicate_field = event_spec(ContractType::U64);
@@ -1275,7 +1317,7 @@ mod tests {
             unreachable!()
         };
         struct_def.fields.0[0].ty = ContractType::Named {
-            named: spec_string("Type0"),
+            named: spec_id("Type0"),
         };
 
         assert!(matches!(

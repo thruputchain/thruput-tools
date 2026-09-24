@@ -44,7 +44,7 @@ export const spec: ContractSpec = {
       name: s("ExampleContract"),
       vers: s("0.1.0"),
       throws: [
-        { selector: 0x1234n, ty: { v: ContractTypeKind.Named, named: s("ExampleError") } },
+        { selector: 0x1234n, ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") } } },
       ],
       methods: [
         {
@@ -68,7 +68,7 @@ export const spec: ContractSpec = {
     {
       v: ContractTypeDefKind.TypeDefUnion,
       union_def: {
-        name: s("ExampleError"),
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") },
         cases: [
           {
             name: s("InvalidValue"),
@@ -86,7 +86,7 @@ export const spec: ContractSpec = {
   ],
   events: [
     {
-      name: s("ChangedEvent"),
+      name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ChangedEvent") },
       signature: topic(fromHex("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a")),
       topics: [
         { name: s("actor"), ty: { v: ContractTypeKind.Address } },

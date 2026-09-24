@@ -10811,16 +10811,24 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
 
 fn write_event_spec(tmp: &TempDir) -> std::path::PathBuf {
     use groundhog_contract_spec::{
-        ContractEventDef, ContractField, ContractSpec, ContractSpecString, ContractType,
+        ContractEventDef, ContractField, ContractSpec, ContractSpecId, ContractSpecString,
+        ContractType,
     };
     use xdr_common::VecM;
 
     let string = |value: &str| ContractSpecString::try_from(value).unwrap();
+    // One crate, one module: the declared name is what this fixture turns on.
+    let id = |declared: &str| ContractSpecId {
+        crate_name: string("demo"),
+        major: string("1"),
+        module_path: string("demo"),
+        declared: string(declared),
+    };
     let spec = ContractSpec {
         interfaces: VecM(vec![]),
         type_defs: VecM(vec![]),
         events: VecM(vec![ContractEventDef {
-            name: string("PingEvent"),
+            name: id("PingEvent"),
             signature: [0x91; 32].into(),
             topics: VecM(vec![ContractField {
                 name: string("tag"),
@@ -14044,7 +14052,7 @@ fn library_abort_hex(case_name: &str) -> String {
         .iter()
         .find_map(|def| match def {
             groundhog_contract_spec::ContractTypeDef::TypeDefUnion { union_def }
-                if AsRef::<[u8]>::as_ref(&union_def.name) == b"LibraryExn" =>
+                if AsRef::<[u8]>::as_ref(&union_def.name.declared) == b"LibraryExn" =>
             {
                 union_def
                     .cases
