@@ -5,10 +5,12 @@
 //! ```
 
 use std::fs;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser;
+use same_file::Handle;
 
 use groundhog_rv32_lower::{
     FORMAT_FINGERPRINT, LowerError, LowerOptions, MetadataInput, lower_with, render_metadata,
@@ -53,6 +55,26 @@ struct Cli {
     memory_bytes: Option<usize>,
 }
 
+// Keep the checked handles through the writes: resolving paths and then
+// reopening them would miss aliases introduced between the check and write.
+fn open_output(path: &Path) -> Result<Handle, LowerError> {
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    Ok(Handle::from_file(file)?)
+}
+
+fn write_output(handle: &mut Handle, bytes: &[u8]) -> Result<(), LowerError> {
+    let file = handle.as_file_mut();
+    if file.metadata()?.is_file() {
+        file.set_len(0)?;
+    }
+    file.write_all(bytes)?;
+    Ok(())
+}
+
 fn run(cli: &Cli) -> Result<(), LowerError> {
     if cli.print_format_fingerprint {
         if cli.json {
@@ -78,14 +100,37 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
         .as_ref()
         .ok_or_else(|| LowerError::Invalid("--out is required".to_string()))?;
 
-    let elf_bytes = fs::read(elf)?;
+    let mut input = Handle::from_path(elf)?;
+    let mut elf_bytes = Vec::new();
+    input.as_file_mut().read_to_end(&mut elf_bytes)?;
     let options = LowerOptions {
         memory_bytes: cli
             .memory_bytes
             .unwrap_or(LowerOptions::default().memory_bytes),
     };
     let lowered = lower_with(&elf_bytes, &options)?;
-    fs::write(out, &lowered.artifact)?;
+    // Open every destination without truncating before checking identities.
+    // This also catches initially absent paths and symlink/hard-link aliases.
+    let mut output = open_output(out)?;
+    if output == input {
+        return Err(LowerError::Invalid(
+            "--out and --elf refer to the same file".to_string(),
+        ));
+    }
+    let mut metadata_output = cli.metadata.as_deref().map(open_output).transpose()?;
+    if let Some(handle) = &metadata_output {
+        if *handle == input {
+            return Err(LowerError::Invalid(
+                "--metadata and --elf refer to the same file".to_string(),
+            ));
+        }
+        if *handle == output {
+            return Err(LowerError::Invalid(
+                "--metadata and --out refer to the same file".to_string(),
+            ));
+        }
+    }
+    write_output(&mut output, &lowered.artifact)?;
     // The JSON summary carries `warnings`; plain mode prints them where a
     // human building a contract will see them.
     if !cli.json {
@@ -94,7 +139,7 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
         }
     }
 
-    if let Some(metadata_path) = &cli.metadata {
+    if let Some(handle) = &mut metadata_output {
         let document = render_metadata(&MetadataInput {
             elf: &elf_bytes,
             artifact: &lowered.artifact,
@@ -106,7 +151,7 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
             target_triple: cli.target_triple.clone(),
             build_flags: cli.build_flags.clone(),
         });
-        fs::write(metadata_path, document)?;
+        write_output(handle, document.as_bytes())?;
     }
 
     if cli.json {

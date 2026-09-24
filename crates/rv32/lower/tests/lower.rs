@@ -292,11 +292,15 @@ fn as_u16(value: usize) -> u16 {
     u16::try_from(value).expect("test value fits in u16")
 }
 
+fn nops(words: usize) -> Vec<u8> {
+    0x0000_0013u32.to_le_bytes().repeat(words) // ADDI x0, x0, 0 (NOP)
+}
+
 /// A baseline valid contract: 32-byte `.text`, `_start` at 0, two method
 /// entry points (method ids 0xAA @ pc 4 and 0x10 @ pc 16).
 fn happy_spec() -> ElfSpec {
     ElfSpec {
-        text: vec![0u8; 32],
+        text: nops(8),
         text_addr: 0,
         extras: Vec::new(),
         syms: vec![
@@ -459,6 +463,56 @@ fn rejects_unaligned_text_size() {
     let mut spec = happy_spec();
     spec.text = vec![0u8; 30];
     expect_err(spec, ".text size must be four-byte aligned");
+}
+
+#[test]
+fn rejects_compressed_instructions_at_every_code_boundary() {
+    // The total remains four-byte aligned, even with two 16-bit encodings.
+    // Neither stripped symbols nor a missing RVC flag may hide the encoding.
+    for compressed in [[0x00, 0x00], [0x01, 0x00], [0x02, 0x90]] {
+        for pc in [0, 4, 28] {
+            for flags in [0u32, 1] {
+                let mut spec = happy_spec();
+                spec.strip = true;
+                spec.text[pc..pc + 4].copy_from_slice(&compressed.repeat(2));
+                let mut bytes = assemble(spec);
+                bytes[36..40].copy_from_slice(&flags.to_le_bytes());
+                let err = lower(&bytes).expect_err("compressed code must not lower");
+                assert!(err.to_string().contains("compressed instruction"), "{err}");
+                assert!(err.to_string().contains(&format!("PC {pc:#x}")), "{err}");
+            }
+        }
+    }
+}
+
+#[test]
+fn preserves_rv32im_instructions_and_canonical_unimp() {
+    let words: [u32; 6] = [
+        0x0000_0013, // NOP
+        0x0000_8067, // RET
+        0x02b5_0533, // MUL a0, a0, a1
+        0x0000_0073, // ECALL
+        0x0010_0073, // EBREAK
+        0xc000_1073, // canonical UNIMP, an intentional runtime trap
+    ];
+    let code: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    let mut spec = happy_spec();
+    spec.text.clone_from(&code);
+    assert_eq!(lower(&assemble(spec)).expect("RV32IM lowers").code, code);
+}
+
+#[test]
+fn rejects_text_without_file_contents() {
+    for section_type in [SHT_NOBITS, 0] {
+        let mut bytes = assemble(happy_spec());
+        let shoff = u32::from_le_bytes(bytes[32..36].try_into().unwrap()) as usize;
+        // Keep valid instructions at sh_offset: reading those incidental
+        // bytes must not make a non-PROGBITS .text acceptable.
+        let text_type_offset = shoff + 40 + 4;
+        bytes[text_type_offset..text_type_offset + 4].copy_from_slice(&section_type.to_le_bytes());
+        let err = lower(&bytes).expect_err(".text must have file contents");
+        assert!(err.to_string().contains("SHT_PROGBITS"), "{err}");
+    }
 }
 
 #[test]
@@ -741,7 +795,7 @@ fn rejects_data_section_in_the_null_guard() {
 #[test]
 fn code_at_the_protocol_default_lowers_without_a_warning() {
     let mut spec = happy_spec();
-    spec.text = vec![0u8; 64 * 1024]; // exactly at the default
+    spec.text = nops(64 * 1024 / 4);
     let lowered = lower(&assemble(spec)).expect("at-default .text lowers");
     assert_eq!(lowered.code.len(), 64 * 1024);
     assert!(lowered.warnings.is_empty(), "{:?}", lowered.warnings);
@@ -754,7 +808,7 @@ fn code_over_the_protocol_default_lowers_with_a_warning() {
     // default is a warning, not a refusal: a chain configured above the
     // default admits it, and one that is not rejects it at deploy.
     let mut spec = happy_spec();
-    spec.text = vec![0u8; 64 * 1024 + 4]; // one instruction over the default
+    spec.text = nops(64 * 1024 / 4 + 1);
     let lowered = lower(&assemble(spec)).expect("over-default .text lowers");
     assert_eq!(lowered.code.len(), 65540);
     assert_eq!(
@@ -1194,4 +1248,248 @@ fn rejects_a_memory_size_past_the_header_field() {
         matches!(err, LowerError::Invalid(ref message) if message.contains("32-bit")),
         "{err}"
     );
+}
+
+fn run_cli(
+    elf: &std::path::Path,
+    out: &std::path::Path,
+    metadata: Option<&std::path::Path>,
+    json: bool,
+) -> std::process::Output {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_rv32-lower"));
+    command.arg("--elf").arg(elf).arg("--out").arg(out);
+    if let Some(path) = metadata {
+        command.arg("--metadata").arg(path);
+    }
+    if json {
+        command.arg("--json");
+    }
+    command.output().expect("run rv32-lower")
+}
+
+fn assert_cli_error(output: &std::process::Output, json: bool, needle: &str) {
+    assert!(!output.status.success(), "unexpected success: {output:?}");
+    let message = if json {
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let doc: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON error");
+        assert_eq!(doc["status"], "error");
+        doc["message"].as_str().expect("error message").to_string()
+    } else {
+        assert!(output.stdout.is_empty(), "{output:?}");
+        String::from_utf8(output.stderr.clone()).expect("plain error")
+    };
+    assert!(message.contains(needle), "{message}");
+}
+
+#[test]
+fn cli_rejects_bad_code_before_touching_outputs() {
+    for json in [false, true] {
+        for existing in [false, true] {
+            for nobits in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let elf = dir.path().join("contract.elf");
+                let out = dir.path().join("contract.rv32a");
+                let metadata = dir.path().join("contract.json");
+                let mut bytes = assemble(happy_spec());
+                let shoff = u32::from_le_bytes(bytes[32..36].try_into().unwrap()) as usize;
+                let needle = if nobits {
+                    let text_type_offset = shoff + 40 + 4;
+                    bytes[text_type_offset..text_type_offset + 4]
+                        .copy_from_slice(&SHT_NOBITS.to_le_bytes());
+                    "SHT_PROGBITS"
+                } else {
+                    let text_offset_field = shoff + 40 + 16;
+                    let offset = u32::from_le_bytes(
+                        bytes[text_offset_field..text_offset_field + 4]
+                            .try_into()
+                            .unwrap(),
+                    ) as usize;
+                    bytes[offset..offset + 4].copy_from_slice(&[1, 0, 1, 0]);
+                    "compressed instruction"
+                };
+                std::fs::write(&elf, &bytes).unwrap();
+                if existing {
+                    std::fs::write(&out, b"previous artifact").unwrap();
+                    std::fs::write(&metadata, b"previous metadata").unwrap();
+                }
+                assert_cli_error(&run_cli(&elf, &out, Some(&metadata), json), json, needle);
+                assert_eq!(std::fs::read(&elf).unwrap(), bytes);
+                if existing {
+                    assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
+                    assert_eq!(std::fs::read(&metadata).unwrap(), b"previous metadata");
+                } else {
+                    assert!(!out.exists());
+                    assert!(!metadata.exists());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cli_rejects_identical_and_normalized_output_paths() {
+    for json in [false, true] {
+        for existing in [false, true] {
+            for normalized in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let elf = dir.path().join("contract.elf");
+                let out = dir.path().join("contract.rv32a");
+                std::fs::write(&elf, assemble(happy_spec())).unwrap();
+                if existing {
+                    std::fs::write(&out, b"previous artifact").unwrap();
+                }
+                let metadata = if normalized {
+                    std::fs::create_dir(dir.path().join("sub")).unwrap();
+                    dir.path().join("sub/../contract.rv32a")
+                } else {
+                    out.clone()
+                };
+                assert_cli_error(
+                    &run_cli(&elf, &out, Some(&metadata), json),
+                    json,
+                    "--metadata and --out refer to the same file",
+                );
+                // Opening a new destination can create it, but it must never
+                // contain either of the two conflicting payloads.
+                assert_eq!(
+                    std::fs::read(&out).unwrap(),
+                    if existing {
+                        b"previous artifact".as_slice()
+                    } else {
+                        &[]
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cli_rejects_outputs_aliasing_the_input() {
+    for metadata_alias in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let elf = dir.path().join("contract.elf");
+        let out = dir.path().join("contract.rv32a");
+        let bytes = assemble(happy_spec());
+        std::fs::write(&elf, &bytes).unwrap();
+        std::fs::write(&out, b"previous artifact").unwrap();
+        let result = if metadata_alias {
+            run_cli(&elf, &out, Some(&elf), true)
+        } else {
+            run_cli(&elf, &elf, None, true)
+        };
+        assert_cli_error(&result, true, "--elf refer to the same file");
+        assert_eq!(std::fs::read(&elf).unwrap(), bytes);
+        assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_rejects_symlink_and_hard_link_aliases() {
+    for symlink in [false, true] {
+        // Each of the three path pairs can alias the same underlying file.
+        for pair in [0, 1, 2] {
+            let dir = tempfile::tempdir().unwrap();
+            let elf = dir.path().join("contract.elf");
+            let out = dir.path().join("contract.rv32a");
+            let metadata = dir.path().join("contract.json");
+            let bytes = assemble(happy_spec());
+            std::fs::write(&elf, &bytes).unwrap();
+            let (source, alias) = match pair {
+                0 => (&elf, &out),
+                1 => (&elf, &metadata),
+                _ => (&out, &metadata),
+            };
+            if pair != 0 {
+                std::fs::write(&out, b"previous artifact").unwrap();
+            }
+            if symlink {
+                std::os::unix::fs::symlink(source, alias).unwrap();
+            } else {
+                std::fs::hard_link(source, alias).unwrap();
+            }
+            assert_cli_error(
+                &run_cli(&elf, &out, Some(&metadata), true),
+                true,
+                "refer to the same file",
+            );
+            assert_eq!(std::fs::read(&elf).unwrap(), bytes);
+            if pair != 0 {
+                assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_rejects_dangling_symlink_output_aliases() {
+    for reverse in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let elf = dir.path().join("contract.elf");
+        let out = dir.path().join("contract.rv32a");
+        let alias = dir.path().join("alias");
+        std::fs::write(&elf, assemble(happy_spec())).unwrap();
+        std::os::unix::fs::symlink(&out, &alias).unwrap();
+        let (out, metadata) = if reverse {
+            (&alias, &out)
+        } else {
+            (&out, &alias)
+        };
+        assert_cli_error(
+            &run_cli(&elf, out, Some(metadata), true),
+            true,
+            "--metadata and --out refer to the same file",
+        );
+        assert!(std::fs::read(out).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn cli_emits_matching_artifact_metadata_and_summary() {
+    for existing in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let elf = dir.path().join("contract.elf");
+        let out = dir.path().join("contract.rv32a");
+        let metadata = dir.path().join("contract.json");
+        let bytes = assemble(happy_spec());
+        std::fs::write(&elf, &bytes).unwrap();
+        if existing {
+            // Rebuilding shorter outputs must truncate stale tails.
+            std::fs::write(&out, vec![0xff; 4096]).unwrap();
+            std::fs::write(&metadata, vec![0xff; 4096]).unwrap();
+        }
+        let output = run_cli(&elf, &out, Some(&metadata), true);
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let artifact = std::fs::read(&out).unwrap();
+        verify_artifact(&artifact).unwrap();
+        assert_eq!(artifact, lower(&bytes).unwrap().artifact);
+        assert_eq!(std::fs::read(&elf).unwrap(), bytes);
+        let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
+        let hash = groundhog_rv32_artifact::sha256_hex(&artifact);
+        assert_eq!(summary["artifact_sha256"], hash);
+        assert_eq!(document["artifact_sha256"], hash);
+        assert_eq!(
+            document["elf_sha256"],
+            groundhog_rv32_artifact::sha256_hex(&bytes)
+        );
+        assert_eq!(summary["artifact_bytes"], artifact.len());
+        assert_eq!(document["artifact_bytes"], artifact.len());
+    }
+}
+
+#[test]
+fn cli_preserves_existing_artifact_when_metadata_cannot_be_opened() {
+    let dir = tempfile::tempdir().unwrap();
+    let elf = dir.path().join("contract.elf");
+    let out = dir.path().join("contract.rv32a");
+    let metadata = dir.path().join("missing-parent/contract.json");
+    std::fs::write(&elf, assemble(happy_spec())).unwrap();
+    std::fs::write(&out, b"previous artifact").unwrap();
+    assert_cli_error(&run_cli(&elf, &out, Some(&metadata), true), true, "");
+    assert_eq!(std::fs::read(&out).unwrap(), b"previous artifact");
 }
