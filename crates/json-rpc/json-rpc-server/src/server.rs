@@ -726,12 +726,28 @@ where
 /// hands it to the read backend.  Rejects requests whose `limit` or
 /// opaque `cursor` exceed the per-server caps in `RpcServerConfig`.
 ///
-/// `limit == 0` and empty `filters` pass through unchanged; the
-/// indexer owns those defaults.
+/// `limit == 0` selects the indexer's default. Empty filters or contract
+/// lists are invalid: the indexer cannot serve all-contract scans.
 fn validate_event_query(
     query: &EventQuery,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
+    if query.filters.0.is_empty() {
+        return Err(RpcServerError::InvalidParam(
+            "filters must contain at least one event filter".into(),
+        ));
+    }
+    if let Some(index) = query
+        .filters
+        .0
+        .iter()
+        .position(|filter| filter.contract_addresses.0.is_empty())
+    {
+        return Err(RpcServerError::InvalidParam(format!(
+            "filters[{index}].contractAddresses must name at least one contract; \
+             the indexer cannot scan all contracts",
+        )));
+    }
     if query.limit > config.max_events_per_page {
         return Err(RpcServerError::InvalidParam(format!(
             "limit {} exceeds maximum {}",

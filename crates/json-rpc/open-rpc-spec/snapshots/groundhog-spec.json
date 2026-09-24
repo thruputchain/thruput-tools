@@ -601,6 +601,7 @@
           "$ref": "#/components/schemas/Hex0x_ContractAddress"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
       },
       "EmittedEvent": {
@@ -652,6 +653,7 @@
           "$ref": "#/components/schemas/EventFilter"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
       },
       "EventPage": {
@@ -697,7 +699,8 @@
             "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
           },
           "filters": {
-            "$ref": "#/components/schemas/EventFilterList"
+            "$ref": "#/components/schemas/EventFilterList",
+            "description": "At least one filter is required. Empty lists are not all-contract scans."
           },
           "limit": {
             "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",

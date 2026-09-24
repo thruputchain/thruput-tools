@@ -2361,13 +2361,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .build(&url)
             .expect("bug: jsonrpsee http client builds");
 
-        // Build a minimal EventQuery (first page, no filters).
+        // Build a minimal EventQuery (first page, one named contract).
         // Serialization shapes:
         //   - `IterationOrder` serializes as "ascending" / "descending"
         //   - `BlockAnchor` serializes as a tagged object
         //   - `PaginationCursor` serializes as `0x`-prefixed hex; `0x` = empty
         let query = serde_json::json!({
-            "filters": [],
+            "filters": [{
+                "contractAddresses": [format!("0x{}", "00".repeat(32))],
+                "topics": {"topic0": [], "topic1": [], "topic2": []},
+            }],
             "order": "ascending",
             "anchor": { "kind": "atBeginning" },
             "cursor": "0x",
