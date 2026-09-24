@@ -3,6 +3,7 @@
 
 pub mod account;
 pub mod build;
+pub mod default_wallet;
 pub mod dev_account;
 pub mod dev_wallet;
 pub mod encode;
