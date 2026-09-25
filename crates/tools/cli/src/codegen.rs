@@ -171,7 +171,6 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     }
 }
 
-/// Emit a TypeScript type declaration for a named contract type definition.
 /// Write declarations grouped under the namespaces their ids map to.
 ///
 /// Items are grouped by namespace path and the paths walked in sorted order,
@@ -243,6 +242,7 @@ fn emit_type_declarations(out: &mut String, spec: &ContractSpec) -> Result<(), C
     emit_namespaced(out, &items, |def| emit_type_def(def))
 }
 
+/// Emit a TypeScript type declaration for a named contract type definition.
 fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
     match def {
         ContractTypeDef::TypeDefStruct { struct_def } => emit_struct(struct_def),
@@ -1541,15 +1541,10 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
-    // A type def occupies a place inside its namespaces, not a top-level name,
-    // so the only top-level name it claims is the root of its id -- the crate
-    // ident. Several defs legitimately share one, which is the entire point of
-    // namespacing them, so a root is reserved once rather than per def.
-    // Namespacing moves the collision question inside a namespace: two crates
-    // may both declare `Error`, but a type def and an event that land on one
-    // qualified path still clash -- TypeScript would merge the declarations.
-    // So names are reserved per qualified path, and the only top-level name a
-    // def or event claims is the root of its id.
+    // A def claims only the root of its id at top level, and several defs
+    // legitimately share one, so a root is reserved once rather than per def.
+    // Names are then reserved per qualified path: two crates may both declare
+    // `Error`, but a def and an event landing on one path would merge.
     let mut defined_types = BTreeSet::new();
     let mut reserved_roots = BTreeSet::new();
     let mut namespaced_values: BTreeMap<String, String> = BTreeMap::new();
