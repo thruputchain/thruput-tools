@@ -292,6 +292,12 @@ jobs:
             exit 1
           fi
 
+      # A clean tsc says nothing, so print the version first: a green log then
+      # shows the compiler ran rather than leaving that to be assumed.
       - name: Type-check the generated bindings
         working-directory: crates/tools/cli/fixtures/codegen/typecheck
-        run: npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json
+        run: |
+          set -euo pipefail
+          npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc --version
+          npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json
+          echo "tsc clean: generated bindings type-check"
