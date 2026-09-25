@@ -1,19 +1,6 @@
-// Ambient declarations of the runtime surface that generated bindings import.
-//
-// These stand in for the published @groundhogchain packages so the type-check
-// job is hermetic: no registry auth, no lockfile, no install. They mirror the
-// real exports in the way that matters for checking generated code -- every
-// name exists, with its real generic arity and constraints -- while leaving
-// internals the generator never names as loose types.
-//
-// What this proves: the generated TypeScript parses, every name it writes
-// resolves, and nothing it declares captures a name it also references.
-// What it does not prove: that the bindings agree with the runtime's current
-// implementation. client-ts's own build is what checks that.
-//
-// Keep in step with @groundhogchain/client/contract when the generator starts
-// naming something new; an import the generator emits and this file omits
-// fails the job with "has no exported member".
+// Types of the @groundhogchain exports the generated bindings import, standing
+// in for the published packages so the type-check job needs no install. Keep
+// them in step when the generator starts naming something new.
 
 declare module "@groundhogchain/protocol" {
   export type ContractAddress = Uint8Array & { readonly __brand: "ContractAddress" };

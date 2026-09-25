@@ -15,10 +15,6 @@ use crate::CliError;
 
 /// Where a spec id lands in the generated TypeScript: the namespaces it nests
 /// under, then the declaration's own name.
-///
-/// The mapping is total and injective, so no pass has to detect collisions and
-/// no name shifts when an unrelated type joins the spec. Two types differing
-/// anywhere in their id land in different places.
 struct TsIdPath {
     namespaces: Vec<String>,
     name: String,
@@ -39,24 +35,15 @@ impl TsIdPath {
 
 /// Map a spec id onto its TypeScript path.
 ///
-/// Every segment is rendered, never parsed back out:
-/// - the crate name is a Cargo package name, so hyphenated; `-` becomes `_`,
-///   which cannot alias two crates together because a registry already treats
-///   `a-b` and `a_b` as one name
-/// - the major is nested rather than suffixed, so a crate actually named
-///   `foo_v1` lands at `foo_v1.v...` instead of aliasing onto `foo` major 1
-/// - `module_path!()` leads with the crate's own Rust ident, which the first
-///   namespace already carries, so that segment is dropped when it matches
+/// The crate name's `-` becomes `_` and the major nests as its own segment, so
+/// distinct ids never share a path.
 fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
     let crate_name = spec_string_text(&id.crate_name)?;
     let major = spec_string_text(&id.major)?;
     let module_path = spec_string_text(&id.module_path)?;
     let declared = spec_string_text(&id.declared)?;
 
-    // `name = "..."` is substituted verbatim and the SDK validates it only as
-    // UTF-8, so a declared name can contain `::`. Nesting on it would make this
-    // mapping non-injective: a type named `A::B` at a crate's root and a type
-    // named `B` in that crate's module `A` would land in one place.
+    // A declared name may contain `::`; nesting on it would not be injective.
     if declared.contains("::") {
         return Err(CliError::SpecFailed(format!(
             "spec type `{}` has `::` in its declared name, which a generated \
@@ -283,6 +270,7 @@ fn type_def_id(def: &ContractTypeDef) -> Result<&ContractSpecId, CliError> {
         )),
     }
 }
+
 /// Map a contract type to its TypeScript type reference string.
 fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
     match ty {
@@ -361,11 +349,6 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
 }
 
 /// Write declarations grouped under the namespaces their ids map to.
-///
-/// Items are grouped by namespace path and the paths walked in sorted order,
-/// so a shared prefix opens once and every namespace closes exactly where it
-/// should. Each item renders itself with its bare declared name; the
-/// surrounding namespaces supply the qualification.
 fn emit_namespaced<T>(
     out: &mut String,
     items: &[(TsIdPath, T)],
@@ -2520,8 +2503,7 @@ mod tests {
     }
 
     /// A fixture id: one crate, one module, so the declared name is what
-    /// tells these types apart -- which is what these tests turn on. The
-    /// generated output takes the declared segment, so it reads as before.
+    /// tells these types apart, which is what these tests turn on.
     fn spec_id(declared: &str) -> ContractSpecId {
         ContractSpecId {
             crate_name: spec_string("demo"),
