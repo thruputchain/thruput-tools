@@ -14,10 +14,16 @@ const entrypoints = {
   },
 } as const;
 
-export interface Tree { "value": bigint; "left": Tree | null; "right": Tree | null; }
+export namespace demo {
+
+  export namespace v1 {
+
+    export interface Tree { "value": bigint; "left": demo.v1.Tree | null; "right": demo.v1.Tree | null; }
+  }
+}
 
 export interface RecursiveTypeContractDepthArgs {
-  tree: Tree;
+  tree: demo.v1.Tree;
 }
 export type RecursiveTypeContractDepthResult = bigint;
 

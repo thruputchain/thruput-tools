@@ -11,6 +11,96 @@ use groundhog_contract_spec::{
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
 use crate::CliError;
+
+/// Where a spec id lands in the generated TypeScript: the namespaces it nests
+/// under, then the declaration's own name.
+///
+/// The mapping is total and injective, so no pass has to detect collisions and
+/// no name shifts when an unrelated type joins the spec. Two types differing
+/// anywhere in their id land in different places.
+struct TsIdPath {
+    namespaces: Vec<String>,
+    name: String,
+}
+
+impl TsIdPath {
+    /// The fully qualified reference, e.g. `groundhog_erc20_if.v0_1.ERC20Error`.
+    fn qualified(&self) -> String {
+        let mut out = String::new();
+        for ns in &self.namespaces {
+            out.push_str(ns);
+            out.push('.');
+        }
+        out.push_str(&self.name);
+        out
+    }
+}
+
+/// Map a spec id onto its TypeScript path.
+///
+/// Every segment is rendered, never parsed back out:
+/// - the crate name is a Cargo package name, so hyphenated; `-` becomes `_`,
+///   which cannot alias two crates together because a registry already treats
+///   `a-b` and `a_b` as one name
+/// - the major is nested rather than suffixed, so a crate actually named
+///   `foo_v1` lands at `foo_v1.v...` instead of aliasing onto `foo` major 1
+/// - `module_path!()` leads with the crate's own Rust ident, which the first
+///   namespace already carries, so that segment is dropped when it matches
+fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
+    let crate_name = spec_string_text(&id.crate_name)?;
+    let major = spec_string_text(&id.major)?;
+    let module_path = spec_string_text(&id.module_path)?;
+    let declared = spec_string_text(&id.declared)?;
+
+    // `name = "..."` is substituted verbatim and the SDK validates it only as
+    // UTF-8, so a declared name can contain `::`. Nesting on it would make this
+    // mapping non-injective: a type named `A::B` at a crate's root and a type
+    // named `B` in that crate's module `A` would land in one place.
+    if declared.contains("::") {
+        return Err(CliError::SpecFailed(format!(
+            "spec type `{}` has `::` in its declared name, which a generated \
+             binding cannot tell apart from a module of that path; drop it from \
+             the `name = \"...\"` attribute",
+            groundhog_client::codec::spec_id_text(id)?
+        )));
+    }
+
+    let krate = crate_name.replace('-', "_");
+    let mut namespaces = vec![krate.clone(), format!("v{}", major.replace('.', "_"))];
+
+    let mut segments = module_path.split("::").filter(|s| !s.is_empty()).peekable();
+    if segments.peek() == Some(&krate.as_str()) {
+        segments.next();
+    }
+    namespaces.extend(segments.map(str::to_owned));
+
+    for ns in &namespaces {
+        validate_ts_identifier(ns, "spec id segment")?;
+    }
+    validate_ts_identifier(declared, "spec type name")?;
+
+    Ok(TsIdPath {
+        namespaces,
+        name: declared.to_owned(),
+    })
+}
+
+/// A spec id in TypeScript reference position.
+fn ts_id_ref(id: &ContractSpecId) -> Result<String, CliError> {
+    Ok(ts_id_path(id)?.qualified())
+}
+
+/// The id a type def declares itself under.
+fn type_def_id(def: &ContractTypeDef) -> Result<&ContractSpecId, CliError> {
+    match def {
+        ContractTypeDef::TypeDefStruct { struct_def } => Ok(&struct_def.name),
+        ContractTypeDef::TypeDefEnum { enum_def } => Ok(&enum_def.name),
+        ContractTypeDef::TypeDefUnion { union_def } => Ok(&union_def.name),
+        _ => Err(CliError::SpecFailed(
+            "contract spec contains an unsupported type definition kind".into(),
+        )),
+    }
+}
 /// Map a contract type to its TypeScript type reference string.
 fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     match ty {
@@ -67,7 +157,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
             Ok(format!("readonly [{}]", items.join(", ")))
         }
-        ContractType::Named { named } => Ok(spec_string_text(&named.declared)?.to_owned()),
+        ContractType::Named { named } => ts_id_ref(named),
         ContractType::SignedToken {
             signed_token_preimage,
         } => match signed_token_preimage.preimage_type.as_deref() {
@@ -81,6 +171,77 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
 }
 
 /// Emit a TypeScript type declaration for a named contract type definition.
+/// Write declarations grouped under the namespaces their ids map to.
+///
+/// Items are grouped by namespace path and the paths walked in sorted order,
+/// so a shared prefix opens once and every namespace closes exactly where it
+/// should. Each item renders itself with its bare declared name; the
+/// surrounding namespaces supply the qualification.
+fn emit_namespaced<T>(
+    out: &mut String,
+    items: &[(TsIdPath, T)],
+    mut render: impl FnMut(&T) -> Result<String, CliError>,
+) -> Result<(), CliError> {
+    let mut by_namespace: BTreeMap<&[String], Vec<&T>> = BTreeMap::new();
+    for (path, item) in items {
+        by_namespace
+            .entry(path.namespaces.as_slice())
+            .or_default()
+            .push(item);
+    }
+
+    let mut open: Vec<String> = Vec::new();
+    for (path, group) in &by_namespace {
+        let shared = open
+            .iter()
+            .zip(path.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while open.len() > shared {
+            open.pop();
+            let _ = writeln!(out, "{}}}", "  ".repeat(open.len()));
+        }
+        while open.len() < path.len() {
+            let _ = writeln!(out);
+            let _ = writeln!(
+                out,
+                "{}export namespace {} {{",
+                "  ".repeat(open.len()),
+                path[open.len()]
+            );
+            open.push(path[open.len()].clone());
+        }
+
+        let indent = "  ".repeat(open.len());
+        for item in group {
+            let _ = writeln!(out);
+            for line in render(item)?.lines() {
+                if line.is_empty() {
+                    let _ = writeln!(out);
+                } else {
+                    let _ = writeln!(out, "{indent}{line}");
+                }
+            }
+        }
+    }
+
+    while open.pop().is_some() {
+        let _ = writeln!(out, "{}}}", "  ".repeat(open.len()));
+    }
+
+    Ok(())
+}
+
+/// Emit every named type declaration, nested under its id's namespaces.
+fn emit_type_declarations(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let items = spec
+        .type_defs
+        .iter()
+        .map(|def| Ok((ts_id_path(type_def_id(def)?)?, def)))
+        .collect::<Result<Vec<_>, CliError>>()?;
+    emit_namespaced(out, &items, |def| emit_type_def(def))
+}
+
 fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
     match def {
         ContractTypeDef::TypeDefStruct { struct_def } => emit_struct(struct_def),
@@ -234,11 +395,8 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         emit_entrypoints(&mut out, spec, &public_method_names_by_interface)?;
     }
 
-    // 4. Named type declarations
-    for def in spec.type_defs.iter() {
-        let _ = writeln!(out);
-        let _ = writeln!(out, "{}", emit_type_def(def)?);
-    }
+    // 4. Named type declarations, nested under the namespaces their ids map to
+    emit_type_declarations(&mut out, spec)?;
 
     // 5. Method argument, result, and exception declarations
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
@@ -965,10 +1123,17 @@ fn emit_interface_method(
 /// Emit per-event interface/const pairs, the per-contract event union, and
 /// the combined `decodeEvent` dispatcher.
 fn emit_event_sections(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
-    for (idx, event) in spec.events.iter().enumerate() {
-        let _ = writeln!(out);
-        emit_event_decl(out, event, idx)?;
-    }
+    let items = spec
+        .events
+        .iter()
+        .enumerate()
+        .map(|(idx, event)| Ok((ts_id_path(&event.name)?, (event, idx))))
+        .collect::<Result<Vec<_>, CliError>>()?;
+    emit_namespaced(out, &items, |(event, idx)| {
+        let mut decl = String::new();
+        emit_event_decl(&mut decl, event, *idx)?;
+        Ok(decl)
+    })?;
 
     let _ = writeln!(out);
     emit_decode_event(out, spec)?;
@@ -1077,10 +1242,11 @@ fn event_union_name(spec: &ContractSpec) -> Result<String, CliError> {
 fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
     let union_name = event_union_name(spec)?;
 
-    let event_names: Vec<&str> = spec
+    // Qualified, because the declarations now live inside their namespaces.
+    let event_names: Vec<String> = spec
         .events
         .iter()
-        .map(|e| spec_string_text(&e.name.declared))
+        .map(|e| ts_id_ref(&e.name))
         .collect::<Result<_, _>>()?;
 
     let _ = writeln!(
@@ -1236,34 +1402,36 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
+    // A type def occupies a place inside its namespaces, not a top-level name,
+    // so the only top-level name it claims is the root of its id -- the crate
+    // ident. Several defs legitimately share one, which is the entire point of
+    // namespacing them, so a root is reserved once rather than per def.
+    // Namespacing moves the collision question inside a namespace: two crates
+    // may both declare `Error`, but a type def and an event that land on one
+    // qualified path still clash -- TypeScript would merge the declarations.
+    // So names are reserved per qualified path, and the only top-level name a
+    // def or event claims is the root of its id.
     let mut defined_types = BTreeSet::new();
+    let mut reserved_roots = BTreeSet::new();
+    let mut namespaced_values: BTreeMap<String, String> = BTreeMap::new();
     for def in spec.type_defs.iter() {
-        let (name, source) = match def {
-            ContractTypeDef::TypeDefStruct { struct_def } => (
-                spec_string_text(&struct_def.name.declared)?,
-                "struct type definition",
-            ),
-            ContractTypeDef::TypeDefEnum { enum_def } => (
-                spec_string_text(&enum_def.name.declared)?,
-                "enum type definition",
-            ),
-            ContractTypeDef::TypeDefUnion { union_def } => (
-                spec_string_text(&union_def.name.declared)?,
-                "union type definition",
-            ),
-            _ => {
-                return Err(CliError::SpecFailed(
-                    "type definition contains an unsupported kind".into(),
-                ));
-            }
-        };
-        validate_ts_identifier(name, &format!("{source} \"{name}\""))?;
+        let id = type_def_id(def)?;
+        let path = ts_id_path(id)?;
+        let root = path.namespaces[0].clone();
+        if reserved_roots.insert(root.clone()) {
+            reserve_ts_value_name(
+                &mut top_level_values,
+                root.clone(),
+                format!("spec id namespace \"{root}\""),
+            )?;
+        }
+        let qualified = path.qualified();
         reserve_ts_value_name(
-            &mut top_level_values,
-            name.into(),
-            format!("{source} \"{name}\""),
+            &mut namespaced_values,
+            qualified.clone(),
+            format!("type definition \"{qualified}\""),
         )?;
-        defined_types.insert(name.to_owned());
+        defined_types.insert(id.clone());
     }
 
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
@@ -1344,23 +1512,38 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
-    let type_def_index: BTreeMap<&str, &ContractTypeDef> = spec
+    // Keyed on the whole id: a bare declared name conflates types the spec
+    // keeps apart, and would also make the cycle guard below trip on two
+    // unrelated same-named types.
+    let type_def_index: BTreeMap<&ContractSpecId, &ContractTypeDef> = spec
         .type_defs
         .iter()
-        .filter_map(|def| type_def_name(def).ok().map(|name| (name, def)))
+        .filter_map(|def| type_def_id(def).ok().map(|id| (id, def)))
         .collect();
     let mut event_signatures = BTreeMap::new();
     for event in spec.events.iter() {
         let event_name = spec_string_text(&event.name.declared)?;
         validate_ts_identifier(event_name, &format!("event \"{event_name}\""))?;
+        // Like a type def, an event declares itself inside its id's
+        // namespaces, so the only top-level name it claims is the root.
+        let event_path = ts_id_path(&event.name)?;
+        let event_root = event_path.namespaces[0].clone();
+        if reserved_roots.insert(event_root.clone()) {
+            reserve_ts_value_name(
+                &mut top_level_values,
+                event_root.clone(),
+                format!("spec id namespace \"{event_root}\""),
+            )?;
+        }
+        let qualified = event_path.qualified();
         for (name, source) in [
-            (event_name.to_owned(), format!("event \"{event_name}\"")),
+            (qualified.clone(), format!("event \"{qualified}\"")),
             (
-                format!("{event_name}Filter"),
-                format!("event \"{event_name}\" filter"),
+                format!("{qualified}Filter"),
+                format!("event \"{qualified}\" filter"),
             ),
         ] {
-            reserve_ts_value_name(&mut top_level_values, name, source)?;
+            reserve_ts_value_name(&mut namespaced_values, name, source)?;
         }
         if let Some(existing) =
             event_signatures.insert(event.signature.into_inner(), event_name.to_owned())
@@ -1572,7 +1755,7 @@ fn is_ts_identifier_name(name: &str) -> bool {
 
 fn validate_type_def(
     def: &ContractTypeDef,
-    defined_types: &BTreeSet<String>,
+    defined_types: &BTreeSet<ContractSpecId>,
 ) -> Result<(), CliError> {
     match def {
         ContractTypeDef::TypeDefStruct { struct_def } => {
@@ -1664,7 +1847,7 @@ fn validate_type_def(
 
 fn validate_fields<'a>(
     fields: impl Iterator<Item = &'a ContractField>,
-    defined_types: &BTreeSet<String>,
+    defined_types: &BTreeSet<ContractSpecId>,
     location: &str,
 ) -> Result<(), CliError> {
     let mut names = BTreeSet::new();
@@ -1689,7 +1872,7 @@ fn validate_fields<'a>(
 fn validate_contract_type(
     ty: &ContractType,
     allow_void: bool,
-    defined_types: &BTreeSet<String>,
+    defined_types: &BTreeSet<ContractSpecId>,
     location: &str,
 ) -> Result<(), CliError> {
     match ty {
@@ -1731,12 +1914,15 @@ fn validate_contract_type(
             Ok(())
         }
         ContractType::Named { named } => {
-            let name = spec_string_text(&named.declared)?;
-            if defined_types.contains(name) {
+            // Resolved through the whole id, the same way the generated
+            // binding resolves it: a bare declared name matches types the
+            // spec keeps apart.
+            if defined_types.contains(named) {
                 Ok(())
             } else {
                 Err(CliError::SpecFailed(format!(
-                    "{location} references unresolved named type \"{name}\""
+                    "{location} references unresolved named type \"{}\"",
+                    groundhog_client::codec::spec_id_text(named)?
                 )))
             }
         }
@@ -1862,27 +2048,14 @@ fn spec_uses_type(spec: &ContractSpec, predicate: impl Fn(&ContractType) -> bool
     })
 }
 
-fn type_def_name(def: &ContractTypeDef) -> Result<&str, CliError> {
-    match def {
-        ContractTypeDef::TypeDefStruct { struct_def } => {
-            spec_string_text(&struct_def.name.declared)
-        }
-        ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name.declared),
-        ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name.declared),
-        _ => Err(CliError::SpecFailed(
-            "type definition contains an unsupported kind".into(),
-        )),
-    }
-}
-
 /// Whether `ty` contains a signed token anywhere, resolving named definitions
 /// through `type_defs`. `visiting` holds the names on the current path, so a
 /// recursive definition terminates: a token inside it is found on the first
 /// visit or not at all.
 fn type_carries_signed_token(
     ty: &ContractType,
-    type_defs: &BTreeMap<&str, &ContractTypeDef>,
-    visiting: &mut BTreeSet<String>,
+    type_defs: &BTreeMap<&ContractSpecId, &ContractTypeDef>,
+    visiting: &mut BTreeSet<ContractSpecId>,
 ) -> bool {
     match ty {
         ContractType::SignedToken { .. } => true,
@@ -1899,13 +2072,10 @@ fn type_carries_signed_token(
             .iter()
             .any(|item| type_carries_signed_token(item, type_defs, visiting)),
         ContractType::Named { named } => {
-            let Ok(name) = spec_string_text(&named.declared) else {
-                return false;
-            };
-            if !visiting.insert(name.to_owned()) {
+            if !visiting.insert(named.clone()) {
                 return false;
             }
-            let found = match type_defs.get(name) {
+            let found = match type_defs.get(named) {
                 Some(ContractTypeDef::TypeDefStruct { struct_def }) => struct_def
                     .fields
                     .iter()
@@ -1923,7 +2093,7 @@ fn type_carries_signed_token(
                 }
                 _ => false,
             };
-            visiting.remove(name);
+            visiting.remove(named);
             found
         }
         _ => false,
@@ -2155,7 +2325,7 @@ mod tests {
                 })),
             },
         };
-        assert_eq!(ts_type_ref(&typed).unwrap(), "SignedToken<Auth>");
+        assert_eq!(ts_type_ref(&typed).unwrap(), "SignedToken<demo.v1.Auth>");
         assert_eq!(
             spec_type_to_ts_literal(&typed).unwrap(),
             "{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
@@ -2299,7 +2469,9 @@ mod tests {
                 .unwrap(),
             },
         };
-        let index: BTreeMap<&str, &ContractTypeDef> = [("Node", &node_def)].into_iter().collect();
+        let node_id = spec_id("Node");
+        let index: BTreeMap<&ContractSpecId, &ContractTypeDef> =
+            [(&node_id, &node_def)].into_iter().collect();
         assert!(!type_carries_signed_token(
             &ContractType::Named {
                 named: spec_id("Node"),
@@ -2337,10 +2509,17 @@ mod tests {
         }]
         .try_into()
         .unwrap();
-        let err = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap_err();
+        // The runtime's `SignedToken` import stays top level while a spec type
+        // of that name lands inside its id's namespaces, so the two coexist.
+        let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
         assert!(
-            err.to_string().contains("SignedToken"),
-            "collision with the runtime import must be reported: {err}"
+            output.contains("    export interface SignedToken"),
+            "spec type must be namespaced:\n{output}"
+        );
+        assert!(
+            output.contains("export type CounterAuthorizeResult = SignedToken;"),
+            "the method result must still resolve to the runtime import, not \
+             the spec type:\n{output}"
         );
     }
 
@@ -2431,7 +2610,7 @@ mod tests {
         let ty = ContractType::Named {
             named: spec_id("ERC20Error"),
         };
-        assert_eq!(ts_type_ref(&ty).unwrap(), "ERC20Error");
+        assert_eq!(ts_type_ref(&ty).unwrap(), "demo.v1.ERC20Error");
     }
 
     #[test]
@@ -2634,7 +2813,7 @@ export type Result =
         );
 
         assert!(
-            output.contains("export type CounterEvent = PingEvent;"),
+            output.contains("export type CounterEvent = demo.v1.PingEvent;"),
             "missing union:\n{output}"
         );
         assert!(
@@ -2644,7 +2823,7 @@ export type Result =
             "missing decodeEvent:\n{output}"
         );
         assert!(
-            output.contains("return PingEvent.decode(event);"),
+            output.contains("return demo.v1.PingEvent.decode(event);"),
             "missing dispatch body:\n{output}"
         );
         assert!(
@@ -2677,17 +2856,17 @@ export type Result =
     }
 
     #[test]
-    fn event_name_colliding_with_union_name_errors() {
-        // The combined-decoder union is named "{FirstInterface}Event"; an
-        // event with that exact name would collide in TS's type namespace.
+    fn event_named_after_the_union_is_namespaced_apart() {
+        // The combined-decoder union is named "{FirstInterface}Event" at top
+        // level. An event with that exact name used to collide with it;
+        // namespacing keeps them apart, so this generates.
         let mut spec = spec_with_events();
         let mut event = ping_event_def();
         event.name = spec_id("CounterEvent");
         spec.events = vec![event].try_into().unwrap();
-        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
-        assert!(error.to_string().contains(
-            "generated TypeScript value name \"CounterEvent\" collides between event \"CounterEvent\" and generated \"CounterEvent\" event union"
-        ));
+        let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+        assert!(output.contains("export type CounterEvent = demo.v1.CounterEvent;"));
+        assert!(output.contains("return demo.v1.CounterEvent.decode(event);"));
     }
 
     #[test]
@@ -2703,12 +2882,15 @@ export type Result =
         .unwrap();
         let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
-            "generated TypeScript value name \"PingEvent\" collides between struct type definition \"PingEvent\" and event \"PingEvent\""
+            "generated TypeScript value name \"demo.v1.PingEvent\" collides between type definition \"demo.v1.PingEvent\" and event \"demo.v1.PingEvent\""
         ));
     }
 
     #[test]
-    fn generated_method_type_names_reject_colliding_spec_types() {
+    fn generated_method_type_names_are_namespaced_apart_from_spec_types() {
+        // Method argument and result types are emitted at top level. A spec
+        // type declared with the same name used to collide with them; it now
+        // lands inside its id's namespaces instead.
         for suffix in ["Args", "Result"] {
             let name = format!("ERC20Transfer{suffix}");
             let mut spec = erc20_spec();
@@ -2719,11 +2901,11 @@ export type Result =
                 },
             });
 
-            let error = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap_err();
-            assert!(error.to_string().contains(&format!(
-                "generated TypeScript value name \"{name}\" collides between \
-                 struct type definition \"{name}\" and method \"ERC20.transfer\" {suffix} type"
-            )));
+            let output = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
+            // The generated one stays top level, the spec type is nested
+            // inside its id's namespaces, so both can exist at once.
+            assert!(output.contains(&format!("export interface {name} {{")));
+            assert!(output.contains(&format!("    export interface {name} {{")));
         }
     }
 
@@ -2893,10 +3075,13 @@ export type Result =
         .try_into()
         .unwrap();
 
-        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
-        assert!(error.to_string().contains(
-            "generated TypeScript value name \"Uint8Array\" collides between TypeScript standard library and struct type definition \"Uint8Array\""
-        ));
+        // Namespacing is what makes this safe: the declaration lands at
+        // `demo.v1.Uint8Array`, so the global `Uint8Array` the bindings use
+        // for `bytes` fields is untouched.
+        let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+        assert!(output.contains("export namespace demo {"));
+        assert!(output.contains("export interface Uint8Array"));
+        assert!(!output.contains("\nexport interface Uint8Array"));
     }
 
     #[test]
@@ -2907,10 +3092,11 @@ export type Result =
         event.topics.0[0].ty = ContractType::String;
         spec.events = vec![event].try_into().unwrap();
 
-        let error = generate_ts_bindings(&spec, "events.spec.xdr").unwrap_err();
-        assert!(error.to_string().contains(
-            "generated TypeScript value name \"Record\" collides between TypeScript standard library and event \"Record\""
-        ));
+        // As above: the event declares itself inside its namespaces, so it
+        // cannot shadow the standard library's `Record`.
+        let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
+        assert!(output.contains("export namespace demo {"));
+        assert!(!output.contains("\nexport interface Record"));
     }
 
     #[test]
@@ -3292,7 +3478,7 @@ export type Result =
         assert!(output.contains("publicName: \"accountId\""));
         assert!(output.contains("export type ERC20DeclaredException ="));
         assert!(output.contains("name: \"ERC20Error\";"));
-        assert!(output.contains("value: ERC20Error;"));
+        assert!(output.contains("value: demo.v1.ERC20Error;"));
         assert!(
             output.contains(
                 "export type ERC20Exception = ContractException<ERC20DeclaredException>;"
@@ -3389,17 +3575,17 @@ export type Result =
             "Tree.value field missing"
         );
         assert!(
-            output.contains("\"left\": Tree | null;"),
+            output.contains("\"left\": demo.v1.Tree | null;"),
             "Tree.left field missing"
         );
         assert!(
-            output.contains("\"right\": Tree | null;"),
+            output.contains("\"right\": demo.v1.Tree | null;"),
             "Tree.right field missing"
         );
 
         assert!(
             output.contains("export interface RecursiveTypeContractDepthArgs")
-                && output.contains("tree: Tree"),
+                && output.contains("tree: demo.v1.Tree"),
             "depth 'tree' arg type mismatch"
         );
     }
@@ -3729,7 +3915,7 @@ export type Result =
         assert!(
             error
                 .to_string()
-                .contains("unresolved named type \"Missing\"")
+                .contains("unresolved named type \"demo::Missing (demo@1)\"")
         );
     }
 

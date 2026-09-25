@@ -16,9 +16,15 @@ const entrypoints = {
   },
 } as const;
 
-export type ExampleError =
-  { case: "InvalidValue" }
-  | { case: "UpdateFailed"; value: readonly [bigint] };
+export namespace demo {
+
+  export namespace v1 {
+
+    export type ExampleError =
+      { case: "InvalidValue" }
+      | { case: "UpdateFailed"; value: readonly [bigint] };
+  }
+}
 
 export type ExampleContractGetValuesArgs = void;
 export type ExampleContractGetValuesResult = readonly [bigint, bigint, bigint];
@@ -34,7 +40,7 @@ export type ExampleContractDeclaredException =
     kind: "declared";
     name: "ExampleError";
     selector: 0x1234n;
-    value: ExampleError;
+    value: demo.v1.ExampleError;
   };
 export type ExampleContractException = ContractException<ExampleContractDeclaredException>;
 
@@ -160,47 +166,53 @@ export const ExampleContract = {
   }),
 } as const;
 
-export interface ChangedEvent extends DecodedContractEvent<
-  "ChangedEvent",
-  { "actor": ContractAddress; "request_id": FixedBytes<32> },
-  { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": FixedBytes<32> | null }
-> {}
+export namespace demo {
 
-export interface ChangedEventFilter {
-  "actor"?: ContractEventFilterValue<ContractAddress>;
-  "request_id"?: ContractEventFilterValue<FixedBytes<32>>;
+  export namespace v1 {
+
+    export interface ChangedEvent extends DecodedContractEvent<
+      "ChangedEvent",
+      { "actor": ContractAddress; "request_id": FixedBytes<32> },
+      { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": FixedBytes<32> | null }
+    > {}
+
+    export interface ChangedEventFilter {
+      "actor"?: ContractEventFilterValue<ContractAddress>;
+      "request_id"?: ContractEventFilterValue<FixedBytes<32>>;
+    }
+
+    export const ChangedEvent = defineContractEvent<
+      "ChangedEvent",
+      ChangedEvent["topics"],
+      ChangedEvent["fields"],
+      ChangedEventFilter
+    >({
+      name: "ChangedEvent",
+      signature: spec.events[0]!.signature,
+      topics: [
+        {
+          name: "actor",
+          type: spec.events[0]!.topics[0]!.ty,
+          representation: "address",
+        },
+        {
+          name: "request_id",
+          type: spec.events[0]!.topics[1]!.ty,
+          representation: "fixedBytes32",
+        },
+      ],
+      fields: [
+        { name: "previous_values", type: spec.events[0]!.fields[0]!.ty },
+        { name: "current_values", type: spec.events[0]!.fields[1]!.ty },
+        { name: "request_id", type: spec.events[0]!.fields[2]!.ty },
+      ],
+      codecs,
+    });
+  }
 }
 
-export const ChangedEvent = defineContractEvent<
-  "ChangedEvent",
-  ChangedEvent["topics"],
-  ChangedEvent["fields"],
-  ChangedEventFilter
->({
-  name: "ChangedEvent",
-  signature: spec.events[0]!.signature,
-  topics: [
-    {
-      name: "actor",
-      type: spec.events[0]!.topics[0]!.ty,
-      representation: "address",
-    },
-    {
-      name: "request_id",
-      type: spec.events[0]!.topics[1]!.ty,
-      representation: "fixedBytes32",
-    },
-  ],
-  fields: [
-    { name: "previous_values", type: spec.events[0]!.fields[0]!.ty },
-    { name: "current_values", type: spec.events[0]!.fields[1]!.ty },
-    { name: "request_id", type: spec.events[0]!.fields[2]!.ty },
-  ],
-  codecs,
-});
-
-export type ExampleContractEvent = ChangedEvent;
+export type ExampleContractEvent = demo.v1.ChangedEvent;
 
 export function decodeEvent(event: { topics: Uint8Array[]; data: Uint8Array }): ExampleContractEvent | null {
-  return ChangedEvent.decode(event);
+  return demo.v1.ChangedEvent.decode(event);
 }

@@ -17,9 +17,15 @@ const entrypoints = {
   },
 } as const;
 
-export const ERC20Error = { "AlreadyInitialized": 1n, "MustBeContractOwner": 2n, "TooLarge": 3n, "Internal": 100n, } as const;
+export namespace demo {
 
-export type ERC20Error = (typeof ERC20Error)[keyof typeof ERC20Error];
+  export namespace v1 {
+
+    export const ERC20Error = { "AlreadyInitialized": 1n, "MustBeContractOwner": 2n, "TooLarge": 3n, "Internal": 100n, } as const;
+
+    export type ERC20Error = (typeof ERC20Error)[keyof typeof ERC20Error];
+  }
+}
 
 export interface ERC20TransferArgs {
   to: ContractAddress;
@@ -40,7 +46,7 @@ export type ERC20DeclaredException =
     kind: "declared";
     name: "ERC20Error";
     selector: 0xb19947acb2fa14ffn;
-    value: ERC20Error;
+    value: demo.v1.ERC20Error;
   };
 export type ERC20Exception = ContractException<ERC20DeclaredException>;
 
