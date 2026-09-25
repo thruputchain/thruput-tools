@@ -69,7 +69,7 @@ fn deployment_attaches_the_exact_code_it_hashes_and_keeps_salt_stable() {
         build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
             account: &account,
             deployment_nonce: salt,
-            contract: contract.clone(),
+            code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
             amount: 0,
             initializer: None,
             gas_limit: 1000,
@@ -117,7 +117,7 @@ fn funded_deployment_encodes_exact_amount_and_attaches_matching_code() {
         let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
             account: &account,
             deployment_nonce: salt,
-            contract: contract.clone(),
+            code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
             amount,
             initializer: None,
             gas_limit: 1000,
@@ -175,7 +175,7 @@ fn deployment_initializer_uses_fixed_selector_and_optional_cxs_layout() {
     let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
         account: &account,
         deployment_nonce: salt,
-        contract,
+        code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
         amount: 64,
         initializer: Some(WalletInitCall {
             entrypoint: ContractEntrypointID::from(63_u64.to_be_bytes()),
@@ -223,4 +223,39 @@ fn single_call_return_rejects_missing_extra_truncated_and_trailing_data() {
     let mut trailing = good;
     trailing.push(0);
     assert!(decode_default_wallet_call_return(&trailing).is_err());
+}
+
+#[test]
+fn registered_code_keeps_deployment_effects_and_auth_without_attachment() {
+    let account = PubkeyAccount::from_public_key_bytes([0x44; 32], 0);
+    let contract = Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: BytesM(vec![1, 2, 3]),
+        },
+    };
+    let hash = wallet_contract_hash(&contract).unwrap();
+    let build = |code| {
+        build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
+            account: &account,
+            deployment_nonce: [0x55; 32].into(),
+            code,
+            amount: 123,
+            initializer: Some(WalletInitCall {
+                entrypoint: [0x66; 8].into(),
+                gas_limit: 456,
+                calldata: &[7, 8],
+            }),
+            gas_limit: 1000,
+            block_expiry_height: 100,
+            nonce: 1,
+        })
+        .unwrap()
+    };
+    let attached = build(DeploymentCode::Attached(contract));
+    let registered = build(DeploymentCode::Registered(hash));
+    assert_eq!(attached.invocation, registered.invocation);
+    assert_eq!(attached.auth_claim, registered.auth_claim);
+    assert_eq!(attached.uniquifier, registered.uniquifier);
+    assert_eq!(attached.contracts_to_deploy.len(), 1);
+    assert!(registered.contracts_to_deploy.is_empty());
 }

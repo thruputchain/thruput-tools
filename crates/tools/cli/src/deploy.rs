@@ -704,7 +704,7 @@ fn prepare_deploy_transaction_plan(
             groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
                 account,
                 deployment_nonce: deploy_nonce,
-                contract,
+                code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
                 amount: funding.expect("bug: native funding validated above"),
                 initializer: init_call.as_ref().map(|(entrypoint, calldata)| {
                     groundhog_signing::default_wallet::WalletInitCall {

@@ -5631,6 +5631,55 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
 }
 
 #[test]
+fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again() {
+    for conflicting_name in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config_home, "alice");
+        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+            groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+            0,
+        );
+        let faucet_wallet = advertised_dev_wallet_address(0);
+        let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
+        let (rpc_url, rpc_server) =
+            spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
+        let unrelated = if conflicting_name {
+            format!(
+                "\n[profile.default.wallets.alice]\naddress = '0x{}'\nowner_public_key = '0x{}'\n",
+                "ab".repeat(32),
+                "cd".repeat(32)
+            )
+        } else {
+            String::new()
+        };
+        std::fs::write(project.join("groundhog.toml"), format!(
+            "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n{unrelated}",
+            manifest_path.file_name().unwrap().to_string_lossy())).unwrap();
+        let output = groundhog()
+            .args(["--json", "airdrop", "--amount", "1", "--dry-run"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["recipient"], "alice");
+        assert_eq!(
+            report["data"]["recipientWallet"],
+            format!("0x{}", hex::encode(account.address().as_ref()))
+        );
+    }
+}
+
+#[test]
 fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -6236,13 +6285,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
         .unwrap();
     assert!(!missing.status.success());
     let error: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "saved_wallet_missing");
-    assert!(
-        error["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("wallet create")
-    );
+    assert_eq!(error["error"]["code"], "missing_network_hash");
 
     std::fs::write(
         project.join("groundhog.toml"),
@@ -6260,8 +6303,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
         .unwrap();
     assert!(!invalid.status.success());
     let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
-    assert_eq!(error["error"]["code"], "saved_wallet_missing");
-    assert_eq!(error["error"]["details"]["keyName"], "alice");
+    assert_eq!(error["error"]["code"], "missing_network_hash");
 
     std::fs::write(
         project.join("groundhog.toml"),

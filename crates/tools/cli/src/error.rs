@@ -4,7 +4,7 @@ use serde_json::json;
 use std::borrow::Cow;
 use thiserror::Error;
 
-use crate::terminal::{render_shell_arg, terminal_safe};
+use crate::terminal::render_shell_arg;
 
 /// Next step after any cargo invocation that failed without a recognizable
 /// cause.
@@ -663,20 +663,6 @@ pub enum CliError {
         /// Specific derivation failure.
         message: String,
     },
-    #[error(
-        "no wallet saved for key `{}` in profile `{}`; run `groundhog wallet create --key={} --profile={}`",
-        terminal_safe(.key_name.as_str()),
-        terminal_safe(.profile.as_str()),
-        render_shell_arg(.key_name.as_str()),
-        render_shell_arg(.profile.as_str()),
-    )]
-    #[hint(
-        "run `groundhog wallet create --key={} --profile={}` before using this stored key",
-        render_shell_arg(key_name),
-        render_shell_arg(profile)
-    )]
-    #[details]
-    SavedWalletMissing { key_name: String, profile: String },
     #[error(
         "multiple wallets are saved for key `{key_name}` in profile `{profile}`: {wallet_names:?}"
     )]

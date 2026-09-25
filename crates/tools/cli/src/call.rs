@@ -2,7 +2,7 @@ use groundhog_json_rpc_types::hex::prefixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_client::codec::method_entrypoint_id;
-use groundhog_client::{PollOptions, SignedCall, UnsignedCall, WalletCallRequest};
+use groundhog_client::{CallRequest, PollOptions, SignedCall, UnsignedCall};
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
@@ -438,8 +438,8 @@ fn prepare_call_plan_with_runtime(
     let wallet_entrypoint_id = format_entrypoint_id(wallet_context.entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
-    let tx = groundhog_client::prepare_wallet_call(
-        WalletCallRequest {
+    let tx = groundhog_client::prepare_call(
+        CallRequest {
             wallet: sender.wallet(wallet_context.entrypoints.do_action),
             target_address: contract_address,
             target_entrypoint: resolved.entrypoint,

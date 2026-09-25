@@ -142,12 +142,18 @@ pub(crate) fn resolve_sender_account(
     let selected_wallet = explicit_wallet.or(profile.default_wallet.as_deref());
     let (wallet_name, wallet_address) =
         resolve_wallet_selection(profile, &key_name, &signer, selected_wallet)?;
-    let native_account = wallet_name
-        .as_ref()
-        .and_then(|name| profile.wallets.get(name))
-        .map(|wallet| native_account_for_binding(wallet_name.as_deref().unwrap_or(""), wallet))
-        .transpose()?
-        .flatten();
+    let native_account = match wallet_name.as_deref() {
+        Some(name) => profile
+            .wallets
+            .get(name)
+            .map(|wallet| native_account_for_binding(name, wallet))
+            .transpose()?
+            .flatten(),
+        None if dev_keys::dev_key_index(&key_name).is_none() => {
+            Some(default_native_account(&signer))
+        }
+        None => None,
+    };
     Ok(ResolvedSenderAccount {
         native_account,
         key_name,
@@ -275,6 +281,10 @@ fn native_account_for_binding(
     }
 }
 
+fn default_native_account(signer: &LocalSigner) -> groundhog_signing::PubkeyAccount {
+    groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+}
+
 fn resolve_saved_wallet_for_signer(
     profile: &ResolvedProfile,
     key_name: &str,
@@ -295,10 +305,7 @@ fn resolve_saved_wallet_for_signer(
     }
     let [(_, wallet)] = matches.as_slice() else {
         if matches.is_empty() {
-            return Err(CliError::SavedWalletMissing {
-                key_name: key_name.to_string(),
-                profile: profile.name.clone(),
-            });
+            return Ok((None, default_native_account(signer).address()));
         }
         return Err(CliError::SavedWalletAmbiguous {
             key_name: key_name.to_string(),
@@ -1011,24 +1018,12 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_requires_saved_wallet_address() {
+    fn ordinary_key_without_saved_wallet_uses_native_nonce_zero() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let profile = test_profile("alice", None, BTreeMap::default());
-
-        let err = resolve_wallet_selection(&profile, "alice", &signer, None)
-            .expect_err("bug: missing wallet should fail");
-
-        assert_eq!(err.code(), "saved_wallet_missing");
-        assert!(err.to_string().contains("run `groundhog wallet create"));
-        assert_eq!(
-            err.details_json().expect("details expected")["profile"],
-            "default"
-        );
-        assert!(
-            err.hint()
-                .expect("hint expected")
-                .contains("groundhog wallet create")
-        );
+        let (name, address) = resolve_wallet_selection(&profile, "alice", &signer, None).unwrap();
+        assert!(name.is_none());
+        assert_eq!(address, default_native_account(&signer).address());
     }
 
     #[test]
@@ -1126,14 +1121,10 @@ mod tests {
             },
         );
 
-        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
-            .expect_err("bug: wallet owned by another key should not resolve");
-
-        assert_eq!(error.code(), "saved_wallet_missing");
-        assert_eq!(
-            error.details_json().expect("details expected")["keyName"],
-            "alice"
-        );
+        let (name, address) = resolve_wallet_selection(&profile, "alice", &signer, None).unwrap();
+        assert!(name.is_none());
+        assert_eq!(address, default_native_account(&signer).address());
+        assert_ne!(address, wallet_address);
     }
 
     #[test]
@@ -1179,10 +1170,9 @@ mod tests {
             },
         );
 
-        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
-            .expect_err("bug: malformed unrelated ownership should not match");
-
-        assert_eq!(error.code(), "saved_wallet_missing");
+        let (name, address) = resolve_wallet_selection(&profile, "alice", &signer, None).unwrap();
+        assert!(name.is_none());
+        assert_eq!(address, default_native_account(&signer).address());
     }
 
     #[test]

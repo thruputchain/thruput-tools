@@ -1,4 +1,4 @@
-//! Runtime-manifest loading and dev-account derivation.
+//! Runtime-manifest loading and explicit account derivation.
 
 use std::path::Path;
 
@@ -7,8 +7,7 @@ use groundhog_json_rpc_types::runtime_manifest::{
     parse_runtime_manifest,
 };
 use groundhog_signing::{
-    DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer,
-    derive_default_dev_account_signer, derive_dev_account_signer,
+    DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer, derive_dev_account_signer,
 };
 use groundhog_xdr::types::{ContractAddress, NetworkHash};
 
@@ -18,10 +17,11 @@ use crate::error::{Result, TestkitError};
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 
-/// A funded dev account: a signer paired with its on-chain wallet address.
+/// A signer paired with its native or explicitly selected legacy address.
 #[derive(Debug)]
-pub(crate) struct DevAccount {
+pub(crate) struct TestAccount {
     pub(crate) index: u32,
+    pub(crate) native: bool,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: ContractAddress,
     /// Network this account signs for. Part of every signature preimage.
@@ -36,15 +36,23 @@ pub(crate) struct DevAccount {
 pub(crate) enum AccountSource {
     /// Accounts materialized by a live target and described by its manifest.
     Manifest(Box<RuntimeManifest>),
-    /// Locally derived default dev accounts for offline scenarios.
-    Offline { count: usize },
+    /// Deterministic empty native accounts for live and offline scenarios.
+    Native {
+        count: usize,
+        seed: String,
+        network_hash: Option<NetworkHash>,
+    },
 }
 
 impl AccountSource {
-    pub(crate) fn accounts(&self) -> Result<Vec<DevAccount>> {
+    pub(crate) fn accounts(&self) -> Result<Vec<TestAccount>> {
         match self {
             Self::Manifest(manifest) => derive_manifest_accounts(manifest),
-            Self::Offline { count } => Ok(derive_offline_accounts(*count)),
+            Self::Native {
+                count,
+                seed,
+                network_hash,
+            } => Ok(derive_native_accounts(*count, seed, network_hash.as_ref())),
         }
     }
 }
@@ -74,7 +82,7 @@ pub(crate) fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest> {
     Ok(manifest)
 }
 
-fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount>> {
+fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccount>> {
     if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
         return Err(TestkitError::UnsupportedDerivationScheme {
             scheme: manifest.bootstrap_account_derivation.scheme.clone(),
@@ -101,8 +109,9 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount
                     index: account.index,
                 });
             }
-            Ok(DevAccount {
+            Ok(TestAccount {
                 index: account.index,
+                native: false,
                 signer,
                 wallet_address: account.wallet_address.0,
                 network_hash: Some(manifest.network_hash.to_network_hash()),
@@ -111,17 +120,51 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<DevAccount
         .collect()
 }
 
-fn derive_offline_accounts(count: usize) -> Vec<DevAccount> {
+pub(crate) fn derive_native_accounts(
+    count: usize,
+    seed: &str,
+    network_hash: Option<&NetworkHash>,
+) -> Vec<TestAccount> {
     (0..count)
         .map(|index| {
-            let signer = derive_default_dev_account_signer(index);
+            let signer = derive_dev_account_signer(&format!("groundhog-testkit:{seed}"), index);
             let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
-            DevAccount {
+            TestAccount {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
+                native: true,
                 wallet_address: account.address(),
                 signer,
-                network_hash: None,
+                network_hash: network_hash.cloned(),
             }
         })
         .collect()
+}
+
+pub(crate) fn derive_faucet(manifest: &RuntimeManifest) -> Result<Option<TestAccount>> {
+    let Some(account) = manifest.bootstrap_accounts.iter().find(|account| {
+        account.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
+    }) else {
+        return Ok(None);
+    };
+    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
+        return Err(TestkitError::UnsupportedDerivationScheme {
+            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
+        });
+    }
+    let signer = derive_dev_account_signer(
+        &manifest.bootstrap_account_derivation.seed,
+        account.index as usize,
+    );
+    if account.public_key.as_ref() != signer.verifying_key_bytes().as_slice() {
+        return Err(TestkitError::BootstrapPublicKeyMismatch {
+            index: account.index,
+        });
+    }
+    Ok(Some(TestAccount {
+        index: account.index,
+        native: false,
+        signer,
+        wallet_address: account.wallet_address.0,
+        network_hash: Some(manifest.network_hash.to_network_hash()),
+    }))
 }

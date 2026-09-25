@@ -79,7 +79,11 @@ async fn offline_chain_verbs_report_offline() {
     scenario
         .run_agents([Agent::new("solo", |mut ctx| async move {
             let err = ctx
-                .deploy(b"not-a-real-artifact", ArtifactKind::Rv32)
+                .deploy(
+                    b"not-a-real-artifact",
+                    ArtifactKind::Rv32,
+                    groundhog_testkit::DeployOptions::funded(0),
+                )
                 .await
                 .expect_err("deploy against an offline target must fail");
             assert!(matches!(err, TestkitError::Offline { .. }));
@@ -260,7 +264,8 @@ async fn registry_exposes_hash_and_registration_state() {
             ));
             // Deploying needs a live target.
             assert!(matches!(
-                ctx.deploy_artifact("counter").await,
+                ctx.deploy_artifact("counter", groundhog_testkit::DeployOptions::funded(0))
+                    .await,
                 Err(TestkitError::Offline { .. })
             ));
             Ok(())

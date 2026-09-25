@@ -156,8 +156,8 @@ fn prepare_plan(
     let wallet_context = resolved_sender.signing_context(&profile, &rt)?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
 
-    let tx = groundhog_client::prepare_wallet_call(
-        groundhog_client::WalletCallRequest {
+    let tx = groundhog_client::prepare_call(
+        groundhog_client::CallRequest {
             wallet: resolved_sender.wallet(wallet_context.entrypoints.do_action),
             target_address: token_address,
             target_entrypoint: hog::transfer_entrypoint(),

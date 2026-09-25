@@ -412,7 +412,7 @@ fn prepare_deploy(
             groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
                 account: &account,
                 deployment_nonce: deploy_address_nonce,
-                contract,
+                code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
                 amount,
                 initializer: None,
                 gas_limit: DEFAULT_TX_GAS_LIMIT,

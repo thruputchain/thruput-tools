@@ -376,6 +376,10 @@ owner, address, kind and nonce locally. It neither deploys a wallet contract nor
 requests funds. It works without a running node or faucet. `--dry-run` derives
 without saving; `--prefund` is rejected with an explicit airdrop hint.
 
+An ordinary key with no saved wallet automatically uses its nonce-zero native
+account for calls, transfers and deployments. Saving it with `wallet create` is
+optional. Saved wallet selection and ownership checks still take precedence.
+
 Repeat creation of the identical binding leaves it and the default selection
 unchanged. An existing name for a different account is rejected. Existing
 untyped wallet bindings and manifest-backed dev-N accounts retain their legacy

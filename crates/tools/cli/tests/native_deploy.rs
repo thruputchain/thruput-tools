@@ -82,6 +82,67 @@ impl Fixture {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
+    let (url, handle, state) = server(Outcome::Success).await;
+    let fixture = Fixture::new(&url);
+    let path = fixture.dir.path().join("groundhog.toml");
+    let mut config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let profile = config["profile"]["default"].as_table_mut().unwrap();
+    let owner = profile["wallets"]["owner"]["owner_public_key"]
+        .as_str()
+        .unwrap();
+    let account = PubkeyAccount::from_public_key_bytes(
+        groundhog_signing::strkey::parse_public_key(owner).unwrap(),
+        0,
+    );
+    profile.remove("wallets");
+    profile.remove("default_wallet");
+    std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let target = format!("0x{}", "ab".repeat(32));
+    let outputs = [
+        (
+            fixture
+                .command()
+                .args(["call", &target, "0x0102030405060708", "0x", "--dry-run"])
+                .output()
+                .unwrap(),
+            "signedTx",
+            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+        ),
+        (
+            fixture
+                .command()
+                .args(["transfer", &target, "1", "--dry-run"])
+                .output()
+                .unwrap(),
+            "signedTransaction",
+            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
+        ),
+        (
+            fixture.deploy(&["--experimental-native-deploy", "--fund", "0", "--dry-run"]),
+            "signedTx",
+            groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
+        ),
+    ];
+    for (output, field, entrypoint) in outputs {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let tx = signed(report["data"][field].as_str().unwrap());
+        assert_eq!(tx.tx.invocation.invoked_address, account.address());
+        assert_eq!(tx.tx.auth_claim, account.auth_claim());
+        assert_eq!(tx.tx.invocation.entrypoint, entrypoint);
+    }
+    assert!(state.submissions.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    handle.stop().unwrap();
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Outcome {
     Success,

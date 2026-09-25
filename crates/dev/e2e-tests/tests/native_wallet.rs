@@ -130,7 +130,7 @@ async fn qualify_native_deployment(atomic: bool) {
     let negative = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
         account: &account,
         deployment_nonce: unfunded_salt,
-        contract: contract.clone(),
+        code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract.clone()),
         amount: 0,
         initializer: None,
         gas_limit: 1_000_000,
@@ -202,7 +202,7 @@ async fn qualify_native_deployment(atomic: bool) {
     let deployment = BuildDefaultWalletDeployTransaction {
         account: &account,
         deployment_nonce: salt,
-        contract,
+        code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
         amount: if atomic { amount } else { 0 },
         initializer: None,
         gas_limit: 1_000_000,

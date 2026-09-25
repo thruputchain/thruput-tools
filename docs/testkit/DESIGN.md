@@ -53,10 +53,10 @@ The harness consumes:
 
 - a target provider to acquire or locate a network (reused from the existing
   supervisor/provider path);
-- dev-account signers derived from the runtime manifest;
+- deterministic native-account signers derived from the scenario seed;
 - the typed JSON-RPC client, `signing` transaction builders, and the `xdrs`
   codec for building typed calldata;
-- a runtime manifest for account derivation and endpoint discovery.
+- a runtime manifest for network identity, account capacity, and the explicit bootstrap faucet.
 
 The harness does not own:
 
@@ -126,8 +126,8 @@ control surfaces beyond ordinary reads:
 > manual mode. `SubmittedTransaction` and `SubmittedDeploy` separate submission
 > from `await_pending()` and `await_receipt()`, while existing call/deploy helpers
 > remain submit-and-wait wrappers. Registry-backed deployment retains the signed
-> binary-carrying transaction so an advisory failure or unknown status can safely
-> re-submit the same hash rather than create a second registration attempt.
+> binary-carrying transaction for observation and recovery. Unknown or advisory
+> failure status never causes automatic resubmission.
 >
 > **Optional devnode change:** a configurable per-block cap (plumb `kMaxBlockSize`
 > to a CLI flag or bootstrap field, default unchanged) would let tests exercise
@@ -180,15 +180,17 @@ as ordinary async Rust — an `async fn` handed an agent context — and may:
 - communicate off-chain with other agents through harness-provided channels;
 - assert on anything it observes.
 
-Agents draw their identity and funds from **bootstrap dev accounts** derived
-from the runtime manifest (the same scheme `hogsim` and `groundhog-bench` use).
-Each agent is assigned a bootstrap account (and a nonce namespace; see
-[Substrate reuse](#substrate-reuse)) at scenario start.
+Agents receive deterministic native pubkey accounts derived from the scenario
+seed and agent index. These accounts start empty; `ctx.fund(raw_amount)` explicitly
+transfers the requested amount from the manifest's existing bootstrap faucet.
+For manual block production, use `submit_fund`, await pending, produce a block,
+then await the receipt. The configured local-user count determines capacity;
+those manifest wallet addresses and balances are not reassigned to native users.
 
-> **Note — future funding.** The planned devnet would let agents use freshly
-> generated keys with funds deposited from a faucet into the associated
-> accounts. When that lands, the identity model can widen beyond bootstrap
-> accounts.
+`ScenarioBuilder::legacy_bootstrap_accounts()` explicitly selects the existing
+manifest dev-N identities for legacy call tests. That mode cannot deploy through
+the native API. The bootstrap faucet remains an internal legacy adapter until the
+runtime bootstrap migration.
 
 The harness owns nonce allocation, key access, and submit/receipt pairing on
 the agent's behalf; agent code works at the level of "call this method, await
@@ -201,8 +203,11 @@ by hash: the binary is sent in a transaction's `contracts_to_deploy` field,
 where it is visible to a `deploy` syscall in that same transaction and to other
 transactions only once the registering transaction commits. The harness retains
 one unique binary-carrying transaction per registration attempt and then deploys
-further *instances* by hash. If submission outcome is unknown, it may re-submit
-the exact retained bytes and hash to recover the attempt idempotently.
+further *instances* by hash. An ambiguous submission preserves its canonical hash
+and signed bytes; recovery observes that identity without automatically submitting
+again. A pending owner's request with different funding or initialization is
+rejected. Registration succeeds only after a matching successful receipt returns
+the exact predicted address.
 
 A scenario declares contracts by name on the builder; each is read and hashed at
 `build()` (fail-fast on a missing file, unrecognized extension, or duplicate
@@ -213,16 +218,24 @@ name):
 - `.artifact_with_kind(name, path, kind)` — explicit kind;
 - `.artifact_bytes(name, bytes, kind)` — embedded bytes (e.g. `include_bytes!`).
 
-Agents then work by name. `ctx.deploy_artifact(name)` is the common path: the
+Agents then work by name. `ctx.deploy_artifact(name, options)` is the common path: the
 first deploy of a contract carries the binary (registering it and creating that
 agent's first instance in one transaction), guarded so concurrent first-deploys
 share one unique registration transaction and wait for its receipt to commit;
 every later deploy — by any agent — is hash-only and fully concurrent. The returned `Deployed`
 reports whether that transaction performed the registration. The steps are also
-exposed explicitly for tests that assert on them: `register_artifact(name)`
-(force the binary-carrying deploy), `deploy_registered(name)` (hash-only),
-`contract_hash(name)`, and `is_registered(name)`. `ctx.deploy(bytes, kind)`
+exposed explicitly for tests that assert on them: `register_artifact(name, options)`
+(force the binary-carrying deploy), `deploy_registered(name, options)` (hash-only),
+`contract_hash(name)`, and `is_registered(name)`. `ctx.deploy(bytes, kind, options)`
 remains a raw escape hatch that always carries the binary.
+
+Every deployment takes `DeployOptions { amount, initializer }`: `amount` is an
+exact raw HOG amount, including explicit zero, and `initializer` optionally calls
+the newly deployed contract as its wallet in the same atomic transaction.
+Funding, deployment, and initialization either commit together or roll back.
+Use `DeployOptions::funded(amount)` when no initializer is needed. Select
+`.experimental_native_deploy()` only for a runtime that supports this ABI;
+the runtime manifest does not advertise support and older bundles cannot run it.
 
 Calldata and return values are Rust-native: agent code encodes and decodes with
 `xdrs` (re-exported as `groundhog_testkit::xdrs`) and passes raw entrypoint
@@ -386,8 +399,8 @@ in-crate; the result event stream is not built yet.
     node` subprocess). Bind the RPC facade on port 0, disable the PID file, and
     give a shared node its own long-lived runtime. Teardown is the fixture's
     RAII guard, with the supervisor's `kill_on_drop` as the final backstop.
-- Assign bootstrap dev accounts and nonce namespaces to agents; derive signers
-  from the runtime manifest.
+- Assign deterministic native accounts and nonce namespaces to agents; fund
+  them explicitly. Existing bootstrap identities remain an explicit legacy call mode.
 - Submit/deploy/call built from the `signing` transaction builders with
   Rust-native `xdrs` calldata; await receipts and read chain tip, storage,
   events, and views.

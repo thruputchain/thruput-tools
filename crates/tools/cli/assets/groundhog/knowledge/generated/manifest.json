@@ -19,15 +19,15 @@
   "artifacts": {
     "agentGuide": {
       "path": "generated/agent-guide.md",
-      "sha256": "sha256:6a72edc70f3e6c18c15a7ab2b0b9f6efc84a05a3e141b64b4c2458e6a562c19e"
+      "sha256": "sha256:1b64f8acb6b7f8fdc0b963b759c83dc345a5808592e43dbef690598044353782"
     },
     "records": {
       "path": "generated/records.jsonl",
-      "sha256": "sha256:42a420ae35856f3908cb72eb8b2ab99b1d45db5aa20780200f545a767c5794d1"
+      "sha256": "sha256:2f641766fefb6a99121593f1590cd32ea2e9dc0d825bbdc4bcc7b5da96d8fdac"
     },
     "skillTemplate": {
       "path": "generated/SKILL.md",
-      "sha256": "sha256:2fb01065ad2a36efa7443f5f27a9cfef483fe02df8121edacf2af1f0b862567c"
+      "sha256": "sha256:c66c635f7fc91f0e029a84c7f2605ef0e78a7922f6740213f7d63aa3672634df"
     }
   }
 }

@@ -422,11 +422,6 @@ WalletAddressDerivationFailed
   code: wallet_address_derivation_failed
   hint text: check the stored public key material, or regenerate the key
 
-SavedWalletMissing
-  code: saved_wallet_missing
-  hint format: run `groundhog wallet create --key={} --profile={}` before using this stored key
-  details: keyName, profile
-
 SavedWalletAmbiguous
   code: saved_wallet_ambiguous
   hint text: set `default_wallet` in the selected profile or pass the command's explicit wallet option

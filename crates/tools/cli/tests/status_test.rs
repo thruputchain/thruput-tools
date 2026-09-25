@@ -40,7 +40,14 @@ fn status_succeeds_when_fully_configured() {
     groundhog_cli::config::initialize_global_profiles().unwrap();
 
     let result = groundhog_cli::status::run(tmp.path(), None, "status", &quiet());
-    assert!(result.is_ok());
+    assert!(
+        result.is_ok(),
+        "{result:?}: {:?}",
+        groundhog_cli::checks::collect_report(tmp.path(), None)
+            .unwrap()
+            .all_findings()
+            .collect::<Vec<_>>()
+    );
 
     unsafe {
         env::remove_var("CARGO_HOME");

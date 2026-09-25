@@ -402,10 +402,9 @@ Existing key files and public JSON-RPC wire encodings remain unchanged.
 
 ### Native accounts
 
-`wallet create --key <key>` saves an empty nonce-zero native account offline.
-`--prefund` is rejected. Repeating preserves identity/defaults. Fund with the
-printed `airdrop <address>` command.
-Untyped wallets and dev-N retain legacy identity/format.
+Unsaved ordinary keys use nonce-zero native accounts. `wallet create` saves that
+identity offline; it never funds. Use `airdrop` explicitly. `--prefund` is rejected.
+Saved wallets and dev-N retain their identity and format.
 
 Native deploy requires `--experimental-native-deploy --fund <HOG>`: support is
 operator-asserted; RPC cannot verify activation. Qualify the published bundle. Legacy senders reject native options. Funding is an exact

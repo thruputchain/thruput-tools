@@ -72,13 +72,22 @@ pub fn build_default_wallet_call_transaction(
     }))
 }
 
-/// Native deployment with its code attached to the transaction.
+/// Code deployed either from this transaction or from an earlier registration.
+#[derive(Debug, Clone)]
+pub enum DeploymentCode {
+    /// Register this binary and deploy it in the same transaction.
+    Attached(Contract),
+    /// Deploy a binary that is already registered on the network.
+    Registered(SHA256Hash),
+}
+
+/// Native deployment with explicit code identity.
 #[derive(Debug, Clone)]
 pub struct BuildDefaultWalletDeployTransaction<'a> {
     pub account: &'a PubkeyAccount,
     /// Stable 32-byte deployment salt, separate from the transaction uniquifier.
     pub deployment_nonce: SHA256Hash,
-    pub contract: Contract,
+    pub code: DeploymentCode,
     /// Exact raw HOG amount to transfer. Zero skips the transfer.
     pub amount: u128,
     /// Initialization at the newly deployed address within the same root frame.
@@ -94,7 +103,12 @@ pub struct BuildDefaultWalletDeployTransaction<'a> {
 pub fn build_default_wallet_deploy_transaction(
     args: BuildDefaultWalletDeployTransaction<'_>,
 ) -> Result<Transaction, SigningError> {
-    let hash = wallet_contract_hash(&args.contract)?;
+    let (hash, contracts_to_deploy) = match args.code {
+        DeploymentCode::Attached(contract) => {
+            (wallet_contract_hash(&contract)?, VecM(vec![contract]))
+        }
+        DeploymentCode::Registered(hash) => (hash, VecM(vec![])),
+    };
     let initializer = args
         .initializer
         .map(|call| (call.entrypoint, call.gas_limit, call.calldata));
@@ -107,7 +121,7 @@ pub fn build_default_wallet_deploy_transaction(
         gas_limit: args.gas_limit,
         block_expiry_height: args.block_expiry_height,
         nonce: args.nonce,
-        contracts_to_deploy: VecM(vec![args.contract]),
+        contracts_to_deploy,
         auth_claim: args.account.auth_claim(),
     }))
 }

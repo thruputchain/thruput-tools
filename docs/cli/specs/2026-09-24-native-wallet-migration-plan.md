@@ -1,8 +1,9 @@
 # Native-wallet migration: funding decision and delivery plan
 
-Status: unified deployment revision in development, 2026-09-24. Canonical #56
-and hogd #4144 are open; no releases have been made. Breaking the unpublished
-deployment ABI is accepted in favor of one simple API.
+Status: client migration in development, 2026-09-25. Canonical #56 and hogd
+#4144 merged as `c21ab653` and `7e32f85d`; runtime release qualification remains
+open. Breaking the unpublished deployment ABI is accepted in favor of one simple
+API. Later evidence sections supersede the earlier implementation milestones.
 Parent: [GH-371](https://linear.app/grndhg/issue/GH-371).
 Developer migration: [GH-372](https://linear.app/grndhg/issue/GH-372).
 Bootstrap retirement: [GH-373](https://linear.app/grndhg/issue/GH-373).
@@ -494,3 +495,60 @@ and initializer effects. Hackathon snapshots and dispatch app variants contain
 copies of that older published API. These applications are outside this runtime
 and client revision; do not treat the source qualification above as a completed
 consumer rollout or keep an old decoder to accommodate them.
+
+## Shared routing and testkit qualification, 2026-09-25
+
+The shared Rust client has one `CallRequest` with an explicit `Wallet` choice:
+native pubkey account or a saved legacy address and entrypoint. Ordinary keys
+without a saved binding now resolve to their nonce-zero native account across
+CLI calls, transfers, deployments, balance reads and funding. Saved bindings and
+manifest-backed dev-N accounts keep their identities. Airdrop carries the
+resolved address separately from its display label; a saved wallet with the same
+name as an unsaved key cannot redirect default funding.
+
+Testkit scenarios derive empty native accounts from their scenario seed by
+default. Funding is explicit through `fund` or `submit_fund`; deployment requires
+an exact amount and optional initializer, with an experimental-runtime assertion.
+The explicit legacy bootstrap mode supports existing call fixtures and rejects
+deployment rather than concealing the old wallet's fixed deposit. Attached-code
+and registered-code deployments use the same signing builder. Registration
+recovery observes the retained transaction, verifies the receipt hash and address,
+and rejects changed deployment effects while an attempt is unresolved.
+
+The TypeScript client changes are in
+[client-ts #79](https://github.com/groundhogchain/client-ts/pull/79). No client
+package or supporting runtime bundle has been published by this work.
+
+An isolated local chain built from the merged backend source verified the current
+CLI without a saved wallet: zero initial balance, explicit 100-HOG airdrop, atomic
+10-HOG deployment with `initialize(42)`, a native call returning 42, and a 1-HOG
+transfer to an existing dev-N account. Saving the wallet afterward retained the
+same account and its funds without a transaction. The experimental deployment
+gate remains; these results do not establish a released-bundle activation. After
+stopping and restarting that chain, a native call still returned 42 and repeated
+wallet creation reported the existing identity without creating or funding it.
+
+All four live testkit scenarios passed against the same backend build, covering
+atomic initialization, attached and registered code, native calls, manual block
+production, and recovery between scenario runs. Six RPC fixture tests cover
+submission ambiguity, mismatched receipts, changed deployment effects, and
+recovery evidence retained by high-level deployment errors.
+
+The experimental Stellar adapter compiled against this shared client in an
+isolated copy after selecting `Wallet::Legacy` explicitly and migrating its
+separately obsolete spec decoder. Its working checkout remains unchanged; those
+consumer edits still need adoption. This is compile evidence, not live Stellar
+invocation qualification.
+
+Workspace tests, build, strict all-target Clippy, formatting, generated guidance
+checks, and packaged-skill inclusion passed. The first workspace run stopped at
+the existing status fixture; that test passed independently and in the full
+rerun. Its assertion now includes diagnostic findings if it recurs. Independent
+slice and final reviews are clean after fixing default-airdrop address reuse and
+retaining deployment evidence on unverified high-level testkit results.
+
+Before GH-372 can close, qualify the published runtime/client combination and
+update consumers as they adopt the breaking API. GH-373 still owns native
+bootstrap, faucet and manifest migration, retained-state policy, and removal of
+the legacy dev-wallet artifacts. Deployment estimation and sponsored deployment
+remain separate follow-ups.

@@ -1,33 +1,64 @@
-//! Per-agent funded account and the chain-writing operations it performs.
+//! Per-agent account and the chain-writing operations it performs.
 
 use std::sync::Arc;
 
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_signing::default_wallet::{
+    BuildDefaultWalletCallTransaction, BuildDefaultWalletDeployTransaction, DeploymentCode,
+    build_default_wallet_call_transaction, build_default_wallet_deploy_transaction,
+};
 use groundhog_signing::{
-    BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT,
-    SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
-    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    build_dev_wallet_do_action_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
     transaction_hash,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 use sha2::{Digest, Sha256};
-use xdr_common::VecM;
 
 use crate::artifact::{
     ArtifactEntry, PendingRegistration as ArtifactPendingRegistration, RegistrationOwner,
     contract_from_bytes, contract_hash,
 };
 use crate::error::{Result, TestkitError};
-use crate::manifest::DevAccount;
+use crate::manifest::TestAccount;
 use crate::network::{Network, SubmittedTransaction};
 use crate::nonce::NonceNamespace;
 
 /// Absolute block height at which harness-built transactions expire. Chosen far
 /// enough ahead that a short scenario never reaches it.
 const EXPIRY_HEIGHT: i64 = 10_000_000;
+
+/// Explicit funding and optional initialization in the deployment transaction.
+#[derive(Debug, Clone, Copy)]
+pub struct DeployOptions<'a> {
+    /// Exact raw HOG amount transferred to the new contract. Zero skips funding.
+    pub amount: u128,
+    /// Optional invocation on the new contract, called by its deploying wallet.
+    pub initializer: Option<groundhog_signing::default_wallet::WalletInitCall<'a>>,
+}
+
+impl DeployOptions<'_> {
+    pub(crate) fn effects(self) -> Result<Vec<u8>> {
+        xdrs::cxs::encode(&(
+            self.amount,
+            self.initializer
+                .map(|init| (init.entrypoint, init.gas_limit, init.calldata)),
+        ))
+        .map_err(TestkitError::encode)
+    }
+
+    /// Deploy with an exact amount and no initializer.
+    #[must_use]
+    pub const fn funded(amount: u128) -> Self {
+        Self {
+            amount,
+            initializer: None,
+        }
+    }
+}
 
 /// Result of a contract deploy.
 #[derive(Debug)]
@@ -68,6 +99,7 @@ pub(crate) struct PreparedDeploy {
     tx_hash: TxHash,
     registered: bool,
     tx_hex: String,
+    effects: Vec<u8>,
 }
 
 impl PreparedDeploy {
@@ -76,18 +108,13 @@ impl PreparedDeploy {
             tx_hash: self.tx_hash,
             tx_hex: self.tx_hex.clone(),
             owner: self.owner,
+            effects: self.effects.clone(),
             address: self.address,
         }
     }
 
     pub(crate) async fn submit(self) -> Result<SubmittedDeploy> {
-        let actual = self.network.submit_raw(self.tx_hex.clone()).await?;
-        if actual != self.tx_hash {
-            return Err(TestkitError::SubmissionHashMismatch {
-                expected: format!("{:?}", self.tx_hash),
-                actual: format!("{actual:?}"),
-            });
-        }
+        submit_signed(&self.network, self.tx_hash, &self.tx_hex).await?;
         Ok(SubmittedDeploy {
             network: self.network,
             address: self.address,
@@ -106,6 +133,11 @@ impl SubmittedDeploy {
         self.address
     }
 
+    /// Original signed bytes retained for reconciliation.
+    pub fn signed_transaction(&self) -> &str {
+        &self.tx_hex
+    }
+
     /// Canonical deployment transaction hash.
     pub fn tx_hash(&self) -> TxHash {
         self.tx_hash
@@ -121,9 +153,7 @@ impl SubmittedDeploy {
                 },
             });
         }
-        self.network
-            .await_pending_with_resubmission(self.tx_hash, &self.tx_hex)
-            .await
+        self.network.await_pending(self.tx_hash).await
     }
 
     /// Wait for the deployment receipt and require successful execution.
@@ -133,8 +163,18 @@ impl SubmittedDeploy {
     pub async fn await_receipt(&self) -> Result<Deployed> {
         let receipt = match &self.cached_receipt {
             Some(receipt) => receipt.clone(),
-            None => self.network.await_receipt(self.tx_hash).await?,
+            None => self
+                .network
+                .await_receipt(self.tx_hash)
+                .await
+                .map_err(|error| TestkitError::UnverifiedDeployment {
+                    tx_hash: self.tx_hash,
+                    predicted_address: self.address,
+                    signed_transaction: self.tx_hex.clone(),
+                    detail: error.to_string(),
+                })?,
         };
+        verify_deployment_receipt(self.tx_hash, self.address, &self.tx_hex, &receipt)?;
         if !matches!(receipt.status, ExecStatus::Ok) {
             self.finish_registration(false).await;
             return Err(TestkitError::Deploy {
@@ -182,21 +222,25 @@ impl SubmittedDeploy {
     }
 }
 
-/// A funded dev account assigned to one agent, tracking its own nonce sequence.
+/// An account assigned to one agent, tracking its own nonce sequence.
 #[derive(Debug)]
 pub(crate) struct Account {
-    dev: DevAccount,
+    dev: TestAccount,
     namespace: NonceNamespace,
     next_sequence: u32,
 }
 
 impl Account {
-    pub(crate) fn new(dev: DevAccount, namespace: NonceNamespace) -> Self {
+    pub(crate) fn new(dev: TestAccount, namespace: NonceNamespace) -> Self {
         Self {
             dev,
             namespace,
             next_sequence: 0,
         }
+    }
+
+    pub(crate) fn is_native(&self) -> bool {
+        self.dev.native
     }
 
     pub(crate) fn index(&self) -> u32 {
@@ -232,15 +276,13 @@ impl Account {
         &mut self,
         network: &Network,
         artifact: &[u8],
+        options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
         let contract = contract_from_bytes(artifact.to_vec());
         let hash = contract_hash(&contract)?;
-        let submitted = self
-            .build_deploy(network, hash, Some(contract))?
-            .submit()
-            .await?;
+        let prepared = self.build_deploy(network, hash, Some(contract), options)?;
         self.advance()?;
-        Ok(submitted)
+        prepared.submit().await
     }
 
     pub(crate) async fn submit_deploy_entry(
@@ -248,14 +290,12 @@ impl Account {
         network: &Network,
         entry: &ArtifactEntry,
         include_binary: bool,
+        options: DeployOptions<'_>,
     ) -> Result<SubmittedDeploy> {
         let contract = include_binary.then(|| entry.contract());
-        let submitted = self
-            .build_deploy(network, entry.hash(), contract)?
-            .submit()
-            .await?;
+        let prepared = self.build_deploy(network, entry.hash(), contract, options)?;
         self.advance()?;
-        Ok(submitted)
+        prepared.submit().await
     }
 
     pub(crate) fn prepare_deploy_entry(
@@ -263,9 +303,10 @@ impl Account {
         network: &Network,
         entry: &ArtifactEntry,
         include_binary: bool,
+        options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
         let contract = include_binary.then(|| entry.contract());
-        let prepared = self.build_deploy(network, entry.hash(), contract)?;
+        let prepared = self.build_deploy(network, entry.hash(), contract, options)?;
         self.advance()?;
         Ok(prepared)
     }
@@ -277,31 +318,37 @@ impl Account {
         network: &Network,
         hash: SHA256Hash,
         contract: Option<Contract>,
+        options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
-        let entrypoint = network.deploy_entrypoint()?;
+        network.require_native_deploy()?;
+        if !self.dev.native {
+            return Err(TestkitError::LegacyDeploymentUnsupported);
+        }
         let tx_nonce = self.next_nonce();
         let deploy_nonce =
             SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(tx_nonce.to_le_bytes())));
         let address = derive_deploy_address(&self.dev.wallet_address, &deploy_nonce, &hash)
             .map_err(TestkitError::signing)?;
 
-        // Calldata is CXS-encoded (nonce, contract_hash): the wallet deploy
-        // entrypoint decodes calldata with the contract (CXS) codec.
-        let calldata = xdrs::cxs::encode(&(&deploy_nonce, &hash)).map_err(TestkitError::encode)?;
-
         let registered = contract.is_some();
-        let contracts_to_deploy: VecM<Contract> = VecM(contract.into_iter().collect());
-
-        let tx = build_deploy_transaction(BuildDeployTransaction {
-            invoked_address: self.dev.wallet_address,
-            entrypoint,
-            calldata,
-            gas_limit: DEFAULT_TX_GAS_LIMIT,
+        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+            self.dev.signer.verifying_key_bytes(),
+            0,
+        );
+        let gas_limit = DEFAULT_TX_GAS_LIMIT
+            .checked_add(options.initializer.map_or(0, |init| init.gas_limit))
+            .ok_or_else(|| TestkitError::signing("initializer gas overflows deployment budget"))?;
+        let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
+            account: &account,
+            deployment_nonce: deploy_nonce,
+            code: contract.map_or(DeploymentCode::Registered(hash), DeploymentCode::Attached),
+            amount: options.amount,
+            initializer: options.initializer,
+            gas_limit,
             block_expiry_height: EXPIRY_HEIGHT,
             nonce: tx_nonce,
-            contracts_to_deploy,
-            auth_claim: source_address_auth_claim(),
-        });
+        })
+        .map_err(TestkitError::signing)?;
         let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
         let tx_hex = sign_and_encode_transaction_hex(
             tx,
@@ -322,6 +369,7 @@ impl Account {
             tx_hash,
             registered,
             tx_hex,
+            effects: options.effects()?,
         })
     }
 
@@ -332,21 +380,37 @@ impl Account {
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<SubmittedTransaction> {
-        let wallet_entrypoint = network.do_action_entrypoint()?;
         let nonce = self.next_nonce();
-
-        let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-            wallet_address: self.dev.wallet_address,
-            wallet_entrypoint,
-            target_address: target,
-            target_entrypoint: entrypoint,
-            target_calldata: calldata,
-            gas_limit: DEFAULT_TX_GAS_LIMIT,
-            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-            block_expiry_height: EXPIRY_HEIGHT,
-            nonce,
-        })
+        let tx = if self.dev.native {
+            let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                self.dev.signer.verifying_key_bytes(),
+                0,
+            );
+            build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+                account: &account,
+                target_address: target,
+                target_entrypoint: entrypoint,
+                target_calldata: calldata,
+                gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
+                target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+                block_expiry_height: EXPIRY_HEIGHT,
+                nonce,
+            })
+        } else {
+            build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+                wallet_address: self.dev.wallet_address,
+                wallet_entrypoint: network.do_action_entrypoint()?,
+                target_address: target,
+                target_entrypoint: entrypoint,
+                target_calldata: calldata,
+                gas_limit: DEFAULT_TX_GAS_LIMIT,
+                target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+                block_expiry_height: EXPIRY_HEIGHT,
+                nonce,
+            })
+        }
         .map_err(TestkitError::signing)?;
+        let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
         let tx_hex = sign_and_encode_transaction_hex(
             tx,
             &self.dev.signer,
@@ -358,10 +422,51 @@ impl Account {
         )
         .map_err(TestkitError::signing)?;
 
-        let tx_hash = network.submit_raw(tx_hex.clone()).await?;
         self.advance()?;
+        submit_signed(network, tx_hash, &tx_hex).await?;
         Ok(SubmittedTransaction::new(network.clone(), tx_hash, tx_hex))
     }
+}
+
+pub(crate) async fn submit_signed(network: &Network, tx_hash: TxHash, tx_hex: &str) -> Result<()> {
+    let detail = match network.submit_raw(tx_hex.to_owned()).await {
+        Ok(actual) if actual == tx_hash => return Ok(()),
+        Ok(actual) => format!("returned transaction hash {actual:?}"),
+        Err(error) => error.to_string(),
+    };
+    Err(TestkitError::Submission {
+        tx_hash,
+        signed_transaction: tx_hex.to_owned(),
+        detail,
+    })
+}
+
+pub(crate) fn verify_deployment_receipt(
+    tx_hash: TxHash,
+    address: ContractAddress,
+    tx_hex: &str,
+    receipt: &TransactionReceipt,
+) -> Result<()> {
+    let unverified = |detail: &str| TestkitError::UnverifiedDeployment {
+        tx_hash,
+        predicted_address: address,
+        signed_transaction: tx_hex.to_owned(),
+        detail: detail.to_owned(),
+    };
+    if receipt.tx_hash != tx_hash {
+        return Err(unverified("receipt hash mismatch"));
+    }
+    if matches!(receipt.status, ExecStatus::Ok)
+        && receipt
+            .return_data
+            .as_ref()
+            .is_none_or(|data| data.as_ref() != address.as_ref())
+    {
+        return Err(unverified(
+            "receipt did not return the exact predicted address",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -386,6 +491,7 @@ mod tests {
         let attempt = PendingRegistration {
             tx_hash,
             tx_hex: "0x01".to_owned(),
+            effects: Vec::new(),
             owner: RegistrationOwner {
                 address,
                 namespace: NonceNamespace::for_run("seed", 0),

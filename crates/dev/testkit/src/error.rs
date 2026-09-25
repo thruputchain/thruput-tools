@@ -78,6 +78,49 @@ impl fmt::Display for AgentFailures {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TestkitError {
+    /// The caller has not asserted support for the new deployment ABI.
+    #[error("native deployment requires experimental_native_deploy() and a supporting runtime")]
+    NativeDeploymentUnsupported,
+    /// Existing legacy wallet identities cannot use native deployment semantics.
+    #[error("legacy bootstrap accounts support calls only; deploy from a native account")]
+    LegacyDeploymentUnsupported,
+    /// The runtime manifest has no faucet account to fund test accounts.
+    #[error("runtime manifest has no bootstrap faucet")]
+    MissingFaucet,
+    /// A receipt belongs to another transaction.
+    #[error("receipt hash does not match {expected:?}")]
+    ReceiptHashMismatch {
+        /// Locally computed transaction identity.
+        expected: TxHash,
+    },
+    /// An ambiguous submission retains the exact original signed transaction.
+    #[error("submission of {tx_hash:?} was not verified: {detail}")]
+    Submission {
+        /// Locally computed transaction identity.
+        tx_hash: TxHash,
+        /// Exact signed bytes. Observe the original hash before any further action.
+        signed_transaction: String,
+        /// Transport error or unexpected returned identity.
+        detail: String,
+    },
+    /// A submitted deployment could not be verified; preserve the original attempt.
+    #[error("deployment {tx_hash:?} at {predicted_address:?} was not verified: {detail}")]
+    UnverifiedDeployment {
+        /// Locally computed transaction identity.
+        tx_hash: TxHash,
+        /// Address predicted from the signed deployment effects.
+        predicted_address: groundhog_xdr::types::ContractAddress,
+        /// Exact original signed bytes for reconciliation.
+        signed_transaction: String,
+        /// Failed receipt lookup or verification.
+        detail: String,
+    },
+    /// Retained deployment effects differ from a new request by the same caller.
+    #[error("artifact {name} has a retained deployment with different funding or initialization")]
+    DeploymentRequestMismatch {
+        /// Artifact with the retained attempt.
+        name: String,
+    },
     /// A scenario was built without a network configuration.
     #[error("no network configured for the scenario")]
     NoNetwork,
@@ -141,8 +184,8 @@ pub enum TestkitError {
         index: u32,
     },
 
-    /// The scenario has fewer accounts than it has agents to fund.
-    #[error("scenario needs {needed} funded accounts but only {available} are available")]
+    /// The scenario has fewer accounts than it has agents.
+    #[error("scenario needs {needed} accounts but only {available} are available")]
     NotEnoughAccounts {
         /// Number of agents that need accounts.
         needed: usize,
@@ -310,15 +353,6 @@ pub enum TestkitError {
         name: String,
         /// Transaction currently registering the artifact.
         tx_hash: TxHash,
-    },
-
-    /// Submitting signed transaction bytes returned a different canonical hash.
-    #[error("submission hash mismatch: expected `{expected}`, got `{actual}`")]
-    SubmissionHashMismatch {
-        /// Original canonical transaction hash.
-        expected: String,
-        /// Canonical hash returned by re-submission.
-        actual: String,
     },
 
     /// The local node supervisor failed to start or stop the target.

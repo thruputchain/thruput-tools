@@ -5,8 +5,9 @@
 //! a set of [`Agent`]s, and asserts on what they observe. Test scenarios are
 //! run in `#[tokio::test]` functions.
 //!
-//! Each agent is assigned a funded dev account and can [`deploy`] contracts and
-//! [`call`] them through its dev wallet, await receipts, and read chain state,
+//! Each agent receives a deterministic empty native account. Fund it explicitly
+//! with [`AgentContext::fund`], then [`deploy`] contracts with explicit funding
+//! and optional initialization, [`call`] them, await receipts, and read chain state,
 //! in addition to coordinating with other agents off-chain and using the
 //! virtual clock and deterministic randomness.
 //!
@@ -34,7 +35,7 @@ mod nonce;
 pub mod rng;
 pub mod scenario;
 
-pub use account::{Deployed, SubmittedDeploy};
+pub use account::{DeployOptions, Deployed, SubmittedDeploy};
 pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
 pub use clock::Clock;
@@ -45,6 +46,7 @@ pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
 pub use groundhog_node_supervisor::{
     BlockDriverConfig, BlockDriverMode, BlockProductionError, LogLevel, ProducedBlock,
 };
+pub use groundhog_signing::default_wallet::WalletInitCall;
 pub use logging::init_tracing;
 pub use mailbox::{Envelope, Mailbox, Message};
 pub use network::{LocalNetworkConfig, Network, NetworkConfig, SubmittedTransaction};

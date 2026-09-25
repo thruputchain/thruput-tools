@@ -19,7 +19,6 @@ use groundhog_json_rpc_client::{GroundhogApiClient, PollTransactionReceiptError}
 use groundhog_json_rpc_types::{
     network_info::NetworkInfo, receipt::TransactionReceipt, transaction::TxHash,
 };
-pub use groundhog_signing::BuildDevWalletDoActionTransaction as CallRequest;
 use groundhog_signing::{SignTransactionParams, Signer, SigningError};
 use groundhog_xdr::{transaction::Transaction, types::NetworkHash};
 use jsonrpsee::core::client::{ClientT, Error as RpcError};
@@ -49,7 +48,7 @@ pub enum Wallet<'a> {
 
 /// A single child call through an explicitly selected wallet adapter.
 #[derive(Debug, Clone, Copy)]
-pub struct WalletCallRequest<'a> {
+pub struct CallRequest<'a> {
     /// Native or legacy caller identity.
     pub wallet: Wallet<'a>,
     /// Child contract address.
@@ -69,8 +68,8 @@ pub struct WalletCallRequest<'a> {
 }
 
 /// Prepare a single native or legacy child call without submitting it.
-pub fn prepare_wallet_call(
-    request: WalletCallRequest<'_>,
+pub fn prepare_call(
+    request: CallRequest<'_>,
     network_hash: NetworkHash,
 ) -> Result<UnsignedCall, SigningError> {
     let transaction = match request.wallet {
@@ -89,35 +88,24 @@ pub fn prepare_wallet_call(
         Wallet::Legacy {
             address,
             entrypoint,
-        } => signing::build_dev_wallet_do_action_transaction(CallRequest {
-            wallet_address: address,
-            wallet_entrypoint: entrypoint,
-            target_address: request.target_address,
-            target_entrypoint: request.target_entrypoint,
-            target_calldata: request.target_calldata,
-            target_gas_limit: request.target_gas_limit,
-            gas_limit: request.gas_limit,
-            block_expiry_height: request.block_expiry_height,
-            nonce: request.nonce,
-        })?,
+        } => signing::build_dev_wallet_do_action_transaction(
+            signing::BuildDevWalletDoActionTransaction {
+                wallet_address: address,
+                wallet_entrypoint: entrypoint,
+                target_address: request.target_address,
+                target_entrypoint: request.target_entrypoint,
+                target_calldata: request.target_calldata,
+                target_gas_limit: request.target_gas_limit,
+                gas_limit: request.gas_limit,
+                block_expiry_height: request.block_expiry_height,
+                nonce: request.nonce,
+            },
+        )?,
     };
     Ok(UnsignedCall {
         transaction,
         network_hash,
         native_return: matches!(request.wallet, Wallet::Native(_)),
-    })
-}
-
-/// Build an unsigned invocation using the canonical wallet transaction builder.
-/// Network identity is supplied by the caller; use [`validate_network`] before signing online.
-pub fn prepare_call(
-    request: CallRequest<'_>,
-    network_hash: NetworkHash,
-) -> Result<UnsignedCall, SigningError> {
-    Ok(UnsignedCall {
-        transaction: groundhog_signing::build_dev_wallet_do_action_transaction(request)?,
-        network_hash,
-        native_return: false,
     })
 }
 
@@ -304,8 +292,10 @@ mod tests {
     fn prepared() -> UnsignedCall {
         prepare_call(
             CallRequest {
-                wallet_address: ContractAddress::from([1; 32]),
-                wallet_entrypoint: ContractEntrypointID::from([2; 8]),
+                wallet: Wallet::Legacy {
+                    address: ContractAddress::from([1; 32]),
+                    entrypoint: ContractEntrypointID::from([2; 8]),
+                },
                 target_address: ContractAddress::from([3; 32]),
                 target_entrypoint: ContractEntrypointID::from([4; 8]),
                 target_calldata: &[5, 6],
@@ -351,7 +341,7 @@ mod tests {
     fn wallet_dispatch_preserves_legacy_bytes_and_unwraps_native_returns() {
         let key = LocalSigner::from_secret_key([9; 32]);
         let account = signing::PubkeyAccount::from_public_key_bytes(key.verifying_key_bytes(), 17);
-        let request = WalletCallRequest {
+        let request = CallRequest {
             wallet: Wallet::Legacy {
                 address: ContractAddress::from([1; 32]),
                 entrypoint: ContractEntrypointID::from([2; 8]),
@@ -365,13 +355,13 @@ mod tests {
             nonce: 7,
         };
         let network = NetworkHash::from(SHA256Hash::from([8; 32]));
-        let legacy = prepare_wallet_call(request, network.clone()).unwrap();
+        let legacy = prepare_call(request, network.clone()).unwrap();
         assert_eq!(legacy.transaction(), prepared().transaction());
         let legacy = legacy.sign(&key).unwrap();
         assert!(!legacy.is_native());
         assert_eq!(legacy.decode_return(&[42]).unwrap(), [42]);
-        let native = prepare_wallet_call(
-            WalletCallRequest {
+        let native = prepare_call(
+            CallRequest {
                 wallet: Wallet::Native(&account),
                 ..request
             },
