@@ -291,6 +291,16 @@ jobs:
             echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p groundhog-cli --lib codegen"
             exit 1
           fi
+          # git diff only reports tracked files, so a spec artifact whose
+          # binding was never committed would slip past the check above with
+          # nothing to compare against.
+          untracked="$(git ls-files --others --exclude-standard -- "$FIXTURES")"
+          if [ -n "$untracked" ]; then
+            echo "Generated bindings that are not checked in:"
+            echo "$untracked"
+            echo "Commit them, or drop the spec artifact that produced them."
+            exit 1
+          fi
 
       # A clean tsc says nothing, so print the version first: a green log then
       # shows the compiler ran rather than leaving that to be assumed.
