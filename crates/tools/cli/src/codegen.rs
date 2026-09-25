@@ -185,8 +185,13 @@ fn module_alias(module: &str) -> String {
 }
 
 fn plan_escapes(spec: &ContractSpec) -> Result<Escapes, CliError> {
-    // The crate root sits at the file's top level and shadows nothing there;
-    // every segment below it, and every declared name, is inside a namespace.
+    // The crate root sits at the file's top level, where the generator's own
+    // names live: a root that collides with one is rejected outright by the
+    // reservations in `validate_spec` (`Uint8Array` and `Record` among them),
+    // so it never reaches an escape. Rejecting is fine
+    // for that handful of names; below the root it would not be, which is
+    // what the escapes are for. Hence `skip(1)`: every segment under the root,
+    // and every declared name, is inside a namespace and can capture.
     let mut nested: BTreeMap<String, String> = BTreeMap::new();
     for (path, what) in declarations(spec)? {
         for name in path
