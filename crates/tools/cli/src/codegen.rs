@@ -1,5 +1,6 @@
 //! TypeScript binding code generation from contract specs.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -1307,6 +1308,144 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             .iter()
             .all(|field| event_topic_representation(&field.ty) == "hash")
     });
+    // Namespacing relocated the flat file scope's collisions rather than
+    // removing them. TypeScript resolves the first segment of a reference
+    // lexically, innermost enclosing scope outwards, so a name that lands
+    // inside a namespace captures every reference to that name made from
+    // within it. Three shadowers, one rule: a name nested inside a namespace
+    // must not be one the declarations in there resolve lexically. Each case
+    // otherwise emits a binding that reads correctly and does not type-check,
+    // so the name is rejected rather than silently shadowed.
+    //
+    // The crate root is exempt: it sits at the file's top level, where the
+    // flat reservations below already cover it.
+    let mut captured: BTreeMap<&str, &str> = BTreeMap::new();
+    if uses_uint8_array {
+        captured.insert("Uint8Array", "the standard library's `Uint8Array`");
+    }
+    if uses_record {
+        captured.insert(
+            "Record",
+            "the standard library's `Record`, which a topic-only event's filter aliases",
+        );
+    }
+    if uses_address {
+        captured.insert("ContractAddress", "the runtime's `ContractAddress` import");
+    }
+    if uses_fixed_array {
+        captured.insert("FixedArray", "the runtime's `FixedArray` import");
+    }
+    if uses_fixed_bytes {
+        captured.insert("FixedBytes", "the runtime's `FixedBytes` import");
+    }
+    if uses_signed_token {
+        captured.insert("SignedToken", "the runtime's `SignedToken` import");
+    }
+    if has_events {
+        captured.insert(
+            "DecodedContractEvent",
+            "the runtime's `DecodedContractEvent` import",
+        );
+        captured.insert(
+            "defineContractEvent",
+            "the runtime's `defineContractEvent` import",
+        );
+        if spec.events.iter().any(|event| {
+            event
+                .topics
+                .iter()
+                .any(|field| event_topic_representation(&field.ty) != "hash")
+        }) {
+            captured.insert(
+                "ContractEventFilterValue",
+                "the runtime's `ContractEventFilterValue` import",
+            );
+        }
+    }
+
+    // A reference to a named type is written from its crate's root down, even
+    // within that same crate, and the root resolves lexically like any other
+    // first segment. So a module named after a crate the spec references
+    // captures it, and every reference to that crate's types made from inside
+    // resolves into the wrong namespace.
+    let referenced_roots = RefCell::new(BTreeSet::new());
+    spec_uses_type(spec, |ty| {
+        if let ContractType::Named { named } = ty
+            && let Ok(path) = ts_id_path(named)
+        {
+            referenced_roots
+                .borrow_mut()
+                .insert(path.namespaces[0].clone());
+        }
+        false
+    });
+    let referenced_roots = referenced_roots.into_inner();
+
+    let mut declared: Vec<(TsIdPath, String)> = Vec::new();
+    for def in spec.type_defs.iter() {
+        let path = ts_id_path(type_def_id(def)?)?;
+        let what = format!("type definition \"{}\"", path.qualified());
+        declared.push((path, what));
+    }
+    for event in spec.events.iter() {
+        let path = ts_id_path(&event.name)?;
+        let what = format!("event \"{}\"", path.qualified());
+        declared.push((path, what));
+    }
+
+    let mut namespace_paths: BTreeSet<String> = BTreeSet::new();
+    let mut declaration_paths: BTreeMap<String, String> = BTreeMap::new();
+    for (path, what) in &declared {
+        for nested in path
+            .namespaces
+            .iter()
+            .skip(1)
+            .chain(std::iter::once(&path.name))
+        {
+            if let Some(captures) = captured.get(nested.as_str()) {
+                return Err(CliError::SpecFailed(format!(
+                    "{what} puts \"{nested}\" inside a generated namespace, where it captures \
+                     {captures}; rename it"
+                )));
+            }
+            if referenced_roots.contains(nested.as_str()) {
+                return Err(CliError::SpecFailed(format!(
+                    "{what} puts \"{nested}\" inside a generated namespace, where it captures \
+                     the \"{nested}\" crate's own namespace and breaks every reference to that \
+                     crate's types made from inside; rename it"
+                )));
+            }
+        }
+
+        let mut prefix = String::new();
+        for ns in &path.namespaces {
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(ns);
+            namespace_paths.insert(prefix.clone());
+        }
+        declaration_paths
+            .entry(path.qualified())
+            .or_insert_with(|| what.clone());
+    }
+
+    // A declaration that lands where a namespace has to be opened: an
+    // `export type foo` beside an `export namespace foo` is a duplicate
+    // identifier, because a type alias cannot merge with a namespace the way
+    // an interface can. The two come from different spec ids -- a union
+    // declared `foo` at a crate's root and a type in that crate's module
+    // `foo` -- so the per-path reservations below see no clash.
+    for (qualified, what) in &declaration_paths {
+        if namespace_paths.contains(qualified) {
+            return Err(CliError::SpecFailed(format!(
+                "generated TypeScript declaration for {what} lands at \"{qualified}\", where \
+                 another spec type's module needs a namespace of that name; rename the type or \
+                 move it out of that module"
+            )));
+        }
+    }
+
     for name in ["contractSpecString", "ContractSpec", "s", "spec"] {
         reserve_ts_value_name(
             &mut top_level_values,
@@ -2509,17 +2648,16 @@ mod tests {
         }]
         .try_into()
         .unwrap();
-        // The runtime's `SignedToken` import stays top level while a spec type
-        // of that name lands inside its id's namespaces, so the two coexist.
-        let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
+        // Namespacing does not make this safe. The spec type nests, but the
+        // runtime's `SignedToken` is referenced from inside that same
+        // namespace, so the nested declaration captures it and the reference
+        // resolves to the spec's own type.
+        let error = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap_err();
         assert!(
-            output.contains("    export interface SignedToken"),
-            "spec type must be namespaced:\n{output}"
-        );
-        assert!(
-            output.contains("export type CounterAuthorizeResult = SignedToken;"),
-            "the method result must still resolve to the runtime import, not \
-             the spec type:\n{output}"
+            error
+                .to_string()
+                .contains("captures the runtime's `SignedToken` import"),
+            "unexpected error: {error}"
         );
     }
 
@@ -3075,13 +3213,16 @@ export type Result =
         .try_into()
         .unwrap();
 
-        // Namespacing is what makes this safe: the declaration lands at
-        // `demo.v1.Uint8Array`, so the global `Uint8Array` the bindings use
-        // for `bytes` fields is untouched.
-        let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
-        assert!(output.contains("export namespace demo {"));
-        assert!(output.contains("export interface Uint8Array"));
-        assert!(!output.contains("\nexport interface Uint8Array"));
+        // The declaration lands at `demo.v1.Uint8Array`, in the very
+        // namespace whose `bytes` fields are typed `Uint8Array`, so it
+        // captures the global rather than sitting harmlessly beside it.
+        let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("captures the standard library's `Uint8Array`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -3092,11 +3233,160 @@ export type Result =
         event.topics.0[0].ty = ContractType::String;
         spec.events = vec![event].try_into().unwrap();
 
-        // As above: the event declares itself inside its namespaces, so it
-        // cannot shadow the standard library's `Record`.
-        let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
-        assert!(output.contains("export namespace demo {"));
-        assert!(!output.contains("\nexport interface Record"));
+        // A topic-only event's filter aliases `Record<string, never>`, and
+        // that alias is emitted in the same namespace as the event interface
+        // -- so an event named `Record` captures it, leaving the filter
+        // referring to a non-generic interface.
+        let error = generate_ts_bindings(&spec, "events.spec.xdr").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("captures the standard library's `Record`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    fn spec_id_at(krate: &str, module_path: &str, declared: &str) -> ContractSpecId {
+        ContractSpecId {
+            crate_name: spec_string(krate),
+            major: spec_string("1"),
+            module_path: spec_string(module_path),
+            declared: spec_string(declared),
+        }
+    }
+
+    /// A struct in `demo` holding a type declared in crate `other`.
+    fn cross_crate_spec(holder_module: &str) -> ContractSpec {
+        let mut spec = spec_with_events();
+        spec.events = vec![].try_into().unwrap();
+        spec.type_defs = vec![
+            ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id_at("other", "other", "Thing"),
+                    fields: vec![ContractField {
+                        name: spec_string("n"),
+                        ty: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+            ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id_at("demo", holder_module, "Holder"),
+                    fields: vec![ContractField {
+                        name: spec_string("inner"),
+                        ty: ContractType::Named {
+                            named: spec_id_at("other", "other", "Thing"),
+                        },
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+        ]
+        .try_into()
+        .unwrap();
+        spec
+    }
+
+    #[test]
+    fn embeds_a_type_declared_in_another_crate() {
+        let output = generate_ts_bindings(&cross_crate_spec("demo"), "x.spec.xdr").unwrap();
+
+        // The reference is written from the other crate's root down, and that
+        // root is a top-level namespace, so it resolves from inside `demo`.
+        assert!(
+            output.contains(r#"export interface Holder { "inner": other.v1.Thing; }"#),
+            "cross-crate reference missing:\n{output}"
+        );
+        assert!(output.contains("export namespace other {"));
+    }
+
+    #[test]
+    fn module_named_after_a_referenced_crate_errors() {
+        // `Holder` moves into `demo::other`, so its own namespace is now named
+        // `other`. The reference it carries still reads `other.v1.Thing`, but
+        // `other` now resolves to the enclosing module namespace, which has no
+        // `v1` -- the binding would not type-check.
+        let error =
+            generate_ts_bindings(&cross_crate_spec("demo::other"), "x.spec.xdr").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("captures the \"other\" crate's own namespace"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn type_alias_colliding_with_a_sibling_module_errors() {
+        let mut spec = spec_with_events();
+        spec.events = vec![].try_into().unwrap();
+        spec.type_defs = vec![
+            // A union renders as `export type foo = ...`.
+            ContractTypeDef::TypeDefUnion {
+                union_def: ContractUnionDef {
+                    name: spec_id_at("demo", "demo", "foo"),
+                    cases: vec![ContractUnionCase {
+                        name: spec_string("Ok"),
+                        discriminant: 0,
+                        case_type: ContractUnionCaseType::UnionCaseVoid,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+            // ... and this one needs `export namespace foo` at the same level.
+            ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id_at("demo", "demo::foo", "Bar"),
+                    fields: vec![].try_into().unwrap(),
+                },
+            },
+        ]
+        .try_into()
+        .unwrap();
+
+        // A type alias cannot merge with a namespace the way an interface can.
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert!(
+            error.to_string().contains("needs a namespace of that name"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn two_crates_may_declare_the_same_name() {
+        // The motivating case: structured spec ids let two crates each declare
+        // `Error`, and one crate declare `Config` in two modules. The flat
+        // scope rejected all of this; the namespaces keep them apart.
+        let mut spec = spec_with_events();
+        spec.events = vec![].try_into().unwrap();
+        let def = |krate: &str, module: &str, declared: &str| ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_id_at(krate, module, declared),
+                fields: vec![].try_into().unwrap(),
+            },
+        };
+        spec.type_defs = vec![
+            def("dup-name-if-a", "dup_name_if_a", "Error"),
+            def("dup-name-if-b", "dup_name_if_b", "Error"),
+            def("spec-name-reuse", "spec_name_reuse::ledger", "Config"),
+            def("spec-name-reuse", "spec_name_reuse::vault", "Config"),
+        ]
+        .try_into()
+        .unwrap();
+
+        let output = generate_ts_bindings(&spec, "reuse.spec.xdr").unwrap();
+        for expected in [
+            "export namespace dup_name_if_a {",
+            "export namespace dup_name_if_b {",
+            "export namespace ledger {",
+            "export namespace vault {",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
     }
 
     #[test]
