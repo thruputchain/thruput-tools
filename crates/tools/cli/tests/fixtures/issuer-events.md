@@ -9,6 +9,9 @@ ISSUER_TOKEN_CLI_EVENTS_OUT=/tmp/issuer-events.json \
   cargo test -p erc20_issuer --locked export_cli_event_fixture -- --ignored
 ```
 
+The fixture uses the absolute `ApprovalEvent` and events from
+`groundhog-erc20-controls-if`.
+
 The HTTP test checks raw preservation of all nine events and the four canonical
 movements. Clawback emits a standard burn plus context; only the burn contributes
 to movement history. This needs no new CLI dependency or JSON schema version.
