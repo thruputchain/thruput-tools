@@ -8,7 +8,10 @@
     "lib": ["es2022"],
     "skipLibCheck": false,
     "noUnusedLocals": true,
+    "noUncheckedIndexedAccess": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
     "types": []
   },
-  "include": ["runtime.d.ts", "../*.ts"]
+  "include": ["runtime.d.ts", "consumer.ts", "../*.ts"]
 }

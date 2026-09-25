@@ -4,10 +4,12 @@
 import { contractEntrypointID, topic } from "@groundhogchain/protocol";
 import { fromHex } from "@groundhogchain/protocol/utils";
 import { ContractTypeKind, ContractTypeDefKind, contractSpecString } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException, defineContractEvent, type DecodedContractEvent } from "@groundhogchain/client/contract";
+import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException, defineContractEvent, type DecodedContractEvent, type ContractEventFilterValue } from "@groundhogchain/client/contract";
 
 import * as __gh_client_contract from "@groundhogchain/client/contract";
-import __gh_ns_other = other;
+import __gh_globalThis = globalThis;
+type __gh_Holder_3 = demo.v1.other.Holder;
+type __gh_Thing_2 = other.v1.Thing;
 
 const s = contractSpecString;
 
@@ -21,13 +23,18 @@ export namespace demo {
 
   export namespace v1 {
 
-    export interface Uint8Array { "bytes": globalThis.Uint8Array; }
+    export interface Uint8Array { "bytes": __gh_globalThis.Uint8Array; }
 
     export interface SignedToken { "token": __gh_client_contract.SignedToken; }
 
+    export namespace globalThis {
+
+      export interface Uint8Array { "bytes": __gh_globalThis.Uint8Array; }
+    }
+
     export namespace other {
 
-      export interface Holder { "inner": __gh_ns_other.v1.Thing; }
+      export interface Holder { "inner": __gh_Thing_2; }
     }
   }
 }
@@ -37,11 +44,13 @@ export namespace other {
   export namespace v1 {
 
     export interface Thing { "n": bigint; }
+
+    export interface demo {  }
   }
 }
 
 export interface ShadowedAuthorizeArgs {
-  holder: demo.v1.other.Holder;
+  holder: __gh_Holder_3;
 }
 export type ShadowedAuthorizeResult = __gh_client_contract.SignedToken;
 
@@ -103,6 +112,23 @@ export const spec: ContractSpec = {
         ],
       },
     },
+    {
+      v: ContractTypeDefKind.TypeDefStruct,
+      struct_def: {
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::globalThis"), declared: s("Uint8Array") },
+        fields: [
+          { name: s("bytes"), ty: { v: ContractTypeKind.Bytes } },
+        ],
+      },
+    },
+    {
+      v: ContractTypeDefKind.TypeDefStruct,
+      struct_def: {
+        name: { crate_name: s("other"), major: s("1"), module_path: s("other"), declared: s("demo") },
+        fields: [
+        ],
+      },
+    },
   ],
   events: [
     {
@@ -110,6 +136,26 @@ export const spec: ContractSpec = {
       signature: topic(fromHex("abababababababababababababababababababababababababababababababab")),
       topics: [
         { name: s("tag"), ty: { v: ContractTypeKind.String } },
+      ],
+      fields: [
+        { name: s("note"), ty: { v: ContractTypeKind.String } },
+      ],
+    },
+    {
+      name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("codecs") },
+      signature: topic(fromHex("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")),
+      topics: [
+        { name: s("tag"), ty: { v: ContractTypeKind.U64 } },
+      ],
+      fields: [
+        { name: s("note"), ty: { v: ContractTypeKind.String } },
+      ],
+    },
+    {
+      name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::spec"), declared: s("Pinged") },
+      signature: topic(fromHex("efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef")),
+      topics: [
+        { name: s("tag"), ty: { v: ContractTypeKind.U64 } },
       ],
       fields: [
         { name: s("note"), ty: { v: ContractTypeKind.String } },
@@ -145,17 +191,20 @@ export const Shadowed = {
   }),
 } as const;
 
+const __gh_codecs = codecs;
+const __gh_spec = spec;
+
 export namespace demo {
 
   export namespace v1 {
 
     export interface Record extends DecodedContractEvent<
       "Record",
-      { /** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "tag": globalThis.Uint8Array },
+      { /** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "tag": __gh_globalThis.Uint8Array },
       { "note": string }
     > {}
 
-    export type RecordFilter = globalThis.Record<string, never>;
+    export type RecordFilter = __gh_globalThis.Record<string, never>;
 
     export const Record = defineContractEvent<
       "Record",
@@ -164,24 +213,89 @@ export namespace demo {
       RecordFilter
     >({
       name: "Record",
-      signature: spec.events[0]!.signature,
+      signature: __gh_spec.events[0]!.signature,
       topics: [
         {
           name: "tag",
-          type: spec.events[0]!.topics[0]!.ty,
+          type: __gh_spec.events[0]!.topics[0]!.ty,
           representation: "hash",
         },
       ],
       fields: [
-        { name: "note", type: spec.events[0]!.fields[0]!.ty },
+        { name: "note", type: __gh_spec.events[0]!.fields[0]!.ty },
       ],
-      codecs,
+      codecs: __gh_codecs,
     });
+
+    export interface codecs extends DecodedContractEvent<
+      "codecs",
+      { "tag": bigint },
+      { "note": string }
+    > {}
+
+    export interface codecsFilter {
+      "tag"?: ContractEventFilterValue<bigint>;
+    }
+
+    export const codecs = defineContractEvent<
+      "codecs",
+      codecs["topics"],
+      codecs["fields"],
+      codecsFilter
+    >({
+      name: "codecs",
+      signature: __gh_spec.events[1]!.signature,
+      topics: [
+        {
+          name: "tag",
+          type: __gh_spec.events[1]!.topics[0]!.ty,
+          representation: "u64",
+        },
+      ],
+      fields: [
+        { name: "note", type: __gh_spec.events[1]!.fields[0]!.ty },
+      ],
+      codecs: __gh_codecs,
+    });
+
+    export namespace spec {
+
+      export interface Pinged extends DecodedContractEvent<
+        "Pinged",
+        { "tag": bigint },
+        { "note": string }
+      > {}
+
+      export interface PingedFilter {
+        "tag"?: ContractEventFilterValue<bigint>;
+      }
+
+      export const Pinged = defineContractEvent<
+        "Pinged",
+        Pinged["topics"],
+        Pinged["fields"],
+        PingedFilter
+      >({
+        name: "Pinged",
+        signature: __gh_spec.events[2]!.signature,
+        topics: [
+          {
+            name: "tag",
+            type: __gh_spec.events[2]!.topics[0]!.ty,
+            representation: "u64",
+          },
+        ],
+        fields: [
+          { name: "note", type: __gh_spec.events[2]!.fields[0]!.ty },
+        ],
+        codecs: __gh_codecs,
+      });
+    }
   }
 }
 
-export type ShadowedEvent = demo.v1.Record;
+export type ShadowedEvent = demo.v1.Record | demo.v1.codecs | demo.v1.spec.Pinged;
 
 export function decodeEvent(event: { topics: Uint8Array[]; data: Uint8Array }): ShadowedEvent | null {
-  return demo.v1.Record.decode(event);
+  return demo.v1.Record.decode(event) ?? demo.v1.codecs.decode(event) ?? demo.v1.spec.Pinged.decode(event);
 }

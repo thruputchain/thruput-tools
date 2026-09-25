@@ -237,11 +237,8 @@ jobs:
             exit 1
           fi
 
-  # The codegen tests assert on generated text; they cannot tell whether that
-  # text compiles. Namespacing made that gap load-bearing: a spec name can
-  # shadow something the bindings reach for, and the result reads correctly
-  # while failing to type-check. This job closes it by running the real CLI
-  # over checked-in spec artifacts and putting tsc on the output.
+  # Codegen tests assert on generated text. This job runs the real CLI over the
+  # checked-in spec artifacts, then type-checks and runs what it generates.
   codegen-typecheck:
     needs: dependency-policy # Check deps before building anything
     name: Codegen typecheck (spec artifact -> groundhog codegen ts -> tsc)
@@ -311,3 +308,16 @@ jobs:
           npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc --version
           npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json
           echo "tsc clean: generated bindings type-check"
+
+      # A binding can type-check and still fail when it runs, so compile the
+      # bindings and call every event decoder they generate.
+      - name: Run the generated event decoders
+        working-directory: crates/tools/cli/fixtures/codegen/typecheck
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP:?}/codegen-js"
+          npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json \
+            --noEmit false --rootDir .. --outDir "$out"
+          echo '{ "type": "module" }' > "$out/package.json"
+          node --version
+          node decode-events.mjs "$out"

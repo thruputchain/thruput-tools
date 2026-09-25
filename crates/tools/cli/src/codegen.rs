@@ -73,81 +73,155 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
     })
 }
 
-/// Every declaration the bindings emit inside a namespace, with a description
-/// for error messages.
-fn declarations(spec: &ContractSpec) -> Result<Vec<(TsIdPath, String)>, CliError> {
+/// A declaration the bindings emit inside a namespace.
+struct Declaration {
+    path: TsIdPath,
+    /// How error messages name it.
+    what: String,
+    /// Whether it renders as a value: an enum's or an event's `export const`.
+    value: bool,
+}
+
+/// Every declaration the bindings emit inside a namespace.
+fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration>, CliError> {
     let mut out = Vec::new();
     for def in spec.type_defs.iter() {
         let path = ts_id_path(type_def_id(def)?)?;
-        let what = format!("type definition \"{}\"", path.qualified());
-        out.push((path, what));
+        out.push(Declaration {
+            what: format!("type definition \"{}\"", path.qualified()),
+            value: matches!(def, ContractTypeDef::TypeDefEnum { .. }),
+            path,
+        });
     }
     for event in spec.events.iter() {
         let path = ts_id_path(&event.name)?;
-        let what = format!("event \"{}\"", path.qualified());
-        out.push((path, what));
+        out.push(Declaration {
+            what: format!("event \"{}\"", path.qualified()),
+            value: true,
+            path,
+        });
     }
     Ok(out)
 }
 
-/// How the generator reaches a name one of its own namespaces captures.
+/// How the generator writes the names a spec declaration would capture.
 ///
-/// TypeScript has no absolute path -- no `::`, no root qualifier -- so the
-/// first segment of every reference resolves lexically, innermost scope
-/// outwards. A spec type named `Uint8Array` therefore captures the standard
-/// library's for every reference made from inside its namespace, and a module
-/// named after another crate captures that crate's root.
-///
-/// Rather than reject those names, the generator writes the captured name
-/// another way and leaves the spec's own names alone:
-/// - a standard-library type is reached through `globalThis`
-/// - a runtime import and another crate's root are reached through an alias
-///   declared at the file's top level, where nothing shadows it
-///
-/// Escapes are planned per spec and applied only where a name really is
-/// captured, so the common binding is unchanged.
+/// A name declared inside a namespace shadows that name for every reference
+/// made there, so a captured name is written through a top-level alias.
 #[derive(Default)]
 struct Escapes {
-    rewrites: BTreeMap<String, String>,
-    aliases: Vec<String>,
+    /// Standard-library and runtime names, and how each is reached.
+    names: BTreeMap<&'static str, Escape>,
+    /// Whether a spec name captures `globalThis` itself.
+    global_this: bool,
+    /// Types under a captured crate root: the alias each is written as, and
+    /// the path that alias names.
+    named: BTreeMap<ContractSpecId, (String, String)>,
+    /// Generated bindings the event declarations reach through a `const`.
+    bindings: BTreeSet<&'static str>,
+    /// The aliases written references have used; only these are declared.
+    used: RefCell<BTreeSet<Alias>>,
 }
 
 impl Escapes {
-    /// The captured name rewritten, or the name unchanged.
+    /// A standard-library or runtime name as the file writes it.
     fn at(&self, name: &str) -> String {
-        self.rewrites
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| name.to_owned())
+        match self.names.get(name) {
+            None => name.to_owned(),
+            Some(Escape::Global) if self.global_this => {
+                self.used.borrow_mut().insert(Alias::GlobalThis);
+                format!("{GLOBAL_THIS_ALIAS}.{name}")
+            }
+            Some(Escape::Global) => format!("globalThis.{name}"),
+            Some(Escape::Module(module)) => {
+                self.used.borrow_mut().insert(Alias::Module(module));
+                format!("{}.{name}", module_alias(module))
+            }
+        }
     }
 
-    fn is_empty(&self) -> bool {
-        self.aliases.is_empty()
+    /// A named type as the file writes it.
+    fn named(&self, id: &ContractSpecId) -> Result<String, CliError> {
+        let Some((alias, target)) = self.named.get(id) else {
+            return Ok(ts_id_path(id)?.qualified());
+        };
+        self.used.borrow_mut().insert(Alias::Named {
+            alias: alias.clone(),
+            target: target.clone(),
+        });
+        Ok(alias.clone())
     }
 
-    /// Whether this name is reached through an escape rather than written bare.
+    /// Whether this name is written through an escape rather than bare.
     fn escaped(&self, name: &str) -> bool {
-        self.rewrites.contains_key(name)
+        self.names.contains_key(name)
+    }
+
+    /// A generated binding as an event declaration writes it.
+    fn binding(&self, name: &'static str) -> String {
+        if self.bindings.contains(name) {
+            format!("{ESCAPE_PREFIX}{name}")
+        } else {
+            name.to_owned()
+        }
+    }
+
+    /// An object property holding a generated binding of the same name:
+    /// shorthand unless the binding is written through its alias.
+    fn binding_property(&self, name: &'static str) -> String {
+        if self.bindings.contains(name) {
+            format!("{name}: {ESCAPE_PREFIX}{name}")
+        } else {
+            name.to_owned()
+        }
+    }
+
+    /// The top-level declarations of the aliases written references used.
+    fn alias_declarations(&self) -> Vec<String> {
+        self.used.borrow().iter().map(Alias::declaration).collect()
     }
 }
 
-/// How a captured name has to be written around.
+/// How a captured standard-library or runtime name is written.
+#[derive(Clone, Copy)]
 enum Escape {
     /// A standard-library type, reached through `globalThis`.
     Global,
-    /// A runtime import, reached through a namespace import of its module.
-    /// Qualifying by module needs no knowledge of the name's arity,
-    /// constraints or defaults, so it survives changes to the runtime that a
-    /// hand-written alias per name would not.
+    /// A runtime import, reached through a namespace import of its module, so
+    /// no alias has to restate the name's arity or constraints.
     Module(&'static str),
+}
+
+/// A top-level declaration that an escaped reference relies on.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Alias {
+    /// A namespace import of a runtime module.
+    Module(&'static str),
+    /// `globalThis` itself, for when a spec name captures it.
+    GlobalThis,
+    /// A type under a captured crate root. An `import x = root` alias would
+    /// be a value, which `verbatimModuleSyntax` rejects for a namespace that
+    /// holds only types, and which reads `undefined` until the root is set.
+    Named { alias: String, target: String },
+}
+
+impl Alias {
+    fn declaration(&self) -> String {
+        match self {
+            Alias::Module(module) => {
+                format!("import * as {} from \"{module}\";", module_alias(module))
+            }
+            Alias::GlobalThis => format!("import {GLOBAL_THIS_ALIAS} = globalThis;"),
+            Alias::Named { alias, target } => format!("type {alias} = {target};"),
+        }
+    }
 }
 
 const PROTOCOL: &str = "@groundhogchain/protocol";
 const CLIENT_CONTRACT: &str = "@groundhogchain/client/contract";
 
-/// Names the declarations reference from inside their namespaces. Everything
-/// else the file names -- the spec literal, the entrypoints, the method types
-/// -- is emitted at top level, where the flat reservations already apply.
+/// Standard-library and runtime names the declarations reference from inside
+/// their namespaces.
 const ESCAPABLE: &[(&str, Escape)] = &[
     ("Uint8Array", Escape::Global),
     ("Record", Escape::Global),
@@ -160,8 +234,14 @@ const ESCAPABLE: &[(&str, Escape)] = &[
     ("defineContractEvent", Escape::Module(CLIENT_CONTRACT)),
 ];
 
-/// Alias names carry this prefix so they cannot be mistaken for spec names.
+/// Generated top-level bindings the event declarations reference.
+const EVENT_BINDINGS: &[&str] = &["spec", "codecs"];
+
+/// Alias names carry this prefix, which `validate_spec` reserves.
 const ESCAPE_PREFIX: &str = "__gh_";
+
+/// The alias `globalThis` is reached through when a spec name captures it.
+const GLOBAL_THIS_ALIAS: &str = "__gh_globalThis";
 
 /// The namespace-import alias for a module, e.g. `__gh_client_contract`.
 fn module_alias(module: &str) -> String {
@@ -171,92 +251,42 @@ fn module_alias(module: &str) -> String {
     format!("{ESCAPE_PREFIX}{tail}")
 }
 
+/// Plan how the file writes each name a spec declaration captures.
 fn plan_escapes(spec: &ContractSpec) -> Result<Escapes, CliError> {
-    // The crate root sits at the file's top level, where the generator's own
-    // names live: a root that collides with one is rejected outright by the
-    // reservations in `validate_spec` (`Uint8Array` and `Record` among them),
-    // so it never reaches an escape. Rejecting is fine
-    // for that handful of names; below the root it would not be, which is
-    // what the escapes are for. Hence `skip(1)`: every segment under the root,
-    // and every declared name, is inside a namespace and can capture.
-    let mut nested: BTreeMap<String, String> = BTreeMap::new();
-    for (path, what) in declarations(spec)? {
-        for name in path
-            .namespaces
-            .iter()
-            .skip(1)
-            .chain(std::iter::once(&path.name))
-        {
-            nested.entry(name.clone()).or_insert_with(|| what.clone());
-        }
-    }
-    if nested.is_empty() {
-        return Ok(Escapes::default());
+    // A crate root sits at top level, where `validate_spec` keeps it apart from
+    // the generator's names; only the segments below it can capture.
+    let mut nested = BTreeSet::new();
+    for decl in declarations(spec)? {
+        nested.extend(decl.path.namespaces.into_iter().skip(1));
+        nested.insert(decl.path.name);
     }
 
-    if let Some((name, what)) = nested.iter().find(|(n, _)| n.starts_with(ESCAPE_PREFIX)) {
-        return Err(CliError::SpecFailed(format!(
-            "{what} is named \"{name}\", and the generated TypeScript reserves the \
-             \"{ESCAPE_PREFIX}\" prefix for the imports it adds when a spec name shadows one of \
-             its own. Rename the type without that prefix."
-        )));
-    }
-
-    let mut escapes = Escapes::default();
-    let mut modules: BTreeSet<&str> = BTreeSet::new();
+    let mut escapes = Escapes {
+        global_this: nested.contains("globalThis"),
+        ..Escapes::default()
+    };
     for (name, escape) in ESCAPABLE {
-        if !nested.contains_key(*name) {
-            continue;
+        if nested.contains(*name) {
+            escapes.names.insert(*name, *escape);
         }
-        let rewritten = match escape {
-            Escape::Global => format!("globalThis.{name}"),
-            Escape::Module(module) => {
-                modules.insert(module);
-                format!("{}.{name}", module_alias(module))
-            }
-        };
-        escapes.rewrites.insert((*name).to_owned(), rewritten);
     }
-    for module in modules {
-        escapes.aliases.push(format!(
-            "import * as {} from \"{module}\";",
-            module_alias(module)
-        ));
-    }
-
-    // A named type is referenced from its crate's root down, even within that
-    // same crate, so a module named after a crate the spec references captures
-    // it. The root is a namespace, which an import alias can bind.
-    let referenced_roots = RefCell::new(BTreeSet::new());
-    spec_uses_type(spec, |ty| {
-        if let ContractType::Named { named } = ty
-            && let Ok(path) = ts_id_path(named)
-        {
-            referenced_roots
-                .borrow_mut()
-                .insert(path.namespaces[0].clone());
+    for binding in EVENT_BINDINGS {
+        if nested.contains(*binding) {
+            escapes.bindings.insert(*binding);
         }
-        false
-    });
-    for root in referenced_roots.into_inner() {
-        if !nested.contains_key(&root) {
-            continue;
-        }
-        let alias = format!("{ESCAPE_PREFIX}ns_{root}");
-        escapes.aliases.push(format!("import {alias} = {root};"));
-        escapes.rewrites.insert(root, alias);
     }
-
+    // A named type is written from its crate's root down, so a nested name
+    // matching that root captures every reference to the crate's types. The
+    // index keeps the alias names distinct.
+    for (index, def) in spec.type_defs.iter().enumerate() {
+        let id = type_def_id(def)?;
+        let path = ts_id_path(id)?;
+        if nested.contains(&path.namespaces[0]) {
+            let alias = format!("{ESCAPE_PREFIX}{}_{index}", path.name);
+            escapes.named.insert(id.clone(), (alias, path.qualified()));
+        }
+    }
     Ok(escapes)
-}
-
-/// A spec id in TypeScript reference position.
-fn ts_id_ref(id: &ContractSpecId, esc: &Escapes) -> Result<String, CliError> {
-    let path = ts_id_path(id)?;
-    let mut segments = vec![esc.at(&path.namespaces[0])];
-    segments.extend(path.namespaces[1..].iter().cloned());
-    segments.push(path.name);
-    Ok(segments.join("."))
 }
 
 /// The id a type def declares itself under.
@@ -331,7 +361,7 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
                 .collect::<Result<_, _>>()?;
             Ok(format!("readonly [{}]", items.join(", ")))
         }
-        ContractType::Named { named } => ts_id_ref(named, esc),
+        ContractType::Named { named } => esc.named(named),
         ContractType::SignedToken {
             signed_token_preimage,
         } => match signed_token_preimage.preimage_type.as_deref() {
@@ -544,9 +574,6 @@ fn emit_inline_struct_fields<'a>(
 /// `source_name` is the human-readable origin (for example, a spec sidecar)
 /// embedded in the header comment.
 pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<String, CliError> {
-    let mut out = String::new();
-
-    // 1. Header
     let interfaces: Vec<(&str, &str)> = spec
         .interfaces
         .iter()
@@ -564,35 +591,26 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         .interfaces
         .iter()
         .any(|iface| !iface.methods.is_empty());
-    emit_header(&mut out, source_name, &interfaces);
 
-    // 2. Imports
-    emit_imports(&mut out, spec, &escapes);
-    if !escapes.is_empty() {
-        // A spec name shadows something the declarations reach for, so the
-        // file carries an unshadowed way to name it. See `plan_escapes`.
-        let _ = writeln!(out);
-        for alias in &escapes.aliases {
-            let _ = writeln!(out, "{alias}");
-        }
-    }
-
-    let _ = writeln!(out);
-    let _ = writeln!(out, "const s = contractSpecString;");
+    // The body is written first, so the imports above it declare only the
+    // aliases its references used.
+    let mut body = String::new();
+    let _ = writeln!(body);
+    let _ = writeln!(body, "const s = contractSpecString;");
 
     // 3. Entrypoints
     if has_methods {
-        emit_entrypoints(&mut out, spec, &public_method_names_by_interface)?;
+        emit_entrypoints(&mut body, spec, &public_method_names_by_interface)?;
     }
 
     // 4. Named type declarations, nested under the namespaces their ids map to
-    emit_type_declarations(&mut out, spec, &escapes)?;
+    emit_type_declarations(&mut body, spec, &escapes)?;
 
     // 5. Method argument, result, and exception declarations
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
-        let _ = writeln!(out);
+        let _ = writeln!(body);
         emit_interface_types(
-            &mut out,
+            &mut body,
             iface,
             &public_method_names_by_interface[iface_index],
             &escapes,
@@ -600,23 +618,23 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
     }
 
     // 6. Spec literal
-    let _ = writeln!(out);
-    emit_spec_literal(&mut out, spec)?;
+    let _ = writeln!(body);
+    emit_spec_literal(&mut body, spec)?;
 
     // 7. Shared codec context
     if has_methods || !spec.events.is_empty() {
-        let _ = writeln!(out);
+        let _ = writeln!(body);
         let _ = writeln!(
-            out,
+            body,
             "const codecs = createContractCodecContext(spec.type_defs);"
         );
     }
 
     // 8. Per-interface method descriptors
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
-        let _ = writeln!(out);
+        let _ = writeln!(body);
         emit_interface_object(
-            &mut out,
+            &mut body,
             iface,
             iface_index,
             &public_method_names_by_interface[iface_index],
@@ -625,9 +643,24 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
 
     // 9. Event descriptors and combined decoder
     if !spec.events.is_empty() {
-        emit_event_sections(&mut out, spec, &escapes)?;
+        emit_event_sections(&mut body, spec, &escapes)?;
     }
 
+    // 1. Header
+    let mut out = String::new();
+    emit_header(&mut out, source_name, &interfaces);
+
+    // 2. Imports, then the aliases escaped references use. See `plan_escapes`.
+    emit_imports(&mut out, spec, &escapes);
+    let aliases = escapes.alias_declarations();
+    if !aliases.is_empty() {
+        let _ = writeln!(out);
+        for alias in aliases {
+            let _ = writeln!(out, "{alias}");
+        }
+    }
+
+    out.push_str(&body);
     Ok(out)
 }
 
@@ -1337,6 +1370,15 @@ fn emit_event_sections(
     spec: &ContractSpec,
     esc: &Escapes,
 ) -> Result<(), CliError> {
+    // The declarations below run in file order, so a binding they reach
+    // through an alias is aliased here, once its target is initialized.
+    if !esc.bindings.is_empty() {
+        let _ = writeln!(out);
+        for binding in &esc.bindings {
+            let _ = writeln!(out, "const {ESCAPE_PREFIX}{binding} = {binding};");
+        }
+    }
+
     let items = spec
         .events
         .iter()
@@ -1350,7 +1392,7 @@ fn emit_event_sections(
     })?;
 
     let _ = writeln!(out);
-    emit_decode_event(out, spec, esc)?;
+    emit_decode_event(out, spec)?;
     Ok(())
 }
 
@@ -1361,6 +1403,7 @@ fn emit_event_decl(
     esc: &Escapes,
 ) -> Result<(), CliError> {
     let name = spec_string_text(&event.name.declared)?;
+    let spec_ref = esc.binding("spec");
     let mut topic_fields = Vec::new();
     let mut filter_fields = Vec::new();
     for field in event.topics.iter() {
@@ -1428,7 +1471,7 @@ fn emit_event_decl(
     let _ = writeln!(out, "  {name}Filter");
     let _ = writeln!(out, ">({{");
     let _ = writeln!(out, "  name: {},", ts_string_literal(name));
-    let _ = writeln!(out, "  signature: spec.events[{idx}]!.signature,");
+    let _ = writeln!(out, "  signature: {spec_ref}.events[{idx}]!.signature,");
     let _ = writeln!(out, "  topics: [");
     for (field_index, field) in event.topics.iter().enumerate() {
         let fname = spec_string_text(&field.name)?;
@@ -1436,7 +1479,7 @@ fn emit_event_decl(
         let _ = writeln!(out, "      name: {},", ts_string_literal(fname));
         let _ = writeln!(
             out,
-            "      type: spec.events[{idx}]!.topics[{field_index}]!.ty,"
+            "      type: {spec_ref}.events[{idx}]!.topics[{field_index}]!.ty,"
         );
         let _ = writeln!(
             out,
@@ -1451,12 +1494,12 @@ fn emit_event_decl(
         let fname = spec_string_text(&field.name)?;
         let _ = writeln!(
             out,
-            "    {{ name: {}, type: spec.events[{idx}]!.fields[{field_index}]!.ty }},",
+            "    {{ name: {}, type: {spec_ref}.events[{idx}]!.fields[{field_index}]!.ty }},",
             ts_string_literal(fname)
         );
     }
     let _ = writeln!(out, "  ],");
-    let _ = writeln!(out, "  codecs,");
+    let _ = writeln!(out, "  {},", esc.binding_property("codecs"));
     let _ = writeln!(out, "}});");
     Ok(())
 }
@@ -1471,15 +1514,15 @@ fn event_union_name(spec: &ContractSpec) -> Result<String, CliError> {
 }
 
 /// Emit the per-contract event union and combined decoder.
-fn emit_decode_event(out: &mut String, spec: &ContractSpec, esc: &Escapes) -> Result<(), CliError> {
+fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
     let union_name = event_union_name(spec)?;
 
-    // Qualified, because the declarations now live inside their namespaces.
+    // Qualified from the top level, where every crate root resolves to itself.
     let event_names: Vec<String> = spec
         .events
         .iter()
-        .map(|e| ts_id_ref(&e.name, esc))
-        .collect::<Result<_, _>>()?;
+        .map(|e| Ok(ts_id_path(&e.name)?.qualified()))
+        .collect::<Result<_, CliError>>()?;
 
     let _ = writeln!(
         out,
@@ -1539,44 +1582,30 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             .iter()
             .all(|field| event_topic_representation(&field.ty) == "hash")
     });
-    // Namespacing relocated the flat file scope's collisions rather than
-    // removing them: TypeScript resolves the first segment of a reference
-    // lexically, innermost scope outwards, so a declaration nested in a
-    // namespace captures every reference to that name made from inside it.
-    // `plan_escapes` handles that by writing the captured name another way,
-    // which leaves one case it cannot write around.
-    //
-    // A declaration that lands where a namespace has to be opened: an
-    // `export type foo` beside an `export namespace foo` is a duplicate
-    // identifier, because a type alias cannot merge with a namespace the way
-    // an interface can. Both names are the spec's own, so only the spec can
-    // resolve it. The two come from different spec ids -- a union declared
-    // `foo` at a crate's root and a type in that crate's module `foo` -- so
-    // the per-path reservations below see no clash.
-    let mut namespace_owner: BTreeMap<String, String> = BTreeMap::new();
-    let mut declaration_paths: Vec<(String, String)> = Vec::new();
-    for (path, what) in declarations(spec)? {
-        let mut prefix = String::new();
-        for ns in &path.namespaces {
-            if !prefix.is_empty() {
-                prefix.push('.');
-            }
-            prefix.push_str(ns);
-            namespace_owner
-                .entry(prefix.clone())
-                .or_insert(what.clone());
-        }
-        declaration_paths.push((path.qualified(), what));
-    }
-    for (qualified, what) in &declaration_paths {
-        if let Some(owner) = namespace_owner.get(qualified)
-            && owner != what
+    // A type in module `foo` opens a namespace `foo` beside any declaration
+    // named `foo`. Interfaces and type aliases merge with it, but an enum's or
+    // event's `export const` cannot once the namespace holds a value too.
+    let declared = declarations(spec)?;
+    for decl in declared.iter().filter(|decl| decl.value) {
+        let as_namespace: Vec<String> = decl
+            .path
+            .namespaces
+            .iter()
+            .chain(std::iter::once(&decl.path.name))
+            .cloned()
+            .collect();
+        if let Some(inner) = declared
+            .iter()
+            .find(|other| other.value && other.path.namespaces.starts_with(&as_namespace))
         {
             return Err(CliError::SpecFailed(format!(
-                "{what} and {owner} both need the name \"{qualified}\" in the generated \
-                 TypeScript: one as a declaration, the other as the namespace its module \
-                 nests under, and TypeScript cannot have both. Rename either type, or move \
-                 one out of that module."
+                "{} and {} both need \"{}\" as a value in the generated TypeScript: one is \
+                 declared there as a const, and the other puts a value in the namespace of \
+                 that name. TypeScript cannot merge the two. Rename either type, or move one \
+                 out of that module.",
+                decl.what,
+                inner.what,
+                decl.path.qualified()
             )));
         }
     }
@@ -1588,9 +1617,9 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             "generated binding".into(),
         )?;
     }
-    for name in uses_uint8_array
-        .then_some("Uint8Array")
-        .into_iter()
+    // Escaped references reach the standard library through `globalThis`.
+    for name in std::iter::once("globalThis")
+        .chain(uses_uint8_array.then_some("Uint8Array"))
         .chain(uses_record.then_some("Record"))
     {
         reserve_ts_value_name(
@@ -1860,6 +1889,27 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             union_name.clone(),
             format!("generated \"{union_name}\" event union"),
         )?;
+    }
+
+    // The aliases `plan_escapes` declares carry this prefix.
+    let nested = declared.iter().flat_map(|decl| {
+        decl.path
+            .namespaces
+            .iter()
+            .skip(1)
+            .chain(std::iter::once(&decl.path.name))
+            .map(|name| (name, &decl.what))
+    });
+    if let Some((name, source)) = top_level_values
+        .iter()
+        .chain(nested)
+        .find(|(name, _)| name.starts_with(ESCAPE_PREFIX))
+    {
+        return Err(CliError::SpecFailed(format!(
+            "generated TypeScript name \"{name}\" for {source} starts with \"{ESCAPE_PREFIX}\", \
+             which the generator reserves for the aliases it declares when a spec name shadows \
+             one of its own. Rename it without that prefix."
+        )));
     }
 
     for def in spec.type_defs.iter() {
@@ -2801,7 +2851,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_type_named_signed_token_when_the_import_is_needed() {
+    fn reaches_the_runtime_signed_token_past_a_type_of_that_name() {
         use groundhog_contract_spec::ContractSignedTokenPreimage;
         let mut spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
@@ -3404,7 +3454,7 @@ export type Result =
     }
 
     #[test]
-    fn named_type_shadowing_emitted_uint8_array_errors() {
+    fn reaches_the_global_uint8_array_past_a_type_of_that_name() {
         let mut spec = counter_spec();
         spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
             struct_def: ContractStructDef {
@@ -3435,7 +3485,7 @@ export type Result =
     }
 
     #[test]
-    fn event_shadowing_emitted_record_errors() {
+    fn reaches_the_global_record_past_an_event_of_that_name() {
         let mut spec = spec_with_events();
         let mut event = ping_event_def();
         event.name = spec_id("Record");
@@ -3514,55 +3564,275 @@ export type Result =
         // `Holder` moves into `demo::other`, so its own namespace is named
         // `other`. A bare `other.v1.Thing` would now resolve to the enclosing
         // module namespace, which has no `v1`, so the reference goes through
-        // an import alias bound at the top level instead.
+        // a type alias declared at the top level instead.
         let output = generate_ts_bindings(&cross_crate_spec("demo::other"), "x.spec.xdr").unwrap();
         assert!(
-            output.contains("import __gh_ns_other = other;"),
+            output.contains("type __gh_Thing_0 = other.v1.Thing;"),
             "escape alias missing:\n{output}"
         );
         assert!(
-            output.contains(r#"export interface Holder { "inner": __gh_ns_other.v1.Thing; }"#),
+            output.contains(r#"export interface Holder { "inner": __gh_Thing_0; }"#),
             "reference must go through the alias:\n{output}"
+        );
+        // `import x = other` would be a value alias, which
+        // `verbatimModuleSyntax` rejects for a namespace holding only types.
+        assert!(!output.contains("import __gh_"), "{output}");
+    }
+
+    #[test]
+    fn decoder_names_events_from_the_top_level() {
+        // `other` is captured inside `demo::other`, but the decoder runs at
+        // top level, where the root is not shadowed. It must name the event
+        // directly: it reads the descriptor as a value when it is called.
+        let mut spec = cross_crate_spec("demo::other");
+        let mut event = ping_event_def();
+        event.name = spec_id_at("other", "other", "PingEvent");
+        spec.events = vec![event].try_into().unwrap();
+
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(
+            output.contains("export type CounterEvent = other.v1.PingEvent;"),
+            "{output}"
+        );
+        assert!(
+            output.contains("return other.v1.PingEvent.decode(event);"),
+            "{output}"
         );
     }
 
     #[test]
-    fn type_alias_colliding_with_a_sibling_module_errors() {
+    fn a_captured_name_the_file_never_writes_needs_no_alias() {
+        // A struct named `SignedToken` captures the runtime's, but no signed
+        // token appears anywhere, so an import for it would go unused.
+        let mut spec = counter_spec();
+        spec.type_defs = vec![struct_at(spec_id("SignedToken"))].try_into().unwrap();
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(!output.contains("__gh_"), "{output}");
+
+        // Nor does a captured crate's type that only an event topic uses: the
+        // topic is written as its hash, never as the type.
         let mut spec = spec_with_events();
-        spec.events = vec![].try_into().unwrap();
         spec.type_defs = vec![
-            // A union renders as `export type foo = ...`.
-            ContractTypeDef::TypeDefUnion {
-                union_def: ContractUnionDef {
-                    name: spec_id_at("demo", "demo", "foo"),
-                    cases: vec![ContractUnionCase {
-                        name: spec_string("Ok"),
-                        discriminant: 0,
-                        case_type: ContractUnionCaseType::UnionCaseVoid,
-                    }]
-                    .try_into()
-                    .unwrap(),
-                },
-            },
-            // ... and this one needs `export namespace foo` at the same level.
-            ContractTypeDef::TypeDefStruct {
-                struct_def: ContractStructDef {
-                    name: spec_id_at("demo", "demo::foo", "Bar"),
-                    fields: vec![].try_into().unwrap(),
-                },
-            },
+            struct_at(spec_id_at("other", "other", "Thing")),
+            struct_at(spec_id_at("demo", "demo::other", "Unrelated")),
         ]
         .try_into()
         .unwrap();
+        spec.events.0[0].topics.0[0].ty = ContractType::Named {
+            named: spec_id_at("other", "other", "Thing"),
+        };
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(!output.contains("__gh_"), "{output}");
+    }
 
-        // A type alias cannot merge with a namespace the way an interface can.
+    #[test]
+    fn event_declarations_reach_the_generated_bindings_past_names_that_capture_them() {
+        // An event in module `spec` opens a namespace `spec`, and an event
+        // named `codecs` declares a const `codecs`, so each would capture the
+        // binding the event descriptors read.
+        let mut spec = spec_with_events();
+        let mut in_spec_module = ping_event_def();
+        in_spec_module.name = spec_id_at("demo", "demo::spec", "PingEvent");
+        let mut named_codecs = ping_event_def();
+        named_codecs.name = spec_id("codecs");
+        named_codecs.signature = [0xCD; 32].into();
+        spec.events = vec![in_spec_module, named_codecs].try_into().unwrap();
+
+        let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
+        for expected in [
+            "const __gh_codecs = codecs;",
+            "const __gh_spec = spec;",
+            "signature: __gh_spec.events[0]!.signature,",
+            "type: __gh_spec.events[1]!.fields[0]!.ty",
+            "codecs: __gh_codecs,",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
+        assert!(!output.contains(" spec.events"), "{output}");
+        assert!(!output.contains("  codecs,"), "{output}");
+
+        // The aliases are consts, read when the event namespaces run, so they
+        // follow their targets and precede the events.
+        let at = |needle: &str| {
+            output
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing {needle}:\n{output}"))
+        };
+        assert!(at("const codecs = ") < at("const __gh_codecs = codecs;"));
+        assert!(at("const __gh_spec = spec;") < at("export namespace demo {"));
+    }
+
+    #[test]
+    fn escape_prefix_is_reserved_wherever_a_spec_name_lands() {
+        // An interface object sits at top level beside the escape imports.
+        let spec = counter_spec_with_interface_name("__gh_client_contract", vec![], false);
         let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("both need the name \"demo.v1.foo\""),
-            "unexpected error: {error}"
+                .contains("\"__gh_client_contract\" for interface \"__gh_client_contract\""),
+            "{error}"
         );
+
+        // So does a crate root; a module segment is nested beside the others.
+        for id in [
+            spec_id_at("__gh_x", "__gh_x", "Thing"),
+            spec_id_at("demo", "demo::__gh_x", "Thing"),
+        ] {
+            let mut spec = counter_spec();
+            spec.type_defs = vec![struct_at(id)].try_into().unwrap();
+            let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+            assert!(
+                error.to_string().contains("starts with \"__gh_\""),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn reaches_the_standard_library_past_a_module_named_global_this() {
+        // Inside `demo.v1.globalThis`, a `globalThis.Uint8Array` field would
+        // name the spec's own struct, and still compile.
+        let mut spec = counter_spec();
+        spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_id_at("demo", "demo::globalThis", "Uint8Array"),
+                fields: vec![ContractField {
+                    name: spec_string("bytes"),
+                    ty: ContractType::Bytes,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        }]
+        .try_into()
+        .unwrap();
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(
+            output.contains("import __gh_globalThis = globalThis;"),
+            "{output}"
+        );
+        assert!(
+            output.contains(r#""bytes": __gh_globalThis.Uint8Array;"#),
+            "{output}"
+        );
+
+        // A crate root named `globalThis` would shadow it at top level too.
+        let mut spec = counter_spec();
+        spec.type_defs = vec![struct_at(spec_id_at("globalThis", "globalThis", "Thing"))]
+            .try_into()
+            .unwrap();
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("\"globalThis\" collides between TypeScript standard library"),
+            "{error}"
+        );
+    }
+
+    fn struct_at(name: ContractSpecId) -> ContractTypeDef {
+        ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name,
+                fields: vec![ContractField {
+                    name: spec_string("x"),
+                    ty: ContractType::U64,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        }
+    }
+
+    fn enum_at(name: ContractSpecId) -> ContractTypeDef {
+        ContractTypeDef::TypeDefEnum {
+            enum_def: ContractEnumDef {
+                name,
+                variants: vec![ContractEnumVariant {
+                    name: spec_string("A"),
+                    value: 1,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        }
+    }
+
+    fn union_at(name: ContractSpecId) -> ContractTypeDef {
+        ContractTypeDef::TypeDefUnion {
+            union_def: ContractUnionDef {
+                name,
+                cases: vec![ContractUnionCase {
+                    name: spec_string("Ok"),
+                    discriminant: 0,
+                    case_type: ContractUnionCaseType::UnionCaseVoid,
+                }]
+                .try_into()
+                .unwrap(),
+            },
+        }
+    }
+
+    /// `outer`, declared at `demo`'s root, beside a module holding `inner`.
+    fn beside_a_module_holding(outer: ContractTypeDef, inner: ContractTypeDef) -> ContractSpec {
+        let mut spec = spec_with_events();
+        spec.events = vec![].try_into().unwrap();
+        spec.type_defs = vec![outer, inner].try_into().unwrap();
+        spec
+    }
+
+    #[test]
+    fn declarations_merge_with_a_module_of_their_name() {
+        // An interface or a type alias merges with any namespace, and an
+        // enum's const with one holding only types.
+        let foo = || spec_id_at("demo", "demo", "foo");
+        let bar = || spec_id_at("demo", "demo::foo", "Bar");
+        for (label, outer, inner) in [
+            ("struct", struct_at(foo()), enum_at(bar())),
+            ("union", union_at(foo()), enum_at(bar())),
+            ("enum", enum_at(foo()), struct_at(bar())),
+        ] {
+            let output = generate_ts_bindings(&beside_a_module_holding(outer, inner), "x.spec.xdr")
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            assert!(
+                output.contains("    export namespace foo {"),
+                "{label}:\n{output}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_beside_a_module_holding_a_value_errors() {
+        // An enum's `export const foo` cannot merge with `export namespace
+        // foo` once that namespace holds a value, however deep.
+        let expected = "both need \"demo.v1.foo\" as a value";
+        for module in ["demo::foo", "demo::foo::deeper"] {
+            let spec = beside_a_module_holding(
+                enum_at(spec_id_at("demo", "demo", "foo")),
+                enum_at(spec_id_at("demo", module, "Bar")),
+            );
+            let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+            assert!(error.to_string().contains(expected), "{module}: {error}");
+        }
+
+        // An event is a const as well, on either side.
+        for (event, def) in [
+            (
+                spec_id_at("demo", "demo", "foo"),
+                spec_id_at("demo", "demo::foo", "Bar"),
+            ),
+            (
+                spec_id_at("demo", "demo::foo", "Ping"),
+                spec_id_at("demo", "demo", "foo"),
+            ),
+        ] {
+            let mut spec = spec_with_events();
+            spec.events.0[0].name = event;
+            spec.type_defs = vec![enum_at(def)].try_into().unwrap();
+            let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -4578,10 +4848,14 @@ export type Result =
     }
 
     /// A spec whose own names shadow everything the bindings reach for: the
-    /// standard library's `Uint8Array` and `Record`, the runtime's
-    /// `SignedToken`, and another crate's root. Each one is reached through a
-    /// different escape, so the generated file exercises all of them at once
-    /// and the type-check job proves they resolve.
+    /// standard library's `Uint8Array` and `Record` and `globalThis` itself,
+    /// the runtime's `SignedToken`, the generated `spec` and `codecs`, and the
+    /// roots of both crates. The type-check job proves every escape resolves,
+    /// and runs the decoder, whose events sit under a captured root.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
+    )]
     fn shadowed_names_spec() -> ContractSpec {
         let signed_token = ContractType::SignedToken {
             signed_token_preimage: groundhog_contract_spec::ContractSignedTokenPreimage {
@@ -4663,14 +4937,94 @@ export type Result =
                         .unwrap(),
                     },
                 },
+                // Opens a namespace `globalThis`, so the escapes above cannot
+                // go through the bare name either.
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id_at("demo", "demo::globalThis", "Uint8Array"),
+                        fields: vec![ContractField {
+                            name: spec_string("bytes"),
+                            ty: ContractType::Bytes,
+                        }]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                // Named after the crate `demo`, whose root, unlike `other`'s,
+                // holds values: the events below.
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id_at("other", "other", "demo"),
+                        fields: vec![].try_into().unwrap(),
+                    },
+                },
             ]
             .try_into()
             .unwrap(),
-            // Topic-only, so its filter aliases `Record<string, never>`.
+            events: vec![
+                // Topic-only, so its filter aliases `Record<string, never>`.
+                {
+                    let mut event = ping_event_def();
+                    event.name = spec_id("Record");
+                    event.topics.0[0].ty = ContractType::String;
+                    event
+                },
+                // Declares a const named after the codec context.
+                {
+                    let mut event = ping_event_def();
+                    event.name = spec_id("codecs");
+                    event.signature = [0xCD; 32].into();
+                    event
+                },
+                // Opens a namespace named after the spec literal.
+                {
+                    let mut event = ping_event_def();
+                    event.name = spec_id_at("demo", "demo::spec", "Pinged");
+                    event.signature = [0xEF; 32].into();
+                    event
+                },
+            ]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
+    /// A spec declaring types beside modules of the same name, in each pairing
+    /// TypeScript can merge: an interface, a type alias, an enum's const and an
+    /// event's const, each beside a namespace holding types or values.
+    fn namespace_merges_spec() -> ContractSpec {
+        let at = |module: &str, declared: &str| spec_id_at("demo", module, declared);
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string("Merged"),
+                vers: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![].try_into().unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![
+                // An interface beside a namespace holding a type.
+                struct_at(at("demo", "foo")),
+                struct_at(at("demo::foo", "Bar")),
+                // A type alias beside a namespace holding a value.
+                union_at(at("demo", "bar")),
+                enum_at(at("demo::bar", "Kind")),
+                // An enum's const beside a namespace holding a type.
+                enum_at(at("demo", "baz")),
+                struct_at(at("demo::baz", "Inner")),
+                // Referenced by the event beside the module it sits in.
+                struct_at(at("demo::qux", "Detail")),
+            ]
+            .try_into()
+            .unwrap(),
+            // An event's const beside a namespace holding a type.
             events: vec![{
                 let mut event = ping_event_def();
-                event.name = spec_id("Record");
-                event.topics.0[0].ty = ContractType::String;
+                event.name = at("demo", "qux");
+                event.fields.0[0].ty = ContractType::Named {
+                    named: at("demo::qux", "Detail"),
+                };
                 event
             }]
             .try_into()
@@ -4696,6 +5050,11 @@ export type Result =
                 "shadowed_names",
                 "shadowed_names.spec.xdr",
                 shadowed_names_spec(),
+            ),
+            (
+                "namespace_merges",
+                "namespace_merges.spec.xdr",
+                namespace_merges_spec(),
             ),
         ] {
             let output = generate_ts_bindings(&spec, source_name).unwrap();
