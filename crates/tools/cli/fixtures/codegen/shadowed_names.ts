@@ -7,7 +7,6 @@ import { ContractTypeKind, ContractTypeDefKind, contractSpecString } from "@grou
 import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException, defineContractEvent, type DecodedContractEvent, type ContractEventFilterValue } from "@groundhogchain/client/contract";
 
 import * as __gh_client_contract from "@groundhogchain/client/contract";
-import __gh_globalThis = globalThis;
 type __gh_Holder_3 = demo.v1.other.Holder;
 type __gh_Thing_2 = other.v1.Thing;
 
@@ -23,14 +22,9 @@ export namespace demo {
 
   export namespace v1 {
 
-    export interface Uint8Array { "bytes": __gh_globalThis.Uint8Array; }
+    export interface Uint8Array { "bytes": globalThis.Uint8Array; }
 
     export interface SignedToken { "token": __gh_client_contract.SignedToken; }
-
-    export namespace globalThis {
-
-      export interface Uint8Array { "bytes": __gh_globalThis.Uint8Array; }
-    }
 
     export namespace other {
 
@@ -115,15 +109,6 @@ export const spec: ContractSpec = {
     {
       v: ContractTypeDefKind.TypeDefStruct,
       struct_def: {
-        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::globalThis"), declared: s("Uint8Array") },
-        fields: [
-          { name: s("bytes"), ty: { v: ContractTypeKind.Bytes } },
-        ],
-      },
-    },
-    {
-      v: ContractTypeDefKind.TypeDefStruct,
-      struct_def: {
         name: { crate_name: s("other"), major: s("1"), module_path: s("other"), declared: s("demo") },
         fields: [
         ],
@@ -200,11 +185,11 @@ export namespace demo {
 
     export interface Record extends DecodedContractEvent<
       "Record",
-      { /** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "tag": __gh_globalThis.Uint8Array },
+      { /** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "tag": globalThis.Uint8Array },
       { "note": string }
     > {}
 
-    export type RecordFilter = __gh_globalThis.Record<string, never>;
+    export type RecordFilter = globalThis.Record<string, never>;
 
     export const Record = defineContractEvent<
       "Record",

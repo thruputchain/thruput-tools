@@ -8,7 +8,6 @@ import type { demo, other } from "../shadowed_names.js";
 
 // Spec types named after what the bindings reach for still reach the originals.
 export const bytes: demo.v1.Uint8Array = { bytes: new Uint8Array() };
-export const bytesInGlobalThis: demo.v1.globalThis.Uint8Array = { bytes: new Uint8Array() };
 export const token: demo.v1.SignedToken = { token: {} as SignedToken };
 export const thing: other.v1.Thing = { n: 1n };
 export const holder: demo.v1.other.Holder = { inner: thing };

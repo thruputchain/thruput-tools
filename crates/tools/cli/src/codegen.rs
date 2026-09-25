@@ -112,8 +112,6 @@ fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration>, CliError> {
 struct Escapes {
     /// Standard-library and runtime names, and how each is reached.
     names: BTreeMap<&'static str, Escape>,
-    /// Whether a spec name captures `globalThis` itself.
-    global_this: bool,
     /// Types under a captured crate root: the alias each is written as, and
     /// the path that alias names.
     named: BTreeMap<ContractSpecId, (String, String)>,
@@ -128,10 +126,6 @@ impl Escapes {
     fn at(&self, name: &str) -> String {
         match self.names.get(name) {
             None => name.to_owned(),
-            Some(Escape::Global) if self.global_this => {
-                self.used.borrow_mut().insert(Alias::GlobalThis);
-                format!("{GLOBAL_THIS_ALIAS}.{name}")
-            }
             Some(Escape::Global) => format!("globalThis.{name}"),
             Some(Escape::Module(module)) => {
                 self.used.borrow_mut().insert(Alias::Module(module));
@@ -197,11 +191,7 @@ enum Escape {
 enum Alias {
     /// A namespace import of a runtime module.
     Module(&'static str),
-    /// `globalThis` itself, for when a spec name captures it.
-    GlobalThis,
-    /// A type under a captured crate root. An `import x = root` alias would
-    /// be a value, which `verbatimModuleSyntax` rejects for a namespace that
-    /// holds only types, and which reads `undefined` until the root is set.
+    /// A type under a captured crate root.
     Named { alias: String, target: String },
 }
 
@@ -211,7 +201,9 @@ impl Alias {
             Alias::Module(module) => {
                 format!("import * as {} from \"{module}\";", module_alias(module))
             }
-            Alias::GlobalThis => format!("import {GLOBAL_THIS_ALIAS} = globalThis;"),
+            // Not `import x = root`: that is a value, which reads `undefined`
+            // until the root runs and which `verbatimModuleSyntax` rejects for
+            // a root holding only types.
             Alias::Named { alias, target } => format!("type {alias} = {target};"),
         }
     }
@@ -240,9 +232,6 @@ const EVENT_BINDINGS: &[&str] = &["spec", "codecs"];
 /// Alias names carry this prefix, which `validate_spec` reserves.
 const ESCAPE_PREFIX: &str = "__gh_";
 
-/// The alias `globalThis` is reached through when a spec name captures it.
-const GLOBAL_THIS_ALIAS: &str = "__gh_globalThis";
-
 /// The namespace-import alias for a module, e.g. `__gh_client_contract`.
 fn module_alias(module: &str) -> String {
     let tail = module
@@ -261,10 +250,7 @@ fn plan_escapes(spec: &ContractSpec) -> Result<Escapes, CliError> {
         nested.insert(decl.path.name);
     }
 
-    let mut escapes = Escapes {
-        global_this: nested.contains("globalThis"),
-        ..Escapes::default()
-    };
+    let mut escapes = Escapes::default();
     for (name, escape) in ESCAPABLE {
         if nested.contains(*name) {
             escapes.names.insert(*name, *escape);
@@ -1582,9 +1568,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             .iter()
             .all(|field| event_topic_representation(&field.ty) == "hash")
     });
-    // A type in module `foo` opens a namespace `foo` beside any declaration
-    // named `foo`. Interfaces and type aliases merge with it, but an enum's or
-    // event's `export const` cannot once the namespace holds a value too.
+    // An enum's or event's const cannot merge with a same-named namespace that holds a value.
     let declared = declarations(spec)?;
     for decl in declared.iter().filter(|decl| decl.value) {
         let as_namespace: Vec<String> = decl
@@ -1705,10 +1689,8 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
-    // A def claims only the root of its id at top level, and several defs
-    // legitimately share one, so a root is reserved once rather than per def.
-    // Names are then reserved per qualified path: two crates may both declare
-    // `Error`, but a def and an event landing on one path would merge.
+    // Roots are reserved once, since defs share them; names are reserved per
+    // qualified path, where a def and an event would merge.
     let mut defined_types = BTreeSet::new();
     let mut reserved_roots = BTreeSet::new();
     let mut namespaced_values: BTreeMap<String, String> = BTreeMap::new();
@@ -1891,18 +1873,30 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         )?;
     }
 
+    let nested: Vec<(&String, &String)> = declared
+        .iter()
+        .flat_map(|decl| {
+            decl.path
+                .namespaces
+                .iter()
+                .skip(1)
+                .chain(std::iter::once(&decl.path.name))
+                .map(|name| (name, &decl.what))
+        })
+        .collect();
+    // Escaped references reach built-in types through `globalThis`, reserved
+    // at top level above; below a root, a spec name would shadow it.
+    if let Some((_, source)) = nested.iter().find(|(name, _)| *name == "globalThis") {
+        return Err(CliError::SpecFailed(format!(
+            "{source} has \"globalThis\" in its generated TypeScript path, where it would \
+             shadow the global object the bindings reach built-in types through. Rename the \
+             module or type."
+        )));
+    }
     // The aliases `plan_escapes` declares carry this prefix.
-    let nested = declared.iter().flat_map(|decl| {
-        decl.path
-            .namespaces
-            .iter()
-            .skip(1)
-            .chain(std::iter::once(&decl.path.name))
-            .map(|name| (name, &decl.what))
-    });
     if let Some((name, source)) = top_level_values
         .iter()
-        .chain(nested)
+        .chain(nested.iter().copied())
         .find(|(name, _)| name.starts_with(ESCAPE_PREFIX))
     {
         return Err(CliError::SpecFailed(format!(
@@ -2878,10 +2872,7 @@ mod tests {
         }]
         .try_into()
         .unwrap();
-        // The spec type nests, and the runtime's `SignedToken` is referenced
-        // from inside that same namespace, so the declaration would capture
-        // it. The binding reaches the runtime through a namespace import
-        // instead, and both names survive.
+        // The spec type captures the runtime's name, so it is reached through a namespace import.
         let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
         assert!(
             output.contains(
@@ -3690,34 +3681,25 @@ export type Result =
     }
 
     #[test]
-    fn reaches_the_standard_library_past_a_module_named_global_this() {
-        // Inside `demo.v1.globalThis`, a `globalThis.Uint8Array` field would
-        // name the spec's own struct, and still compile.
-        let mut spec = counter_spec();
-        spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
-            struct_def: ContractStructDef {
-                name: spec_id_at("demo", "demo::globalThis", "Uint8Array"),
-                fields: vec![ContractField {
-                    name: spec_string("bytes"),
-                    ty: ContractType::Bytes,
-                }]
-                .try_into()
-                .unwrap(),
-            },
-        }]
-        .try_into()
-        .unwrap();
-        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
-        assert!(
-            output.contains("import __gh_globalThis = globalThis;"),
-            "{output}"
-        );
-        assert!(
-            output.contains(r#""bytes": __gh_globalThis.Uint8Array;"#),
-            "{output}"
-        );
+    fn global_this_is_reserved_wherever_a_spec_name_lands() {
+        // Built-in types are written `globalThis.X`, which a module or type of
+        // that name would capture, still compiling with the wrong type.
+        for id in [
+            spec_id_at("demo", "demo::globalThis", "Uint8Array"),
+            spec_id_at("demo", "demo", "globalThis"),
+        ] {
+            let mut spec = counter_spec();
+            spec.type_defs = vec![struct_at(id)].try_into().unwrap();
+            let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("has \"globalThis\" in its generated TypeScript path"),
+                "{error}"
+            );
+        }
 
-        // A crate root named `globalThis` would shadow it at top level too.
+        // A crate root named `globalThis` would shadow it at top level.
         let mut spec = counter_spec();
         spec.type_defs = vec![struct_at(spec_id_at("globalThis", "globalThis", "Thing"))]
             .try_into()
@@ -4847,11 +4829,8 @@ export type Result =
         }
     }
 
-    /// A spec whose own names shadow everything the bindings reach for: the
-    /// standard library's `Uint8Array` and `Record` and `globalThis` itself,
-    /// the runtime's `SignedToken`, the generated `spec` and `codecs`, and the
-    /// roots of both crates. The type-check job proves every escape resolves,
-    /// and runs the decoder, whose events sit under a captured root.
+    /// A spec whose names shadow everything the bindings reach for, so the type-check job
+    /// exercises every escape and runs a decoder whose events sit under a captured root.
     #[expect(
         clippy::too_many_lines,
         reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
@@ -4932,19 +4911,6 @@ export type Result =
                             ty: ContractType::Named {
                                 named: spec_id_at("other", "other", "Thing"),
                             },
-                        }]
-                        .try_into()
-                        .unwrap(),
-                    },
-                },
-                // Opens a namespace `globalThis`, so the escapes above cannot
-                // go through the bare name either.
-                ContractTypeDef::TypeDefStruct {
-                    struct_def: ContractStructDef {
-                        name: spec_id_at("demo", "demo::globalThis", "Uint8Array"),
-                        fields: vec![ContractField {
-                            name: spec_string("bytes"),
-                            ty: ContractType::Bytes,
                         }]
                         .try_into()
                         .unwrap(),
