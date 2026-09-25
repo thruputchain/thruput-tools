@@ -60,8 +60,15 @@ pub fn load_built_contract_spec(
     package_name: &str,
 ) -> Result<Option<ContractSpec>, CliError> {
     let rv32 = crate::artifacts::groundhog_rv32_output_path(target_dir, package_name);
-    let rv32_spec = spec_xdr_sidecar_path(&rv32);
-    let Some(rv32_modified) = file_modified(&rv32)? else {
+    load_artifact_contract_spec(&rv32)
+}
+
+/// Load the adjacent spec only when it is at least as new as the selected artifact.
+pub(crate) fn load_artifact_contract_spec(
+    artifact: &Path,
+) -> Result<Option<ContractSpec>, CliError> {
+    let rv32_spec = spec_xdr_sidecar_path(artifact);
+    let Some(rv32_modified) = file_modified(artifact)? else {
         return Ok(None);
     };
     let Some(rv32_spec_modified) = file_modified(&rv32_spec)? else {

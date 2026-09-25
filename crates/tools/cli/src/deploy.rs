@@ -30,7 +30,31 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 5;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
+
+/// Explicit native deployment effects and runtime opt-in.
+#[derive(Debug, Default)]
+pub struct DeploymentOptions<'a> {
+    /// Exact HOG transfer, including zero to skip funding.
+    pub fund: Option<&'a str>,
+    /// Caller assertion that the network supports the current native deployment ABI.
+    pub experimental: bool,
+    /// Method name from the artifact spec, or an explicit eight-byte selector.
+    pub init_method: Option<&'a str>,
+    /// Typed method arguments, or one raw hex argument with an explicit selector.
+    pub init_args: &'a [String],
+    /// Initializer gas budget. Defaults to the ordinary call budget.
+    pub init_gas_limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct InitializerReport {
+    method: String,
+    entrypoint_id: String,
+    gas_limit: u64,
+    calldata: HexBytes,
+}
 
 /// Exact effects and identity of an experimental native deployment.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
@@ -41,9 +65,11 @@ struct NativeDeployment {
     contract_hash: String,
     deployment_nonce: String,
     expiry_height: i64,
+    gas_limit: u64,
     funding_hog: String,
     funding_raw_amount: String,
     runtime_support: &'static str,
+    initializer: Option<InitializerReport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +128,7 @@ pub(crate) struct SubmittedDeploy {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run(
     artifact_path: Option<&Path>,
-    fund: Option<&str>,
-    experimental_native_deploy: bool,
+    options: &DeploymentOptions<'_>,
     package: Option<&str>,
     alias: Option<&str>,
     dry_run: bool,
@@ -124,8 +149,7 @@ pub fn run(
         &cwd,
         &resolved,
         artifact_path,
-        fund,
-        experimental_native_deploy,
+        options,
         package,
         artifacts,
         wallet,
@@ -149,9 +173,11 @@ pub fn run(
             print.detail("deployment nonce", &native.deployment_nonce);
             print.detail("predicted address", &plan.predicted_address);
             print.detail("funding HOG", &native.funding_hog);
+            print_initializer(native.initializer.as_ref(), print);
             print.detail("expiry height", native.expiry_height);
+            print.detail("gas budget", native.gas_limit);
             print.detail("tx", format_tx_hash(&plan.tx_hash));
-            print.warn("Experimental: runtime support is asserted by you, not detected. The specified HOG transfer and code deployment commit atomically; retained balance depends on storage collateral.");
+            print.warn("Experimental: runtime support is asserted by you, not detected. Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
         }
         if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
             print.note("Cancelled");
@@ -431,7 +457,9 @@ fn print_dry_run(
         print.detail("contract hash", &native.contract_hash);
         print.detail("deployment nonce", &native.deployment_nonce);
         print.detail("funding HOG", &native.funding_hog);
+        print_initializer(native.initializer.as_ref(), print);
         print.detail("expiry height", native.expiry_height);
+        print.detail("gas budget", native.gas_limit);
         print.warn("Experimental runtime support is operator-asserted. Funding is the authorized transfer, not a minimum-cost estimate or final balance.");
     }
     print.detail("tx", format_tx_hash(&prepared.tx_hash));
@@ -505,8 +533,7 @@ fn prepare_deploy_plan(
     cwd: &Path,
     resolved: &ResolvedProfile,
     artifact_path: Option<&Path>,
-    fund: Option<&str>,
-    experimental_native_deploy: bool,
+    options: &DeploymentOptions<'_>,
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
@@ -547,8 +574,7 @@ fn prepare_deploy_plan(
         package_name,
         resolved,
         wallet,
-        fund,
-        experimental_native_deploy,
+        options,
     )
 }
 
@@ -585,8 +611,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         None,
         &profile,
         None,
-        None,
-        false,
+        &DeploymentOptions::default(),
     )?)
 }
 
@@ -597,19 +622,55 @@ fn prepare_deploy_transaction_plan(
     package_name: Option<String>,
     profile: &ResolvedProfile,
     selected_wallet: Option<&str>,
-    fund: Option<&str>,
-    experimental_native_deploy: bool,
+    options: &DeploymentOptions<'_>,
 ) -> Result<DeployPlan, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    if options.init_method.is_none()
+        && (!options.init_args.is_empty() || options.init_gas_limit.is_some())
+    {
+        return Err(CliError::InvalidDeploymentInitializer {
+            message: "initializer arguments and gas require --init <METHOD>".into(),
+        });
+    }
+    if options.init_gas_limit == Some(0) {
+        return Err(CliError::InvalidDeploymentInitializer {
+            message: "initializer gas must be greater than zero".into(),
+        });
+    }
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let sender = resolve_transaction_sender(profile, selected_wallet)?;
     let funding = resolve_native_funding(
         sender.native_account.is_some(),
-        fund,
-        experimental_native_deploy,
+        options.fund,
+        options.experimental,
     )?;
+
+    if sender.native_account.is_none() && options.init_method.is_some() {
+        return Err(CliError::NativeDeploymentOptionsForLegacy);
+    }
+    let init_call = options
+        .init_method
+        .map(|method| {
+            let resolved = crate::call::resolve_artifact_call(&artifact.path, method)?;
+            let calldata =
+                crate::codec::encode_args(options.init_args, resolved.metadata.as_ref())?;
+            Ok::<_, CliError>((resolved.entrypoint, calldata))
+        })
+        .transpose()?;
+    let init_gas_limit = options
+        .init_gas_limit
+        .unwrap_or(crate::call::DEFAULT_CALL_GAS_LIMIT);
+    let gas_limit = if init_call.is_some() {
+        DEFAULT_TX_GAS_LIMIT
+            .checked_add(init_gas_limit)
+            .ok_or_else(|| CliError::InvalidDeploymentInitializer {
+                message: "initializer gas plus deployment budget exceeds u64".into(),
+            })?
+    } else {
+        DEFAULT_TX_GAS_LIMIT
+    };
 
     let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;
@@ -639,16 +700,23 @@ fn prepare_deploy_transaction_plan(
     let wallet_context = sender.signing_context(profile, &rt)?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
     let tx = if let Some(account) = &sender.native_account {
-        groundhog_signing::default_wallet::build_default_wallet_funded_deploy_transaction(
+        groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
             groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
                 account,
                 deployment_nonce: deploy_nonce,
                 contract,
-                gas_limit: DEFAULT_TX_GAS_LIMIT,
+                amount: funding.expect("bug: native funding validated above"),
+                initializer: init_call.as_ref().map(|(entrypoint, calldata)| {
+                    groundhog_signing::default_wallet::WalletInitCall {
+                        entrypoint: *entrypoint,
+                        gas_limit: init_gas_limit,
+                        calldata,
+                    }
+                }),
+                gas_limit,
                 block_expiry_height,
                 nonce: deploy_nonce_val,
             },
-            funding.expect("bug: native funding validated above"),
         )
         .map_err(|e| CliError::Other(e.to_string()))?
     } else {
@@ -676,9 +744,19 @@ fn prepare_deploy_transaction_plan(
         contract_hash: format!("0x{}", hex::encode(contract_hash.as_ref())),
         deployment_nonce: format!("0x{}", hex::encode(deploy_nonce.as_ref())),
         expiry_height: block_expiry_height,
+        gas_limit,
         funding_hog: crate::hog::format_amount(amount),
         funding_raw_amount: amount.to_string(),
         runtime_support: "operator_asserted",
+        initializer: init_call.map(|(entrypoint, calldata)| InitializerReport {
+            method: options
+                .init_method
+                .expect("bug: initializer was resolved")
+                .to_owned(),
+            entrypoint_id: crate::call::format_entrypoint_id(entrypoint),
+            gas_limit: init_gas_limit,
+            calldata: HexBytes(calldata),
+        }),
     });
 
     Ok(DeployPlan {
@@ -728,6 +806,18 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
     })
 }
 
+fn print_initializer(initializer: Option<&InitializerReport>, print: &Print) {
+    if let Some(initializer) = initializer {
+        print.detail("initializer", &initializer.method);
+        print.detail("initializer entrypoint", &initializer.entrypoint_id);
+        print.detail("initializer gas", initializer.gas_limit);
+        print.detail(
+            "initializer calldata",
+            format!("0x{}", hex::encode(&initializer.calldata.0)),
+        );
+    }
+}
+
 fn resolve_native_funding(
     native: bool,
     fund: Option<&str>,
@@ -743,7 +833,14 @@ fn resolve_native_funding(
         return Err(CliError::NativeWalletDeploymentUnavailable);
     }
     let amount = fund.ok_or(CliError::NativeDeploymentFundingRequired)?;
-    crate::hog::parse_amount(amount).map(Some)
+    match groundhog_signing::parse_hog_amount(amount) {
+        Ok(amount) => Ok(Some(amount)),
+        Err(groundhog_signing::ParseHogAmountError::Zero) => Ok(Some(0)),
+        Err(error) => Err(CliError::InvalidHogAmount {
+            input: amount.trim().to_owned(),
+            message: error.to_string(),
+        }),
+    }
 }
 
 async fn submit_native_deploy(

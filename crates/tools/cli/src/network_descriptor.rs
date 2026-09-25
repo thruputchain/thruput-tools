@@ -53,7 +53,7 @@ pub(crate) fn resolve_native_signing_context(
     Ok(WalletSigningContext {
         network_hash: validated_signing_network_hash(configured, &network_info)?,
         entrypoints: WalletEntrypoints {
-            deploy: groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_FUNDED_ENTRYPOINT,
+            deploy: groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
             do_action: groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
             source: "native_default_wallet",
         },

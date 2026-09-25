@@ -552,12 +552,26 @@ impl TestArgs {
 
 #[derive(Args)]
 struct DeployArgs {
-    /// Exact HOG to transfer to the new native contract atomically with deployment
+    /// Exact HOG to transfer atomically with native deployment; zero skips funding
     #[arg(long, value_name = "HOG")]
     fund: Option<String>,
-    /// Assert that this network supports the experimental native `deploy_funded` operation
+    /// Assert that this network supports the experimental native deployment ABI
     #[arg(long)]
     experimental_native_deploy: bool,
+    /// Initialize the new contract atomically using a method name or 0x entrypoint
+    #[arg(long, value_name = "METHOD")]
+    init: Option<String>,
+    /// Initializer argument; repeat for each argument (explicit entrypoints take raw hex)
+    #[arg(
+        long,
+        value_name = "VALUE",
+        requires = "init",
+        allow_hyphen_values = true
+    )]
+    init_arg: Vec<String>,
+    /// Gas budget for the initializer (default: 25000000)
+    #[arg(long, requires = "init", value_parser = clap::value_parser!(u64).range(1..))]
+    init_gas_limit: Option<u64>,
     /// Package to deploy (required at a workspace root)
     #[arg(short, long, conflicts_with = "artifact")]
     package: Option<String>,
@@ -591,8 +605,13 @@ impl DeployArgs {
         let cwd = invocation_cwd()?;
         groundhog_cli::deploy::run(
             self.artifact.as_deref(),
-            self.fund.as_deref(),
-            self.experimental_native_deploy,
+            &groundhog_cli::deploy::DeploymentOptions {
+                fund: self.fund.as_deref(),
+                experimental: self.experimental_native_deploy,
+                init_method: self.init.as_deref(),
+                init_args: &self.init_arg,
+                init_gas_limit: self.init_gas_limit,
+            },
             self.package.as_deref(),
             self.alias.as_deref(),
             self.dry_run,

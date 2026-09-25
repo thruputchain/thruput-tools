@@ -1,18 +1,22 @@
 # Native-wallet migration: funding decision and delivery plan
 
-Status: implementation started, 2026-09-24. The funding decision below was
-accepted for development. Backend draft PRs are open; no releases have been made.
+Status: unified deployment revision in development, 2026-09-24. Canonical #56
+and hogd #4144 are open; no releases have been made. Breaking the unpublished
+deployment ABI is accepted in favor of one simple API.
 Parent: [GH-371](https://linear.app/grndhg/issue/GH-371).
 Developer migration: [GH-372](https://linear.app/grndhg/issue/GH-372).
 Bootstrap retirement: [GH-373](https://linear.app/grndhg/issue/GH-373).
 
 ## Accepted funding decision
 
-Use an additive atomic funded-deployment operation in the existing native
-DefaultWallet for the normal developer deployment flow. Keep the existing
-unfunded `deploy` operation for compatible callers. This requires a backend
-release before native deployment becomes the CLI default; it does not require
-retiring bootstrap dev wallets first.
+Use one atomic deployment operation in DefaultWallet:
+`deploy(nonce, contract_hash, amount, initializer: Option<WalletInitCall>)`.
+Remove the separate unfunded and funded entrypoints. A zero amount skips the
+token transfer; a positive amount transfers exactly the caller-authorized HOG.
+An optional initializer runs on the newly deployed contract, from the wallet,
+before the transaction completes. This requires a supported backend release
+before becoming the CLI default; it does not require retiring bootstrap wallets
+first. Existing bootstrap plumbing remains only where it is still required.
 
 The alternative, explicit prefund followed by deploy, remains technically
 possible on the current backend. It needs durable recovery for both submissions
@@ -27,7 +31,7 @@ transactions on older nodes. Retain explicit legacy bindings and guard native de
 unless the operator explicitly opts into a qualified experimental runtime.
 The current public RPC has no reliable capability signal.
 
-## Current evidence and the pre-step
+## Initial investigation (before implementation)
 
 - GH-372 is In Progress, with no linked implementation PR. GH-373 is Backlog
   and blocked by GH-372. The former allocator PR association was incorrect.
@@ -66,46 +70,44 @@ and old experiment are useful inputs, not the release baseline.
 
 ## Funding operation contract
 
-Proposed shape, with final name/selector generated from the canonical interface:
-`deploy_funded(deployment_nonce, contract_hash, funding_raw_amount) -> address`.
+Canonical shape:
+`deploy(nonce, contract_hash, amount, initializer: Option<WalletInitCall>) -> address`.
+`WalletInitCall` contains only `entrypoint`, `gas_limit`, and `calldata`.
 
-- Authenticate the same root pubkey account as existing native operations.
-  Derive the address from that account, nonce, and canonical contract hash.
-- Transfer the explicitly authorized HOG amount to the target and deploy its
-  attached code in one transaction. Failure leaves no committed funding transfer,
-  deployment, or associated success events. Normal replay/lifecycle bookkeeping
-  follows the transaction contract and must be tested separately.
-- Preserve existing `execute`/`deploy` selectors and behavior. Update the Rust
-  reference/interface, generated bindings, and native C++ implementation together;
-  retain native/reference parity tests. Do not add a syscall or weaken root auth
-  unless investigation demonstrates that the existing primitives are insufficient.
-- Define zero funding, an already-funded target, duplicate deployment, insufficient
-  sender funds, insufficient target collateral, changed storage prices, and malformed
-  or missing attached code. Funding is an exact transfer, not an implicit
-  concurrency-sensitive "top up to balance" calculation.
-- Keep target storage collateral separate from sender gas capacity, sender storage,
-  and later contract-state growth. Initial deployment funding does not promise
-  unlimited future writes or a general withdrawal facility.
-- Clients may supply an explicit amount without an estimator. Any advertised
-  minimum/default derived from network costs must use authoritative values with
-  provenance, through the relevant GH-425 work. The local genesis manifest alone
-  is not a current public-network quote. Do not call a chosen amount the minimum.
-- Specify activation and compatibility on a network whose default wallet is
-  chain-configured. Qualify retained-state upgrades and old/new callers; choose
-  an honest capability signal or pinned supported-runtime contract. A new binary
-  or a successful unit test does not establish deployment support on a live chain.
+- Authenticate the root pubkey account. Derive the address from that account,
+  nonce and canonical contract hash.
+- Transfer the explicit amount only when nonzero, deploy, then invoke the optional
+  initializer on that address. The initializer sees the wallet as caller and
+  receives no forwarded auth tokens. Discard its return value and return only the
+  deployed address. No constructor-name convention or generic effect metadata.
+- Failure rolls back funding, deployment, initializer state and success events.
+  Normal transaction replay bookkeeping still applies. Contracts must guard
+  subsequent initializer calls according to their own authorization policy.
+- Share child-call execution and error handling with `execute`: initializer aborts
+  become `CallAborted`; invocation faults become `CallFaulted`.
+- Update the canonical Rust interface, generated bindings, native C++ runtime,
+  Rust builders/CLI and TypeScript adapters together. Do not retain the obsolete
+  native ABI or add a decoder fallback. The method-name-derived `deploy` selector
+  remains `6be0cb0f6de0917a`; its argument encoding intentionally changes.
+- Test zero funding, existing target collateral, duplicate deployment, insufficient
+  sender funds and target collateral, malformed/missing code, initializer calldata,
+  caller identity, aborts, faults and gas limits in native/reference parity.
+- Funding covers deployment and initializer storage. It is an exact transfer,
+  not a minimum estimate or a promise of unlimited later state growth. GH-425 owns
+  authoritative cost inputs for a future estimator.
+- Runtime activation still matters even without backward compatibility. Select a
+  qualified runtime explicitly until the producer bundle and network configuration
+  support the new ABI; never fall back to separate funding/deployment submissions.
 
-GH-427 should qualify whether initialization also needs an atomic operation.
-Fund-and-deploy must not be presented as deploy-and-initialize. Keep initialization
-and generic contract-effect metadata outside this first primitive unless its
-qualification establishes a concrete dependency.
+This implements the wallet primitive needed for GH-427's atomic initialization
+qualification. Generic contract-effect metadata remains separate.
 
 ## Implementation slices
 
 | Slice | Scope and ownership | Exit evidence |
 |---|---|---|
 | 0. Re-establish the contract | RPC/signing + hogd/interface: reconstruct native codecs on current main; pin bundle; lock explicit funding amount, identity selection, and compatibility behavior | Rust native transfer, unfunded failure, prefunded deploy and address/receipt checks against an isolated released node; recorded artifact versions/hashes |
-| 1. Atomic funded deployment | integration_test_contracts + hogd, then producer release and SDK bindings | Native/reference parity; successful exact funding/deploy; failure rolls both back; auth, duplicates, changed-cost, gas and missing-code cases; published bundle qualification and activation contract |
+| 1. Atomic deployment and initialization | integration_test_contracts + hogd + Rust and TypeScript consumers | Native/reference parity; exact funding, optional initialization and complete rollback; caller identity, zero transfer, gas, duplicates and missing-code cases; published bundle qualification and activation contract |
 | 2. Shared wallet routing | signing + shared Rust client + CLI account resolution | Native pubkey execute/deploy builders, strict single-child return decoding; explicit legacy adapter; stable signed hash before submission; current downstream consumers compile |
 | 3. Native account setup and funding | CLI wallet/config, init/checks/status, airdrop | `wallet create` derives/saves an empty native account for a fresh ordinary key, without deploying or funding it; `airdrop` explicitly funds the selected account; local and hosted funding succeeds; saved bindings and dev-N retain identity |
 | 4. Transaction commands and testkit | deploy/call/transfer + Rust testkit + bundled starter guidance | Native and legacy runtime matrix passes; dry-run/confirmation/JSON describe actual effects; receipts preserve return values and wallet errors; restart and ambiguous-submission recovery |
@@ -154,9 +156,9 @@ networks, and repeating creation neither changes identity nor requests funds.
 Update init guidance, help, JSON reports, and examples to use this two-command
 flow. Preserve existing saved legacy and manifest-backed dev-N identities.
 
-This decision concerns funding the user's account. Atomic `deploy_funded`
+This decision concerns funding the user's account. Atomic `deploy`
 separately transfers an explicitly authorized amount from that funded account
-to a new contract's address and deploys its code; it does not obtain faucet funds.
+to a new contract's address, deploys its code and optionally initializes it; it does not obtain faucet funds.
 
 ### Identity and client rules
 
@@ -179,7 +181,7 @@ Native wallet errors can discard child abort payloads today. Preserve what the
 runtime actually returns; GH-426 owns richer failure provenance.
 
 Prepare and show sender, network, target, contract hash, deployment nonce, funding
-amount and transaction effects before approval. Honor global `--non-interactive`
+amount, initializer entrypoint/calldata/gas and transaction effects before approval. Honor global `--non-interactive`
 without granting consent. Preserve the original signed bytes/hash on ambiguous
 submission; observation timeout or `unknown` is not proof of non-execution.
 Save aliases only after verified success, and retain enough evidence to recover
@@ -203,7 +205,7 @@ Explicitly disclose that abandonment may leave funds at the target.
 |---|---|
 | [GH-371](https://linear.app/grndhg/issue/GH-371), [GH-372](https://linear.app/grndhg/issue/GH-372), [GH-373](https://linear.app/grndhg/issue/GH-373) | Keep the parent and two delivery boundaries. Add funded deployment as an explicit prerequisite to native deploy enablement. |
 | [GH-425](https://linear.app/grndhg/issue/GH-425), Backlog | Authoritative storage costs and effective limits. Required for an automatic trustworthy amount, not for an explicitly supplied amount. |
-| [GH-427](https://linear.app/grndhg/issue/GH-427), Backlog | Atomic deploy-and-initialize qualification; coordinate primitive scope without conflating it with funding. |
+| [GH-427](https://linear.app/grndhg/issue/GH-427), Backlog | Atomic deploy-and-initialize qualification; the unified wallet operation addresses the missing primitive. Generic method-effect metadata remains separate. |
 | [GH-419](https://linear.app/grndhg/issue/GH-419), Todo, including GH-263 | Retry/discard/funding diagnostics. Reuse its lifecycle contract; do not block all native routing on richer diagnostics. |
 | [GH-426](https://linear.app/grndhg/issue/GH-426), Backlog | Nested error provenance. Preserve current wallet errors honestly while this proceeds. |
 | [integration_test_contracts #44](https://github.com/groundhogchain/integration_test_contracts/issues/44), Open | Existing hard-coded deployment deposit. Decide its legacy disposition explicitly; native migration does not fix saved legacy wallets. |
@@ -223,7 +225,12 @@ Linear and GitHub searches performed. Proposed tracking additions, not yet filed
 
 Do not duplicate GH-425/426/427 or turn all adjacent work into mandatory blockers.
 
-## Implementation evidence
+## Earlier implementation evidence
+
+The following milestones describe the earlier two-entrypoint ABI. They record
+prior experiments, not qualification of the unified deployment revision above.
+Current-revision verification is recorded separately below.
+
 
 The Rust signing crate now builds native single-call `execute` transactions and
 unfunded `deploy` transactions, binding both the root address and auth claim to
@@ -415,3 +422,75 @@ Eight native deployment process tests pass. Independent slice and final reviews
 are clean after preserving the explicit profile in recovery commands. Local
 backend wallet tests pass (38 passed, one existing skip); the backend CI rerun
 must confirm the debug event lifecycle and explicit optional guards.
+
+## Unified deployment revision
+
+Geoff's review prompted a simpler API: keep only `deploy` with explicit amount
+and optional initialization. Backward compatibility with the old native argument
+layout is deliberately dropped. Canonical #56 is at `e13d297`; hogd #4144 is at
+`0e915d40d` after direct-include, test-copy and fixture trace-snapshot fixes. Rust signing/CLI and
+TypeScript bindings/adapters use the new layout. Geoff approved canonical
+`e13d297`; his unified-method and optional-initializer threads are resolved.
+The TypeScript high-level API requires an amount and accepts an existing typed
+invocation as initializer, validating its target before encoding the targetless
+wallet call. It no longer offers legacy DevWallet deployment through that API.
+
+The CLI accepts `--fund 0`, `--init`, repeated `--init-arg`, and
+`--init-gas-limit`. Its total gas budget includes both deployment and the selected
+initializer allowance; overflow is rejected before RPC. Preview, schema-6 JSON
+and recovery data include the initializer and gas budgets.
+
+Current validation:
+
+- Rust workspace: 2,474 passed, 28 ignored. Workspace build, all-target Clippy
+  with warnings denied, formatting, generated knowledge and package checks pass.
+  The subsequent simulator migration passed 328 tests (seven ignored), plus
+  all-target Clippy with warnings denied.
+- Eight canonical native tests and Clippy pass. Backend tests: 137 passed,
+  two existing skips. Native/RV32 tests prove caller identity, no forwarded auth,
+  exact funding, zero-transfer behavior, discarded output, initializer gas,
+  rollback of code/state/events and existing execute behavior.
+- TypeScript: 772 tests passed, two existing skips; all required build, type,
+  documentation, package, formatting and generated-binding checks pass. Eight
+  built-package tests passed against the source-built local node, including
+  atomic funding/deployment/initialize(42), readback and event handling.
+- A fresh local CLI wallet had zero balance, then received an explicit airdrop.
+  Named initialize(42) committed with deployment at height 3 and read back 42.
+  A named initializer abort at height 5 left the target balance zero, emitted no
+  events and saved no alias; only seven raw units of normal replay collateral
+  were charged. Final CLI initialize(77) with a 500,000-gas child budget committed
+  at height 17; readback survived a restart of the final source-built runtime.
+  A one-gas initializer reverted at height 18 with `CallFaulted` and no saved alias.
+- The live CLI fixture was built from the current scaffold with SDK 0.38.0.
+  Artifact SHA-256: `505fb86826972518a650714d6336f8362705d97379380c623792867e7bb9a80a`.
+  TypeScript regeneration uses its pinned CLI 0.18.0 for the backend SDK 0.36.1
+  spec format. The development CLI uses a newer spec format; no legacy decoder
+  was added. Aligning published compiler/spec/runtime artifacts remains a release
+  requirement.
+- Independent slice and combined reviews found one stale CLI README section;
+  it was corrected. No outstanding correctness findings were reported. CI also
+  caught an exact gas snapshot that needed updating after the initializer
+  fixture changed its dispatcher cost; trace-shape assertions are preserved.
+  All eight trace-shape tests and 137 wallet/runtime tests pass after that fix
+  (two existing runtime skips). Current-head backend CI is pending.
+
+This qualifies source builds on a disposable local chain, including a restart
+with the same ABI. Published runtime delivery and an old-to-new chain activation
+are not established by these results. Native testkit/default-key routing and
+bootstrap retirement remain the later migration slices listed above.
+
+The simulator now uses the same signing builder with its configured amount and
+no initializer. Its separate prefunding transaction and duplicate transaction
+metadata are removed. It records the signed hash before dispatch, consumes one
+nonce, and verifies the submission hash, receipt hash and returned address.
+Independent review of this follow-up found no issues. Native testkit routing
+remains a distinct later slice.
+
+Published-client consumers need an explicit migration when adopting the new
+package/runtime: `groundhog-examples` Counter, swap and token-launchpad provisioning
+currently encode the old deployment arguments and initialize separately. The
+wallet extension's deployment approval presentation must also describe funding
+and initializer effects. Hackathon snapshots and dispatch app variants contain
+copies of that older published API. These applications are outside this runtime
+and client revision; do not treat the source qualification above as a completed
+consumer rollout or keep an old decoder to accommodate them.

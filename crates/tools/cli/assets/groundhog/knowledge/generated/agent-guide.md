@@ -402,21 +402,21 @@ Existing key files and public JSON-RPC wire encodings remain unchanged.
 
 ### Native accounts
 
-`groundhog wallet create --key <key>` saves a nonce-zero native account for a
-stored non-dev key offline, without funding. Dry-run does not save; `--prefund`
-is rejected. Repeat creation preserves identity and defaults. Explicitly fund
-with the printed `groundhog airdrop <address>` command. Saved untyped and
-manifest-backed dev-N wallets retain their legacy identity and format.
+`wallet create --key <key>` saves an empty nonce-zero native account offline.
+`--prefund` is rejected. Repeating preserves identity/defaults. Fund with the
+printed `airdrop <address>` command.
+Untyped wallets and dev-N retain legacy identity/format.
 
-Native calls and transfers are supported. Native deploy requires
-`--experimental-native-deploy --fund <HOG>`: operator-asserted support, since RPC
-cannot verify activation. Published bundle qualification remains a release gate.
-Legacy senders reject these flags. Funding transfers the exact positive amount
-to the contract atomically with deployment, without estimating a minimum.
-Initialization is separate. Dry-run submits nothing. Unverified outcomes retain
-hash, signed bytes and target. Inspect before retrying: timeout/`unknown` is
-inconclusive; rerunning creates a new nonce/address. Aliases require verified
-success and the exact predicted address.
+Native deploy requires `--experimental-native-deploy --fund <HOG>`: support is
+operator-asserted; RPC cannot verify activation. Qualify the published bundle. Legacy senders reject native options. Funding is an exact
+transfer, not a minimum estimate; zero skips it. For atomic initialization, use
+`--init <METHOD>` with repeated `--init-arg <VALUE>` from the artifact's current
+spec sidecar, or a 0x selector with one raw hex argument. `--init-gas-limit` sets
+the child budget. Init targets the new contract, sees the wallet as caller, and
+discards its return. Failure rolls back funding, deployment and init. Dry-run
+submits nothing. Unverified outcomes retain signed bytes and identity, including
+init. Inspect before retrying: timeout/`unknown` is inconclusive; rerunning changes
+nonce/address. Aliases require verified success at the exact address.
 
 ## Sources and Escalation
 

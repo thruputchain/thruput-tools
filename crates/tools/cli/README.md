@@ -463,24 +463,34 @@ Native senders require both `--experimental-native-deploy` and `--fund <HOG>`:
 
 ```bash
 groundhog deploy --experimental-native-deploy --fund 5 --dry-run
-groundhog deploy --experimental-native-deploy --fund 5
+groundhog deploy --experimental-native-deploy --fund 5 --init initialize --init-arg 42
 ```
 
-The flag asserts that the selected network supports native `deploy_funded`.
+The flag asserts that the selected network supports the unified native deployment ABI.
 The CLI cannot discover that capability through the current public RPC. Use it
 only with a runtime qualified for this operation; a published supported bundle
 and network activation remain release gates. Legacy senders reject these flags.
 
-Funding is an exact positive transfer from the sender to the new contract,
-atomic with deployment. Five HOG above is an example, not an estimated minimum.
-It covers target collateral only to the extent permitted by current costs;
-account funding, later storage growth and initialization are separate actions.
-The preview and dry-run report sender, network hash, code hash, deployment nonce,
-predicted address, expiry and funding amount. Dry-run does not submit.
+Funding is an exact transfer from the sender to the new contract. Zero skips the
+transfer and uses any collateral already at the predicted address. Five HOG above
+is an example, not an estimated minimum. Funding must cover deployment and any
+state created by initialization; later storage growth may require more funds.
 
-Deploy JSON schema version 5 includes `nativeDeployment` for native transactions.
+`--init <METHOD>` optionally initializes the new contract in the same transaction.
+Repeat `--init-arg <VALUE>` for typed arguments using the selected artifact's
+current `.spec.xdr` sidecar, or use an explicit entrypoint with raw hex calldata.
+`--init-gas-limit` sets the child-call budget. The initializer sees the wallet as
+caller; its return data is discarded. Any failure rolls back funding, deployment
+and initializer state. Contracts remain responsible for guarding later calls to
+their initialization method.
+
+The preview and dry-run report sender, network hash, code hash, deployment nonce,
+predicted address, expiry, funding amount, initializer and gas budgets. Dry-run
+does not submit. Wallet creation and faucet funding remain separate actions.
+
+Deploy JSON schema version 6 includes `nativeDeployment` for native transactions.
 If submission or confirmation cannot be verified, the failure includes the
-original `txHash`, `signedTx`, `predictedAddress`, endpoint and funding details.
+original `txHash`, `signedTx`, `predictedAddress`, endpoint, funding and initializer details.
 Inspect that transaction before taking further action. A timeout or `unknown`
 status does not prove it failed; rerunning deploy generates a new nonce/address.
 There is no automatic resubmission or separate prefunding fallback. Aliases are

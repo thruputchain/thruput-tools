@@ -589,6 +589,30 @@ pub(crate) fn resolve_call(
     }
 }
 
+pub(crate) fn resolve_artifact_call(
+    artifact: &Path,
+    method: &str,
+) -> Result<ResolvedCall, CliError> {
+    if let Some(entrypoint) = explicit_entrypoint_id(method)? {
+        return Ok(ResolvedCall {
+            entrypoint,
+            metadata: None,
+        });
+    }
+    let spec = crate::contract_spec::load_artifact_contract_spec(artifact)?.ok_or_else(||
+        CliError::SpecFailed("initializer requires the selected artifact's current .spec.xdr sidecar; rebuild it or supply an explicit entrypoint".into()))?;
+    let metadata =
+        groundhog_client::codec::resolve_spec_method(&spec, method)?.ok_or_else(|| {
+            CliError::SpecFailed(format!(
+                "initializer method `{method}` is absent from the selected artifact's spec"
+            ))
+        })?;
+    Ok(ResolvedCall {
+        entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
+        metadata: Some(CallMetadata::Spec(metadata)),
+    })
+}
+
 fn resolve_spec_method(
     cwd: &Path,
     method: &str,

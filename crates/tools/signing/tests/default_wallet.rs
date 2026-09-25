@@ -70,6 +70,8 @@ fn deployment_attaches_the_exact_code_it_hashes_and_keeps_salt_stable() {
             account: &account,
             deployment_nonce: salt,
             contract: contract.clone(),
+            amount: 0,
+            initializer: None,
             gas_limit: 1000,
             block_expiry_height: expiry,
             nonce,
@@ -86,8 +88,14 @@ fn deployment_attaches_the_exact_code_it_hashes_and_keeps_salt_stable() {
     );
     assert_eq!(tx.contracts_to_deploy.as_slice(), &[contract]);
     assert_eq!(
-        xdrs::cxs::decode::<(SHA256Hash, SHA256Hash)>(&tx.invocation.calldata).unwrap(),
-        (salt, hash)
+        xdrs::cxs::decode::<(
+            SHA256Hash,
+            SHA256Hash,
+            u128,
+            Option<(ContractEntrypointID, u64, Vec<u8>)>
+        )>(&tx.invocation.calldata)
+        .unwrap(),
+        (salt, hash, 0, None)
     );
     assert_eq!(tx.invocation, later.invocation);
     assert_ne!(tx.uniquifier, later.uniquifier);
@@ -106,21 +114,20 @@ fn funded_deployment_encodes_exact_amount_and_attaches_matching_code() {
     let hash = wallet_contract_hash(&contract).unwrap();
     let salt = SHA256Hash::from([29; 32]);
     for amount in [0, 64, (1_u128 << 64) + 63, u128::MAX] {
-        let tx = build_default_wallet_funded_deploy_transaction(
-            BuildDefaultWalletDeployTransaction {
-                account: &account,
-                deployment_nonce: salt,
-                contract: contract.clone(),
-                gas_limit: 1000,
-                block_expiry_height: 100,
-                nonce: 11,
-            },
+        let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
+            account: &account,
+            deployment_nonce: salt,
+            contract: contract.clone(),
             amount,
-        )
+            initializer: None,
+            gas_limit: 1000,
+            block_expiry_height: 100,
+            nonce: 11,
+        })
         .unwrap();
         assert_eq!(
             hex::encode(tx.invocation.entrypoint.as_ref()),
-            "1f843596f5b57b18"
+            "6be0cb0f6de0917a"
         );
         assert_eq!(tx.invocation.invoked_address, account.address());
         assert_eq!(tx.auth_claim, account.auth_claim());
@@ -129,24 +136,65 @@ fn funded_deployment_encodes_exact_amount_and_attaches_matching_code() {
             std::slice::from_ref(&contract)
         );
         assert_eq!(
-            xdrs::cxs::decode::<(SHA256Hash, SHA256Hash, (u64, u64))>(&tx.invocation.calldata)
-                .unwrap(),
+            xdrs::cxs::decode::<(
+                SHA256Hash,
+                SHA256Hash,
+                (u64, u64),
+                Option<(ContractEntrypointID, u64, Vec<u8>)>
+            )>(&tx.invocation.calldata)
+            .unwrap(),
             (
                 salt,
                 hash,
                 (
                     u64::try_from(amount >> 64).unwrap(),
                     u64::try_from(amount & u128::from(u64::MAX)).unwrap()
-                )
+                ),
+                None
             ),
         );
         if amount == 64 {
             let mut expected = Vec::from(salt.as_ref());
             expected.extend_from_slice(hash.as_ref());
-            expected.extend_from_slice(&[0, 0x3f, 0x40]);
+            expected.extend_from_slice(&[0, 0x3f, 0x40, 0]);
             assert_eq!(tx.invocation.calldata.0, expected);
         }
     }
+}
+
+#[test]
+fn deployment_initializer_uses_fixed_selector_and_optional_cxs_layout() {
+    let account = PubkeyAccount::from_public_key_bytes([18; 32], 9);
+    let contract = Contract::kRv32 {
+        rv32_contract: ContractBlob {
+            data: BytesM(vec![1, 2, 3]),
+        },
+    };
+    let hash = wallet_contract_hash(&contract).unwrap();
+    let salt = SHA256Hash::from([29; 32]);
+    let tx = build_default_wallet_deploy_transaction(BuildDefaultWalletDeployTransaction {
+        account: &account,
+        deployment_nonce: salt,
+        contract,
+        amount: 64,
+        initializer: Some(WalletInitCall {
+            entrypoint: ContractEntrypointID::from(63_u64.to_be_bytes()),
+            gas_limit: 64,
+            calldata: &[0xab, 0xcd],
+        }),
+        gas_limit: 1000,
+        block_expiry_height: 100,
+        nonce: 11,
+    })
+    .unwrap();
+    // nonce, hash, u128 amount (high then low), Some, fixed 8-byte selector,
+    // gas and length-prefixed calldata. This is independent of the tuple encoder.
+    let mut expected = Vec::from(salt.as_ref());
+    expected.extend_from_slice(hash.as_ref());
+    expected.extend_from_slice(&[0, 0x3f, 0x40, 1]);
+    expected.extend_from_slice(&63_u64.to_be_bytes());
+    expected.extend_from_slice(&[0x3f, 0x40, 2, 0xab, 0xcd]);
+    assert_eq!(tx.invocation.calldata.0, expected);
 }
 
 #[test]

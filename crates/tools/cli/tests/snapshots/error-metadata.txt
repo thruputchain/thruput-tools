@@ -13,7 +13,7 @@ WalletCreatePrefundUnsupported
 
 NativeWalletDeploymentUnavailable
   code: native_wallet_deployment_unavailable
-  hint text: use --experimental-native-deploy --fund <HOG> only on a network known to support atomic deploy_funded; runtime support is not detected automatically
+  hint text: use --experimental-native-deploy --fund <HOG> only on a network known to support atomic deploy with optional initialization; runtime support is not detected automatically
 
 NativeDeploymentFundingRequired
   code: native_deployment_funding_required
@@ -22,6 +22,10 @@ NativeDeploymentFundingRequired
 NativeDeploymentOptionsForLegacy
   code: native_deployment_options_for_legacy
   hint text: existing legacy wallets retain their own deployment funding behavior
+
+InvalidDeploymentInitializer
+  code: invalid_deployment_initializer
+  details: message
 
 NativeDeploymentUnverified
   code: native_deployment_unverified

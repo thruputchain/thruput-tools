@@ -2,7 +2,9 @@
 use groundhog_signing::{
     PubkeyAccount, derive_deploy_address, transaction_hash, wallet_contract_hash,
 };
-use groundhog_xdr::{transaction::SignedTransaction, types::SHA256Hash};
+use groundhog_xdr::{
+    contract::ContractEntrypointID, transaction::SignedTransaction, types::SHA256Hash,
+};
 use jsonrpsee::{
     RpcModule,
     server::{ServerBuilder, ServerHandle},
@@ -12,6 +14,9 @@ use serde_json::{Value, json};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
+
+type InitCalldata = (ContractEntrypointID, u64, Vec<u8>);
+type DeployCalldata = (SHA256Hash, SHA256Hash, u128, Option<InitCalldata>);
 
 const NETWORK: &str = "0707070707070707070707070707070707070707070707070707070707070707";
 
@@ -101,7 +106,7 @@ fn identity(signed: &SignedTransaction) -> (String, String) {
         "0x{}",
         hex::encode(transaction_hash(&signed.tx).unwrap().as_ref())
     );
-    let (nonce, code_hash, _amount): (SHA256Hash, SHA256Hash, u128) =
+    let (nonce, code_hash, _amount, _init): DeployCalldata =
         xdrs::cxs::decode(&signed.tx.invocation.calldata.0).unwrap();
     let address =
         derive_deploy_address(&signed.tx.invocation.invoked_address, &nonce, &code_hash).unwrap();
@@ -157,7 +162,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
 }
 
 #[test]
-fn native_deploy_requires_opt_in_and_exact_positive_funding_without_rpc() {
+fn native_deploy_requires_opt_in_and_explicit_funding_without_rpc() {
     let fixture = Fixture::new("http://127.0.0.1:1");
     for (args, code) in [
         (vec![], "native_wallet_deployment_unavailable"),
@@ -165,10 +170,6 @@ fn native_deploy_requires_opt_in_and_exact_positive_funding_without_rpc() {
         (
             vec!["--experimental-native-deploy"],
             "native_deployment_funding_required",
-        ),
-        (
-            vec!["--experimental-native-deploy", "--fund", "0"],
-            "invalid_hog_amount",
         ),
         (
             vec!["--experimental-native-deploy", "--fund", "0.00000001"],
@@ -254,11 +255,12 @@ async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
     assert_eq!(data["predictedAddress"], address);
     assert_eq!(
         tx.tx.invocation.entrypoint,
-        groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_FUNDED_ENTRYPOINT
+        groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
     );
-    let (nonce, code_hash, amount): (SHA256Hash, SHA256Hash, u128) =
+    let (nonce, code_hash, amount, initializer): DeployCalldata =
         xdrs::cxs::decode(&tx.tx.invocation.calldata.0).unwrap();
     assert_eq!(amount, 50_000_001);
+    assert_eq!(initializer, None);
     assert_eq!(data["nativeDeployment"]["fundingRawAmount"], "50000001");
     assert_eq!(
         data["nativeDeployment"]["runtimeSupport"],
@@ -293,6 +295,168 @@ async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
             .is_none()
     );
     handle.stop().unwrap();
+}
+
+#[test]
+fn initializer_options_require_a_method_and_valid_arguments_before_rpc() {
+    let fixture = Fixture::new("http://127.0.0.1:1");
+    for args in [
+        vec!["--init-arg", "42"],
+        vec!["--init-gas-limit", "100"],
+        vec!["--init", "0x000000000000003f", "--init-gas-limit", "0"],
+        vec!["--init", "0x000000000000003f", "--init-arg", "not-hex"],
+        vec!["--init", "initialize"],
+        vec![
+            "--init",
+            "0x000000000000003f",
+            "--init-gas-limit",
+            "18446744073709551615",
+        ],
+    ] {
+        let mut all = vec!["--experimental-native-deploy", "--fund", "5"];
+        all.extend(args);
+        let output = fixture.deploy(&all);
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("connection"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments() {
+    use groundhog_contract_spec::{
+        ContractField, ContractSpec, ContractSpecInterface, ContractSpecMethod, ContractType,
+    };
+    let (url, handle, state) = server(Outcome::Success).await;
+    let fixture = Fixture::new(&url);
+    let spec = ContractSpec {
+        interfaces: vec![ContractSpecInterface {
+            name: "Counter".try_into().unwrap(),
+            vers: "0.1.0".try_into().unwrap(),
+            throws: vec![].try_into().unwrap(),
+            methods: vec![ContractSpecMethod {
+                name: "initialize".try_into().unwrap(),
+                args: vec![ContractField {
+                    name: "value".try_into().unwrap(),
+                    ty: ContractType::U64,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Void,
+            }]
+            .try_into()
+            .unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        type_defs: vec![].try_into().unwrap(),
+        events: vec![].try_into().unwrap(),
+    };
+    std::fs::write(
+        fixture.dir.path().join("counter.spec.xdr"),
+        xdrs::txs::encode(&spec).unwrap(),
+    )
+    .unwrap();
+    let output = fixture.deploy(&[
+        "--experimental-native-deploy",
+        "--fund",
+        "5",
+        "--init",
+        "initialize",
+        "--init-arg",
+        "42",
+        "--dry-run",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let init = &report["data"]["nativeDeployment"]["initializer"];
+    assert_eq!(init["entrypointId"], "0x2bfe21a62e5119c4");
+    assert_eq!(init["calldata"], "0x2a");
+    let tx = signed(report["data"]["signedTx"].as_str().unwrap());
+    assert_eq!(
+        tx.tx.invocation.gas_limit,
+        groundhog_signing::DEFAULT_TX_GAS_LIMIT + groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT
+    );
+    assert_eq!(
+        init["gasLimit"],
+        groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT
+    );
+    for value in ["not-a-number", "18446744073709551616"] {
+        let bad = fixture.deploy(&[
+            "--experimental-native-deploy",
+            "--fund",
+            "5",
+            "--init",
+            "initialize",
+            "--init-arg",
+            value,
+        ]);
+        assert!(!bad.status.success());
+    }
+    assert!(state.submissions.lock().unwrap().is_empty());
+    handle.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
+    for (outcome, dry_run) in [(Outcome::Success, true), (Outcome::SendError, false)] {
+        let (url, handle, state) = server(outcome).await;
+        let fixture = Fixture::new(&url);
+        let mut args = vec![
+            "--experimental-native-deploy",
+            "--fund",
+            "0.0000000",
+            "--init",
+            "0x000000000000003f",
+            "--init-arg",
+            "0xabcd",
+            "--init-gas-limit",
+            "12345",
+        ];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        let output = fixture.deploy(&args);
+        assert_eq!(
+            output.status.success(),
+            dry_run,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let data = &report["data"];
+        let tx = signed(data["signedTx"].as_str().unwrap());
+        let (_, _, amount, initializer): DeployCalldata =
+            xdrs::cxs::decode(&tx.tx.invocation.calldata.0).unwrap();
+        assert_eq!(amount, 0);
+        assert_eq!(
+            initializer,
+            Some((
+                ContractEntrypointID::from(63u64.to_be_bytes()),
+                12345,
+                vec![0xab, 0xcd]
+            ))
+        );
+        assert_eq!(data["schemaVersion"], 6);
+        assert_eq!(data["nativeDeployment"]["fundingRawAmount"], "0");
+        assert_eq!(
+            data["nativeDeployment"]["initializer"]["entrypointId"],
+            "0x000000000000003f"
+        );
+        assert_eq!(
+            data["nativeDeployment"]["initializer"]["calldata"],
+            "0xabcd"
+        );
+        assert_eq!(data["nativeDeployment"]["initializer"]["gasLimit"], 12345);
+        assert_eq!(
+            state.submissions.lock().unwrap().len(),
+            usize::from(!dry_run)
+        );
+        handle.stop().unwrap();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

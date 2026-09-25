@@ -1,10 +1,9 @@
 //! Native `DefaultWallet` transactions for pubkey accounts.
 //!
-//! Selectors and argument layouts follow `DefaultWallet` 0.1.0 in
-//! `integration_test_contracts` at e1b139fb8461e848cb1666b16c5ad0d9f31c45ba.
-//! Funded deployment is an additive backend prerequisite that must be released
-//! before callers select it for a published runtime.
-//! These helpers do not reinterpret deployed legacy wallet addresses.
+//! Deployment atomically transfers an explicit amount, installs attached code,
+//! and optionally initializes that code. Callers must select a runtime supporting
+//! this deployment ABI; these helpers do not discover runtime capabilities.
+//! Legacy deployed wallets have their own transaction format.
 
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::transaction::Transaction;
@@ -19,13 +18,21 @@ use crate::{
 /// Canonical `DefaultWallet.execute` selector.
 pub const DEFAULT_WALLET_EXECUTE_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0xc3ed_b11f_dd6d_5d58_u64.to_be_bytes());
-/// Canonical `DefaultWallet.deploy` selector (does not fund target storage).
+/// Canonical `DefaultWallet.deploy` selector.
 pub const DEFAULT_WALLET_DEPLOY_ENTRYPOINT: ContractEntrypointID =
     ContractEntrypointID::new(0x6be0_cb0f_6de0_917a_u64.to_be_bytes());
-/// Additive `DefaultWallet.deploy_funded` selector. Requires a runtime that
-/// implements atomic funded deployment; older runtimes do not support it.
-pub const DEFAULT_WALLET_DEPLOY_FUNDED_ENTRYPOINT: ContractEntrypointID =
-    ContractEntrypointID::new(0x1f84_3596_f5b5_7b18_u64.to_be_bytes());
+
+/// Optional initialization of the newly deployed contract, called by the wallet.
+/// A failed invocation rolls back funding and deployment; return bytes are discarded.
+#[derive(Debug, Clone, Copy)]
+pub struct WalletInitCall<'a> {
+    /// Initializer method on the new contract.
+    pub entrypoint: ContractEntrypointID,
+    /// Gas budget for the initializer invocation.
+    pub gas_limit: u64,
+    /// Encoded initializer arguments.
+    pub calldata: &'a [u8],
+}
 
 /// One child invocation wrapped in the native wallet's `execute` call.
 #[derive(Debug, Clone, Copy)]
@@ -72,59 +79,37 @@ pub struct BuildDefaultWalletDeployTransaction<'a> {
     /// Stable 32-byte deployment salt, separate from the transaction uniquifier.
     pub deployment_nonce: SHA256Hash,
     pub contract: Contract,
+    /// Exact raw HOG amount to transfer. Zero skips the transfer.
+    pub amount: u128,
+    /// Initialization at the newly deployed address within the same root frame.
+    pub initializer: Option<WalletInitCall<'a>>,
     pub gas_limit: u64,
     pub block_expiry_height: i64,
     pub nonce: u64,
 }
 
-/// Build an unfunded deployment. Callers must arrange sufficient collateral at
-/// the predicted target first; this helper never submits a funding transfer.
+/// Build an atomic deployment with optional funding and initialization.
+/// Zero skips funding. The initializer targets only the newly deployed contract.
+/// This performs no submission or capability discovery and has no multi-transaction fallback.
 pub fn build_default_wallet_deploy_transaction(
     args: BuildDefaultWalletDeployTransaction<'_>,
 ) -> Result<Transaction, SigningError> {
     let hash = wallet_contract_hash(&args.contract)?;
-    let calldata = xdrs::cxs::encode(&(args.deployment_nonce, hash))
+    let initializer = args
+        .initializer
+        .map(|call| (call.entrypoint, call.gas_limit, call.calldata));
+    let calldata = xdrs::cxs::encode(&(args.deployment_nonce, hash, args.amount, initializer))
         .map_err(|error| SigningError::XdrEncode(error.to_string()))?;
-    Ok(build_native_deploy(
-        args,
-        DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
-        calldata,
-    ))
-}
-
-/// Build an atomic funding transfer and deployment with an exact raw HOG amount.
-/// This performs no submission or capability discovery. Callers must select a
-/// supported runtime and authorize the amount. Never retry this as two separate
-/// transactions when the runtime does not support the operation.
-pub fn build_default_wallet_funded_deploy_transaction(
-    args: BuildDefaultWalletDeployTransaction<'_>,
-    funding_raw_amount: u128,
-) -> Result<Transaction, SigningError> {
-    let hash = wallet_contract_hash(&args.contract)?;
-    let calldata = xdrs::cxs::encode(&(args.deployment_nonce, hash, funding_raw_amount))
-        .map_err(|error| SigningError::XdrEncode(error.to_string()))?;
-    Ok(build_native_deploy(
-        args,
-        DEFAULT_WALLET_DEPLOY_FUNDED_ENTRYPOINT,
-        calldata,
-    ))
-}
-
-fn build_native_deploy(
-    args: BuildDefaultWalletDeployTransaction<'_>,
-    entrypoint: ContractEntrypointID,
-    calldata: Vec<u8>,
-) -> Transaction {
-    build_deploy_transaction(BuildDeployTransaction {
+    Ok(build_deploy_transaction(BuildDeployTransaction {
         invoked_address: args.account.address(),
-        entrypoint,
+        entrypoint: DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
         calldata,
         gas_limit: args.gas_limit,
         block_expiry_height: args.block_expiry_height,
         nonce: args.nonce,
         contracts_to_deploy: VecM(vec![args.contract]),
         auth_claim: args.account.auth_claim(),
-    })
+    }))
 }
 
 /// Decode a successful native `execute` result for a single child call.

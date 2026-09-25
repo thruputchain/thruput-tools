@@ -131,6 +131,8 @@ async fn qualify_native_deployment(atomic: bool) {
         account: &account,
         deployment_nonce: unfunded_salt,
         contract: contract.clone(),
+        amount: 0,
+        initializer: None,
         gas_limit: 1_000_000,
         block_expiry_height: *client.chain_tip().await.unwrap().height + 100,
         nonce: 1,
@@ -201,16 +203,13 @@ async fn qualify_native_deployment(atomic: bool) {
         account: &account,
         deployment_nonce: salt,
         contract,
+        amount: if atomic { amount } else { 0 },
+        initializer: None,
         gas_limit: 1_000_000,
         block_expiry_height: *client.chain_tip().await.unwrap().height + 100,
         nonce: 3,
     };
-    let deploy = if atomic {
-        build_default_wallet_funded_deploy_transaction(deployment, amount)
-    } else {
-        build_default_wallet_deploy_transaction(deployment)
-    }
-    .unwrap();
+    let deploy = build_default_wallet_deploy_transaction(deployment).unwrap();
     let receipt = success(&client, submit(&client, &signer, &network, deploy).await).await;
     let deployed: ContractAddress = xdrs::cxs::decode(&receipt.return_data.unwrap().0).unwrap();
     assert_eq!(deployed, target);
