@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "lib": ["es2022"],
+    "skipLibCheck": false,
+    "noUnusedLocals": true,
+    "types": []
+  },
+  "include": ["runtime.d.ts", "../*.ts"]
+}
