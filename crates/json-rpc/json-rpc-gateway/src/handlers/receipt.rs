@@ -647,17 +647,20 @@ mod tests {
         scheduler_addr: Option<std::net::SocketAddr>,
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
+        test_context_with(X23PoolSettings::default(), scheduler_addr, indexer_addr).await
+    }
+
+    async fn test_context_with(
+        pools: X23PoolSettings,
+        scheduler_addr: Option<std::net::SocketAddr>,
+        indexer_addr: std::net::SocketAddr,
+    ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => connect_optional_scheduler(
-                X23PoolSettings::default(),
-                &addr.to_string(),
-                1,
-                4,
-                PROTOCOL_VERSION,
-                None,
-            )
-            .await
-            .expect("bug: test scheduler should connect"),
+            Some(addr) => {
+                connect_optional_scheduler(pools, &addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
+                    .await
+                    .expect("bug: test scheduler should connect")
+            }
             None => None,
         };
         let indexer = try_connect(
@@ -1636,6 +1639,26 @@ mod tests {
 
     #[tokio::test]
     async fn canceled_lookups_preserve_scheduler_and_recover_capacity() {
+        canceled_lookups_preserve_scheduler_and_recover_capacity_with(X23PoolSettings::default())
+            .await;
+    }
+
+    /// With multiplexed pools a canceled lookup keeps its connection rather
+    /// than replacing it; the scheduler generation and lookup capacity
+    /// recover the same way.
+    #[tokio::test]
+    async fn canceled_lookups_preserve_scheduler_with_multiplexed_pools() {
+        use crate::config::{X23MultiplexConnections, X23PoolKind};
+
+        canceled_lookups_preserve_scheduler_and_recover_capacity_with(X23PoolSettings {
+            kind: X23PoolKind::Multiplex,
+            multiplex_connections: X23MultiplexConnections::try_from(2)
+                .expect("bug: two connections is in range"),
+        })
+        .await;
+    }
+
+    async fn canceled_lookups_preserve_scheduler_and_recover_capacity_with(pools: X23PoolSettings) {
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1648,7 +1671,7 @@ mod tests {
             })
             .await;
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
-        let ctx = Arc::new(test_context(Some(scheduler_addr), indexer_addr).await);
+        let ctx = Arc::new(test_context_with(pools, Some(scheduler_addr), indexer_addr).await);
         let generation = ctx
             .scheduler
             .read()

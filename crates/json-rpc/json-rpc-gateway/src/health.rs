@@ -1540,7 +1540,7 @@ mod tests {
 
     use crate::{
         backend::GatewayBackend,
-        config::X23PoolSettings,
+        config::{X23PoolKind, X23PoolSettings},
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
         tip_coalescer::{SchedulerTipSink, TipSink},
@@ -3450,11 +3450,23 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
     async fn four_backend_restart_recovers_without_rebuilding_gateway() {
+        four_backend_restart_recovers_without_rebuilding_gateway_with(X23PoolKind::Serial).await;
+    }
+
+    /// The same restart with every data pool multiplexed: reconnects and
+    /// quarantine promotion do not depend on the pool kind.
+    #[tokio::test]
+    async fn four_backend_restart_recovers_with_multiplexed_pools() {
+        four_backend_restart_recovers_without_rebuilding_gateway_with(X23PoolKind::Multiplex).await;
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn four_backend_restart_recovers_without_rebuilding_gateway_with(x23_pool: X23PoolKind) {
         let cluster = LifecycleBackendCluster::start(None).await;
         let addresses = cluster.addresses;
         let config = GatewayConfig {
+            x23_pool,
             scheduler_address: addresses.scheduler.to_string(),
             indexer_address: Some(addresses.indexer.to_string()),
             db_gateway_address: Some(addresses.db_gateway.to_string()),
