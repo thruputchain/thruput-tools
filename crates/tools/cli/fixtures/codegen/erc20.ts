@@ -1,19 +1,18 @@
 // Generated from erc20.spec.xdr - ERC20 interface v0.1.0
 // DO NOT EDIT. Re-run codegen to update.
 
-import type { ContractAddress } from "@groundhogchain/protocol";
-import { contractEntrypointID } from "@groundhogchain/protocol";
-import { fromHex } from "@groundhogchain/protocol/utils";
-import { ContractTypeKind, ContractTypeDefKind, contractSpecString } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException } from "@groundhogchain/client/contract";
+import * as __gh_protocol from "@groundhogchain/protocol";
+import * as __gh_protocol_utils from "@groundhogchain/protocol/utils";
+import * as __gh_contract_spec from "@groundhogchain/contract-spec";
+import * as __gh_client_contract from "@groundhogchain/client/contract";
 
-const s = contractSpecString;
+const s = __gh_contract_spec.contractSpecString;
 
 const entrypoints = {
   ERC20: {
-    transfer: contractEntrypointID(fromHex("63285b3523f9dc3f")),
-    getBalance: contractEntrypointID(fromHex("b921b642d31d7dac")),
-    getBalanceOf: contractEntrypointID(fromHex("41ac95d6e06e2620")),
+    transfer: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("63285b3523f9dc3f")),
+    getBalance: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("b921b642d31d7dac")),
+    getBalanceOf: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("41ac95d6e06e2620")),
   },
 } as const;
 
@@ -28,7 +27,7 @@ export namespace demo {
 }
 
 export interface ERC20TransferArgs {
-  to: ContractAddress;
+  to: __gh_protocol.ContractAddress;
   amount: bigint;
 }
 export type ERC20TransferResult = void;
@@ -37,7 +36,7 @@ export type ERC20GetBalanceArgs = void;
 export type ERC20GetBalanceResult = bigint;
 
 export interface ERC20GetBalanceOfArgs {
-  accountId: ContractAddress;
+  accountId: __gh_protocol.ContractAddress;
 }
 export type ERC20GetBalanceOfResult = bigint;
 
@@ -48,44 +47,44 @@ export type ERC20DeclaredException =
     selector: 0xb19947acb2fa14ffn;
     value: demo.v1.ERC20Error;
   };
-export type ERC20Exception = ContractException<ERC20DeclaredException>;
+export type ERC20Exception = __gh_client_contract.ContractException<ERC20DeclaredException>;
 
-export const spec: ContractSpec = {
+export const spec: __gh_client_contract.ContractSpec = {
   interfaces: [
     {
       name: s("ERC20"),
       vers: s("0.1.0"),
       throws: [
-        { selector: 0xb19947acb2fa14ffn, ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ERC20Error") } } },
+        { selector: 0xb19947acb2fa14ffn, ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ERC20Error") } } },
       ],
       methods: [
         {
           name: s("transfer"),
           args: [
-            { name: s("to"), ty: { v: ContractTypeKind.Address } },
-            { name: s("amount"), ty: { v: ContractTypeKind.U128 } },
+            { name: s("to"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
+            { name: s("amount"), ty: { v: __gh_contract_spec.ContractTypeKind.U128 } },
           ],
-          return_type: { v: ContractTypeKind.Void },
+          return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
         },
         {
           name: s("get_balance"),
           args: [
           ],
-          return_type: { v: ContractTypeKind.U128 },
+          return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
         },
         {
           name: s("get_balance_of"),
           args: [
-            { name: s("account_id"), ty: { v: ContractTypeKind.Address } },
+            { name: s("account_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
           ],
-          return_type: { v: ContractTypeKind.U128 },
+          return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
         },
       ],
     },
   ],
   type_defs: [
     {
-      v: ContractTypeDefKind.TypeDefEnum,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefEnum,
       enum_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ERC20Error") },
         variants: [
@@ -101,10 +100,10 @@ export const spec: ContractSpec = {
   ],
 };
 
-const codecs = createContractCodecContext(spec.type_defs);
+const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);
 
 export const ERC20 = {
-  transfer: defineContractMethod<
+  transfer: __gh_client_contract.defineContractMethod<
     ERC20TransferArgs,
     ERC20TransferResult,
     ERC20DeclaredException
@@ -136,7 +135,7 @@ export const ERC20 = {
     ],
     codecs,
   }),
-  getBalance: defineContractMethod<
+  getBalance: __gh_client_contract.defineContractMethod<
     ERC20GetBalanceArgs,
     ERC20GetBalanceResult,
     ERC20DeclaredException
@@ -158,7 +157,7 @@ export const ERC20 = {
     ],
     codecs,
   }),
-  getBalanceOf: defineContractMethod<
+  getBalanceOf: __gh_client_contract.defineContractMethod<
     ERC20GetBalanceOfArgs,
     ERC20GetBalanceOfResult,
     ERC20DeclaredException

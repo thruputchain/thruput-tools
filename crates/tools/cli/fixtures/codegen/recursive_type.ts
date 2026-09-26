@@ -1,16 +1,16 @@
 // Generated from recursive_type.spec.xdr - RecursiveTypeContract interface v0.1.0
 // DO NOT EDIT. Re-run codegen to update.
 
-import { contractEntrypointID } from "@groundhogchain/protocol";
-import { fromHex } from "@groundhogchain/protocol/utils";
-import { ContractTypeKind, ContractTypeDefKind, contractSpecString } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException } from "@groundhogchain/client/contract";
+import * as __gh_protocol from "@groundhogchain/protocol";
+import * as __gh_protocol_utils from "@groundhogchain/protocol/utils";
+import * as __gh_contract_spec from "@groundhogchain/contract-spec";
+import * as __gh_client_contract from "@groundhogchain/client/contract";
 
-const s = contractSpecString;
+const s = __gh_contract_spec.contractSpecString;
 
 const entrypoints = {
   RecursiveTypeContract: {
-    depth: contractEntrypointID(fromHex("1abed5310419683c")),
+    depth: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("1abed5310419683c")),
   },
 } as const;
 
@@ -28,9 +28,9 @@ export interface RecursiveTypeContractDepthArgs {
 export type RecursiveTypeContractDepthResult = bigint;
 
 export type RecursiveTypeContractDeclaredException = never;
-export type RecursiveTypeContractException = ContractException<RecursiveTypeContractDeclaredException>;
+export type RecursiveTypeContractException = __gh_client_contract.ContractException<RecursiveTypeContractDeclaredException>;
 
-export const spec: ContractSpec = {
+export const spec: __gh_client_contract.ContractSpec = {
   interfaces: [
     {
       name: s("RecursiveTypeContract"),
@@ -41,22 +41,22 @@ export const spec: ContractSpec = {
         {
           name: s("depth"),
           args: [
-            { name: s("tree"), ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } },
+            { name: s("tree"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } },
           ],
-          return_type: { v: ContractTypeKind.U32 },
+          return_type: { v: __gh_contract_spec.ContractTypeKind.U32 },
         },
       ],
     },
   ],
   type_defs: [
     {
-      v: ContractTypeDefKind.TypeDefStruct,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,
       struct_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") },
         fields: [
-          { name: s("value"), ty: { v: ContractTypeKind.U32 } },
-          { name: s("left"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } } },
-          { name: s("right"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } } },
+          { name: s("value"), ty: { v: __gh_contract_spec.ContractTypeKind.U32 } },
+          { name: s("left"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } } },
+          { name: s("right"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Tree") } } } },
         ],
       },
     },
@@ -65,10 +65,10 @@ export const spec: ContractSpec = {
   ],
 };
 
-const codecs = createContractCodecContext(spec.type_defs);
+const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);
 
 export const RecursiveTypeContract = {
-  depth: defineContractMethod<
+  depth: __gh_client_contract.defineContractMethod<
     RecursiveTypeContractDepthArgs,
     RecursiveTypeContractDepthResult,
     RecursiveTypeContractDeclaredException

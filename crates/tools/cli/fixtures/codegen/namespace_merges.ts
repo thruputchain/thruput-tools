@@ -1,12 +1,12 @@
 // Generated from namespace_merges.spec.xdr - Merged interface v0.1.0
 // DO NOT EDIT. Re-run codegen to update.
 
-import { topic } from "@groundhogchain/protocol";
-import { fromHex } from "@groundhogchain/protocol/utils";
-import { ContractTypeKind, ContractTypeDefKind, contractSpecString, ContractUnionCaseKind } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, type ContractException, defineContractEvent, type DecodedContractEvent, type ContractEventFilterValue } from "@groundhogchain/client/contract";
+import * as __gh_protocol from "@groundhogchain/protocol";
+import * as __gh_protocol_utils from "@groundhogchain/protocol/utils";
+import * as __gh_contract_spec from "@groundhogchain/contract-spec";
+import * as __gh_client_contract from "@groundhogchain/client/contract";
 
-const s = contractSpecString;
+const s = __gh_contract_spec.contractSpecString;
 
 export namespace demo {
 
@@ -46,9 +46,9 @@ export namespace demo {
 }
 
 export type MergedDeclaredException = never;
-export type MergedException = ContractException<MergedDeclaredException>;
+export type MergedException = __gh_client_contract.ContractException<MergedDeclaredException>;
 
-export const spec: ContractSpec = {
+export const spec: __gh_client_contract.ContractSpec = {
   interfaces: [
     {
       name: s("Merged"),
@@ -61,38 +61,38 @@ export const spec: ContractSpec = {
   ],
   type_defs: [
     {
-      v: ContractTypeDefKind.TypeDefStruct,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,
       struct_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("foo") },
         fields: [
-          { name: s("x"), ty: { v: ContractTypeKind.U64 } },
+          { name: s("x"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } },
         ],
       },
     },
     {
-      v: ContractTypeDefKind.TypeDefStruct,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,
       struct_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::foo"), declared: s("Bar") },
         fields: [
-          { name: s("x"), ty: { v: ContractTypeKind.U64 } },
+          { name: s("x"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } },
         ],
       },
     },
     {
-      v: ContractTypeDefKind.TypeDefUnion,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefUnion,
       union_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("bar") },
         cases: [
           {
             name: s("Ok"),
             discriminant: 0n,
-            case_type: { v: ContractUnionCaseKind.UnionCaseVoid },
+            case_type: { v: __gh_contract_spec.ContractUnionCaseKind.UnionCaseVoid },
           },
         ],
       },
     },
     {
-      v: ContractTypeDefKind.TypeDefEnum,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefEnum,
       enum_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::bar"), declared: s("Kind") },
         variants: [
@@ -101,7 +101,7 @@ export const spec: ContractSpec = {
       },
     },
     {
-      v: ContractTypeDefKind.TypeDefEnum,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefEnum,
       enum_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("baz") },
         variants: [
@@ -110,20 +110,20 @@ export const spec: ContractSpec = {
       },
     },
     {
-      v: ContractTypeDefKind.TypeDefStruct,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,
       struct_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::baz"), declared: s("Inner") },
         fields: [
-          { name: s("x"), ty: { v: ContractTypeKind.U64 } },
+          { name: s("x"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } },
         ],
       },
     },
     {
-      v: ContractTypeDefKind.TypeDefStruct,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,
       struct_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::qux"), declared: s("Detail") },
         fields: [
-          { name: s("x"), ty: { v: ContractTypeKind.U64 } },
+          { name: s("x"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } },
         ],
       },
     },
@@ -131,18 +131,18 @@ export const spec: ContractSpec = {
   events: [
     {
       name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("qux") },
-      signature: topic(fromHex("abababababababababababababababababababababababababababababababab")),
+      signature: __gh_protocol.topic(__gh_protocol_utils.fromHex("abababababababababababababababababababababababababababababababab")),
       topics: [
-        { name: s("tag"), ty: { v: ContractTypeKind.U64 } },
+        { name: s("tag"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } },
       ],
       fields: [
-        { name: s("note"), ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo::qux"), declared: s("Detail") } } },
+        { name: s("note"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo::qux"), declared: s("Detail") } } },
       ],
     },
   ],
 };
 
-const codecs = createContractCodecContext(spec.type_defs);
+const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);
 
 export const Merged = {
 } as const;
@@ -151,17 +151,17 @@ export namespace demo {
 
   export namespace v1 {
 
-    export interface qux extends DecodedContractEvent<
+    export interface qux extends __gh_client_contract.DecodedContractEvent<
       "qux",
       { "tag": bigint },
       { "note": demo.v1.qux.Detail }
     > {}
 
     export interface quxFilter {
-      "tag"?: ContractEventFilterValue<bigint>;
+      "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
     }
 
-    export const qux = defineContractEvent<
+    export const qux = __gh_client_contract.defineContractEvent<
       "qux",
       qux["topics"],
       qux["fields"],

@@ -1,6 +1,4 @@
-// Loads each compiled binding in the given directory against runtime.mjs and
-// runs its decodeEvent on every event its spec declares. Type-checking cannot
-// see a binding that compiles but fails when it runs.
+// Runs each compiled binding's decodeEvent against runtime.mjs.
 //
 // Usage: node decode-events.mjs <directory of compiled bindings>
 

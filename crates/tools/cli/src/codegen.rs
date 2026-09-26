@@ -107,30 +107,27 @@ fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration>, CliError> {
 /// How the generator writes the names a spec declaration would capture.
 ///
 /// A name declared inside a namespace shadows that name for every reference
-/// made there, so a captured name is written through a top-level alias.
+/// made there, so a captured name is written another way.
 #[derive(Default)]
 struct Escapes {
-    /// Standard-library and runtime names, and how each is reached.
-    names: BTreeMap<&'static str, Escape>,
+    /// Standard-library names a spec name captures, reached through `globalThis`.
+    globals: BTreeSet<&'static str>,
     /// Types under a captured crate root: the alias each is written as, and
     /// the path that alias names.
     named: BTreeMap<ContractSpecId, (String, String)>,
     /// Generated bindings the event declarations reach through a `const`.
     bindings: BTreeSet<&'static str>,
-    /// The aliases written references have used; only these are declared.
-    used: RefCell<BTreeSet<Alias>>,
+    /// The type aliases written references have used; only these are declared.
+    used: RefCell<BTreeSet<(String, String)>>,
 }
 
 impl Escapes {
-    /// A standard-library or runtime name as the file writes it.
-    fn at(&self, name: &str) -> String {
-        match self.names.get(name) {
-            None => name.to_owned(),
-            Some(Escape::Global) => format!("globalThis.{name}"),
-            Some(Escape::Module(module)) => {
-                self.used.borrow_mut().insert(Alias::Module(module));
-                format!("{}.{name}", module_alias(module))
-            }
+    /// A standard-library name as the file writes it.
+    fn global(&self, name: &'static str) -> String {
+        if self.globals.contains(name) {
+            format!("globalThis.{name}")
+        } else {
+            name.to_owned()
         }
     }
 
@@ -139,16 +136,10 @@ impl Escapes {
         let Some((alias, target)) = self.named.get(id) else {
             return Ok(ts_id_path(id)?.qualified());
         };
-        self.used.borrow_mut().insert(Alias::Named {
-            alias: alias.clone(),
-            target: target.clone(),
-        });
+        self.used
+            .borrow_mut()
+            .insert((alias.clone(), target.clone()));
         Ok(alias.clone())
-    }
-
-    /// Whether this name is written through an escape rather than bare.
-    fn escaped(&self, name: &str) -> bool {
-        self.names.contains_key(name)
     }
 
     /// A generated binding as an event declaration writes it.
@@ -170,75 +161,40 @@ impl Escapes {
         }
     }
 
-    /// The top-level declarations of the aliases written references used.
+    /// The top-level declarations of the type aliases written references used.
     fn alias_declarations(&self) -> Vec<String> {
-        self.used.borrow().iter().map(Alias::declaration).collect()
+        // Not `import x = root`: that is a value, which reads `undefined`
+        // until the root runs and which `verbatimModuleSyntax` rejects for a
+        // root holding only types.
+        self.used
+            .borrow()
+            .iter()
+            .map(|(alias, target)| format!("type {alias} = {target};"))
+            .collect()
     }
 }
 
-/// How a captured standard-library or runtime name is written.
-#[derive(Clone, Copy)]
-enum Escape {
-    /// A standard-library type, reached through `globalThis`.
-    Global,
-    /// A runtime import, reached through a namespace import of its module, so
-    /// no alias has to restate the name's arity or constraints.
-    Module(&'static str),
-}
-
-/// A top-level declaration that an escaped reference relies on.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum Alias {
-    /// A namespace import of a runtime module.
-    Module(&'static str),
-    /// A type under a captured crate root.
-    Named { alias: String, target: String },
-}
-
-impl Alias {
-    fn declaration(&self) -> String {
-        match self {
-            Alias::Module(module) => {
-                format!("import * as {} from \"{module}\";", module_alias(module))
-            }
-            // Not `import x = root`: that is a value, which reads `undefined`
-            // until the root runs and which `verbatimModuleSyntax` rejects for
-            // a root holding only types.
-            Alias::Named { alias, target } => format!("type {alias} = {target};"),
-        }
-    }
-}
-
-const PROTOCOL: &str = "@groundhogchain/protocol";
-const CLIENT_CONTRACT: &str = "@groundhogchain/client/contract";
-
-/// Standard-library and runtime names the declarations reference from inside
-/// their namespaces.
-const ESCAPABLE: &[(&str, Escape)] = &[
-    ("Uint8Array", Escape::Global),
-    ("Record", Escape::Global),
-    ("ContractAddress", Escape::Module(PROTOCOL)),
-    ("SignedToken", Escape::Module(CLIENT_CONTRACT)),
-    ("FixedBytes", Escape::Module(CLIENT_CONTRACT)),
-    ("FixedArray", Escape::Module(CLIENT_CONTRACT)),
-    ("DecodedContractEvent", Escape::Module(CLIENT_CONTRACT)),
-    ("ContractEventFilterValue", Escape::Module(CLIENT_CONTRACT)),
-    ("defineContractEvent", Escape::Module(CLIENT_CONTRACT)),
+/// Every runtime module a binding imports, whole, under the alias it writes
+/// that module's names through. No runtime name is ever written bare, so no
+/// spec name can capture one. A binding that uses no name from a module still
+/// imports it: `noUnusedLocals` skips an unused import whose name starts with `_`.
+const RUNTIME_MODULES: &[(&str, &str)] = &[
+    ("__gh_protocol", "@groundhogchain/protocol"),
+    ("__gh_protocol_utils", "@groundhogchain/protocol/utils"),
+    ("__gh_contract_spec", "@groundhogchain/contract-spec"),
+    ("__gh_client_contract", "@groundhogchain/client/contract"),
 ];
+
+/// Standard-library names the declarations reference from inside their
+/// namespaces.
+const GLOBALS: &[&str] = &["Uint8Array", "Record"];
 
 /// Generated top-level bindings the event declarations reference.
 const EVENT_BINDINGS: &[&str] = &["spec", "codecs"];
 
-/// Alias names carry this prefix, which `validate_spec` reserves.
+/// The runtime module aliases and every alias `plan_escapes` declares carry
+/// this prefix, which `validate_spec` reserves.
 const ESCAPE_PREFIX: &str = "__gh_";
-
-/// The namespace-import alias for a module, e.g. `__gh_client_contract`.
-fn module_alias(module: &str) -> String {
-    let tail = module
-        .trim_start_matches("@groundhogchain/")
-        .replace('/', "_");
-    format!("{ESCAPE_PREFIX}{tail}")
-}
 
 /// Plan how the file writes each name a spec declaration captures.
 fn plan_escapes(spec: &ContractSpec) -> Result<Escapes, CliError> {
@@ -251,9 +207,9 @@ fn plan_escapes(spec: &ContractSpec) -> Result<Escapes, CliError> {
     }
 
     let mut escapes = Escapes::default();
-    for (name, escape) in ESCAPABLE {
+    for name in GLOBALS {
         if nested.contains(*name) {
-            escapes.names.insert(*name, *escape);
+            escapes.globals.insert(*name);
         }
     }
     for binding in EVENT_BINDINGS {
@@ -302,8 +258,8 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
         | ContractType::U256
         | ContractType::I256 => Ok("bigint".into()),
         ContractType::String => Ok("string".into()),
-        ContractType::Bytes => Ok(esc.at("Uint8Array")),
-        ContractType::Address => Ok(esc.at("ContractAddress")),
+        ContractType::Bytes => Ok(esc.global("Uint8Array")),
+        ContractType::Address => Ok("__gh_protocol.ContractAddress".into()),
         ContractType::Option { option_inner } => Ok(format!(
             "{} | null",
             ts_type_ref(option_inner.as_ref(), esc)?
@@ -311,7 +267,7 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
         ContractType::Vector { vector } => {
             let element = vector.element.as_ref();
             if matches!(element, ContractType::U8) {
-                return Ok(esc.at("Uint8Array"));
+                return Ok(esc.global("Uint8Array"));
             }
             let inner = ts_type_ref(element, esc)?;
             if inner.contains('|') || inner.starts_with("readonly ") {
@@ -323,7 +279,7 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
         ContractType::Array { array } => {
             let element = array.element.as_ref();
             if matches!(element, ContractType::U8) {
-                return Ok(format!("{}<{}>", esc.at("FixedBytes"), array.len));
+                return Ok(format!("__gh_client_contract.FixedBytes<{}>", array.len));
             }
             let inner = ts_type_ref(element, esc)?;
             if array.len <= 3 {
@@ -337,7 +293,10 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
                     vec![item; array.len as usize].join(", ")
                 ))
             } else {
-                Ok(format!("{}<{inner}, {}>", esc.at("FixedArray"), array.len))
+                Ok(format!(
+                    "__gh_client_contract.FixedArray<{inner}, {}>",
+                    array.len
+                ))
             }
         }
         ContractType::Tuple { tuple } => {
@@ -352,11 +311,10 @@ fn ts_type_ref(ty: &ContractType, esc: &Escapes) -> Result<String, CliError> {
             signed_token_preimage,
         } => match signed_token_preimage.preimage_type.as_deref() {
             Some(inner) => Ok(format!(
-                "{}<{}>",
-                esc.at("SignedToken"),
+                "__gh_client_contract.SignedToken<{}>",
                 ts_type_ref(inner, esc)?
             )),
-            None => Ok(esc.at("SignedToken")),
+            None => Ok("__gh_client_contract.SignedToken".into()),
         },
         _ => Err(CliError::SpecFailed(
             "contract spec contains an unsupported contract type".into(),
@@ -578,11 +536,11 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         .iter()
         .any(|iface| !iface.methods.is_empty());
 
-    // The body is written first, so the imports above it declare only the
-    // aliases its references used.
+    // The body is written first, so the aliases declared above it are only
+    // those its references used.
     let mut body = String::new();
     let _ = writeln!(body);
-    let _ = writeln!(body, "const s = contractSpecString;");
+    let _ = writeln!(body, "const s = __gh_contract_spec.contractSpecString;");
 
     // 3. Entrypoints
     if has_methods {
@@ -612,7 +570,7 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         let _ = writeln!(body);
         let _ = writeln!(
             body,
-            "const codecs = createContractCodecContext(spec.type_defs);"
+            "const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);"
         );
     }
 
@@ -637,7 +595,7 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
     emit_header(&mut out, source_name, &interfaces);
 
     // 2. Imports, then the aliases escaped references use. See `plan_escapes`.
-    emit_imports(&mut out, spec, &escapes);
+    emit_imports(&mut out);
     let aliases = escapes.alias_declarations();
     if !aliases.is_empty() {
         let _ = writeln!(out);
@@ -668,127 +626,12 @@ fn emit_header(out: &mut String, source_name: &str, interfaces: &[(&str, &str)])
     let _ = writeln!(out, "// DO NOT EDIT. Re-run codegen to update.");
 }
 
-/// The names imported from `@groundhogchain/client/contract`.
-///
-/// A name reached through an escape is left out: it is never written bare, so
-/// importing it would leave the generated file with a dead import for a
-/// consumer's linter to flag.
-fn client_contract_imports<'a>(spec: &ContractSpec, esc: &Escapes) -> Vec<&'a str> {
-    let has_events = !spec.events.is_empty();
-    let has_methods = spec
-        .interfaces
-        .iter()
-        .any(|iface| !iface.methods.is_empty());
-    let uses_fixed_bytes = spec_uses_type(
-        spec,
-        |ty| matches!(ty, ContractType::Array { array } if matches!(array.element.as_ref(), ContractType::U8)),
-    );
-    let uses_fixed_array = spec_uses_type(
-        spec,
-        |ty| matches!(ty, ContractType::Array { array } if array.len > 3 && !matches!(array.element.as_ref(), ContractType::U8)),
-    );
-    let uses_signed_token =
-        spec_uses_type(spec, |ty| matches!(ty, ContractType::SignedToken { .. }));
-
-    let mut names = vec!["type ContractSpec"];
-    if has_methods || has_events {
-        names.push("createContractCodecContext");
-    }
-    if has_methods {
-        names.push("defineContractMethod");
-    }
-    if !spec.interfaces.is_empty() {
-        names.push("type ContractException");
-    }
-    if uses_fixed_array {
-        names.push("type FixedArray");
-    }
-    if uses_fixed_bytes {
-        names.push("type FixedBytes");
-    }
-    if uses_signed_token {
-        names.push("type SignedToken");
-    }
-    if has_events {
-        names.extend(["defineContractEvent", "type DecodedContractEvent"]);
-        if spec.events.iter().any(|event| {
-            event
-                .topics
-                .iter()
-                .any(|field| event_topic_representation(&field.ty) != "hash")
-        }) {
-            names.push("type ContractEventFilterValue");
-        }
-    }
-    names
-        .into_iter()
-        .filter(|name| !esc.escaped(name.trim_start_matches("type ")))
-        .collect()
-}
-
-/// Emit the TypeScript import block.
-fn emit_imports(out: &mut String, spec: &ContractSpec, esc: &Escapes) {
+/// Emit the import block: every runtime module, whole, under its alias.
+fn emit_imports(out: &mut String) {
     let _ = writeln!(out);
-    let has_events = !spec.events.is_empty();
-    let has_methods = spec
-        .interfaces
-        .iter()
-        .any(|iface| !iface.methods.is_empty());
-    let has_contract_types = spec_uses_type(spec, |_| true);
-    let uses_address = spec_uses_type(spec, |ty| matches!(ty, ContractType::Address));
-
-    if uses_address && !esc.escaped("ContractAddress") {
-        let _ = writeln!(
-            out,
-            "import type {{ ContractAddress }} from \"@groundhogchain/protocol\";",
-        );
+    for (alias, module) in RUNTIME_MODULES {
+        let _ = writeln!(out, "import * as {alias} from \"{module}\";");
     }
-    let mut protocol_imports = Vec::new();
-    if has_methods {
-        protocol_imports.push("contractEntrypointID");
-    }
-    if has_events {
-        protocol_imports.push("topic");
-    }
-    if !protocol_imports.is_empty() {
-        let _ = writeln!(
-            out,
-            "import {{ {} }} from \"@groundhogchain/protocol\";",
-            protocol_imports.join(", ")
-        );
-        let _ = writeln!(
-            out,
-            "import {{ fromHex }} from \"@groundhogchain/protocol/utils\";"
-        );
-    }
-
-    // @groundhogchain/contract-spec imports
-    let has_unions = spec
-        .type_defs
-        .iter()
-        .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }));
-    let mut cs_imports: Vec<&str> = vec!["contractSpecString"];
-    if has_contract_types {
-        cs_imports.insert(0, "ContractTypeKind");
-    }
-    if !spec.type_defs.is_empty() {
-        cs_imports.insert(1, "ContractTypeDefKind");
-    }
-    if has_unions {
-        cs_imports.push("ContractUnionCaseKind");
-    }
-    let _ = writeln!(
-        out,
-        "import {{ {} }} from \"@groundhogchain/contract-spec\";",
-        cs_imports.join(", "),
-    );
-
-    let client_imports = client_contract_imports(spec, esc);
-    let _ = writeln!(
-        out,
-        "import {{ {} }} from \"@groundhogchain/client/contract\";",
-        client_imports.join(", ")
-    );
 }
 
 /// Emit the `entrypoints` const mapping interface/method names to their IDs.
@@ -812,7 +655,8 @@ fn emit_entrypoints(
             let hex = hex::encode(id.as_ref());
             let _ = writeln!(
                 out,
-                "    {public_method_name}: contractEntrypointID(fromHex(\"{hex}\")),",
+                "    {public_method_name}: __gh_protocol.contractEntrypointID(\
+                 __gh_protocol_utils.fromHex(\"{hex}\")),",
             );
         }
         let _ = writeln!(out, "  }},");
@@ -824,7 +668,10 @@ fn emit_entrypoints(
 
 /// Emit the full `ContractSpec` object literal.
 fn emit_spec_literal(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
-    let _ = writeln!(out, "export const spec: ContractSpec = {{");
+    let _ = writeln!(
+        out,
+        "export const spec: __gh_client_contract.ContractSpec = {{"
+    );
 
     // interfaces
     let _ = writeln!(out, "  interfaces: [");
@@ -872,7 +719,10 @@ fn emit_spec_event_literal(out: &mut String, event: &ContractEventDef) -> Result
     let sig_hex = hex::encode(event.signature.into_inner());
     let _ = writeln!(out, "    {{");
     let _ = writeln!(out, "      name: {name},");
-    let _ = writeln!(out, "      signature: topic(fromHex(\"{sig_hex}\")),");
+    let _ = writeln!(
+        out,
+        "      signature: __gh_protocol.topic(__gh_protocol_utils.fromHex(\"{sig_hex}\")),"
+    );
 
     let _ = writeln!(out, "      topics: [");
     for field in event.topics.iter() {
@@ -978,7 +828,10 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
         ContractTypeDef::TypeDefStruct { struct_def } => {
             let name = ts_spec_id_literal(&struct_def.name)?;
             let _ = writeln!(out, "    {{");
-            let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefStruct,");
+            let _ = writeln!(
+                out,
+                "      v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,"
+            );
             let _ = writeln!(out, "      struct_def: {{");
             let _ = writeln!(out, "        name: {name},");
             let _ = writeln!(out, "        fields: [");
@@ -998,7 +851,10 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
         ContractTypeDef::TypeDefEnum { enum_def } => {
             let name = ts_spec_id_literal(&enum_def.name)?;
             let _ = writeln!(out, "    {{");
-            let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefEnum,");
+            let _ = writeln!(
+                out,
+                "      v: __gh_contract_spec.ContractTypeDefKind.TypeDefEnum,"
+            );
             let _ = writeln!(out, "      enum_def: {{");
             let _ = writeln!(out, "        name: {name},");
             let _ = writeln!(out, "        variants: [");
@@ -1018,7 +874,10 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
         ContractTypeDef::TypeDefUnion { union_def } => {
             let name = ts_spec_id_literal(&union_def.name)?;
             let _ = writeln!(out, "    {{");
-            let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefUnion,");
+            let _ = writeln!(
+                out,
+                "      v: __gh_contract_spec.ContractTypeDefKind.TypeDefUnion,"
+            );
             let _ = writeln!(out, "      union_def: {{");
             let _ = writeln!(out, "        name: {name},");
             let _ = writeln!(out, "        cases: [");
@@ -1056,7 +915,7 @@ fn emit_spec_union_case_literal(
             let _ = writeln!(
                 out,
                 "            case_type: \
-                 {{ v: ContractUnionCaseKind.UnionCaseVoid }},"
+                 {{ v: __gh_contract_spec.ContractUnionCaseKind.UnionCaseVoid }},"
             );
             let _ = writeln!(out, "          }},");
         }
@@ -1071,7 +930,7 @@ fn emit_spec_union_case_literal(
             let _ = writeln!(
                 out,
                 "            case_type: {{ v: \
-                 ContractUnionCaseKind.UnionCaseTuple, tuple: [{}] }},",
+                 __gh_contract_spec.ContractUnionCaseKind.UnionCaseTuple, tuple: [{}] }},",
                 items.join(", "),
             );
             let _ = writeln!(out, "          }},");
@@ -1097,7 +956,7 @@ fn emit_spec_union_case_literal(
             let _ = writeln!(
                 out,
                 "            case_type: {{ v: \
-                 ContractUnionCaseKind.UnionCaseStruct, \
+                 __gh_contract_spec.ContractUnionCaseKind.UnionCaseStruct, \
                  struct_fields: {fields_str} }},",
             );
             let _ = writeln!(out, "          }},");
@@ -1112,27 +971,27 @@ fn emit_spec_union_case_literal(
 }
 
 /// Serialize a `ContractType` as a TypeScript object literal suitable for
-/// the spec constant (e.g. `{ v: ContractTypeKind.U64 }`).
+/// the spec constant (e.g. `{ v: __gh_contract_spec.ContractTypeKind.U64 }`).
 fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
     match ty {
-        ContractType::Void => Ok("{ v: ContractTypeKind.Void }".into()),
-        ContractType::Bool => Ok("{ v: ContractTypeKind.Bool }".into()),
-        ContractType::U8 => Ok("{ v: ContractTypeKind.U8 }".into()),
-        ContractType::U32 => Ok("{ v: ContractTypeKind.U32 }".into()),
-        ContractType::I32 => Ok("{ v: ContractTypeKind.I32 }".into()),
-        ContractType::U64 => Ok("{ v: ContractTypeKind.U64 }".into()),
-        ContractType::I64 => Ok("{ v: ContractTypeKind.I64 }".into()),
-        ContractType::U128 => Ok("{ v: ContractTypeKind.U128 }".into()),
-        ContractType::I128 => Ok("{ v: ContractTypeKind.I128 }".into()),
-        ContractType::U256 => Ok("{ v: ContractTypeKind.U256 }".into()),
-        ContractType::I256 => Ok("{ v: ContractTypeKind.I256 }".into()),
-        ContractType::String => Ok("{ v: ContractTypeKind.String }".into()),
-        ContractType::Bytes => Ok("{ v: ContractTypeKind.Bytes }".into()),
-        ContractType::Address => Ok("{ v: ContractTypeKind.Address }".into()),
+        ContractType::Void => Ok("{ v: __gh_contract_spec.ContractTypeKind.Void }".into()),
+        ContractType::Bool => Ok("{ v: __gh_contract_spec.ContractTypeKind.Bool }".into()),
+        ContractType::U8 => Ok("{ v: __gh_contract_spec.ContractTypeKind.U8 }".into()),
+        ContractType::U32 => Ok("{ v: __gh_contract_spec.ContractTypeKind.U32 }".into()),
+        ContractType::I32 => Ok("{ v: __gh_contract_spec.ContractTypeKind.I32 }".into()),
+        ContractType::U64 => Ok("{ v: __gh_contract_spec.ContractTypeKind.U64 }".into()),
+        ContractType::I64 => Ok("{ v: __gh_contract_spec.ContractTypeKind.I64 }".into()),
+        ContractType::U128 => Ok("{ v: __gh_contract_spec.ContractTypeKind.U128 }".into()),
+        ContractType::I128 => Ok("{ v: __gh_contract_spec.ContractTypeKind.I128 }".into()),
+        ContractType::U256 => Ok("{ v: __gh_contract_spec.ContractTypeKind.U256 }".into()),
+        ContractType::I256 => Ok("{ v: __gh_contract_spec.ContractTypeKind.I256 }".into()),
+        ContractType::String => Ok("{ v: __gh_contract_spec.ContractTypeKind.String }".into()),
+        ContractType::Bytes => Ok("{ v: __gh_contract_spec.ContractTypeKind.Bytes }".into()),
+        ContractType::Address => Ok("{ v: __gh_contract_spec.ContractTypeKind.Address }".into()),
         ContractType::Option { option_inner } => {
             let inner_lit = spec_type_to_ts_literal(option_inner.as_ref())?;
             Ok(format!(
-                "{{ v: ContractTypeKind.Option, option_inner: \
+                "{{ v: __gh_contract_spec.ContractTypeKind.Option, option_inner: \
                  {inner_lit} }}"
             ))
         }
@@ -1140,7 +999,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             let elem = vector.element.as_ref();
             let elem_lit = spec_type_to_ts_literal(elem)?;
             Ok(format!(
-                "{{ v: ContractTypeKind.Vector, vector: \
+                "{{ v: __gh_contract_spec.ContractTypeKind.Vector, vector: \
                  {{ element: {elem_lit}, max_len: {}n }} }}",
                 vector.max_len,
             ))
@@ -1149,7 +1008,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             let elem = array.element.as_ref();
             let elem_lit = spec_type_to_ts_literal(elem)?;
             Ok(format!(
-                "{{ v: ContractTypeKind.Array, array: \
+                "{{ v: __gh_contract_spec.ContractTypeKind.Array, array: \
                  {{ element: {elem_lit}, len: {}n }} }}",
                 array.len,
             ))
@@ -1160,7 +1019,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
                 .map(spec_type_to_ts_literal)
                 .collect::<Result<_, _>>()?;
             Ok(format!(
-                "{{ v: ContractTypeKind.Tuple, tuple: [{}] }}",
+                "{{ v: __gh_contract_spec.ContractTypeKind.Tuple, tuple: [{}] }}",
                 items.join(", "),
             ))
         }
@@ -1169,7 +1028,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             // declare themselves under. A bare declared name here would never
             // match one of those, so no named reference would resolve.
             Ok(format!(
-                "{{ v: ContractTypeKind.Named, named: {} }}",
+                "{{ v: __gh_contract_spec.ContractTypeKind.Named, named: {} }}",
                 ts_spec_id_literal(named)?
             ))
         }
@@ -1181,7 +1040,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
                 None => "null".into(),
             };
             Ok(format!(
-                "{{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
+                "{{ v: __gh_contract_spec.ContractTypeKind.SignedToken, signed_token_preimage: \
                  {{ preimage_type: {preimage} }} }}"
             ))
         }
@@ -1269,7 +1128,8 @@ fn emit_interface_types(
     }
     let _ = writeln!(
         out,
-        "export type {iface_name}Exception = ContractException<{declared_exception}>;"
+        "export type {iface_name}Exception = \
+         __gh_client_contract.ContractException<{declared_exception}>;"
     );
     Ok(())
 }
@@ -1285,7 +1145,10 @@ fn emit_interface_method(
     public_method_name: &str,
 ) -> Result<(), CliError> {
     let stem = method_type_stem(iface_name, public_method_name);
-    let _ = writeln!(out, "  {public_method_name}: defineContractMethod<");
+    let _ = writeln!(
+        out,
+        "  {public_method_name}: __gh_client_contract.defineContractMethod<"
+    );
     let _ = writeln!(out, "    {stem}Args,");
     let _ = writeln!(out, "    {stem}Result,");
     let _ = writeln!(out, "    {iface_name}DeclaredException");
@@ -1406,9 +1269,8 @@ fn emit_event_decl(
         topic_fields.push(format!("{documentation}{}: {ty}", ts_property_key(fname)?));
         if event_topic_representation(&field.ty) != "hash" {
             filter_fields.push(format!(
-                "  {}?: {}<{ty}>;",
-                ts_property_key(fname)?,
-                esc.at("ContractEventFilterValue")
+                "  {}?: __gh_client_contract.ContractEventFilterValue<{ty}>;",
+                ts_property_key(fname)?
             ));
         }
     }
@@ -1424,8 +1286,7 @@ fn emit_event_decl(
 
     let _ = writeln!(
         out,
-        "export interface {name} extends {}<",
-        esc.at("DecodedContractEvent")
+        "export interface {name} extends __gh_client_contract.DecodedContractEvent<"
     );
     let _ = writeln!(out, "  {},", ts_string_literal(name));
     let _ = writeln!(out, "  {{ {} }},", topic_fields.join("; "));
@@ -1436,7 +1297,7 @@ fn emit_event_decl(
         let _ = writeln!(
             out,
             "export type {name}Filter = {}<string, never>;",
-            esc.at("Record")
+            esc.global("Record")
         );
     } else {
         let _ = writeln!(out, "export interface {name}Filter {{");
@@ -1448,8 +1309,7 @@ fn emit_event_decl(
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "export const {name} = {}<",
-        esc.at("defineContractEvent")
+        "export const {name} = __gh_client_contract.defineContractEvent<"
     );
     let _ = writeln!(out, "  {},", ts_string_literal(name));
     let _ = writeln!(out, "  {name}[\"topics\"],");
@@ -1545,18 +1405,6 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .iter()
         .any(|iface| !iface.methods.is_empty());
     let has_events = !spec.events.is_empty();
-    let has_contract_types = spec_uses_type(spec, |_| true);
-    let uses_address = spec_uses_type(spec, |ty| matches!(ty, ContractType::Address));
-    let uses_fixed_bytes = spec_uses_type(
-        spec,
-        |ty| matches!(ty, ContractType::Array { array } if matches!(array.element.as_ref(), ContractType::U8)),
-    );
-    let uses_fixed_array = spec_uses_type(
-        spec,
-        |ty| matches!(ty, ContractType::Array { array } if array.len > 3 && !matches!(array.element.as_ref(), ContractType::U8)),
-    );
-    let uses_signed_token =
-        spec_uses_type(spec, |ty| matches!(ty, ContractType::SignedToken { .. }));
     let uses_uint8_array = has_events
         || spec_uses_type(spec, |ty| {
             matches!(ty, ContractType::Bytes)
@@ -1594,7 +1442,19 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
-    for name in ["contractSpecString", "ContractSpec", "s", "spec"] {
+    // Runtime names are written through their module's alias, so only the
+    // file's own top-level bindings need a name to themselves.
+    let mut generated = vec!["s", "spec"];
+    if has_methods {
+        generated.push("entrypoints");
+    }
+    if has_methods || has_events {
+        generated.push("codecs");
+    }
+    if has_events {
+        generated.push("decodeEvent");
+    }
+    for name in generated {
         reserve_ts_value_name(
             &mut top_level_values,
             name.to_owned(),
@@ -1612,83 +1472,6 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             "TypeScript standard library".into(),
         )?;
     }
-    let mut conditional_imports = Vec::new();
-    if has_methods {
-        conditional_imports.extend([
-            "contractEntrypointID",
-            "defineContractMethod",
-            "entrypoints",
-        ]);
-    }
-    if has_methods || has_events {
-        conditional_imports.extend(["fromHex", "createContractCodecContext", "codecs"]);
-    }
-    if has_contract_types {
-        conditional_imports.push("ContractTypeKind");
-    }
-    if !spec.type_defs.is_empty() {
-        conditional_imports.push("ContractTypeDefKind");
-    }
-    if !spec.interfaces.is_empty() {
-        conditional_imports.push("ContractException");
-    }
-    if uses_address {
-        conditional_imports.push("ContractAddress");
-    }
-    if uses_fixed_array {
-        conditional_imports.push("FixedArray");
-    }
-    if uses_fixed_bytes {
-        conditional_imports.push("FixedBytes");
-    }
-    if uses_signed_token {
-        conditional_imports.push("SignedToken");
-    }
-    for name in conditional_imports {
-        reserve_ts_value_name(
-            &mut top_level_values,
-            name.into(),
-            "generated binding import".into(),
-        )?;
-    }
-
-    if spec
-        .type_defs
-        .iter()
-        .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }))
-    {
-        reserve_ts_value_name(
-            &mut top_level_values,
-            "ContractUnionCaseKind".into(),
-            "generated union import".into(),
-        )?;
-    }
-
-    if has_events {
-        let has_direct_event_topics = spec.events.iter().any(|event| {
-            event
-                .topics
-                .iter()
-                .any(|field| event_topic_representation(&field.ty) != "hash")
-        });
-        let mut event_names = vec![
-            "topic",
-            "defineContractEvent",
-            "DecodedContractEvent",
-            "decodeEvent",
-        ];
-        if has_direct_event_topics {
-            event_names.push("ContractEventFilterValue");
-        }
-        for name in event_names {
-            reserve_ts_value_name(
-                &mut top_level_values,
-                name.into(),
-                "generated event support".into(),
-            )?;
-        }
-    }
-
     // Roots are reserved once, since defs share them; names are reserved per
     // qualified path, where a def and an event would merge.
     let mut defined_types = BTreeSet::new();
@@ -1893,7 +1676,6 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
              module or type."
         )));
     }
-    // The aliases `plan_escapes` declares carry this prefix.
     if let Some((name, source)) = top_level_values
         .iter()
         .chain(nested.iter().copied())
@@ -1901,8 +1683,8 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
     {
         return Err(CliError::SpecFailed(format!(
             "generated TypeScript name \"{name}\" for {source} starts with \"{ESCAPE_PREFIX}\", \
-             which the generator reserves for the aliases it declares when a spec name shadows \
-             one of its own. Rename it without that prefix."
+             which the generator reserves for the imports and aliases it declares. Rename it \
+             without that prefix."
         )));
     }
 
@@ -2314,11 +2096,11 @@ fn event_topic_representation(ty: &ContractType) -> &'static str {
 
 fn event_topic_type(ty: &ContractType, esc: &Escapes) -> String {
     match event_topic_representation(ty) {
-        "address" => esc.at("ContractAddress"),
-        "fixedBytes32" => format!("{}<32>", esc.at("FixedBytes")),
+        "address" => "__gh_protocol.ContractAddress".into(),
+        "fixedBytes32" => "__gh_client_contract.FixedBytes<32>".into(),
         "u32" | "u64" | "u128" | "u256" | "i32" | "i64" | "i128" | "i256" => "bigint".into(),
         "bool" => "boolean".into(),
-        _ => esc.at("Uint8Array"),
+        _ => esc.global("Uint8Array"),
     }
 }
 
@@ -2643,7 +2425,7 @@ mod tests {
         );
         assert_eq!(
             ts_type_ref(&ContractType::Address, &Escapes::default()).unwrap(),
-            "ContractAddress"
+            "__gh_protocol.ContractAddress"
         );
     }
 
@@ -2668,11 +2450,12 @@ mod tests {
         };
         assert_eq!(
             ts_type_ref(&opaque, &Escapes::default()).unwrap(),
-            "SignedToken"
+            "__gh_client_contract.SignedToken"
         );
         assert_eq!(
             spec_type_to_ts_literal(&opaque).unwrap(),
-            "{ v: ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } }"
+            "{ v: __gh_contract_spec.ContractTypeKind.SignedToken, \
+             signed_token_preimage: { preimage_type: null } }"
         );
 
         let typed = ContractType::SignedToken {
@@ -2684,12 +2467,12 @@ mod tests {
         };
         assert_eq!(
             ts_type_ref(&typed, &Escapes::default()).unwrap(),
-            "SignedToken<demo.v1.Auth>"
+            "__gh_client_contract.SignedToken<demo.v1.Auth>"
         );
         assert_eq!(
             spec_type_to_ts_literal(&typed).unwrap(),
-            "{ v: ContractTypeKind.SignedToken, signed_token_preimage: \
-             { preimage_type: { v: ContractTypeKind.Named, named: { crate_name: \
+            "{ v: __gh_contract_spec.ContractTypeKind.SignedToken, signed_token_preimage: \
+             { preimage_type: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: \
              s(\"demo\"), major: s(\"1\"), module_path: s(\"demo\"), declared: \
              s(\"Auth\") } } } }"
         );
@@ -2702,12 +2485,12 @@ mod tests {
         };
         assert_eq!(
             ts_type_ref(&list, &Escapes::default()).unwrap(),
-            "SignedToken[]"
+            "__gh_client_contract.SignedToken[]"
         );
     }
 
     #[test]
-    fn generates_signed_token_returns_and_imports_the_type() {
+    fn generates_signed_token_returns_from_the_client_runtime() {
         use groundhog_contract_spec::ContractSignedTokenPreimage;
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
@@ -2733,16 +2516,15 @@ mod tests {
         );
         let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
         assert!(
-            output.contains("type SignedToken } from \"@groundhogchain/client/contract\""),
-            "SignedToken must be imported from the client runtime:\n{output}"
-        );
-        assert!(
-            output.contains("export type CounterAuthorizeResult = SignedToken[];"),
+            output.contains(
+                "export type CounterAuthorizeResult = __gh_client_contract.SignedToken[];"
+            ),
             "return type must be a token placeholder list:\n{output}"
         );
         assert!(
             output.contains(
-                "{ v: ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } }"
+                "{ v: __gh_contract_spec.ContractTypeKind.SignedToken, \
+                 signed_token_preimage: { preimage_type: null } }"
             ),
             "spec literal must carry the signed-token type:\n{output}"
         );
@@ -2872,14 +2654,8 @@ mod tests {
         }]
         .try_into()
         .unwrap();
-        // The spec type captures the runtime's name, so it is reached through a namespace import.
+        // The runtime's name is only ever written through its module.
         let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
-        assert!(
-            output.contains(
-                "import * as __gh_client_contract from \"@groundhogchain/client/contract\";"
-            ),
-            "escape import missing:\n{output}"
-        );
         assert!(
             output.contains("    export interface SignedToken"),
             "spec type must still be declared:\n{output}"
@@ -2957,7 +2733,7 @@ mod tests {
         };
         assert_eq!(
             ts_type_ref(&ty, &Escapes::default()).unwrap(),
-            "FixedBytes<32>"
+            "__gh_client_contract.FixedBytes<32>"
         );
     }
 
@@ -2971,7 +2747,7 @@ mod tests {
         };
         assert_eq!(
             ts_type_ref(&ty, &Escapes::default()).unwrap(),
-            "FixedArray<bigint, 4>"
+            "__gh_client_contract.FixedArray<bigint, 4>"
         );
     }
 
@@ -3024,7 +2800,8 @@ mod tests {
         };
         assert_eq!(
             emit_type_def(&def, &Escapes::default()).unwrap(),
-            "export interface TokenInfo { \"owner\": ContractAddress; \"supply\": bigint; \"frozen\": boolean; }"
+            "export interface TokenInfo { \"owner\": __gh_protocol.ContractAddress; \
+             \"supply\": bigint; \"frozen\": boolean; }"
         );
     }
 
@@ -3147,17 +2924,21 @@ export type Result =
         );
         assert!(
             output.contains(&format!(
-                "signature: topic(fromHex(\"{}\"))",
+                "signature: __gh_protocol.topic(__gh_protocol_utils.fromHex(\"{}\"))",
                 "ab".repeat(32)
             )),
             "event signature literal missing:\n{output}"
         );
         assert!(
-            output.contains("{ name: s(\"tag\"), ty: { v: ContractTypeKind.U64 } }"),
+            output.contains(
+                "{ name: s(\"tag\"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } }"
+            ),
             "event topic field literal missing:\n{output}"
         );
         assert!(
-            output.contains("{ name: s(\"note\"), ty: { v: ContractTypeKind.String } }"),
+            output.contains(
+                "{ name: s(\"note\"), ty: { v: __gh_contract_spec.ContractTypeKind.String } }"
+            ),
             "event payload field literal missing:\n{output}"
         );
     }
@@ -3167,7 +2948,9 @@ export type Result =
         let output = generate_ts_bindings(&spec_with_events(), "counter.spec.xdr").unwrap();
 
         assert!(
-            output.contains("export interface PingEvent extends DecodedContractEvent<"),
+            output.contains(
+                "export interface PingEvent extends __gh_client_contract.DecodedContractEvent<"
+            ),
             "missing decoded event type:\n{output}"
         );
         assert!(
@@ -3180,11 +2963,11 @@ export type Result =
             "missing payload shape:\n{output}"
         );
         assert!(
-            output.contains("\"tag\"?: ContractEventFilterValue<bigint>;"),
+            output.contains("\"tag\"?: __gh_client_contract.ContractEventFilterValue<bigint>;"),
             "missing scalar topic filter:\n{output}"
         );
         assert!(
-            output.contains("export const PingEvent = defineContractEvent<"),
+            output.contains("export const PingEvent = __gh_client_contract.defineContractEvent<"),
             "missing event descriptor:\n{output}"
         );
         assert!(
@@ -3224,7 +3007,7 @@ export type Result =
     fn event_only_binding_defines_spec_string_helper() {
         let output = generate_ts_bindings(&spec_with_events(), "counter.spec.xdr").unwrap();
 
-        assert!(output.contains("const s = contractSpecString;"));
+        assert!(output.contains("const s = __gh_contract_spec.contractSpecString;"));
         assert!(output.contains("name: s(\"Counter\")"));
     }
 
@@ -3387,7 +3170,7 @@ export type Result =
         let output = generate_ts_bindings(&spec, "token.spec.xdr").unwrap();
         assert!(output.contains("export const ERC20 = {"));
         assert!(output.contains("export const ERC20Metadata = {"));
-        assert!(output.contains("  initialize: defineContractMethod<"));
+        assert!(output.contains("  initialize: __gh_client_contract.defineContractMethod<"));
         assert!(output.contains("entrypoint: entrypoints.ERC20.initialize,"));
         assert!(output.contains("entrypoint: entrypoints.ERC20Metadata.initialize,"));
         assert!(output.contains("type: spec.interfaces[0]!.methods[0]!.args[0]!.ty"));
@@ -3421,7 +3204,7 @@ export type Result =
     }
 
     #[test]
-    fn interface_name_colliding_with_import_errors() {
+    fn interface_may_take_a_runtime_export_name() {
         let spec = counter_spec_with_interface_name(
             "fromHex",
             vec![ContractSpecMethod {
@@ -3432,8 +3215,12 @@ export type Result =
             false,
         );
 
-        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
-        assert!(err.to_string().contains("fromHex"));
+        let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+        assert!(output.contains("export const fromHex = {"), "{output}");
+        assert!(
+            output.contains("__gh_protocol_utils.fromHex(\""),
+            "{output}"
+        );
     }
 
     #[test]
@@ -3552,10 +3339,8 @@ export type Result =
 
     #[test]
     fn embeds_another_crate_from_a_module_of_that_crates_name() {
-        // `Holder` moves into `demo::other`, so its own namespace is named
-        // `other`. A bare `other.v1.Thing` would now resolve to the enclosing
-        // module namespace, which has no `v1`, so the reference goes through
-        // a type alias declared at the top level instead.
+        // `Holder` sits in `demo::other`, so a bare `other.v1.Thing` would
+        // resolve to the enclosing module; hence the top-level alias.
         let output = generate_ts_bindings(&cross_crate_spec("demo::other"), "x.spec.xdr").unwrap();
         assert!(
             output.contains("type __gh_Thing_0 = other.v1.Thing;"),
@@ -3593,15 +3378,8 @@ export type Result =
 
     #[test]
     fn a_captured_name_the_file_never_writes_needs_no_alias() {
-        // A struct named `SignedToken` captures the runtime's, but no signed
-        // token appears anywhere, so an import for it would go unused.
-        let mut spec = counter_spec();
-        spec.type_defs = vec![struct_at(spec_id("SignedToken"))].try_into().unwrap();
-        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
-        assert!(!output.contains("__gh_"), "{output}");
-
-        // Nor does a captured crate's type that only an event topic uses: the
-        // topic is written as its hash, never as the type.
+        // A captured crate's type that only an event topic uses: the topic is
+        // written as its hash, never as the type.
         let mut spec = spec_with_events();
         spec.type_defs = vec![
             struct_at(spec_id_at("other", "other", "Thing")),
@@ -3613,7 +3391,7 @@ export type Result =
             named: spec_id_at("other", "other", "Thing"),
         };
         let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
-        assert!(!output.contains("__gh_"), "{output}");
+        assert!(!output.contains("type __gh_"), "{output}");
     }
 
     #[test]
@@ -3655,7 +3433,7 @@ export type Result =
 
     #[test]
     fn escape_prefix_is_reserved_wherever_a_spec_name_lands() {
-        // An interface object sits at top level beside the escape imports.
+        // An interface object sits at top level beside the runtime imports.
         let spec = counter_spec_with_interface_name("__gh_client_contract", vec![], false);
         let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
         assert!(
@@ -3887,7 +3665,7 @@ export type Result =
         let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
         assert!(output.contains("export interface CounterSymbolArgs"));
         assert!(output.contains("  return: string;"));
-        assert!(output.contains("  symbol: defineContractMethod<"));
+        assert!(output.contains("  symbol: __gh_client_contract.defineContractMethod<"));
     }
 
     #[test]
@@ -4006,6 +3784,23 @@ export type Result =
     }
 
     #[test]
+    fn every_binding_imports_every_runtime_module_whole() {
+        let imports = "\n\
+            import * as __gh_protocol from \"@groundhogchain/protocol\";\n\
+            import * as __gh_protocol_utils from \"@groundhogchain/protocol/utils\";\n\
+            import * as __gh_contract_spec from \"@groundhogchain/contract-spec\";\n\
+            import * as __gh_client_contract from \"@groundhogchain/client/contract\";\n";
+        // Methods, events, and neither: the last uses no protocol module at all.
+        let bare = counter_spec_with_interface_name("Counter", vec![], false);
+        for spec in [counter_spec(), spec_with_events(), bare] {
+            let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+            assert!(output.contains(imports), "{output}");
+            let lines = output.lines().filter(|line| line.starts_with("import "));
+            assert_eq!(lines.count(), RUNTIME_MODULES.len(), "{output}");
+        }
+    }
+
+    #[test]
     fn generates_full_binding_for_simple_contract() {
         let spec = counter_spec();
         let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
@@ -4015,20 +3810,17 @@ export type Result =
         assert!(output.contains("counter.spec.xdr"));
         assert!(output.contains("Counter interface v0.1.0"));
 
-        // Imports
-        assert!(output.contains("@groundhogchain/protocol"));
-        assert!(output.contains("@groundhogchain/client"));
-        assert!(output.contains("@groundhogchain/contract-spec"));
-
         // Entrypoints block
         assert!(output.contains("const entrypoints = {"));
         assert!(output.contains("  Counter: {"));
         assert!(output.contains("} as const;"));
 
         // Spec literal
-        assert!(output.contains("export const spec: ContractSpec"));
+        assert!(output.contains("export const spec: __gh_client_contract.ContractSpec"));
 
-        assert!(output.contains("const codecs = createContractCodecContext(spec.type_defs);"));
+        assert!(output.contains(
+            "const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);"
+        ));
 
         assert!(output.contains("export const Counter = {"));
         assert!(output.contains("export type CounterGetArgs = void;"));
@@ -4038,10 +3830,11 @@ export type Result =
         assert!(output.contains("export type CounterIncrementResult = void;"));
         assert!(output.contains("export type CounterDeclaredException = never;"));
         assert!(output.contains(
-            "export type CounterException = ContractException<CounterDeclaredException>;"
+            "export type CounterException = \
+             __gh_client_contract.ContractException<CounterDeclaredException>;"
         ));
-        assert!(output.contains("  get: defineContractMethod<"));
-        assert!(output.contains("  increment: defineContractMethod<"));
+        assert!(output.contains("  get: __gh_client_contract.defineContractMethod<"));
+        assert!(output.contains("  increment: __gh_client_contract.defineContractMethod<"));
         assert!(output.contains("interfaceName: \"Counter\""));
         assert!(output.contains("interfaceVersion: \"0.1.0\""));
         assert!(output.contains("abiName: \"increment\""));
@@ -4182,15 +3975,15 @@ export type Result =
             "ERC20 interface object missing"
         );
         assert!(
-            output.contains("  transfer: defineContractMethod<"),
+            output.contains("  transfer: __gh_client_contract.defineContractMethod<"),
             "transfer method missing"
         );
         assert!(
-            output.contains("  getBalance: defineContractMethod<"),
+            output.contains("  getBalance: __gh_client_contract.defineContractMethod<"),
             "getBalance method missing"
         );
         assert!(
-            output.contains("  getBalanceOf: defineContractMethod<"),
+            output.contains("  getBalanceOf: __gh_client_contract.defineContractMethod<"),
             "getBalanceOf method missing"
         );
         assert!(
@@ -4204,13 +3997,13 @@ export type Result =
 
         assert!(
             output.contains("export interface ERC20TransferArgs")
-                && output.contains("to: ContractAddress")
+                && output.contains("to: __gh_protocol.ContractAddress")
                 && output.contains("amount: bigint"),
             "transfer 'to' arg type mismatch"
         );
         assert!(
             output.contains("export interface ERC20GetBalanceOfArgs")
-                && output.contains("accountId: ContractAddress"),
+                && output.contains("accountId: __gh_protocol.ContractAddress"),
             "getBalanceOf 'accountId' arg type mismatch"
         );
         assert!(
@@ -4230,11 +4023,10 @@ export type Result =
         assert!(output.contains("export type ERC20DeclaredException ="));
         assert!(output.contains("name: \"ERC20Error\";"));
         assert!(output.contains("value: demo.v1.ERC20Error;"));
-        assert!(
-            output.contains(
-                "export type ERC20Exception = ContractException<ERC20DeclaredException>;"
-            )
-        );
+        assert!(output.contains(
+            "export type ERC20Exception = \
+             __gh_client_contract.ContractException<ERC20DeclaredException>;"
+        ));
         assert!(output.contains("type: spec.interfaces[0]!.throws[0]!.ty"));
 
         // Spec literal contains exception selector
@@ -4508,13 +4300,19 @@ export type Result =
         .unwrap();
 
         let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
-        assert!(output.contains("\"owner-address\": ContractAddress"));
-        assert!(output.contains("\"id\": FixedBytes<32>"));
-        assert!(output.contains("\"owner-address\"?: ContractEventFilterValue<ContractAddress>"));
-        assert!(output.contains("\"id\"?: ContractEventFilterValue<FixedBytes<32>>"));
+        assert!(output.contains("\"owner-address\": __gh_protocol.ContractAddress"));
+        assert!(output.contains("\"id\": __gh_client_contract.FixedBytes<32>"));
+        assert!(output.contains(
+            "\"owner-address\"?: \
+             __gh_client_contract.ContractEventFilterValue<__gh_protocol.ContractAddress>"
+        ));
+        assert!(output.contains(
+            "\"id\"?: \
+             __gh_client_contract.ContractEventFilterValue<__gh_client_contract.FixedBytes<32>>"
+        ));
         assert!(output.contains("representation: \"address\""));
         assert!(output.contains("representation: \"fixedBytes32\""));
-        assert!(output.contains("defineContractEvent<"));
+        assert!(output.contains("__gh_client_contract.defineContractEvent<"));
     }
 
     #[test]
@@ -4537,12 +4335,16 @@ export type Result =
 
         assert!(output.contains("\"unsigned\": bigint"));
         assert!(output.contains("\"signed\": bigint"));
-        assert!(output.contains("\"unsigned\"?: ContractEventFilterValue<bigint>"));
-        assert!(output.contains("\"signed\"?: ContractEventFilterValue<bigint>"));
+        assert!(
+            output.contains("\"unsigned\"?: __gh_client_contract.ContractEventFilterValue<bigint>")
+        );
+        assert!(
+            output.contains("\"signed\"?: __gh_client_contract.ContractEventFilterValue<bigint>")
+        );
         assert!(output.contains("representation: \"u256\""));
         assert!(output.contains("representation: \"i256\""));
-        assert!(output.contains("{ v: ContractTypeKind.U256 }"));
-        assert!(output.contains("{ v: ContractTypeKind.I256 }"));
+        assert!(output.contains("{ v: __gh_contract_spec.ContractTypeKind.U256 }"));
+        assert!(output.contains("{ v: __gh_contract_spec.ContractTypeKind.I256 }"));
     }
 
     #[test]
@@ -4560,7 +4362,9 @@ export type Result =
             spec.events.0[0].topics.0[0].ty = ty;
             let output = generate_ts_bindings(&spec, "scalar.spec.xdr").unwrap();
             assert!(output.contains(&format!("\"tag\": {ts_type}")));
-            assert!(output.contains(&format!("\"tag\"?: ContractEventFilterValue<{ts_type}>")));
+            assert!(output.contains(&format!(
+                "\"tag\"?: __gh_client_contract.ContractEventFilterValue<{ts_type}>"
+            )));
             assert!(output.contains(&format!("representation: \"{representation}\"")));
             assert!(!output.contains("original value cannot be recovered"));
         }

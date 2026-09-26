@@ -1,18 +1,17 @@
 // Generated from typed_contract.spec.xdr - ExampleContract interface v0.1.0
 // DO NOT EDIT. Re-run codegen to update.
 
-import type { ContractAddress } from "@groundhogchain/protocol";
-import { contractEntrypointID, topic } from "@groundhogchain/protocol";
-import { fromHex } from "@groundhogchain/protocol/utils";
-import { ContractTypeKind, ContractTypeDefKind, contractSpecString, ContractUnionCaseKind } from "@groundhogchain/contract-spec";
-import { type ContractSpec, createContractCodecContext, defineContractMethod, type ContractException, type FixedBytes, defineContractEvent, type DecodedContractEvent, type ContractEventFilterValue } from "@groundhogchain/client/contract";
+import * as __gh_protocol from "@groundhogchain/protocol";
+import * as __gh_protocol_utils from "@groundhogchain/protocol/utils";
+import * as __gh_contract_spec from "@groundhogchain/contract-spec";
+import * as __gh_client_contract from "@groundhogchain/client/contract";
 
-const s = contractSpecString;
+const s = __gh_contract_spec.contractSpecString;
 
 const entrypoints = {
   ExampleContract: {
-    getValues: contractEntrypointID(fromHex("58ead8a01a28d35b")),
-    update: contractEntrypointID(fromHex("b06037c26b2ec2cd")),
+    getValues: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("58ead8a01a28d35b")),
+    update: __gh_protocol.contractEntrypointID(__gh_protocol_utils.fromHex("b06037c26b2ec2cd")),
   },
 } as const;
 
@@ -31,7 +30,7 @@ export type ExampleContractGetValuesResult = readonly [bigint, bigint, bigint];
 
 export interface ExampleContractUpdateArgs {
   value: bigint;
-  requestId: FixedBytes<32> | null;
+  requestId: __gh_client_contract.FixedBytes<32> | null;
 }
 export type ExampleContractUpdateResult = void;
 
@@ -42,49 +41,49 @@ export type ExampleContractDeclaredException =
     selector: 0x1234n;
     value: demo.v1.ExampleError;
   };
-export type ExampleContractException = ContractException<ExampleContractDeclaredException>;
+export type ExampleContractException = __gh_client_contract.ContractException<ExampleContractDeclaredException>;
 
-export const spec: ContractSpec = {
+export const spec: __gh_client_contract.ContractSpec = {
   interfaces: [
     {
       name: s("ExampleContract"),
       vers: s("0.1.0"),
       throws: [
-        { selector: 0x1234n, ty: { v: ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") } } },
+        { selector: 0x1234n, ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") } } },
       ],
       methods: [
         {
           name: s("get_values"),
           args: [
           ],
-          return_type: { v: ContractTypeKind.Tuple, tuple: [{ v: ContractTypeKind.U128 }, { v: ContractTypeKind.U128 }, { v: ContractTypeKind.U64 }] },
+          return_type: { v: __gh_contract_spec.ContractTypeKind.Tuple, tuple: [{ v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U64 }] },
         },
         {
           name: s("update"),
           args: [
-            { name: s("value"), ty: { v: ContractTypeKind.U128 } },
-            { name: s("request_id"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Array, array: { element: { v: ContractTypeKind.U8 }, len: 32n } } } },
+            { name: s("value"), ty: { v: __gh_contract_spec.ContractTypeKind.U128 } },
+            { name: s("request_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U8 }, len: 32n } } } },
           ],
-          return_type: { v: ContractTypeKind.Void },
+          return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
         },
       ],
     },
   ],
   type_defs: [
     {
-      v: ContractTypeDefKind.TypeDefUnion,
+      v: __gh_contract_spec.ContractTypeDefKind.TypeDefUnion,
       union_def: {
         name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ExampleError") },
         cases: [
           {
             name: s("InvalidValue"),
             discriminant: -1n,
-            case_type: { v: ContractUnionCaseKind.UnionCaseVoid },
+            case_type: { v: __gh_contract_spec.ContractUnionCaseKind.UnionCaseVoid },
           },
           {
             name: s("UpdateFailed"),
             discriminant: 2n,
-            case_type: { v: ContractUnionCaseKind.UnionCaseTuple, tuple: [{ v: ContractTypeKind.U32 }] },
+            case_type: { v: __gh_contract_spec.ContractUnionCaseKind.UnionCaseTuple, tuple: [{ v: __gh_contract_spec.ContractTypeKind.U32 }] },
           },
         ],
       },
@@ -93,24 +92,24 @@ export const spec: ContractSpec = {
   events: [
     {
       name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("ChangedEvent") },
-      signature: topic(fromHex("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a")),
+      signature: __gh_protocol.topic(__gh_protocol_utils.fromHex("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a")),
       topics: [
-        { name: s("actor"), ty: { v: ContractTypeKind.Address } },
-        { name: s("request_id"), ty: { v: ContractTypeKind.Array, array: { element: { v: ContractTypeKind.U8 }, len: 32n } } },
+        { name: s("actor"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
+        { name: s("request_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U8 }, len: 32n } } },
       ],
       fields: [
-        { name: s("previous_values"), ty: { v: ContractTypeKind.Array, array: { element: { v: ContractTypeKind.U128 }, len: 2n } } },
-        { name: s("current_values"), ty: { v: ContractTypeKind.Array, array: { element: { v: ContractTypeKind.U128 }, len: 2n } } },
-        { name: s("request_id"), ty: { v: ContractTypeKind.Option, option_inner: { v: ContractTypeKind.Array, array: { element: { v: ContractTypeKind.U8 }, len: 32n } } } },
+        { name: s("previous_values"), ty: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U128 }, len: 2n } } },
+        { name: s("current_values"), ty: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U128 }, len: 2n } } },
+        { name: s("request_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U8 }, len: 32n } } } },
       ],
     },
   ],
 };
 
-const codecs = createContractCodecContext(spec.type_defs);
+const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);
 
 export const ExampleContract = {
-  getValues: defineContractMethod<
+  getValues: __gh_client_contract.defineContractMethod<
     ExampleContractGetValuesArgs,
     ExampleContractGetValuesResult,
     ExampleContractDeclaredException
@@ -132,7 +131,7 @@ export const ExampleContract = {
     ],
     codecs,
   }),
-  update: defineContractMethod<
+  update: __gh_client_contract.defineContractMethod<
     ExampleContractUpdateArgs,
     ExampleContractUpdateResult,
     ExampleContractDeclaredException
@@ -170,18 +169,18 @@ export namespace demo {
 
   export namespace v1 {
 
-    export interface ChangedEvent extends DecodedContractEvent<
+    export interface ChangedEvent extends __gh_client_contract.DecodedContractEvent<
       "ChangedEvent",
-      { "actor": ContractAddress; "request_id": FixedBytes<32> },
-      { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": FixedBytes<32> | null }
+      { "actor": __gh_protocol.ContractAddress; "request_id": __gh_client_contract.FixedBytes<32> },
+      { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": __gh_client_contract.FixedBytes<32> | null }
     > {}
 
     export interface ChangedEventFilter {
-      "actor"?: ContractEventFilterValue<ContractAddress>;
-      "request_id"?: ContractEventFilterValue<FixedBytes<32>>;
+      "actor"?: __gh_client_contract.ContractEventFilterValue<__gh_protocol.ContractAddress>;
+      "request_id"?: __gh_client_contract.ContractEventFilterValue<__gh_client_contract.FixedBytes<32>>;
     }
 
-    export const ChangedEvent = defineContractEvent<
+    export const ChangedEvent = __gh_client_contract.defineContractEvent<
       "ChangedEvent",
       ChangedEvent["topics"],
       ChangedEvent["fields"],
