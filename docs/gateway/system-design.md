@@ -420,6 +420,33 @@ in the indexer" — only produced when both backends answered.
 A scheduler timeout, unavailability, or overload never turns an indexer miss
 into `Unknown`.
 
+
+### x23 pool kind
+
+Every x23 data pool is built through `x23-transport` in one of two shapes,
+chosen by `x23_pool` (`--x23-pool`, default `serial`):
+
+- `serial` is `rpc_driver::FixedSerialPool`: one call in flight per connection,
+  so each pool's size setting is both its connection count and its execution
+  width. A canceled call replaces or poisons its connection, per the pool's
+  cancellation policy.
+- `multiplex` is `rpc_driver::MultiplexPool`: many calls in flight per
+  connection, each routed to the connection with the fewest outstanding. The
+  size settings keep their meaning as execution widths, enforced in the
+  transport as a cap on calls in flight, and every data pool opens
+  `x23_multiplex_connections` (`--x23-multiplex-connections`, default 4)
+  sockets instead. A canceled call's late reply is discarded and the connection
+  stays in service.
+
+Admission does not change with the kind: lookups stay under the 68-call bound
+with `scheduler_lookup_pool_size` execution permits, the batchers keep their
+in-flight caps, and the indexer, `DbGateway`, and `ViewGateway` widths keep
+their values. Health probes use one serial connection under both kinds. The
+gateway never depends on the connection-level reaction to a canceled call: a
+submit or lookup timeout invalidates the scheduler generation, which drops all
+of that generation's pools, and the health loop rebuilds them behind the
+readiness grace.
+
 ---
 
 ## Event Query Bounds

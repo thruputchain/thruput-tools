@@ -16,10 +16,8 @@ description = "Shared x23 RPC transport helpers for Groundhog Rust binaries"
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 rpc_driver = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
-async-trait = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }

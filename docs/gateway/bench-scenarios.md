@@ -302,9 +302,14 @@ requests, independently of the connection count. Excess lookups fail with
 health connections, or the indexer pool.
 
 Indexer and scheduler lookup clients both use `rpc_driver::FixedSerialPool`
-through `x23-transport`, with one active call per connection and replacement of
-connections whose active call is cancelled. They use separate pool instances;
-scheduler lookups additionally have gateway admission and execution semaphores.
+through `x23-transport` by default, with one active call per connection and
+replacement of connections whose active call is cancelled. They use separate
+pool instances; scheduler lookups additionally have gateway admission and
+execution semaphores. With `x23_pool = "multiplex"` (`--x23-pool multiplex`)
+every data pool is instead an `rpc_driver::MultiplexPool` over
+`x23_multiplex_connections` sockets, and the size settings above become caps on
+calls in flight rather than connection counts. Compare the two kinds with the
+same workload and the same size settings; only the socket count differs.
 
 Compare 4, 8, and 16 connections with the same unknown-hash status workload and
 fixed client concurrency. Confirm metrics show `schedgateway_lookup_tx` calls:

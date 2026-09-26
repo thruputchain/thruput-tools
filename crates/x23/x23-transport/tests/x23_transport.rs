@@ -152,3 +152,192 @@ async fn large_connection_limit_crosses_default_boundary() {
 fn hogd_large_message_limit_is_bounded() {
     assert_eq!(HOGD_LARGE_MESSAGE_SIZE, 64 * 1024 * 1024);
 }
+
+// --- multiplexed pools -------------------------------------------------
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use rpc_driver::CanceledCallPolicy;
+
+/// Echoes after a short hold and records the most calls it had in flight at
+/// once, so a test can see the transport's execution cap from the peer's side.
+struct HoldingEcho {
+    in_flight: AtomicUsize,
+    peak: AtomicUsize,
+}
+
+#[async_trait]
+impl RpcHandler for HoldingEcho {
+    async fn dispatch(&self, _proc: u32, data: &[u8]) -> Result<Vec<u8>, RpcError> {
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(data.to_vec())
+    }
+
+    fn prog_vers(&self) -> ProgVers {
+        ProgVers::new(1, 1)
+    }
+}
+
+/// Lets the test keep a handle on the handler the server owns.
+struct SharedHandler(Arc<HoldingEcho>);
+
+#[async_trait]
+impl RpcHandler for SharedHandler {
+    async fn dispatch(&self, proc: u32, data: &[u8]) -> Result<Vec<u8>, RpcError> {
+        self.0.dispatch(proc, data).await
+    }
+
+    fn prog_vers(&self) -> ProgVers {
+        self.0.prog_vers()
+    }
+}
+
+async fn start_holding_echo_server() -> (std::net::SocketAddr, Arc<HoldingEcho>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bug: test RPC server should bind");
+    let addr = listener
+        .local_addr()
+        .expect("bug: test RPC server should have a local address");
+    let handler = Arc::new(HoldingEcho {
+        in_flight: AtomicUsize::new(0),
+        peak: AtomicUsize::new(0),
+    });
+    let mut services = ServiceMap::new();
+    services.add_service(Box::new(SharedHandler(handler.clone())));
+    RpcServer::new(listener, services).start().await;
+    (addr, handler)
+}
+
+async fn echo_calls(sender: &Arc<dyn RpcSender>, calls: usize) {
+    let mut pending = Vec::new();
+    for i in 0..calls {
+        let sender = sender.clone();
+        pending.push(tokio::spawn(async move {
+            let mut call = sender.call_buf();
+            call.extend_from_slice(format!("call-{i}").as_bytes());
+            sender.send_call(ProgVers::new(1, 1), 1, call).await
+        }));
+    }
+    for (i, call) in pending.into_iter().enumerate() {
+        let response = call
+            .await
+            .expect("bug: call task should finish")
+            .expect("bug: multiplexed call should succeed");
+        assert_eq!(response, format!("call-{i}").as_bytes());
+    }
+}
+
+#[tokio::test]
+async fn multiplex_pool_carries_more_calls_than_connections() {
+    let (addr, handler) = start_holding_echo_server().await;
+    let sender = connect_pool(
+        "multiplex",
+        &addr.to_string(),
+        PoolKind::Multiplex { max_in_flight: 16 },
+        2,
+        ConnectionConfig::default(),
+        build_sender,
+    )
+    .await
+    .expect("bug: multiplexed pool should connect");
+
+    echo_calls(&sender, 16).await;
+
+    // Two connections carried all sixteen at once: the peer saw more than
+    // two in flight, which a serial pool of two could never produce.
+    assert!(handler.peak.load(Ordering::SeqCst) > 2);
+}
+
+#[tokio::test]
+async fn multiplex_pool_caps_calls_in_flight_below_connection_count() {
+    let (addr, handler) = start_holding_echo_server().await;
+    let sender = connect_pool(
+        "capped",
+        &addr.to_string(),
+        PoolKind::Multiplex { max_in_flight: 3 },
+        4,
+        ConnectionConfig::default(),
+        build_sender,
+    )
+    .await
+    .expect("bug: capped pool should connect");
+
+    echo_calls(&sender, 12).await;
+
+    assert!(handler.peak.load(Ordering::SeqCst) <= 3);
+}
+
+#[tokio::test]
+async fn multiplex_pool_rejects_zero_execution_width() {
+    let (addr, _handler) = start_holding_echo_server().await;
+    let err = connect_pool(
+        "zero",
+        &addr.to_string(),
+        PoolKind::Multiplex { max_in_flight: 0 },
+        1,
+        ConnectionConfig::default(),
+        build_dummy,
+    )
+    .await
+    .expect_err("bug: a zero execution width should be a configuration error");
+    assert!(matches!(
+        err,
+        ConnectError::ConnectFailed {
+            source: RpcError::InvalidPoolConfiguration,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn try_connect_pool_returns_none_on_unreachable() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bug: ephemeral bind should succeed");
+    let addr = listener
+        .local_addr()
+        .expect("bug: bound listener should have a local addr")
+        .to_string();
+    drop(listener);
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        try_connect_pool(
+            "dummy",
+            &addr,
+            PoolKind::Multiplex { max_in_flight: 4 },
+            2,
+            ConnectionConfig::default(),
+            build_dummy,
+        ),
+    )
+    .await
+    .expect("bug: try_connect_pool should return promptly on ECONNREFUSED");
+    assert!(matches!(result, Ok(None)));
+}
+
+#[tokio::test]
+async fn serial_pool_kind_matches_the_serial_connect_functions() {
+    let (addr, handler) = start_holding_echo_server().await;
+    let sender = connect_pool(
+        "serial",
+        &addr.to_string(),
+        PoolKind::Serial {
+            canceled_call_policy: CanceledCallPolicy::ReplaceConnection,
+        },
+        2,
+        ConnectionConfig::default(),
+        build_sender,
+    )
+    .await
+    .expect("bug: serial pool should connect");
+
+    echo_calls(&sender, 8).await;
+
+    // One call per connection at a time.
+    assert!(handler.peak.load(Ordering::SeqCst) <= 2);
+}

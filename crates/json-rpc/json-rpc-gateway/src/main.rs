@@ -118,6 +118,14 @@ struct Cli {
     #[arg(long)]
     scheduler_lookup_pool_size: Option<crate::config::SchedulerLookupPoolSize>,
 
+    /// x23 data pool kind: `serial` (default) or `multiplex` (overrides config)
+    #[arg(long)]
+    x23_pool: Option<crate::config::X23PoolKind>,
+
+    /// Connections per multiplexed x23 data pool (1..=64, default 4; overrides config)
+    #[arg(long)]
+    x23_multiplex_connections: Option<crate::config::X23MultiplexConnections>,
+
     /// `DbGateway` x23 RPC address (overrides config file)
     #[arg(long)]
     db_gateway: Option<String>,
@@ -205,6 +213,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         indexer = ?config.indexer_address,
         indexer_pool_size = config.indexer_pool_size.get(),
         scheduler_lookup_pool_size = config.scheduler_lookup_pool_size.get(),
+        x23_pool = %config.x23_pool,
+        x23_multiplex_connections = config.x23_multiplex_connections.get(),
         view_gateway = ?config.view_gateway_address,
         hogd_protocol_override = ?config.hogd_protocol_override,
         "loading configuration",
@@ -393,6 +403,12 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     if let Some(pool_size) = cli.indexer_pool_size {
         config.indexer_pool_size = pool_size;
     }
+    if let Some(kind) = cli.x23_pool {
+        config.x23_pool = kind;
+    }
+    if let Some(connections) = cli.x23_multiplex_connections {
+        config.x23_multiplex_connections = connections;
+    }
     if let Some(db_gateway) = cli.db_gateway {
         config.db_gateway_address = Some(db_gateway);
     }
@@ -518,6 +534,56 @@ mod tests {
             Cli::parse_from(["hog-gateway", "--indexer-pool-size", "16"]),
         );
         assert_eq!(config.indexer_pool_size.get(), 16);
+    }
+
+    #[test]
+    fn x23_pool_defaults_to_serial_and_cli_overrides_toml() {
+        use crate::config::X23PoolKind;
+
+        let mut config = GatewayConfig::default();
+        assert_eq!(config.x23_pool, X23PoolKind::Serial);
+        assert_eq!(config.x23_multiplex_connections.get(), 4);
+        config = toml::from_str("x23_pool = \"multiplex\"\nx23_multiplex_connections = 8").unwrap();
+        apply_cli_overrides(&mut config, Cli::parse_from(["hog-gateway"]));
+        assert_eq!(config.x23_pool, X23PoolKind::Multiplex);
+        assert_eq!(config.x23_multiplex_connections.get(), 8);
+        apply_cli_overrides(
+            &mut config,
+            Cli::parse_from([
+                "hog-gateway",
+                "--x23-pool",
+                "serial",
+                "--x23-multiplex-connections",
+                "2",
+            ]),
+        );
+        assert_eq!(config.x23_pool, X23PoolKind::Serial);
+        assert_eq!(config.x23_multiplex_connections.get(), 2);
+    }
+
+    #[test]
+    fn x23_pool_cli_and_toml_enforce_the_same_bounds() {
+        assert!(toml::from_str::<GatewayConfig>("x23_pool = \"dynamic\"").is_err());
+        assert!(Cli::try_parse_from(["hog-gateway", "--x23-pool", "dynamic"]).is_err());
+        for value in ["1", "4", "64"] {
+            let config: GatewayConfig =
+                toml::from_str(&format!("x23_multiplex_connections = {value}")).unwrap();
+            let cli =
+                Cli::try_parse_from(["hog-gateway", "--x23-multiplex-connections", value]).unwrap();
+            assert_eq!(
+                config.x23_multiplex_connections,
+                cli.x23_multiplex_connections.unwrap()
+            );
+        }
+        for value in ["0", "65", "-1"] {
+            assert!(
+                toml::from_str::<GatewayConfig>(&format!("x23_multiplex_connections = {value}"))
+                    .is_err()
+            );
+            assert!(
+                Cli::try_parse_from(["hog-gateway", "--x23-multiplex-connections", value]).is_err()
+            );
+        }
     }
 
     #[test]
