@@ -248,6 +248,56 @@ BENCH_SCENARIO=submit-ramp \
 scripts/smoke-runtime-manifest-bench.sh
 ```
 
+### `pool-compare`
+
+Compares the gateway's two x23 pool kinds on one mixed workload: tip reads,
+submissions, then confirmed receipt and status lookups over the hashes just
+committed. Each kind gets a gateway started fresh with `--x23-pool <kind>`;
+the CLI node and its runtime manifest are shared. Kinds alternate between
+repetitions so drift in the node does not favor whichever ran first.
+
+```bash
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
+  BENCH_SCENARIO=pool-compare \
+  BENCH_RESULTS_DIR=bench-results \
+  scripts/smoke-runtime-manifest-bench.sh
+```
+
+Default shape, per kind and repetition (the `gateway-baseline` rates plus the
+confirmed-read passes):
+
+- `chainTip`: 250 rps, 30s, 2s warmup, 4 workers
+- `sendRawTransaction`: 100 rps, 30s, 2s warmup, 4 workers, 10 accounts
+- `getTransactionReceipt` and `getTransactionStatus`: 8 outstanding, 30s,
+  over a seeded corpus of 10 confirmed hashes
+
+Useful knobs:
+
+```bash
+POOL_COMPARE_KINDS="serial multiplex" \
+POOL_COMPARE_REPEATS=2 \
+POOL_COMPARE_MULTIPLEX_CONNECTIONS=4 \
+POOL_COMPARE_SUBMIT_RATE=500 \
+POOL_COMPARE_DURATION=60 \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
+BENCH_SCENARIO=pool-compare \
+scripts/smoke-runtime-manifest-bench.sh
+```
+
+Result labels carry the kind and repetition (`standalone gateway multiplex
+pool r1`), so `groundhog-bench compare` can pair each kind's passes. The size
+settings are the same for both kinds; only the socket count differs, per
+`x23_multiplex_connections`. Raise `POOL_COMPARE_SUBMIT_RATE` until the serial
+gateway reports `Overloaded` to see where the pools part: at the default rates
+a single local node is the bottleneck and the two kinds measure alike.
+
+Restart and timeout behavior is covered by the gateway's own tests under both
+kinds (`four_backend_restart_recovers_without_rebuilding_gateway` and
+`canceled_lookups_preserve_scheduler_and_recover_capacity`, each with a
+multiplex variant); for a process-level restart against a real node use the
+simulator's `local-restart-*` scenarios with the gateway started with
+`--x23-pool multiplex`.
+
 ## Legacy Local Reference
 
 On a local `hog-devnode` runtime manifest from May 22, 2026, the standalone

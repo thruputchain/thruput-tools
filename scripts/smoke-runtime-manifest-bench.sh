@@ -12,7 +12,7 @@
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_VERBOSE=1
-#   BENCH_SCENARIO=smoke|gateway-baseline|submit-ramp
+#   BENCH_SCENARIO=smoke|gateway-baseline|submit-ramp|pool-compare
 #   BENCH_RATE=3
 #   BENCH_DURATION=2
 #   BENCH_WARMUP=0
@@ -23,6 +23,9 @@
 #   BENCH_BUILD_PROFILE=debug|release
 #   BENCH_RESULTS_DIR=/path/to/results
 #   SUBMIT_RAMP_RATES="250 500 1000"
+#   POOL_COMPARE_KINDS="serial multiplex"
+#   POOL_COMPARE_REPEATS=2
+#   POOL_COMPARE_MULTIPLEX_CONNECTIONS=4
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -55,6 +58,19 @@ SUBMIT_RAMP_DURATION="${SUBMIT_RAMP_DURATION:-30}"
 SUBMIT_RAMP_WARMUP="${SUBMIT_RAMP_WARMUP:-2}"
 SUBMIT_RAMP_WORKERS="${SUBMIT_RAMP_WORKERS:-4}"
 SUBMIT_RAMP_ACCOUNTS="${SUBMIT_RAMP_ACCOUNTS:-10}"
+
+# pool-compare: the gateway-baseline shape plus confirmed-status lookups,
+# repeated against a fresh gateway per x23 pool kind, in alternating order
+# so drift in the shared node does not favor one kind.
+POOL_COMPARE_KINDS="${POOL_COMPARE_KINDS:-serial multiplex}"
+POOL_COMPARE_REPEATS="${POOL_COMPARE_REPEATS:-2}"
+POOL_COMPARE_MULTIPLEX_CONNECTIONS="${POOL_COMPARE_MULTIPLEX_CONNECTIONS:-4}"
+POOL_COMPARE_CHAIN_RATE="${POOL_COMPARE_CHAIN_RATE:-$GATEWAY_BASELINE_CHAIN_RATE}"
+POOL_COMPARE_SUBMIT_RATE="${POOL_COMPARE_SUBMIT_RATE:-$GATEWAY_BASELINE_SUBMIT_RATE}"
+POOL_COMPARE_DURATION="${POOL_COMPARE_DURATION:-$GATEWAY_BASELINE_DURATION}"
+POOL_COMPARE_WARMUP="${POOL_COMPARE_WARMUP:-$GATEWAY_BASELINE_WARMUP}"
+POOL_COMPARE_WORKERS="${POOL_COMPARE_WORKERS:-$GATEWAY_BASELINE_WORKERS}"
+POOL_COMPARE_ACCOUNTS="${POOL_COMPARE_ACCOUNTS:-$GATEWAY_BASELINE_ACCOUNTS}"
 
 log() {
     printf '==> %s\n' "$*" >&2
@@ -355,10 +371,68 @@ run_submit_ramp() {
     done
 }
 
+# One mixed pass against the gateway `label` names: tip reads, submissions,
+# then confirmed receipt and status lookups over the hashes just committed.
+run_pool_compare_pass() {
+    local label="$1"
+    local gateway_url="$2"
+    local manifest="$3"
+    local slug
+    slug="$(benchmark_slug "$label")"
+    local hashes="$WORK/$slug-hashes.json"
+
+    bench_chain_tip "$label" "$gateway_url" "$manifest" \
+        "$POOL_COMPARE_CHAIN_RATE" "$POOL_COMPARE_DURATION" \
+        "$POOL_COMPARE_WARMUP" "$POOL_COMPARE_WORKERS"
+    bench_send_raw "$label" "$gateway_url" "$manifest" \
+        "$POOL_COMPARE_SUBMIT_RATE" "$POOL_COMPARE_DURATION" \
+        "$POOL_COMPARE_WARMUP" "$POOL_COMPARE_WORKERS" "$POOL_COMPARE_ACCOUNTS"
+    log "Bench $label confirmed receipts: seed $POOL_COMPARE_ACCOUNTS hashes, 8 outstanding"
+    run_bench_command "$slug-confirmed-receipts.json" \
+        --scenario "$BENCH_SCENARIO" --target-label "$label" \
+        --url "$gateway_url" --runtime-manifest "$manifest" \
+        --method getTransactionReceipt --outstanding 8 \
+        --seed-count "$POOL_COMPARE_ACCOUNTS" --seed-output "$hashes" \
+        --accounts "$POOL_COMPARE_ACCOUNTS" --force \
+        --duration "$POOL_COMPARE_DURATION" --warmup "$POOL_COMPARE_WARMUP" \
+        --workers "$POOL_COMPARE_WORKERS"
+    log "Bench $label confirmed status: import verified corpus, 8 outstanding"
+    run_bench_command "$slug-confirmed-status.json" \
+        --scenario "$BENCH_SCENARIO" --target-label "$label" \
+        --url "$gateway_url" --runtime-manifest "$manifest" \
+        --method getTransactionStatus --outstanding 8 --hashes-file "$hashes" \
+        --duration "$POOL_COMPARE_DURATION" --warmup "$POOL_COMPARE_WARMUP" \
+        --workers "$POOL_COMPARE_WORKERS"
+}
+
+# Runs the mixed pass once per pool kind and repetition, each against a
+# gateway started fresh with that kind, alternating the kind order between
+# repetitions. Result labels carry the kind and repetition.
+run_pool_compare() {
+    local manifest="$1"
+    local repeat kinds kind
+
+    for ((repeat = 1; repeat <= POOL_COMPARE_REPEATS; repeat++)); do
+        if ((repeat % 2 == 1)); then
+            kinds="$POOL_COMPARE_KINDS"
+        else
+            kinds="$(printf '%s\n' $POOL_COMPARE_KINDS | tac | tr '\n' ' ')"
+        fi
+        for kind in $kinds; do
+            stop_gateway
+            start_gateway "pool-$kind-r$repeat" \
+                --x23-pool "$kind" \
+                --x23-multiplex-connections "$POOL_COMPARE_MULTIPLEX_CONNECTIONS"
+            run_pool_compare_pass "standalone gateway $kind pool r$repeat" \
+                "$GATEWAY_RPC_URL" "$manifest"
+        done
+    done
+}
+
 check_process_logs() {
     local log_path
 
-    for log_path in "$WORK/node.err" "$WORK/gateway.err"; do
+    for log_path in "$WORK/node.err" "$WORK"/gateway*.err; do
         [[ -f "$log_path" ]] || continue
         if command -v rg >/dev/null 2>&1; then
             if rg -i 'panic|abort|fatal|critical|segmentation fault' "$log_path" >&2; then
@@ -510,18 +584,38 @@ RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
 log "Node RPC: $NODE_RPC_URL"
 log "Runtime manifest: $RUNTIME_MANIFEST"
 
-GATEWAY_PORT="$(free_tcp_port)"
-GATEWAY_RPC_URL="http://127.0.0.1:$GATEWAY_PORT"
-log "Starting standalone gateway: $GATEWAY_RPC_URL"
-"$GATEWAY" --runtime-manifest "$RUNTIME_MANIFEST" --listen "127.0.0.1:$GATEWAY_PORT" \
-    --scheduler-reconnect-grace-ms 0 \
-    > "$WORK/gateway.out" 2> "$WORK/gateway.err" &
-GATEWAY_PID=$!
+# Start a standalone gateway from the runtime manifest. `tag` names its log
+# files (`gateway.err` for the default instance); further arguments are
+# passed to hog-gateway after the manifest and listen address.
+start_gateway() {
+    local tag="$1"
+    shift
+    local log_base="$WORK/gateway"
+    [[ "$tag" == "gateway" ]] || log_base="$WORK/gateway-$tag"
 
-if ! wait_for_gateway_rpc "$GATEWAY_RPC_URL"; then
-    cat "$WORK/gateway.err" >&2 || true
-    die "standalone gateway did not answer chainTip"
-fi
+    GATEWAY_PORT="$(free_tcp_port)"
+    GATEWAY_RPC_URL="http://127.0.0.1:$GATEWAY_PORT"
+    log "Starting standalone gateway ($tag): $GATEWAY_RPC_URL"
+    "$GATEWAY" --runtime-manifest "$RUNTIME_MANIFEST" --listen "127.0.0.1:$GATEWAY_PORT" \
+        --scheduler-reconnect-grace-ms 0 "$@" \
+        > "$log_base.out" 2> "$log_base.err" &
+    GATEWAY_PID=$!
+
+    if ! wait_for_gateway_rpc "$GATEWAY_RPC_URL"; then
+        cat "$log_base.err" >&2 || true
+        die "standalone gateway ($tag) did not answer chainTip"
+    fi
+}
+
+stop_gateway() {
+    if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
+        kill "$GATEWAY_PID" >/dev/null 2>&1 || true
+        wait "$GATEWAY_PID" >/dev/null 2>&1 || true
+    fi
+    GATEWAY_PID=""
+}
+
+start_gateway gateway
 
 case "$BENCH_SCENARIO" in
     smoke)
@@ -538,8 +632,11 @@ case "$BENCH_SCENARIO" in
     submit-ramp)
         run_submit_ramp "$GATEWAY_RPC_URL" "$RUNTIME_MANIFEST"
         ;;
+    pool-compare)
+        run_pool_compare "$RUNTIME_MANIFEST"
+        ;;
     *)
-        die "unknown BENCH_SCENARIO=$BENCH_SCENARIO (expected smoke, gateway-baseline, or submit-ramp)"
+        die "unknown BENCH_SCENARIO=$BENCH_SCENARIO (expected smoke, gateway-baseline, submit-ramp, or pool-compare)"
         ;;
 esac
 
