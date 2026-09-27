@@ -411,12 +411,9 @@ pub(crate) struct QuarantinedScheduler {
 }
 
 /// Connect the scheduler's three pools: submission and tip, transaction
-/// lookup, and the one-connection health probe.
-///
-/// A serial submit pool uses `PoisonConnection`, since hogd's scheduler
-/// needs its intro handshake and a readiness grace before a client may be
-/// used again; `docs/gateway/system-design.md` covers how a submit timeout
-/// clears the scheduler generation under either kind.
+/// lookup, and the one-connection health probe. The "x23 pool kind"
+/// section of `docs/gateway/system-design.md` covers the cancellation
+/// policies.
 pub(crate) async fn connect_optional_scheduler(
     pools: X23PoolSettings,
     address: &str,

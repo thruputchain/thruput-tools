@@ -57,21 +57,16 @@ pub fn hogd_large_message_config() -> ConnectionConfig {
 /// to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolKind {
-    /// `FixedSerialPool`: one call in flight per connection, FIFO per
-    /// connection. The connection count is also the number of calls that
-    /// execute at once; further calls queue in the pool.
-    /// `canceled_call_policy` decides what happens to a connection whose
-    /// active call is canceled.
+    /// `FixedSerialPool`: one call in flight per connection, so the
+    /// connection count is the execution width; `canceled_call_policy`
+    /// decides what a canceled call does to its connection.
     Serial {
         canceled_call_policy: CanceledCallPolicy,
     },
-    /// `MultiplexPool`: many calls in flight per connection, each routed to
-    /// the connection with the fewest calls outstanding. `max_in_flight`
-    /// is the execution width, enforced here in the transport, and is
-    /// independent of the connection count; a call past it waits for a
-    /// slot, as it would queue in a serial pool. A canceled call's reply
-    /// is discarded and its connection stays in service; there is no
-    /// per-connection cancellation policy.
+    /// `MultiplexPool`: many calls in flight per connection, routed to the
+    /// least-loaded one; `max_in_flight` caps the execution width
+    /// independently of the connection count. A canceled call's connection
+    /// stays in service.
     Multiplex { max_in_flight: usize },
 }
 

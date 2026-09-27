@@ -106,14 +106,9 @@ impl FromStr for SchedulerLookupPoolSize {
 #[error("scheduler lookup pool size must be in 1..=68")]
 pub struct InvalidSchedulerLookupPoolSize;
 
-/// Which `rpc_driver` pool the gateway's x23 data connections use.
-///
-/// Each data pool's size setting is its execution width under either kind.
-/// `serial` opens one connection per executing call; `multiplex` opens
-/// [`GatewayConfig::x23_multiplex_connections`] sockets per pool and caps
-/// calls in flight at the width. Health probes stay on one serial
-/// connection either way. `docs/gateway/system-design.md` covers what a
-/// canceled call does under each kind.
+/// Which `rpc_driver` pool the gateway's x23 data connections use; the
+/// "x23 pool kind" section of `docs/gateway/system-design.md` covers what
+/// each kind means for sizing and canceled calls.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum X23PoolKind {

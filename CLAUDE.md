@@ -61,9 +61,8 @@ Workspace crates are grouped by boundary:
 
 `crates/x23/` owns the internal hogd-facing layer:
 
-- **x23-transport** — connection pools (serial or multiplexed, chosen by
-  `PoolKind`), address parsing, and typed connect errors for gateway and
-  node-supervisor. Internal; not the public JSON-RPC API.
+- **x23-transport** — connection pools, address parsing, and typed connect
+  errors for gateway and node-supervisor. Internal; not the public JSON-RPC API.
 - **hogd-backend** — shared hogd x23 backend adapters: intro-handshake
   classification and the XDR-to-JSON-RPC mapping for `SchedGateway`,
   `IndexerBlockExplorer`, `DbGateway`, and `ViewGateway` results, plus submit
