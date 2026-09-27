@@ -23,6 +23,37 @@ export namespace demo {
     export interface SignedToken { "token": __gh_client_contract.SignedToken; }
 
     export interface Holder { "inner": other.v1.Thing; }
+
+    export interface Record extends __gh_client_contract.DecodedContractEvent<
+      "Record",
+      { /** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "tag": globalThis.Uint8Array },
+      { "note": string }
+    > {}
+
+    export type RecordFilter = globalThis.Record<string, never>;
+
+    export interface codecs extends __gh_client_contract.DecodedContractEvent<
+      "codecs",
+      { "tag": bigint },
+      { "note": string }
+    > {}
+
+    export interface codecsFilter {
+      "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
+    }
+
+    export namespace spec {
+
+      export interface Pinged extends __gh_client_contract.DecodedContractEvent<
+        "Pinged",
+        { "tag": bigint },
+        { "note": string }
+      > {}
+
+      export interface PingedFilter {
+        "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
+      }
+    }
   }
 }
 
@@ -170,108 +201,72 @@ export const Shadowed = {
   }),
 } as const;
 
-const __gh_spec = spec;
-const __gh_codecs = codecs;
-
-export namespace demo {
-
-  export namespace v1 {
-
-    export interface Record extends __gh_client_contract.DecodedContractEvent<
+export const demo = {
+  v1: {
+    Record: __gh_client_contract.defineContractEvent<
       "Record",
-      { /** Hash of the ABI-encoded topic value; the original value cannot be recovered or directly filtered by this binding. */ "tag": globalThis.Uint8Array },
-      { "note": string }
-    > {}
-
-    export type RecordFilter = globalThis.Record<string, never>;
-
-    export const Record = __gh_client_contract.defineContractEvent<
-      "Record",
-      Record["topics"],
-      Record["fields"],
-      RecordFilter
+      demo.v1.Record["topics"],
+      demo.v1.Record["fields"],
+      demo.v1.RecordFilter
     >({
       name: "Record",
-      signature: __gh_spec.events[0]!.signature,
+      signature: spec.events[0]!.signature,
       topics: [
         {
           name: "tag",
-          type: __gh_spec.events[0]!.topics[0]!.ty,
+          type: spec.events[0]!.topics[0]!.ty,
           representation: "hash",
         },
       ],
       fields: [
-        { name: "note", type: __gh_spec.events[0]!.fields[0]!.ty },
+        { name: "note", type: spec.events[0]!.fields[0]!.ty },
       ],
-      codecs: __gh_codecs,
-    });
-
-    export interface codecs extends __gh_client_contract.DecodedContractEvent<
+      codecs,
+    }),
+    codecs: __gh_client_contract.defineContractEvent<
       "codecs",
-      { "tag": bigint },
-      { "note": string }
-    > {}
-
-    export interface codecsFilter {
-      "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
-    }
-
-    export const codecs = __gh_client_contract.defineContractEvent<
-      "codecs",
-      codecs["topics"],
-      codecs["fields"],
-      codecsFilter
+      demo.v1.codecs["topics"],
+      demo.v1.codecs["fields"],
+      demo.v1.codecsFilter
     >({
       name: "codecs",
-      signature: __gh_spec.events[1]!.signature,
+      signature: spec.events[1]!.signature,
       topics: [
         {
           name: "tag",
-          type: __gh_spec.events[1]!.topics[0]!.ty,
+          type: spec.events[1]!.topics[0]!.ty,
           representation: "u64",
         },
       ],
       fields: [
-        { name: "note", type: __gh_spec.events[1]!.fields[0]!.ty },
+        { name: "note", type: spec.events[1]!.fields[0]!.ty },
       ],
-      codecs: __gh_codecs,
-    });
-
-    export namespace spec {
-
-      export interface Pinged extends __gh_client_contract.DecodedContractEvent<
+      codecs,
+    }),
+    spec: {
+      Pinged: __gh_client_contract.defineContractEvent<
         "Pinged",
-        { "tag": bigint },
-        { "note": string }
-      > {}
-
-      export interface PingedFilter {
-        "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
-      }
-
-      export const Pinged = __gh_client_contract.defineContractEvent<
-        "Pinged",
-        Pinged["topics"],
-        Pinged["fields"],
-        PingedFilter
+        demo.v1.spec.Pinged["topics"],
+        demo.v1.spec.Pinged["fields"],
+        demo.v1.spec.PingedFilter
       >({
         name: "Pinged",
-        signature: __gh_spec.events[2]!.signature,
+        signature: spec.events[2]!.signature,
         topics: [
           {
             name: "tag",
-            type: __gh_spec.events[2]!.topics[0]!.ty,
+            type: spec.events[2]!.topics[0]!.ty,
             representation: "u64",
           },
         ],
         fields: [
-          { name: "note", type: __gh_spec.events[2]!.fields[0]!.ty },
+          { name: "note", type: spec.events[2]!.fields[0]!.ty },
         ],
-        codecs: __gh_codecs,
-      });
-    }
-  }
-}
+        codecs,
+      }),
+    },
+  },
+} as const;
 
 export type ShadowedEvent = demo.v1.Record | demo.v1.codecs | demo.v1.spec.Pinged;
 

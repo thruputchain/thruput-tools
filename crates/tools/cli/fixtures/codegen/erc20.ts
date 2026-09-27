@@ -20,9 +20,7 @@ export namespace demo {
 
   export namespace v1 {
 
-    export const ERC20Error = { "AlreadyInitialized": 1n, "MustBeContractOwner": 2n, "TooLarge": 3n, "Internal": 100n, } as const;
-
-    export type ERC20Error = (typeof ERC20Error)[keyof typeof ERC20Error];
+    export type ERC20Error = 1n | 2n | 3n | 100n;
   }
 }
 
@@ -184,4 +182,15 @@ export const ERC20 = {
     ],
     codecs,
   }),
+} as const;
+
+export const demo = {
+  v1: {
+    ERC20Error: {
+      "AlreadyInitialized": 1n,
+      "MustBeContractOwner": 2n,
+      "TooLarge": 3n,
+      "Internal": 100n,
+    },
+  },
 } as const;

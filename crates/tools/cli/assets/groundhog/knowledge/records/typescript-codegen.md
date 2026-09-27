@@ -54,6 +54,12 @@ Generated method descriptors provide typed operations such as:
 Generated event descriptors such as `PingEvent` provide `decode(...)`,
 `filter(...)`, `allFromReceipt(...)`, and `singleFromReceipt(...)`.
 
+Declared types, enums and events sit under their spec id's path: crate, major,
+then module, as in `my_token.v1.errors.TokenError`. The same path names the
+type and the value: types live in namespaces, and enum values and event
+descriptors in one object per crate, so a binding is erasable TypeScript that
+Node's type stripping runs without a build step.
+
 Use those generated codecs. Do not create a low-level XDR reader when a binding
 already knows the method or event type.
 

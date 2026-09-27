@@ -72,31 +72,44 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
     })
 }
 
-/// A declaration the bindings emit inside a namespace.
-struct Declaration {
+/// A declaration the bindings emit under a spec id's path.
+struct Declaration<'a> {
     path: TsIdPath,
     /// How error messages name it.
     what: String,
-    /// Whether it renders as a value: an enum's or an event's `export const`.
-    value: bool,
+    /// What it adds to its crate's value object, if anything.
+    value: Option<Value<'a>>,
 }
 
-/// Every declaration the bindings emit inside a namespace.
-fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration>, CliError> {
+/// A runtime value, which the bindings keep out of the type namespaces so
+/// those erase: it lives in its crate's value object, under the same path.
+#[derive(Clone, Copy)]
+enum Value<'a> {
+    /// An enum's variants.
+    Enum(&'a ContractEnumDef),
+    /// An event's descriptor, and the event's index in the spec.
+    Event(usize, &'a ContractEventDef),
+}
+
+/// Every declaration the bindings emit under a spec id's path.
+fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration<'_>>, CliError> {
     let mut out = Vec::new();
     for def in spec.type_defs.iter() {
         let path = ts_id_path(type_def_id(def)?)?;
         out.push(Declaration {
             what: format!("type definition \"{}\"", path.qualified()),
-            value: matches!(def, ContractTypeDef::TypeDefEnum { .. }),
+            value: match def {
+                ContractTypeDef::TypeDefEnum { enum_def } => Some(Value::Enum(enum_def)),
+                _ => None,
+            },
             path,
         });
     }
-    for event in spec.events.iter() {
+    for (index, event) in spec.events.iter().enumerate() {
         let path = ts_id_path(&event.name)?;
         out.push(Declaration {
             what: format!("event \"{}\"", path.qualified()),
-            value: true,
+            value: Some(Value::Event(index, event)),
             path,
         });
     }
@@ -205,13 +218,9 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     }
 }
 
-/// Write declarations grouped under the namespaces their ids map to.
-fn emit_namespaced<T>(
-    out: &mut String,
-    items: &[(TsIdPath, T)],
-    mut render: impl FnMut(&T) -> Result<String, CliError>,
-) -> Result<(), CliError> {
-    let mut by_namespace: BTreeMap<&[String], Vec<&T>> = BTreeMap::new();
+/// Write rendered declarations grouped under the namespaces their ids map to.
+fn emit_namespaced(out: &mut String, items: &[(TsIdPath, String)]) {
+    let mut by_namespace: BTreeMap<&[String], Vec<&String>> = BTreeMap::new();
     for (path, item) in items {
         by_namespace
             .entry(path.namespaces.as_slice())
@@ -244,7 +253,7 @@ fn emit_namespaced<T>(
         let indent = "  ".repeat(open.len());
         for item in group {
             let _ = writeln!(out);
-            for line in render(item)?.lines() {
+            for line in item.lines() {
                 if line.is_empty() {
                     let _ = writeln!(out);
                 } else {
@@ -257,18 +266,20 @@ fn emit_namespaced<T>(
     while open.pop().is_some() {
         let _ = writeln!(out, "{}}}", "  ".repeat(open.len()));
     }
-
-    Ok(())
 }
 
-/// Emit every named type declaration, nested under its id's namespaces.
+/// Emit every declaration's types, nested under its id's namespaces. The
+/// namespaces hold nothing else, so they erase to nothing.
 fn emit_type_declarations(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
-    let items = spec
-        .type_defs
-        .iter()
-        .map(|def| Ok((ts_id_path(type_def_id(def)?)?, def)))
-        .collect::<Result<Vec<_>, CliError>>()?;
-    emit_namespaced(out, &items, |def| emit_type_def(def))
+    let mut items = Vec::new();
+    for def in spec.type_defs.iter() {
+        items.push((ts_id_path(type_def_id(def)?)?, emit_type_def(def)?));
+    }
+    for event in spec.events.iter() {
+        items.push((ts_id_path(&event.name)?, emit_event_types(event)?));
+    }
+    emit_namespaced(out, &items);
+    Ok(())
 }
 
 /// Emit a TypeScript type declaration for a named contract type definition.
@@ -298,25 +309,21 @@ fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
     Ok(format!("export interface {name} {{ {fields} }}"))
 }
 
-/// Emit a TypeScript enum for a contract enum definition.
+/// Emit the type of a contract enum's values, which its crate's value object
+/// holds.
 fn emit_enum(def: &ContractEnumDef) -> Result<String, CliError> {
     let name = spec_string_text(&def.name.declared)?;
-    let mut variants = String::new();
-    for variant in def.variants.iter() {
-        let variant_name = spec_string_text(&variant.name)?;
-        if !variants.is_empty() {
-            variants.push(' ');
-        }
-        let _ = write!(
-            variants,
-            "{}: {}n,",
-            ts_property_key(variant_name)?,
-            variant.value
-        );
-    }
-    Ok(format!(
-        "export const {name} = {{ {variants} }} as const;\n\nexport type {name} = (typeof {name})[keyof typeof {name}];"
-    ))
+    let values: Vec<String> = def
+        .variants
+        .iter()
+        .map(|variant| format!("{}n", variant.value))
+        .collect();
+    let values = if values.is_empty() {
+        "never".to_owned()
+    } else {
+        values.join(" | ")
+    };
+    Ok(format!("export type {name} = {values};"))
 }
 
 /// Emit a TypeScript discriminated union for a contract union definition.
@@ -462,9 +469,13 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         )?;
     }
 
-    // 9. Event descriptors and combined decoder
+    // 9. Enum values and event descriptors, one object per crate
+    emit_value_objects(&mut out, spec)?;
+
+    // 10. Event union and combined decoder
     if !spec.events.is_empty() {
-        emit_event_sections(&mut out, spec)?;
+        let _ = writeln!(out);
+        emit_decode_event(&mut out, spec)?;
     }
 
     Ok(out)
@@ -1073,33 +1084,8 @@ fn emit_interface_method(
     Ok(())
 }
 
-/// Emit per-event interface/const pairs, the per-contract event union, and
-/// the combined `decodeEvent` dispatcher.
-fn emit_event_sections(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
-    // The descriptors sit inside namespaces, where a spec name can capture
-    // `spec` or `codecs`, so they read both through names no spec can take.
-    let _ = writeln!(out);
-    let _ = writeln!(out, "const __gh_spec = spec;");
-    let _ = writeln!(out, "const __gh_codecs = codecs;");
-
-    let items = spec
-        .events
-        .iter()
-        .enumerate()
-        .map(|(idx, event)| Ok((ts_id_path(&event.name)?, (event, idx))))
-        .collect::<Result<Vec<_>, CliError>>()?;
-    emit_namespaced(out, &items, |(event, idx)| {
-        let mut decl = String::new();
-        emit_event_decl(&mut decl, event, *idx)?;
-        Ok(decl)
-    })?;
-
-    let _ = writeln!(out);
-    emit_decode_event(out, spec)?;
-    Ok(())
-}
-
-fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Result<(), CliError> {
+/// Emit an event's decoded and filter types.
+fn emit_event_types(event: &ContractEventDef) -> Result<String, CliError> {
     let name = spec_string_text(&event.name.declared)?;
     let mut topic_fields = Vec::new();
     let mut filter_fields = Vec::new();
@@ -1132,6 +1118,7 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         ));
     }
 
+    let mut out = String::new();
     let _ = writeln!(
         out,
         "export interface {name} extends __gh_client_contract.DecodedContractEvent<"
@@ -1153,18 +1140,80 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         }
         let _ = writeln!(out, "}}");
     }
-    let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "export const {name} = __gh_client_contract.defineContractEvent<"
-    );
-    let _ = writeln!(out, "  {},", ts_string_literal(name));
-    let _ = writeln!(out, "  {name}[\"topics\"],");
-    let _ = writeln!(out, "  {name}[\"fields\"],");
-    let _ = writeln!(out, "  {name}Filter");
+    Ok(out)
+}
+
+/// A node of a crate's value object: the value declared at its path, if any,
+/// and the nodes below it that lead to values.
+#[derive(Default)]
+struct ValueNode<'a> {
+    value: Option<Value<'a>>,
+    children: BTreeMap<String, ValueNode<'a>>,
+}
+
+/// Emit one object per crate holding its enums' variants and its events'
+/// descriptors, each under the path the namespaces give its types.
+fn emit_value_objects(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let mut crates: BTreeMap<String, ValueNode> = BTreeMap::new();
+    for decl in declarations(spec)? {
+        let Some(value) = decl.value else {
+            continue;
+        };
+        let mut node = crates.entry(decl.path.namespaces[0].clone()).or_default();
+        for segment in decl.path.namespaces[1..]
+            .iter()
+            .chain(std::iter::once(&decl.path.name))
+        {
+            node = node.children.entry(segment.clone()).or_default();
+        }
+        node.value = Some(value);
+    }
+    for (root, node) in &crates {
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "export const {root} = {} as const;",
+            render_value_node(node)?
+        );
+    }
+    Ok(())
+}
+
+/// Render a value node as an object literal, or as an event's descriptor.
+/// `validate_spec` keeps values out of the modules named after events.
+fn render_value_node(node: &ValueNode) -> Result<String, CliError> {
+    if let Some(Value::Event(index, event)) = node.value {
+        return render_event_descriptor(event, index);
+    }
+    let mut out = String::from("{\n");
+    if let Some(Value::Enum(def)) = node.value {
+        for variant in def.variants.iter() {
+            let key = ts_property_key(spec_string_text(&variant.name)?)?;
+            let _ = writeln!(out, "  {key}: {}n,", variant.value);
+        }
+    }
+    for (name, child) in &node.children {
+        let child = render_value_node(child)?.replace('\n', "\n  ");
+        let _ = writeln!(out, "  {name}: {child},");
+    }
+    out.push('}');
+    Ok(out)
+}
+
+/// Render an event's descriptor. It sits at top level, where `spec` and
+/// `codecs` are the generated bindings.
+fn render_event_descriptor(event: &ContractEventDef, index: usize) -> Result<String, CliError> {
+    let name = ts_string_literal(spec_string_text(&event.name.declared)?);
+    let path = ts_id_path(&event.name)?.qualified();
+    let mut out = String::new();
+    let _ = writeln!(out, "__gh_client_contract.defineContractEvent<");
+    let _ = writeln!(out, "  {name},");
+    let _ = writeln!(out, "  {path}[\"topics\"],");
+    let _ = writeln!(out, "  {path}[\"fields\"],");
+    let _ = writeln!(out, "  {path}Filter");
     let _ = writeln!(out, ">({{");
-    let _ = writeln!(out, "  name: {},", ts_string_literal(name));
-    let _ = writeln!(out, "  signature: __gh_spec.events[{idx}]!.signature,");
+    let _ = writeln!(out, "  name: {name},");
+    let _ = writeln!(out, "  signature: spec.events[{index}]!.signature,");
     let _ = writeln!(out, "  topics: [");
     for (field_index, field) in event.topics.iter().enumerate() {
         let fname = spec_string_text(&field.name)?;
@@ -1172,7 +1221,7 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         let _ = writeln!(out, "      name: {},", ts_string_literal(fname));
         let _ = writeln!(
             out,
-            "      type: __gh_spec.events[{idx}]!.topics[{field_index}]!.ty,"
+            "      type: spec.events[{index}]!.topics[{field_index}]!.ty,"
         );
         let _ = writeln!(
             out,
@@ -1187,14 +1236,14 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
         let fname = spec_string_text(&field.name)?;
         let _ = writeln!(
             out,
-            "    {{ name: {}, type: __gh_spec.events[{idx}]!.fields[{field_index}]!.ty }},",
+            "    {{ name: {}, type: spec.events[{index}]!.fields[{field_index}]!.ty }},",
             ts_string_literal(fname)
         );
     }
     let _ = writeln!(out, "  ],");
-    let _ = writeln!(out, "  codecs: __gh_codecs,");
-    let _ = writeln!(out, "}});");
-    Ok(())
+    let _ = writeln!(out, "  codecs,");
+    out.push_str("})");
+    Ok(out)
 }
 
 /// Name of the per-contract event union: the first interface name plus
@@ -1253,29 +1302,52 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .iter()
         .any(|iface| !iface.methods.is_empty());
     let has_events = !spec.events.is_empty();
-    // An enum's or event's const cannot merge with a same-named namespace that holds a value.
+    // A crate's value object puts every value under its path. An event's
+    // descriptor cannot also hold the values of a module named after it, and
+    // an enum's variants share one object with them, so no key may repeat.
     let declared = declarations(spec)?;
-    for decl in declared.iter().filter(|decl| decl.value) {
-        let as_namespace: Vec<String> = decl
+    for decl in &declared {
+        let Some(value) = decl.value else {
+            continue;
+        };
+        let at: Vec<String> = decl
             .path
             .namespaces
             .iter()
             .chain(std::iter::once(&decl.path.name))
             .cloned()
             .collect();
-        if let Some(inner) = declared
-            .iter()
-            .find(|other| other.value && other.path.namespaces.starts_with(&as_namespace))
-        {
-            return Err(CliError::SpecFailed(format!(
-                "{} and {} both need \"{}\" as a value in the generated TypeScript: one is \
-                 declared there as a const, and the other puts a value in the namespace of \
-                 that name. TypeScript cannot merge the two. Rename either type, or move one \
-                 out of that module.",
-                decl.what,
-                inner.what,
-                decl.path.qualified()
-            )));
+        for inner in declared.iter().filter(|inner| inner.value.is_some()) {
+            let key = if inner.path.namespaces == at {
+                &inner.path.name
+            } else if inner.path.namespaces.starts_with(&at) {
+                &inner.path.namespaces[at.len()]
+            } else {
+                continue;
+            };
+            let path = decl.path.qualified();
+            match value {
+                Value::Event(..) => {
+                    return Err(CliError::SpecFailed(format!(
+                        "{} and {} both need a value under \"{path}\" in the generated \
+                         TypeScript: the event's descriptor is there, and it cannot also hold \
+                         \"{key}\". Rename either, or move one out of that module.",
+                        decl.what, inner.what
+                    )));
+                }
+                Value::Enum(def) => {
+                    for variant in def.variants.iter() {
+                        if spec_string_text(&variant.name)? == key {
+                            return Err(CliError::SpecFailed(format!(
+                                "{} has a variant \"{key}\", and {} needs \"{path}.{key}\" \
+                                 too: the enum's variants and that module's values share one \
+                                 object in the generated TypeScript. Rename either.",
+                                decl.what, inner.what
+                            )));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2565,7 +2637,7 @@ mod tests {
         };
         assert_eq!(
             emit_type_def(&def).unwrap(),
-            "export const ERC20Error = { \"AlreadyInitialized\": 1n, \"MustBeContractOwner\": 2n, } as const;\n\nexport type ERC20Error = (typeof ERC20Error)[keyof typeof ERC20Error];"
+            "export type ERC20Error = 1n | 2n;"
         );
     }
 
@@ -2706,15 +2778,15 @@ export type Result =
             "missing scalar topic filter:\n{output}"
         );
         assert!(
-            output.contains("export const PingEvent = __gh_client_contract.defineContractEvent<"),
+            output.contains("PingEvent: __gh_client_contract.defineContractEvent<"),
             "missing event descriptor:\n{output}"
         );
         assert!(
-            output.contains("signature: __gh_spec.events[0]!.signature"),
+            output.contains("signature: spec.events[0]!.signature"),
             "missing signature metadata:\n{output}"
         );
-        assert!(output.contains("type: __gh_spec.events[0]!.topics[0]!.ty"));
-        assert!(output.contains("type: __gh_spec.events[0]!.fields[0]!.ty"));
+        assert!(output.contains("type: spec.events[0]!.topics[0]!.ty"));
+        assert!(output.contains("type: spec.events[0]!.fields[0]!.ty"));
         assert!(
             output.contains("representation: \"u64\""),
             "missing topic representation metadata:\n{output}"
@@ -3109,10 +3181,9 @@ export type Result =
     }
 
     #[test]
-    fn event_declarations_read_the_generated_bindings_through_reserved_names() {
-        // An event in module `spec` opens a namespace `spec`, and an event
-        // named `codecs` declares a const `codecs`; neither can capture what
-        // the event descriptors read.
+    fn event_descriptors_read_the_generated_bindings_from_the_top_level() {
+        // An event in module `spec` and an event named `codecs` become keys in
+        // the value object, which bind nothing the descriptors read.
         let mut spec = spec_with_events();
         let mut in_spec_module = ping_event_def();
         in_spec_module.name = spec_id_at("demo", "demo::spec", "PingEvent");
@@ -3123,26 +3194,19 @@ export type Result =
 
         let output = generate_ts_bindings(&spec, "events.spec.xdr").unwrap();
         for expected in [
-            "const __gh_codecs = codecs;",
-            "const __gh_spec = spec;",
-            "signature: __gh_spec.events[0]!.signature,",
-            "type: __gh_spec.events[1]!.fields[0]!.ty",
-            "codecs: __gh_codecs,",
+            "signature: spec.events[0]!.signature,",
+            "type: spec.events[1]!.fields[0]!.ty",
+            "      codecs,\n",
         ] {
             assert!(output.contains(expected), "missing {expected}:\n{output}");
         }
-        assert!(!output.contains(" spec.events"), "{output}");
-        assert!(!output.contains("  codecs,"), "{output}");
-
-        // The aliases are consts, read when the event namespaces run, so they
-        // follow their targets and precede the events.
+        // The descriptors are built with the object, after the codec context.
         let at = |needle: &str| {
             output
                 .find(needle)
                 .unwrap_or_else(|| panic!("missing {needle}:\n{output}"))
         };
-        assert!(at("const codecs = ") < at("const __gh_codecs = codecs;"));
-        assert!(at("const __gh_spec = spec;") < at("export namespace demo {"));
+        assert!(at("const codecs = ") < at("export const demo = {"));
     }
 
     #[test]
@@ -3258,8 +3322,7 @@ export type Result =
 
     #[test]
     fn declarations_merge_with_a_module_of_their_name() {
-        // An interface or a type alias merges with any namespace, and an
-        // enum's const with one holding only types.
+        // Each declares a type there, which merges with any namespace.
         let foo = || spec_id_at("demo", "demo", "foo");
         let bar = || spec_id_at("demo", "demo::foo", "Bar");
         for (label, outer, inner) in [
@@ -3277,35 +3340,58 @@ export type Result =
     }
 
     #[test]
-    fn a_value_beside_a_module_holding_a_value_errors() {
-        // An enum's `export const foo` cannot merge with `export namespace
-        // foo` once that namespace holds a value, however deep.
-        let expected = "both need \"demo.v1.foo\" as a value";
+    fn an_enum_shares_its_object_with_a_module_of_its_name() {
+        // `demo.v1.foo` holds the enum's variants and the module's values, at
+        // any depth, whether the module holds an enum or an event.
         for module in ["demo::foo", "demo::foo::deeper"] {
             let spec = beside_a_module_holding(
                 enum_at(spec_id_at("demo", "demo", "foo")),
                 enum_at(spec_id_at("demo", module, "Bar")),
             );
-            let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
-            assert!(error.to_string().contains(expected), "{module}: {error}");
+            generate_ts_bindings(&spec, "x.spec.xdr")
+                .unwrap_or_else(|error| panic!("{module}: {error}"));
         }
+        let spec = beside_a_module_holding(
+            enum_at(spec_id_at("demo", "demo", "foo")),
+            enum_at(spec_id_at("demo", "demo::foo", "Bar")),
+        );
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(
+            output.contains("    foo: {\n      \"A\": 1n,\n      Bar: {\n"),
+            "{output}"
+        );
+        let mut spec = spec_with_events();
+        spec.events.0[0].name = spec_id_at("demo", "demo::foo", "Ping");
+        spec.type_defs = vec![enum_at(spec_id_at("demo", "demo", "foo"))]
+            .try_into()
+            .unwrap();
+        generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
 
-        // An event is a const as well, on either side.
-        for (event, def) in [
-            (
-                spec_id_at("demo", "demo", "foo"),
-                spec_id_at("demo", "demo::foo", "Bar"),
-            ),
-            (
-                spec_id_at("demo", "demo::foo", "Ping"),
-                spec_id_at("demo", "demo", "foo"),
-            ),
-        ] {
+        // Unless a variant takes the key a module's value needs.
+        let spec = beside_a_module_holding(
+            enum_at(spec_id_at("demo", "demo", "foo")),
+            enum_at(spec_id_at("demo", "demo::foo", "A")),
+        );
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert!(error.to_string().contains("has a variant \"A\""), "{error}");
+    }
+
+    #[test]
+    fn an_event_beside_a_module_holding_a_value_errors() {
+        // The event's descriptor cannot hold the module's values, however deep.
+        for module in ["demo::foo", "demo::foo::deeper"] {
             let mut spec = spec_with_events();
-            spec.events.0[0].name = event;
-            spec.type_defs = vec![enum_at(def)].try_into().unwrap();
+            spec.events.0[0].name = spec_id_at("demo", "demo", "foo");
+            spec.type_defs = vec![enum_at(spec_id_at("demo", module, "Bar"))]
+                .try_into()
+                .unwrap();
             let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
-            assert!(error.to_string().contains(expected), "{error}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("the event's descriptor is there"),
+                "{module}: {error}"
+            );
         }
     }
 
@@ -3670,8 +3756,8 @@ export type Result =
         );
 
         assert!(
-            output.contains("export const ERC20Error ="),
-            "ERC20Error enum declaration missing"
+            output.contains("    ERC20Error: {"),
+            "ERC20Error enum values missing"
         );
         assert!(
             output.contains("\"AlreadyInitialized\": 1n"),
@@ -3681,7 +3767,7 @@ export type Result =
             output.contains("\"Internal\": 100n"),
             "Internal variant missing"
         );
-        assert!(output.contains("export type ERC20Error = (typeof ERC20Error)"));
+        assert!(output.contains("export type ERC20Error = 1n | 2n | 3n | 100n;"));
 
         // Interface object methods
         assert!(
@@ -3885,9 +3971,15 @@ export type Result =
             },
         };
 
-        let output = emit_type_def(&def).unwrap();
-        assert!(output.contains("\"Negative\": -2n"));
-        assert!(output.contains("\"Zero\": 0n"));
+        assert_eq!(
+            emit_type_def(&def).unwrap(),
+            "export type SignedValues = -2n | 0n;"
+        );
+        let mut spec = counter_spec();
+        spec.type_defs = vec![def].try_into().unwrap();
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(output.contains("\"Negative\": -2n,"), "{output}");
+        assert!(output.contains("\"Zero\": 0n,"), "{output}");
     }
 
     #[test]

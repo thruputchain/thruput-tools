@@ -17,15 +17,21 @@ export namespace demo {
     export type bar =
       { case: "Ok" };
 
-    export const baz = { "A": 1n, } as const;
+    export type baz = 1n;
 
-    export type baz = (typeof baz)[keyof typeof baz];
+    export interface qux extends __gh_client_contract.DecodedContractEvent<
+      "qux",
+      { "tag": bigint },
+      { "note": demo.v1.qux.Detail }
+    > {}
+
+    export interface quxFilter {
+      "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
+    }
 
     export namespace bar {
 
-      export const Kind = { "A": 1n, } as const;
-
-      export type Kind = (typeof Kind)[keyof typeof Kind];
+      export type Kind = 1n;
     }
 
     export namespace baz {
@@ -147,45 +153,38 @@ const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);
 export const Merged = {
 } as const;
 
-const __gh_spec = spec;
-const __gh_codecs = codecs;
-
-export namespace demo {
-
-  export namespace v1 {
-
-    export interface qux extends __gh_client_contract.DecodedContractEvent<
+export const demo = {
+  v1: {
+    bar: {
+      Kind: {
+        "A": 1n,
+      },
+    },
+    baz: {
+      "A": 1n,
+    },
+    qux: __gh_client_contract.defineContractEvent<
       "qux",
-      { "tag": bigint },
-      { "note": demo.v1.qux.Detail }
-    > {}
-
-    export interface quxFilter {
-      "tag"?: __gh_client_contract.ContractEventFilterValue<bigint>;
-    }
-
-    export const qux = __gh_client_contract.defineContractEvent<
-      "qux",
-      qux["topics"],
-      qux["fields"],
-      quxFilter
+      demo.v1.qux["topics"],
+      demo.v1.qux["fields"],
+      demo.v1.quxFilter
     >({
       name: "qux",
-      signature: __gh_spec.events[0]!.signature,
+      signature: spec.events[0]!.signature,
       topics: [
         {
           name: "tag",
-          type: __gh_spec.events[0]!.topics[0]!.ty,
+          type: spec.events[0]!.topics[0]!.ty,
           representation: "u64",
         },
       ],
       fields: [
-        { name: "note", type: __gh_spec.events[0]!.fields[0]!.ty },
+        { name: "note", type: spec.events[0]!.fields[0]!.ty },
       ],
-      codecs: __gh_codecs,
-    });
-  }
-}
+      codecs,
+    }),
+  },
+} as const;
 
 export type MergedEvent = demo.v1.qux;
 

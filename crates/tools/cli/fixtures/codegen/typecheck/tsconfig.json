@@ -11,6 +11,7 @@
     "noUncheckedIndexedAccess": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     "types": []
   },
   "include": ["runtime.d.ts", "consumer.ts", "../*.ts"]

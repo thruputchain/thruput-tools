@@ -22,6 +22,17 @@ export namespace demo {
     export type ExampleError =
       { case: "InvalidValue" }
       | { case: "UpdateFailed"; value: readonly [bigint] };
+
+    export interface ChangedEvent extends __gh_client_contract.DecodedContractEvent<
+      "ChangedEvent",
+      { "actor": __gh_protocol.ContractAddress; "request_id": __gh_client_contract.FixedBytes<32> },
+      { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": __gh_client_contract.FixedBytes<32> | null }
+    > {}
+
+    export interface ChangedEventFilter {
+      "actor"?: __gh_client_contract.ContractEventFilterValue<__gh_protocol.ContractAddress>;
+      "request_id"?: __gh_client_contract.ContractEventFilterValue<__gh_client_contract.FixedBytes<32>>;
+    }
   }
 }
 
@@ -165,53 +176,37 @@ export const ExampleContract = {
   }),
 } as const;
 
-const __gh_spec = spec;
-const __gh_codecs = codecs;
-
-export namespace demo {
-
-  export namespace v1 {
-
-    export interface ChangedEvent extends __gh_client_contract.DecodedContractEvent<
+export const demo = {
+  v1: {
+    ChangedEvent: __gh_client_contract.defineContractEvent<
       "ChangedEvent",
-      { "actor": __gh_protocol.ContractAddress; "request_id": __gh_client_contract.FixedBytes<32> },
-      { "previous_values": readonly [bigint, bigint]; "current_values": readonly [bigint, bigint]; "request_id": __gh_client_contract.FixedBytes<32> | null }
-    > {}
-
-    export interface ChangedEventFilter {
-      "actor"?: __gh_client_contract.ContractEventFilterValue<__gh_protocol.ContractAddress>;
-      "request_id"?: __gh_client_contract.ContractEventFilterValue<__gh_client_contract.FixedBytes<32>>;
-    }
-
-    export const ChangedEvent = __gh_client_contract.defineContractEvent<
-      "ChangedEvent",
-      ChangedEvent["topics"],
-      ChangedEvent["fields"],
-      ChangedEventFilter
+      demo.v1.ChangedEvent["topics"],
+      demo.v1.ChangedEvent["fields"],
+      demo.v1.ChangedEventFilter
     >({
       name: "ChangedEvent",
-      signature: __gh_spec.events[0]!.signature,
+      signature: spec.events[0]!.signature,
       topics: [
         {
           name: "actor",
-          type: __gh_spec.events[0]!.topics[0]!.ty,
+          type: spec.events[0]!.topics[0]!.ty,
           representation: "address",
         },
         {
           name: "request_id",
-          type: __gh_spec.events[0]!.topics[1]!.ty,
+          type: spec.events[0]!.topics[1]!.ty,
           representation: "fixedBytes32",
         },
       ],
       fields: [
-        { name: "previous_values", type: __gh_spec.events[0]!.fields[0]!.ty },
-        { name: "current_values", type: __gh_spec.events[0]!.fields[1]!.ty },
-        { name: "request_id", type: __gh_spec.events[0]!.fields[2]!.ty },
+        { name: "previous_values", type: spec.events[0]!.fields[0]!.ty },
+        { name: "current_values", type: spec.events[0]!.fields[1]!.ty },
+        { name: "request_id", type: spec.events[0]!.fields[2]!.ty },
       ],
-      codecs: __gh_codecs,
-    });
-  }
-}
+      codecs,
+    }),
+  },
+} as const;
 
 export type ExampleContractEvent = demo.v1.ChangedEvent;
 
