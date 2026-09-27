@@ -3,8 +3,8 @@
 //! Both the production gateway and the local node supervisor connect to
 //! hogd-side x23 services using an `rpc_driver` connection pool and a
 //! codegen client crate. This crate hoists the small amount of
-//! plumbing — pool construction, address parsing, typed startup
-//! errors — into one place so consumers do not copy it.
+//! plumbing (pool construction, address parsing, typed startup errors)
+//! into one place so consumers do not copy it.
 //!
 //! [`PoolKind`] picks the pool shape: the serial pool every `connect*`
 //! function below builds, or the multiplexed pool [`connect_pool`] and

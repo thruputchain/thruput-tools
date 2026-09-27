@@ -543,7 +543,13 @@ mod tests {
         let mut config = GatewayConfig::default();
         assert_eq!(config.x23_pool, X23PoolKind::Serial);
         assert_eq!(config.x23_multiplex_connections.get(), 4);
-        config = toml::from_str("x23_pool = \"multiplex\"\nx23_multiplex_connections = 8").unwrap();
+        config = toml::from_str(
+            r#"
+x23_pool = "multiplex"
+x23_multiplex_connections = 8
+"#,
+        )
+        .unwrap();
         apply_cli_overrides(&mut config, Cli::parse_from(["hog-gateway"]));
         assert_eq!(config.x23_pool, X23PoolKind::Multiplex);
         assert_eq!(config.x23_multiplex_connections.get(), 8);
@@ -563,7 +569,7 @@ mod tests {
 
     #[test]
     fn x23_pool_cli_and_toml_enforce_the_same_bounds() {
-        assert!(toml::from_str::<GatewayConfig>("x23_pool = \"dynamic\"").is_err());
+        assert!(toml::from_str::<GatewayConfig>(r#"x23_pool = "dynamic""#).is_err());
         assert!(Cli::try_parse_from(["hog-gateway", "--x23-pool", "dynamic"]).is_err());
         for value in ["1", "4", "64"] {
             let config: GatewayConfig =
