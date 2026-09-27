@@ -118,8 +118,10 @@ pub struct InvalidSchedulerLookupPoolSize;
 /// The pools also differ on a canceled call. A serial pool replaces or
 /// poisons the connection whose call was canceled; a multiplexed pool
 /// discards the late reply and keeps the connection. The gateway does not
-/// depend on the connection-level reaction: a submit or lookup that times
-/// out invalidates its scheduler generation, which drops the whole pool.
+/// depend on the connection-level reaction: a submit that times out
+/// invalidates its scheduler generation, which drops the whole pool, and a
+/// lookup that times out is aborted and leaves the generation alone under
+/// either kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum X23PoolKind {
@@ -205,7 +207,10 @@ pub struct InvalidX23MultiplexConnections;
 /// multiplexed pool, its connection count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct X23PoolSettings {
+    /// Which pool the data connections use.
     pub kind: X23PoolKind,
+    /// Connections per multiplexed data pool; a serial pool ignores it and
+    /// opens one connection per executing call.
     pub multiplex_connections: X23MultiplexConnections,
 }
 

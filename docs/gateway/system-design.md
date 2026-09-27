@@ -346,8 +346,9 @@ waiters when all execution slots are occupied. `scheduler_lookup_pool_size`
 (`--scheduler-lookup-pool-size`) configures execution width from 1 to 68 without
 changing total admission. Queueing,
 execution, and indexer fallback share one absolute backend deadline. A lookup
-deadline or cancellation releases permits and replaces only its active lookup
-connection, without invalidating the scheduler's normal submit/tip lane. Actual
+deadline or cancellation releases permits and, with the serial pool kind,
+replaces only its active lookup connection, without invalidating the
+scheduler's normal submit/tip lane. Actual
 RPC failures invalidate only the matching scheduler generation. This finite
 backend bound is independent of the default JSON-RPC array concurrency of 128:
 a sufficiently contended array can intentionally receive per-entry `Overloaded`
@@ -443,9 +444,11 @@ with `scheduler_lookup_pool_size` execution permits, the batchers keep their
 in-flight caps, and the indexer, `DbGateway`, and `ViewGateway` widths keep
 their values. Health probes use one serial connection under both kinds. The
 gateway never depends on the connection-level reaction to a canceled call: a
-submit or lookup timeout invalidates the scheduler generation, which drops all
-of that generation's pools, and the health loop rebuilds them behind the
-readiness grace.
+submit timeout invalidates the scheduler generation, which drops all of that
+generation's pools, and the health loop rebuilds them behind the readiness
+grace. A lookup timeout aborts only that lookup's worker and leaves the
+generation alone; a serial pool then replaces the lookup connection the
+canceled call was on, while a multiplexed pool keeps it in service.
 
 ---
 
