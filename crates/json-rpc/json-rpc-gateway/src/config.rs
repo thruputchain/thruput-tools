@@ -120,7 +120,10 @@ impl X23MultiplexConnections {
 
 impl Default for X23MultiplexConnections {
     fn default() -> Self {
-        Self(std::num::NonZeroUsize::new(4).expect("bug: default multiplex connections is nonzero"))
+        Self(
+            std::num::NonZeroUsize::new(4)
+                .expect("bug: default x23 multiplex connections is nonzero"),
+        )
     }
 }
 
@@ -150,6 +153,20 @@ impl FromStr for X23MultiplexConnections {
 #[derive(Debug, thiserror::Error)]
 #[error("x23 multiplex connections must be in 1..=64")]
 pub struct InvalidX23MultiplexConnections;
+
+/// How every x23 data pool is shaped: the sockets it opens and how long a
+/// canceled call may stay outstanding before the pool is replaced.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct X23DataPool {
+    pub(crate) connections: X23MultiplexConnections,
+    pub(crate) stalled_call_timeout: Duration,
+}
+
+impl Default for X23DataPool {
+    fn default() -> Self {
+        GatewayConfig::default().x23_data_pool()
+    }
+}
 
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -511,6 +528,15 @@ impl GatewayConfig {
         self.request_timeout()
             .saturating_sub(self.request_timeout_margin())
             .max(Duration::from_millis(1))
+    }
+
+    /// A canceled data call gets one more backend request timeout for its
+    /// late reply before its pool is treated as stalled and replaced.
+    pub(crate) fn x23_data_pool(&self) -> X23DataPool {
+        X23DataPool {
+            connections: self.x23_multiplex_connections,
+            stalled_call_timeout: self.backend_request_timeout(),
+        }
     }
 
     pub(crate) fn http_request_timeout(&self) -> Duration {

@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn x23_multiplex_connections_default_and_cli_override_toml() {
+    fn x23_multiplex_connections_defaults_and_cli_override() {
         let mut config = GatewayConfig::default();
         assert_eq!(config.x23_multiplex_connections.get(), 4);
         config = toml::from_str("x23_multiplex_connections = 8").unwrap();

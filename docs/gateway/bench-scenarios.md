@@ -290,10 +290,10 @@ between requests.
 ## Scheduler lookup execution width comparison
 
 `hog-gateway --scheduler-lookup-pool-size N` sets the dedicated scheduler
-transaction-lookup execution permits. The range is
-**1..=68**, with a default of **16**. Set `scheduler_lookup_pool_size = 16` at the
-top level of the gateway TOML config; the CLI overrides TOML. Startup and health
-reconnect use the same setting. The value is logged at startup and included in
+transaction-lookup execution permits. The range is **1..=68**, with a default
+of **16**. Set `scheduler_lookup_pool_size = 16` at the top level of the
+gateway TOML config; the CLI overrides TOML. Startup and health reconnect use
+the same setting. The value is logged at startup and included in
 `--dump-effective-config`. Restart the gateway to change it.
 
 Total admitted lookups remain capped at **68**, including queued and executing
@@ -308,8 +308,8 @@ flight rather than connections. They use separate pool instances; scheduler
 lookups additionally have gateway admission and execution semaphores.
 
 Compare 4, 8, and 16 execution permits with the same unknown-hash status
-workload and
-fixed client concurrency. Confirm metrics show `schedgateway_lookup_tx` calls:
+workload and fixed client concurrency. Confirm metrics show
+`schedgateway_lookup_tx` calls:
 committed hashes can return through the indexer without exercising this pool.
 Record successful lookups/s separately from overload responses, execution-permit
 wait, backend duration, and errors. Repeat in reverse order. Backend duration

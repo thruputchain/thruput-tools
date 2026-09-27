@@ -437,12 +437,23 @@ add throughput.
 Admission is unchanged: lookups stay under the 68-call bound with
 `scheduler_lookup_pool_size` execution permits, and the batchers keep their
 in-flight caps. Health probes use one serial `FixedSerialPool` connection,
-which a canceled probe poisons. A canceled data call's late reply is discarded
-and its connection stays in service; the gateway does not depend on a
-connection-level reaction to a canceled call. A submit timeout invalidates the
-scheduler generation, which drops all of that generation's pools, and the
-health loop rebuilds them behind the readiness grace. A lookup timeout aborts
-only that lookup's worker and leaves the generation alone.
+which a canceled probe poisons.
+
+A canceled data call keeps its share of the execution width until its
+connection delivers the late reply, which is discarded, or fails. The width
+therefore counts every call the backend may still be executing, and a caller
+that times out and retries cannot push more calls onto the backend than the
+width allows. A canceled call still outstanding one backend request timeout
+after its cancellation means its connection is not delivering: the transport
+shuts that pool down, failing the calls on it, and reconnects with backoff,
+as the serial pool replaced a canceled call's connection. Calls made while
+the replacement is being opened fail fast. This recovery is in the
+transport, so it covers the indexer, `DbGateway`, and `ViewGateway` pools,
+whose timeouts do not otherwise touch their pools. A submit timeout still
+invalidates the scheduler generation, which drops all of that generation's
+pools, and the health loop rebuilds them behind the readiness grace. A
+lookup timeout aborts only that lookup's worker and leaves the generation
+alone.
 
 ---
 
