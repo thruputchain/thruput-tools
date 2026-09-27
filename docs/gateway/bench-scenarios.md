@@ -287,31 +287,28 @@ Keep the shell scenarios for smoke and coarse regressions. Move realistic
 traffic mixes into the benchmark harness once the method mix needs shared state
 between requests.
 
-## Scheduler lookup connection pool comparison
+## Scheduler lookup execution width comparison
 
 `hog-gateway --scheduler-lookup-pool-size N` sets the dedicated scheduler
-transaction-lookup connections and matching execution permits. The range is
+transaction-lookup execution permits. The range is
 **1..=68**, with a default of **16**. Set `scheduler_lookup_pool_size = 16` at the
 top level of the gateway TOML config; the CLI overrides TOML. Startup and health
 reconnect use the same setting. The value is logged at startup and included in
 `--dump-effective-config`. Restart the gateway to change it.
 
 Total admitted lookups remain capped at **68**, including queued and executing
-requests, independently of the connection count. Excess lookups fail with
+requests, independently of the execution width. Excess lookups fail with
 `Overloaded`. This setting does not change scheduler submission/tip connections,
 health connections, or the indexer pool.
 
-Indexer and scheduler lookup clients both use `rpc_driver::FixedSerialPool`
-through `x23-transport` by default, with one active call per connection and
-replacement of connections whose active call is cancelled. They use separate
-pool instances; scheduler lookups additionally have gateway admission and
-execution semaphores. With `x23_pool = "multiplex"` (`--x23-pool multiplex`)
-every data pool is instead an `rpc_driver::MultiplexPool` over
-`x23_multiplex_connections` sockets, and the size settings above become caps on
-calls in flight rather than connection counts. Compare the two kinds with the
-same workload and the same size settings; only the socket count differs.
+Indexer and scheduler lookup clients both use `rpc_driver::MultiplexPool`
+through `x23-transport`, with many calls in flight per connection over
+`x23_multiplex_connections` sockets, so the size settings above cap calls in
+flight rather than connections. They use separate pool instances; scheduler
+lookups additionally have gateway admission and execution semaphores.
 
-Compare 4, 8, and 16 connections with the same unknown-hash status workload and
+Compare 4, 8, and 16 execution permits with the same unknown-hash status
+workload and
 fixed client concurrency. Confirm metrics show `schedgateway_lookup_tx` calls:
 committed hashes can return through the indexer without exercising this pool.
 Record successful lookups/s separately from overload responses, execution-permit
@@ -326,11 +323,11 @@ operation. Set the lookup pool to 4 to restore the previous execution width.
 
 ## Indexer connection pool comparison
 
-`hog-gateway --indexer-pool-size N` sets the number of serial indexer data
-connections. The range is **1..=256**, with a default of **16**, and can also be set as
+`hog-gateway --indexer-pool-size N` sets how many indexer calls execute at
+once. The range is **1..=256**, with a default of **16**, and can also be set as
 `indexer_pool_size = 16` at the top level of the gateway TOML config. The CLI
 value overrides TOML. Startup and reconnect use the same setting. A separate
-health connection is excluded from this count. Scheduler pools are unchanged.
+health connection is excluded from this cap. Scheduler pools are unchanged.
 
 Build once and restart the gateway with each setting against the same backend:
 

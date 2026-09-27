@@ -630,9 +630,9 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   the scheduler generation is selected after waiting. Only a full outstanding
   bound returns overload. Terminal indexer answers can still resolve scheduler
   failures within the remaining deadline; an indexer miss cannot hide overload
-  as `Unknown`. An executing lookup's deadline aborts its worker and replaces only
-  that lookup connection (`ReplaceConnection`); it does not evict the scheduler
-  generation or interrupt normal submit/tip work. Caller cancellation has the
+  as `Unknown`. An executing lookup's deadline aborts its worker and leaves its
+  connection in service; it does not evict the scheduler generation or
+  interrupt normal submit/tip work. Caller cancellation has the
   same isolation. Actual RPC errors retain generation-scoped invalidation.
 - Scheduler transport failures clear only the generation that produced the
   failure, so a stale request cannot remove a newer replacement pool.

@@ -10,7 +10,7 @@ use groundhog_json_rpc_types::{
     },
 };
 
-/// Indexer data connections (1..=256, default 16).
+/// Indexer calls in flight at once (1..=256, default 16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct IndexerPoolSize(std::num::NonZeroUsize);
@@ -58,7 +58,7 @@ pub struct InvalidIndexerPoolSize;
 // Total lookup admission is independent of the configurable execution width.
 pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
 
-/// Scheduler lookup connections (1..=68, default 16).
+/// Scheduler lookup execution permits (1..=68, default 16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct SchedulerLookupPoolSize(std::num::NonZeroUsize);
@@ -106,46 +106,7 @@ impl FromStr for SchedulerLookupPoolSize {
 #[error("scheduler lookup pool size must be in 1..=68")]
 pub struct InvalidSchedulerLookupPoolSize;
 
-/// Which `rpc_driver` pool the gateway's x23 data connections use; the
-/// "x23 pool kind" section of `docs/gateway/system-design.md` covers what
-/// each kind means for sizing and canceled calls.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum X23PoolKind {
-    /// `FixedSerialPool`, the gateway's default.
-    #[default]
-    Serial,
-    /// `MultiplexPool`.
-    Multiplex,
-}
-
-impl fmt::Display for X23PoolKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Serial => "serial",
-            Self::Multiplex => "multiplex",
-        })
-    }
-}
-
-impl FromStr for X23PoolKind {
-    type Err = InvalidX23PoolKind;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "serial" => Ok(Self::Serial),
-            "multiplex" => Ok(Self::Multiplex),
-            _ => Err(InvalidX23PoolKind),
-        }
-    }
-}
-
-/// An x23 pool kind other than `serial` or `multiplex`.
-#[derive(Debug, thiserror::Error)]
-#[error("x23 pool must be `serial` or `multiplex`")]
-pub struct InvalidX23PoolKind;
-
-/// Connections per multiplexed x23 data pool (1..=64, default 4).
+/// Connections per x23 data pool (1..=64, default 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct X23MultiplexConnections(std::num::NonZeroUsize);
@@ -189,43 +150,6 @@ impl FromStr for X23MultiplexConnections {
 #[derive(Debug, thiserror::Error)]
 #[error("x23 multiplex connections must be in 1..=64")]
 pub struct InvalidX23MultiplexConnections;
-
-/// The pool shape every x23 data pool is built with: the kind and, for a
-/// multiplexed pool, its connection count.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct X23PoolSettings {
-    /// Which pool the data connections use.
-    pub kind: X23PoolKind,
-    /// Connections per multiplexed data pool; a serial pool ignores it and
-    /// opens one connection per executing call.
-    pub multiplex_connections: X23MultiplexConnections,
-}
-
-impl X23PoolSettings {
-    /// The transport pool kind and connection count for a data pool that
-    /// executes `execution_width` calls at once. `canceled_call_policy`
-    /// applies to a serial pool only; a multiplexed pool ignores it.
-    pub fn data_pool(
-        self,
-        execution_width: usize,
-        canceled_call_policy: rpc_driver::CanceledCallPolicy,
-    ) -> (groundhog_x23_transport::PoolKind, usize) {
-        match self.kind {
-            X23PoolKind::Serial => (
-                groundhog_x23_transport::PoolKind::Serial {
-                    canceled_call_policy,
-                },
-                execution_width,
-            ),
-            X23PoolKind::Multiplex => (
-                groundhog_x23_transport::PoolKind::Multiplex {
-                    max_in_flight: execution_width,
-                },
-                self.multiplex_connections.get(),
-            ),
-        }
-    }
-}
 
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -445,22 +369,19 @@ pub struct GatewayConfig {
     /// indexer return `BackendUnavailable`.
     pub indexer_address: Option<String>,
 
-    /// Number of serial x23 data connections to the indexer (1..=256, default 16).
+    /// Indexer calls in flight at once (1..=256, default 16).
     ///
     /// Applies at startup and reconnect. The separate health connection is
-    /// excluded; each data connection handles one ordinary RPC at a time.
+    /// excluded; `x23_multiplex_connections` sets the sockets these calls share.
     pub indexer_pool_size: IndexerPoolSize,
 
-    /// Dedicated scheduler lookup connections and execution permits (1..=68, default 16).
+    /// Dedicated scheduler lookup execution permits (1..=68, default 16).
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 
-    /// Which `rpc_driver` pool the x23 data connections use (default `serial`);
-    /// see [`X23PoolKind`].
-    pub x23_pool: X23PoolKind,
-
-    /// Connections per multiplexed x23 data pool (1..=64, default 4). Only
-    /// read when `x23_pool = "multiplex"`.
+    /// Connections per x23 data pool (1..=64, default 4). Every data pool is
+    /// multiplexed, so its size setting caps calls in flight rather than
+    /// sockets; see "x23 data pools" in `docs/gateway/system-design.md`.
     pub x23_multiplex_connections: X23MultiplexConnections,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
@@ -539,7 +460,6 @@ impl Default for GatewayConfig {
             indexer_address: Some("127.0.0.1:9001".into()),
             indexer_pool_size: IndexerPoolSize::default(),
             scheduler_lookup_pool_size: SchedulerLookupPoolSize::default(),
-            x23_pool: X23PoolKind::default(),
             x23_multiplex_connections: X23MultiplexConnections::default(),
             db_gateway_address: None,
             view_gateway_address: None,
@@ -558,14 +478,6 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
-    /// The pool shape the x23 data pools are built with.
-    pub fn x23_pools(&self) -> X23PoolSettings {
-        X23PoolSettings {
-            kind: self.x23_pool,
-            multiplex_connections: self.x23_multiplex_connections,
-        }
-    }
-
     pub(crate) fn batch_service<S>(
         &self,
         inner: S,

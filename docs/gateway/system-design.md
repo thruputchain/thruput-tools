@@ -346,9 +346,8 @@ waiters when all execution slots are occupied. `scheduler_lookup_pool_size`
 (`--scheduler-lookup-pool-size`) configures execution width from 1 to 68 without
 changing total admission. Queueing,
 execution, and indexer fallback share one absolute backend deadline. A lookup
-deadline or cancellation releases permits and, with the serial pool kind,
-replaces only its active lookup connection, without invalidating the
-scheduler's normal submit/tip lane. Actual
+deadline or cancellation releases permits and leaves its connection in
+service, without invalidating the scheduler's normal submit/tip lane. Actual
 RPC failures invalidate only the matching scheduler generation. This finite
 backend bound is independent of the default JSON-RPC array concurrency of 128:
 a sufficiently contended array can intentionally receive per-entry `Overloaded`
@@ -422,35 +421,28 @@ A scheduler timeout, unavailability, or overload never turns an indexer miss
 into `Unknown`.
 
 
-### x23 pool kind
+### x23 data pools
 
-Every x23 data pool is built through `x23-transport` in one of two shapes,
-chosen by `x23_pool` (`--x23-pool`, default `serial`):
+Every x23 data pool is an `rpc_driver::MultiplexPool` built through
+`x23-transport`: many calls in flight per connection, each routed to the
+connection with the fewest outstanding. A pool's size setting
+(`indexer_pool_size`, `scheduler_lookup_pool_size`, and the batcher-derived
+scheduler and `DbGateway` widths) is its execution width, enforced in the
+transport as a cap on calls in flight, and every data pool opens
+`x23_multiplex_connections` (`--x23-multiplex-connections`, default 4)
+sockets. Roughly one connection per worker the backend serves with is the
+useful range; each connection's read loop is one task, so more sockets do not
+add throughput.
 
-- `serial` is `rpc_driver::FixedSerialPool`: one call in flight per connection,
-  so each pool's size setting is both its connection count and its execution
-  width. A canceled call replaces or poisons its connection, per the pool's
-  cancellation policy.
-- `multiplex` is `rpc_driver::MultiplexPool`: many calls in flight per
-  connection, each routed to the connection with the fewest outstanding. The
-  size settings keep their meaning as execution widths, enforced in the
-  transport as a cap on calls in flight, and every data pool opens
-  `x23_multiplex_connections` (`--x23-multiplex-connections`, default 4)
-  sockets instead. Roughly one connection per worker the backend serves with
-  is the useful range; each connection's read loop is one task, so more
-  sockets do not add throughput. A canceled call's late reply is discarded and
-  the connection stays in service.
-
-Admission does not change with the kind: lookups stay under the 68-call bound
-with `scheduler_lookup_pool_size` execution permits, the batchers keep their
-in-flight caps, and the indexer, `DbGateway`, and `ViewGateway` widths keep
-their values. Health probes use one serial connection under both kinds. The
-gateway never depends on the connection-level reaction to a canceled call: a
-submit timeout invalidates the scheduler generation, which drops all of that
-generation's pools, and the health loop rebuilds them behind the readiness
-grace. A lookup timeout aborts only that lookup's worker and leaves the
-generation alone; a serial pool then replaces the lookup connection the
-canceled call was on, while a multiplexed pool keeps it in service.
+Admission is unchanged: lookups stay under the 68-call bound with
+`scheduler_lookup_pool_size` execution permits, and the batchers keep their
+in-flight caps. Health probes use one serial `FixedSerialPool` connection,
+which a canceled probe poisons. A canceled data call's late reply is discarded
+and its connection stays in service; the gateway does not depend on a
+connection-level reaction to a canceled call. A submit timeout invalidates the
+scheduler generation, which drops all of that generation's pools, and the
+health loop rebuilds them behind the readiness grace. A lookup timeout aborts
+only that lookup's worker and leaves the generation alone.
 
 ---
 
