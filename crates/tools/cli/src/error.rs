@@ -235,9 +235,13 @@ pub enum CliError {
     #[error("contract spec finalization failed: {0}")]
     #[hint(
         "check that your contract uses `#[contract]` and \
-         `#[contracttype]` attributes correctly"
+         `#[contract_type]` attributes correctly"
     )]
     SpecFailed(String),
+    /// TypeScript codegen cannot express the spec. The contract itself builds;
+    /// the message names the declarations involved and how to rename them.
+    #[error("cannot generate TypeScript bindings: {0}")]
+    TsBindingsFailed(String),
     /// The contract's raw spec wire format is one this build cannot read.
     ///
     /// Surfaced verbatim rather than reworded: the inner error names both

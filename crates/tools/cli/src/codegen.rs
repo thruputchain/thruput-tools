@@ -44,7 +44,7 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
 
     // A declared name may contain `::`; nesting on it would not be injective.
     if declared.contains("::") {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "spec type `{}` has `::` in its declared name, which a generated \
              binding cannot tell apart from a module of that path; drop it from \
              the `name = \"...\"` attribute",
@@ -61,15 +61,24 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
     }
     namespaces.extend(segments.map(str::to_owned));
 
-    for ns in &namespaces {
-        validate_ts_identifier(ns, "spec id segment")?;
-    }
-    validate_ts_identifier(declared, "spec type name")?;
-
-    Ok(TsIdPath {
+    let path = TsIdPath {
         namespaces,
         name: declared.to_owned(),
-    })
+    };
+    if let Some(segment) = path
+        .namespaces
+        .iter()
+        .chain(std::iter::once(&path.name))
+        .find(|segment| !is_ts_identifier(segment) || *segment == "__proto__")
+    {
+        return Err(CliError::TsBindingsFailed(format!(
+            "{} would be \"{}\" in the generated TypeScript, where \"{segment}\" is not a \
+             valid identifier. Rename it.",
+            groundhog_client::codec::spec_id_text(id)?,
+            path.qualified()
+        )));
+    }
+    Ok(path)
 }
 
 /// A declaration the bindings emit under a spec id's path.
@@ -97,7 +106,7 @@ fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration<'_>>, CliError> {
     for def in spec.type_defs.iter() {
         let path = ts_id_path(type_def_id(def)?)?;
         out.push(Declaration {
-            what: format!("type definition \"{}\"", path.qualified()),
+            what: type_def_label(def)?,
             value: match def {
                 ContractTypeDef::TypeDefEnum { enum_def } => Some(Value::Enum(enum_def)),
                 _ => None,
@@ -108,7 +117,7 @@ fn declarations(spec: &ContractSpec) -> Result<Vec<Declaration<'_>>, CliError> {
     for (index, event) in spec.events.iter().enumerate() {
         let path = ts_id_path(&event.name)?;
         out.push(Declaration {
-            what: format!("event \"{}\"", path.qualified()),
+            what: declaration_label("event", &event.name)?,
             value: Some(Value::Event(index, event)),
             path,
         });
@@ -137,10 +146,30 @@ fn type_def_id(def: &ContractTypeDef) -> Result<&ContractSpecId, CliError> {
         ContractTypeDef::TypeDefStruct { struct_def } => Ok(&struct_def.name),
         ContractTypeDef::TypeDefEnum { enum_def } => Ok(&enum_def.name),
         ContractTypeDef::TypeDefUnion { union_def } => Ok(&union_def.name),
-        _ => Err(CliError::SpecFailed(
+        _ => Err(CliError::TsBindingsFailed(
             "contract spec contains an unsupported type definition kind".into(),
         )),
     }
+}
+
+/// How errors name a declared type or event: its kind, then its id as the SDK's
+/// own errors write it, e.g. `enum my_token::errors::TokenError (my_token@1)`.
+fn declaration_label(kind: &str, id: &ContractSpecId) -> Result<String, CliError> {
+    Ok(format!(
+        "{kind} {}",
+        groundhog_client::codec::spec_id_text(id)?
+    ))
+}
+
+/// [`declaration_label`] for a type def.
+fn type_def_label(def: &ContractTypeDef) -> Result<String, CliError> {
+    let kind = match def {
+        ContractTypeDef::TypeDefStruct { .. } => "struct",
+        ContractTypeDef::TypeDefEnum { .. } => "enum",
+        ContractTypeDef::TypeDefUnion { .. } => "union",
+        _ => "type",
+    };
+    declaration_label(kind, type_def_id(def)?)
 }
 
 /// Map a contract type to its TypeScript type reference string.
@@ -212,7 +241,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             )),
             None => Ok("__gh_client_contract.SignedToken".into()),
         },
-        _ => Err(CliError::SpecFailed(
+        _ => Err(CliError::TsBindingsFailed(
             "contract spec contains an unsupported contract type".into(),
         )),
     }
@@ -288,7 +317,7 @@ fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
         ContractTypeDef::TypeDefStruct { struct_def } => emit_struct(struct_def),
         ContractTypeDef::TypeDefEnum { enum_def } => emit_enum(enum_def),
         ContractTypeDef::TypeDefUnion { union_def } => emit_union(union_def),
-        _ => Err(CliError::SpecFailed(
+        _ => Err(CliError::TsBindingsFailed(
             "contract spec contains an unsupported type definition kind".into(),
         )),
     }
@@ -353,7 +382,7 @@ fn emit_union(def: &ContractUnionDef) -> Result<String, CliError> {
                 )
             }
             _ => {
-                return Err(CliError::SpecFailed(
+                return Err(CliError::TsBindingsFailed(
                     "contract spec contains an unsupported union case kind".into(),
                 ));
             }
@@ -763,7 +792,7 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
             let _ = writeln!(out, "    }},");
         }
         _ => {
-            return Err(CliError::SpecFailed(
+            return Err(CliError::TsBindingsFailed(
                 "contract spec contains an unsupported type definition \
                  kind"
                     .into(),
@@ -835,7 +864,7 @@ fn emit_spec_union_case_literal(
             let _ = writeln!(out, "          }},");
         }
         _ => {
-            return Err(CliError::SpecFailed(
+            return Err(CliError::TsBindingsFailed(
                 "contract spec contains an unsupported union case kind".into(),
             ));
         }
@@ -917,7 +946,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
                  {{ preimage_type: {preimage} }} }}"
             ))
         }
-        _ => Err(CliError::SpecFailed(
+        _ => Err(CliError::TsBindingsFailed(
             "contract spec contains an unsupported contract type".into(),
         )),
     }
@@ -1250,7 +1279,7 @@ fn render_event_descriptor(event: &ContractEventDef, index: usize) -> Result<Str
 /// `Event`. The generated file is per-contract, so all events share it.
 fn event_union_name(spec: &ContractSpec) -> Result<String, CliError> {
     let first_iface = spec.interfaces.iter().next().ok_or_else(|| {
-        CliError::SpecFailed("contract spec with events has no interfaces".into())
+        CliError::TsBindingsFailed("contract spec with events has no interfaces".into())
     })?;
     Ok(format!("{}Event", spec_string_text(&first_iface.name)?))
 }
@@ -1328,7 +1357,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             let path = decl.path.qualified();
             match value {
                 Value::Event(..) => {
-                    return Err(CliError::SpecFailed(format!(
+                    return Err(CliError::TsBindingsFailed(format!(
                         "{} and {} both need a value under \"{path}\" in the generated \
                          TypeScript: the event's descriptor is there, and it cannot also hold \
                          \"{key}\". Rename either, or move one out of that module.",
@@ -1338,10 +1367,11 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
                 Value::Enum(def) => {
                     for variant in def.variants.iter() {
                         if spec_string_text(&variant.name)? == key {
-                            return Err(CliError::SpecFailed(format!(
-                                "{} has a variant \"{key}\", and {} needs \"{path}.{key}\" \
-                                 too: the enum's variants and that module's values share one \
-                                 object in the generated TypeScript. Rename either.",
+                            return Err(CliError::TsBindingsFailed(format!(
+                                "{} has a variant \"{key}\", and {} also needs \
+                                 \"{path}.{key}\" in the generated TypeScript, where an enum's \
+                                 variants share one object with the values of the module named \
+                                 after it. Rename either.",
                                 decl.what, inner.what
                             )));
                         }
@@ -1392,11 +1422,10 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
                 format!("spec id namespace \"{root}\""),
             )?;
         }
-        let qualified = path.qualified();
         reserve_ts_value_name(
             &mut namespaced_values,
-            qualified.clone(),
-            format!("type definition \"{qualified}\""),
+            path.qualified(),
+            type_def_label(def)?,
         )?;
         defined_types.insert(id.clone());
     }
@@ -1432,7 +1461,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         let mut selectors = BTreeSet::new();
         for exception in iface.throws.iter() {
             if !selectors.insert(exception.selector) {
-                return Err(CliError::SpecFailed(format!(
+                return Err(CliError::TsBindingsFailed(format!(
                     "interface \"{iface_name}\" has duplicate exception selector 0x{:x}",
                     exception.selector
                 )));
@@ -1489,8 +1518,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .collect();
     let mut event_signatures = BTreeMap::new();
     for event in spec.events.iter() {
-        let event_name = spec_string_text(&event.name.declared)?;
-        validate_ts_identifier(event_name, &format!("event \"{event_name}\""))?;
+        let event_label = declaration_label("event", &event.name)?;
         // Like a type def, an event declares itself inside its id's
         // namespaces, so the only top-level name it claims is the root.
         let event_path = ts_id_path(&event.name)?;
@@ -1504,37 +1532,37 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
         let qualified = event_path.qualified();
         for (name, source) in [
-            (qualified.clone(), format!("event \"{qualified}\"")),
+            (qualified.clone(), event_label.clone()),
             (
                 format!("{qualified}Filter"),
-                format!("event \"{qualified}\" filter"),
+                format!("the filter type of {event_label}"),
             ),
         ] {
             reserve_ts_value_name(&mut namespaced_values, name, source)?;
         }
         if let Some(existing) =
-            event_signatures.insert(event.signature.into_inner(), event_name.to_owned())
+            event_signatures.insert(event.signature.into_inner(), event_label.clone())
         {
-            return Err(CliError::SpecFailed(format!(
-                "events \"{existing}\" and \"{event_name}\" have duplicate signature 0x{}",
+            return Err(CliError::TsBindingsFailed(format!(
+                "{existing} and {event_label} have duplicate signature 0x{}",
                 hex::encode(event.signature.into_inner())
             )));
         }
         if event.topics.len() > 2 {
-            return Err(CliError::SpecFailed(format!(
-                "event \"{event_name}\" declares {} topics including its signature; protocol maximum is 3",
+            return Err(CliError::TsBindingsFailed(format!(
+                "{event_label} declares {} topics including its signature; protocol maximum is 3",
                 event.topics.len() + 1
             )));
         }
         validate_fields(
             event.topics.iter(),
             &defined_types,
-            &format!("event \"{event_name}\" topics"),
+            &format!("{event_label} topics"),
         )?;
         validate_fields(
             event.fields.iter(),
             &defined_types,
-            &format!("event \"{event_name}\" fields"),
+            &format!("{event_label} fields"),
         )?;
         // A token's handle never travels in event data, and the event
         // tooling rejects one; refuse here rather than emit an event spec it
@@ -1542,8 +1570,8 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         // a struct or union the event refers to is caught too.
         for field in event.topics.iter().chain(event.fields.iter()) {
             if type_carries_signed_token(&field.ty, &type_def_index, &mut BTreeSet::new()) {
-                return Err(CliError::SpecFailed(format!(
-                    "event \"{event_name}\" field \"{}\" carries a signed token, which events cannot log",
+                return Err(CliError::TsBindingsFailed(format!(
+                    "{event_label} field \"{}\" carries a signed token, which events cannot log",
                     spec_string_text(&field.name)?
                 )));
             }
@@ -1573,7 +1601,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .collect();
     // Reserved at top level above; below a root, a spec name would shadow it.
     if let Some((_, source)) = nested.iter().find(|(name, _)| *name == "globalThis") {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "{source} has \"globalThis\" in its generated TypeScript path, where it would \
              shadow the global object the bindings reach built-in types through. Rename the \
              module or type."
@@ -1584,7 +1612,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         .chain(nested.iter().copied())
         .find(|(name, _)| name.starts_with(RESERVED_PREFIX))
     {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "generated TypeScript name \"{name}\" for {source} starts with \"{RESERVED_PREFIX}\", \
              which the generator reserves for the names it declares itself. Rename it without \
              that prefix."
@@ -1602,7 +1630,7 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             .iter()
             .find(|segment| crates.contains(*segment))
         {
-            return Err(CliError::SpecFailed(format!(
+            return Err(CliError::TsBindingsFailed(format!(
                 "{} has \"{module}\" in its generated TypeScript path, which is also the name \
                  of a crate whose types the bindings write as \"{module}.…\". Inside that \
                  namespace the name would resolve to the module instead. Rename the module.",
@@ -1648,7 +1676,7 @@ fn validate_interface_method_name_collisions(
             &format!("method \"{iface_name}.{method_name}\""),
         )?;
         if let Some(existing) = methods.get(public_method_name) {
-            return Err(CliError::SpecFailed(format!(
+            return Err(CliError::TsBindingsFailed(format!(
                 "interface \"{iface_name}\" method names \"{existing}\" and \"{method_name}\" both map to \"{public_method_name}\""
             )));
         }
@@ -1663,7 +1691,7 @@ fn reserve_ts_value_name(
     source: String,
 ) -> Result<(), CliError> {
     if let Some(existing) = names.get(&name) {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "generated TypeScript value name \"{name}\" collides between {existing} and {source}"
         )));
     }
@@ -1673,7 +1701,7 @@ fn reserve_ts_value_name(
 
 fn validate_ts_identifier(name: &str, source: &str) -> Result<(), CliError> {
     if !is_ts_identifier(name) || name == "__proto__" {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "generated TypeScript identifier \"{name}\" for {source} is invalid"
         )));
     }
@@ -1682,7 +1710,7 @@ fn validate_ts_identifier(name: &str, source: &str) -> Result<(), CliError> {
 
 fn validate_ts_property_identifier(name: &str, source: &str) -> Result<(), CliError> {
     if !is_ts_identifier_name(name) || name == "__proto__" {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "generated TypeScript property name \"{name}\" for {source} is invalid"
         )));
     }
@@ -1776,29 +1804,26 @@ fn validate_type_def(
     defined_types: &BTreeSet<ContractSpecId>,
 ) -> Result<(), CliError> {
     match def {
-        ContractTypeDef::TypeDefStruct { struct_def } => {
-            let name = spec_string_text(&struct_def.name.declared)?;
-            validate_fields(
-                struct_def.fields.iter(),
-                defined_types,
-                &format!("struct \"{name}\""),
-            )
-        }
+        ContractTypeDef::TypeDefStruct { struct_def } => validate_fields(
+            struct_def.fields.iter(),
+            defined_types,
+            &type_def_label(def)?,
+        ),
         ContractTypeDef::TypeDefEnum { enum_def } => {
-            let name = spec_string_text(&enum_def.name.declared)?;
+            let name = type_def_label(def)?;
             let mut members = BTreeSet::new();
             let mut values = BTreeSet::new();
             for variant in enum_def.variants.iter() {
                 let variant_name = spec_string_text(&variant.name)?;
-                validate_property_name(variant_name, &format!("enum \"{name}\""))?;
+                validate_property_name(variant_name, &name)?;
                 if !members.insert(variant_name) {
-                    return Err(CliError::SpecFailed(format!(
-                        "enum \"{name}\" has duplicate member \"{variant_name}\""
+                    return Err(CliError::TsBindingsFailed(format!(
+                        "{name} has duplicate member \"{variant_name}\""
                     )));
                 }
                 if !values.insert(variant.value) {
-                    return Err(CliError::SpecFailed(format!(
-                        "enum \"{name}\" has duplicate value {}",
+                    return Err(CliError::TsBindingsFailed(format!(
+                        "{name} has duplicate value {}",
                         variant.value
                     )));
                 }
@@ -1806,10 +1831,10 @@ fn validate_type_def(
             Ok(())
         }
         ContractTypeDef::TypeDefUnion { union_def } => {
-            let name = spec_string_text(&union_def.name.declared)?;
+            let name = type_def_label(def)?;
             if union_def.cases.is_empty() {
-                return Err(CliError::SpecFailed(format!(
-                    "union \"{name}\" must declare at least one case"
+                return Err(CliError::TsBindingsFailed(format!(
+                    "{name} must declare at least one case"
                 )));
             }
             let mut members = BTreeSet::new();
@@ -1817,13 +1842,13 @@ fn validate_type_def(
             for case in union_def.cases.iter() {
                 let case_name = spec_string_text(&case.name)?;
                 if !members.insert(case_name) {
-                    return Err(CliError::SpecFailed(format!(
-                        "union \"{name}\" has duplicate case \"{case_name}\""
+                    return Err(CliError::TsBindingsFailed(format!(
+                        "{name} has duplicate case \"{case_name}\""
                     )));
                 }
                 if !discriminants.insert(case.discriminant) {
-                    return Err(CliError::SpecFailed(format!(
-                        "union \"{name}\" has duplicate discriminant {}",
+                    return Err(CliError::TsBindingsFailed(format!(
+                        "{name} has duplicate discriminant {}",
                         case.discriminant
                     )));
                 }
@@ -1835,9 +1860,7 @@ fn validate_type_def(
                                 ty,
                                 false,
                                 defined_types,
-                                &format!(
-                                    "union \"{name}\" case \"{case_name}\" tuple item {index}"
-                                ),
+                                &format!("{name} case \"{case_name}\" tuple item {index}"),
                             )?;
                         }
                     }
@@ -1845,19 +1868,19 @@ fn validate_type_def(
                         validate_fields(
                             struct_fields.iter(),
                             defined_types,
-                            &format!("union \"{name}\" case \"{case_name}\""),
+                            &format!("{name} case \"{case_name}\""),
                         )?;
                     }
                     _ => {
-                        return Err(CliError::SpecFailed(format!(
-                            "union \"{name}\" case \"{case_name}\" has an unsupported kind"
+                        return Err(CliError::TsBindingsFailed(format!(
+                            "{name} case \"{case_name}\" has an unsupported kind"
                         )));
                     }
                 }
             }
             Ok(())
         }
-        _ => Err(CliError::SpecFailed(
+        _ => Err(CliError::TsBindingsFailed(
             "type definition contains an unsupported kind".into(),
         )),
     }
@@ -1873,7 +1896,7 @@ fn validate_fields<'a>(
         let name = spec_string_text(&field.name)?;
         validate_property_name(name, location)?;
         if !names.insert(name) {
-            return Err(CliError::SpecFailed(format!(
+            return Err(CliError::TsBindingsFailed(format!(
                 "{location} has duplicate field \"{name}\""
             )));
         }
@@ -1895,7 +1918,7 @@ fn validate_contract_type(
 ) -> Result<(), CliError> {
     match ty {
         ContractType::Void if allow_void => Ok(()),
-        ContractType::Void => Err(CliError::SpecFailed(format!(
+        ContractType::Void => Err(CliError::TsBindingsFailed(format!(
             "{location} uses Void outside a method return"
         ))),
         ContractType::Bool
@@ -1938,7 +1961,7 @@ fn validate_contract_type(
             if defined_types.contains(named) {
                 Ok(())
             } else {
-                Err(CliError::SpecFailed(format!(
+                Err(CliError::TsBindingsFailed(format!(
                     "{location} references unresolved named type \"{}\"",
                     groundhog_client::codec::spec_id_text(named)?
                 )))
@@ -1955,7 +1978,7 @@ fn validate_contract_type(
             ),
             None => Ok(()),
         },
-        _ => Err(CliError::SpecFailed(format!(
+        _ => Err(CliError::TsBindingsFailed(format!(
             "{location} uses an unsupported contract type"
         ))),
     }
@@ -1963,7 +1986,7 @@ fn validate_contract_type(
 
 fn validate_property_name(name: &str, location: &str) -> Result<(), CliError> {
     if name == "__proto__" {
-        return Err(CliError::SpecFailed(format!(
+        return Err(CliError::TsBindingsFailed(format!(
             "{location} contains unsafe property name \"{name}\""
         )));
     }
@@ -2087,7 +2110,7 @@ fn ts_property_key(name: &str) -> Result<String, CliError> {
 /// Read a spec string as text for emission; accepts any UTF-8, unlike the codec's validator.
 fn spec_string_text(value: &groundhog_contract_spec::ContractSpecString) -> Result<&str, CliError> {
     std::str::from_utf8(value.as_ref()).map_err(|error| {
-        CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {error}"))
+        CliError::TsBindingsFailed(format!("contract spec contains invalid UTF-8: {error}"))
     })
 }
 
@@ -2142,7 +2165,7 @@ fn validate_method_arg_name_collisions(
             &format!("method \"{method_name}\" argument \"{arg_name}\""),
         )?;
         if let Some(existing) = args.get(&public_arg_name) {
-            return Err(CliError::SpecFailed(format!(
+            return Err(CliError::TsBindingsFailed(format!(
                 "method \"{method_name}\" argument names \"{existing}\" and \"{arg_name}\" both map to \"{public_arg_name}\""
             )));
         }
@@ -2863,7 +2886,8 @@ export type Result =
         .unwrap();
         let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
-            "generated TypeScript value name \"demo.v1.PingEvent\" collides between type definition \"demo.v1.PingEvent\" and event \"demo.v1.PingEvent\""
+            "generated TypeScript value name \"demo.v1.PingEvent\" collides between struct \
+             demo::PingEvent (demo@1) and event demo::PingEvent (demo@1)"
         ));
     }
 
@@ -3158,7 +3182,7 @@ export type Result =
             .to_string();
         assert!(
             error.contains(
-                "type definition \"demo.v1.other.Holder\" has \"other\" in its generated \
+                "struct demo::other::Holder (demo@1) has \"other\" in its generated \
                  TypeScript path"
             ),
             "{error}"
@@ -3373,7 +3397,16 @@ export type Result =
             enum_at(spec_id_at("demo", "demo::foo", "A")),
         );
         let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
-        assert!(error.to_string().contains("has a variant \"A\""), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "cannot generate TypeScript bindings: enum demo::foo (demo@1) has a variant \"A\", \
+             and enum demo::foo::A (demo@1) also needs \"demo.v1.foo.A\" in the generated \
+             TypeScript, where an enum's variants share one object with the values of the \
+             module named after it. Rename either."
+        );
+        // The contract builds; only its bindings cannot be generated.
+        assert_eq!(error.code(), "ts_bindings_failed");
+        assert!(error.hint().is_none(), "{error}");
     }
 
     #[test]
@@ -3387,12 +3420,31 @@ export type Result =
                 .unwrap();
             let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
             assert!(
-                error
-                    .to_string()
-                    .contains("the event's descriptor is there"),
+                error.to_string().contains(&format!(
+                    "event demo::foo (demo@1) and enum {module}::Bar (demo@1) both need a value \
+                     under \"demo.v1.foo\" in the generated TypeScript: the event's descriptor \
+                     is there"
+                )),
                 "{module}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn an_invalid_path_segment_names_its_declaration() {
+        // `default` is a valid Rust module name and a reserved word in TypeScript.
+        let mut spec = spec_with_events();
+        spec.events = vec![].try_into().unwrap();
+        spec.type_defs = vec![struct_at(spec_id_at("demo", "demo::default", "Config"))]
+            .try_into()
+            .unwrap();
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "cannot generate TypeScript bindings: demo::default::Config (demo@1) would be \
+             \"demo.v1.default.Config\" in the generated TypeScript, where \"default\" is not a \
+             valid identifier. Rename it."
+        );
     }
 
     #[test]
@@ -4011,7 +4063,7 @@ export type Result =
         assert!(
             error
                 .to_string()
-                .contains("enum \"DuplicateValues\" has duplicate value 1")
+                .contains("enum demo::DuplicateValues (demo@1) has duplicate value 1")
         );
     }
 
@@ -4044,9 +4096,9 @@ export type Result =
 
         let error = generate_ts_bindings(&spec, "duplicate-union.xdr").unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("union \"DuplicateDiscriminants\" has duplicate discriminant -1")
+            error.to_string().contains(
+                "union demo::DuplicateDiscriminants (demo@1) has duplicate discriminant -1"
+            )
         );
     }
 
@@ -4068,7 +4120,7 @@ export type Result =
         assert!(
             error
                 .to_string()
-                .contains("union \"Empty\" must declare at least one case")
+                .contains("union demo::Empty (demo@1) must declare at least one case")
         );
     }
 
@@ -4212,7 +4264,8 @@ export type Result =
 
         let error = generate_ts_bindings(&spec, "events.spec.xdr").unwrap_err();
         assert!(error.to_string().contains(
-            "events \"First\" and \"Second\" have duplicate signature 0xabababababababababababababababababababababababababababababababab"
+            "event demo::First (demo@1) and event demo::Second (demo@1) have duplicate signature \
+             0xabababababababababababababababababababababababababababababababab"
         ));
     }
 

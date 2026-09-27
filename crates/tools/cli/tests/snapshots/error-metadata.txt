@@ -139,7 +139,10 @@ Rv32LowerFailed
 
 SpecFailed
   code: spec_failed
-  hint text: check that your contract uses `#[contract]` and `#[contracttype]` attributes correctly
+  hint text: check that your contract uses `#[contract]` and `#[contract_type]` attributes correctly
+
+TsBindingsFailed
+  code: ts_bindings_failed
 
 RawSpecFormat
   code: raw_spec_format
