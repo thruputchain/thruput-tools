@@ -6,12 +6,10 @@
 //! plumbing — pool construction, address parsing, typed startup
 //! errors — into one place so consumers do not copy it.
 //!
-//! Two pool shapes are available through [`PoolKind`]: the serial pool
-//! that every `connect*` function below builds, with one call in flight
-//! per connection, and the multiplexed pool that [`connect_pool`] and
-//! [`try_connect_pool`] build on request, with many calls in flight per
-//! connection and an execution width set separately from the connection
-//! count.
+//! [`PoolKind`] picks the pool shape: the serial pool every `connect*`
+//! function below builds, or the multiplexed pool [`connect_pool`] and
+//! [`try_connect_pool`] build on request.
+//!
 //! It is an internal workspace boundary and follows the Groundhog workspace
 //! release rather than maintaining an independent public API contract.
 //!
@@ -71,13 +69,9 @@ pub enum PoolKind {
     /// the connection with the fewest calls outstanding. `max_in_flight`
     /// is the execution width, enforced here in the transport, and is
     /// independent of the connection count; a call past it waits for a
-    /// slot, as it would queue in a serial pool.
-    ///
-    /// A canceled call's reply is discarded and its connection stays in
-    /// service. There is no per-connection cancellation policy: a consumer
-    /// that relied on [`CanceledCallPolicy::PoisonConnection`] to force a
-    /// reconnect after a canceled call must invalidate its client itself,
-    /// as the gateway does by scheduler generation.
+    /// slot, as it would queue in a serial pool. A canceled call's reply
+    /// is discarded and its connection stays in service; there is no
+    /// per-connection cancellation policy.
     Multiplex { max_in_flight: usize },
 }
 

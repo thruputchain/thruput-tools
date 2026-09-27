@@ -108,20 +108,12 @@ pub struct InvalidSchedulerLookupPoolSize;
 
 /// Which `rpc_driver` pool the gateway's x23 data connections use.
 ///
-/// `serial` is one call in flight per connection, so each data pool's
-/// size setting is both its connection count and its execution width.
-/// `multiplex` carries many calls per connection: the size settings keep
-/// their meaning as execution widths, enforced by the transport, and every
-/// data pool opens [`GatewayConfig::x23_multiplex_connections`] sockets
-/// instead. Health probes stay on one serial connection either way.
-///
-/// The pools also differ on a canceled call. A serial pool replaces or
-/// poisons the connection whose call was canceled; a multiplexed pool
-/// discards the late reply and keeps the connection. The gateway does not
-/// depend on the connection-level reaction: a submit that times out
-/// invalidates its scheduler generation, which drops the whole pool, and a
-/// lookup that times out is aborted and leaves the generation alone under
-/// either kind.
+/// Each data pool's size setting is its execution width under either kind.
+/// `serial` opens one connection per executing call; `multiplex` opens
+/// [`GatewayConfig::x23_multiplex_connections`] sockets per pool and caps
+/// calls in flight at the width. Health probes stay on one serial
+/// connection either way. `docs/gateway/system-design.md` covers what a
+/// canceled call does under each kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum X23PoolKind {
@@ -216,14 +208,8 @@ pub struct X23PoolSettings {
 
 impl X23PoolSettings {
     /// The transport pool kind and connection count for a data pool that
-    /// executes `execution_width` calls at once.
-    ///
-    /// A serial pool opens one connection per executing call, and
-    /// `canceled_call_policy` says what a canceled call does to its
-    /// connection. A multiplexed pool opens the configured connection count
-    /// and caps calls in flight at `execution_width`; the policy does not
-    /// apply, since a multiplexed pool keeps a connection whose call was
-    /// canceled.
+    /// executes `execution_width` calls at once. `canceled_call_policy`
+    /// applies to a serial pool only; a multiplexed pool ignores it.
     pub fn data_pool(
         self,
         execution_width: usize,
@@ -474,12 +460,8 @@ pub struct GatewayConfig {
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 
-    /// Which `rpc_driver` pool the x23 data connections use (default `serial`).
-    ///
-    /// With `multiplex`, `indexer_pool_size`, `scheduler_lookup_pool_size`,
-    /// and the batcher-derived scheduler and `DbGateway` widths keep bounding
-    /// how many calls execute at once, and each data pool opens
-    /// `x23_multiplex_connections` sockets instead of one per executing call.
+    /// Which `rpc_driver` pool the x23 data connections use (default `serial`);
+    /// see [`X23PoolKind`].
     pub x23_pool: X23PoolKind,
 
     /// Connections per multiplexed x23 data pool (1..=64, default 4).

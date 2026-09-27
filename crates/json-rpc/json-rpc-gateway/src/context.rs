@@ -229,13 +229,9 @@ impl GatewayContext {
             })?;
         let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
 
-        // Each data pool's size is its execution width: with the default
-        // serial pool that is one connection per executing call (FIFO
-        // dispatch per connection, modeling x23 sync RPC), and with the
-        // multiplexed pool it is a cap on calls in flight over
-        // `x23_multiplex_connections` sockets. The scheduler width covers the
-        // batch submitter (`max_inflight_batches` × shards) plus the tip
-        // coalescer (`max_inflight_tips`) plus slack for ad-hoc RPCs.
+        // Each data pool's size is its execution width. The scheduler width
+        // covers the batch submitter (`max_inflight_batches` × shards) plus
+        // the tip coalescer (`max_inflight_tips`) plus slack for ad-hoc RPCs.
         let startup_timeout = Duration::from_millis(config.backend_connect_timeout_ms.max(1));
         let sched_pool_size = scheduler_pool_size(&config);
         let scheduler_candidate = if let Ok(result) = tokio::time::timeout(
@@ -417,15 +413,10 @@ pub(crate) struct QuarantinedScheduler {
 /// Connect the scheduler's three pools: submission and tip, transaction
 /// lookup, and the one-connection health probe.
 ///
-/// The submit pool's serial cancellation policy is `PoisonConnection`: a
-/// canceled or timed-out submit retires its connection and the pool is
-/// discarded, since hogd's scheduler needs its intro handshake and a
-/// readiness grace before a client may be used again. The gateway enforces
-/// that at the client level regardless of pool kind: a submit timeout
-/// clears this scheduler generation, which drops all three pools, and the
-/// health loop rebuilds them behind the quarantine. A multiplexed submit
-/// pool keeps the connection a canceled call was on, and relies on that
-/// generation clear alone.
+/// A serial submit pool uses `PoisonConnection`, since hogd's scheduler
+/// needs its intro handshake and a readiness grace before a client may be
+/// used again; `docs/gateway/system-design.md` covers how a submit timeout
+/// clears the scheduler generation under either kind.
 pub(crate) async fn connect_optional_scheduler(
     pools: X23PoolSettings,
     address: &str,
