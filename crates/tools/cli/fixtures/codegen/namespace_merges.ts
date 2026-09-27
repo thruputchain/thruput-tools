@@ -147,6 +147,9 @@ const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);
 export const Merged = {
 } as const;
 
+const __gh_spec = spec;
+const __gh_codecs = codecs;
+
 export namespace demo {
 
   export namespace v1 {
@@ -168,24 +171,24 @@ export namespace demo {
       quxFilter
     >({
       name: "qux",
-      signature: spec.events[0]!.signature,
+      signature: __gh_spec.events[0]!.signature,
       topics: [
         {
           name: "tag",
-          type: spec.events[0]!.topics[0]!.ty,
+          type: __gh_spec.events[0]!.topics[0]!.ty,
           representation: "u64",
         },
       ],
       fields: [
-        { name: "note", type: spec.events[0]!.fields[0]!.ty },
+        { name: "note", type: __gh_spec.events[0]!.fields[0]!.ty },
       ],
-      codecs,
+      codecs: __gh_codecs,
     });
   }
 }
 
 export type MergedEvent = demo.v1.qux;
 
-export function decodeEvent(event: { topics: Uint8Array[]; data: Uint8Array }): MergedEvent | null {
+export function decodeEvent(event: { topics: globalThis.Uint8Array[]; data: globalThis.Uint8Array }): MergedEvent | null {
   return demo.v1.qux.decode(event);
 }

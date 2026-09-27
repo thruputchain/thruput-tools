@@ -165,6 +165,9 @@ export const ExampleContract = {
   }),
 } as const;
 
+const __gh_spec = spec;
+const __gh_codecs = codecs;
+
 export namespace demo {
 
   export namespace v1 {
@@ -187,31 +190,31 @@ export namespace demo {
       ChangedEventFilter
     >({
       name: "ChangedEvent",
-      signature: spec.events[0]!.signature,
+      signature: __gh_spec.events[0]!.signature,
       topics: [
         {
           name: "actor",
-          type: spec.events[0]!.topics[0]!.ty,
+          type: __gh_spec.events[0]!.topics[0]!.ty,
           representation: "address",
         },
         {
           name: "request_id",
-          type: spec.events[0]!.topics[1]!.ty,
+          type: __gh_spec.events[0]!.topics[1]!.ty,
           representation: "fixedBytes32",
         },
       ],
       fields: [
-        { name: "previous_values", type: spec.events[0]!.fields[0]!.ty },
-        { name: "current_values", type: spec.events[0]!.fields[1]!.ty },
-        { name: "request_id", type: spec.events[0]!.fields[2]!.ty },
+        { name: "previous_values", type: __gh_spec.events[0]!.fields[0]!.ty },
+        { name: "current_values", type: __gh_spec.events[0]!.fields[1]!.ty },
+        { name: "request_id", type: __gh_spec.events[0]!.fields[2]!.ty },
       ],
-      codecs,
+      codecs: __gh_codecs,
     });
   }
 }
 
 export type ExampleContractEvent = demo.v1.ChangedEvent;
 
-export function decodeEvent(event: { topics: Uint8Array[]; data: Uint8Array }): ExampleContractEvent | null {
+export function decodeEvent(event: { topics: globalThis.Uint8Array[]; data: globalThis.Uint8Array }): ExampleContractEvent | null {
   return demo.v1.ChangedEvent.decode(event);
 }

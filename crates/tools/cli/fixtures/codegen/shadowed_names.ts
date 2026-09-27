@@ -6,9 +6,6 @@ import * as __gh_protocol_utils from "@groundhogchain/protocol/utils";
 import * as __gh_contract_spec from "@groundhogchain/contract-spec";
 import * as __gh_client_contract from "@groundhogchain/client/contract";
 
-type __gh_Holder_3 = demo.v1.other.Holder;
-type __gh_Thing_2 = other.v1.Thing;
-
 const s = __gh_contract_spec.contractSpecString;
 
 const entrypoints = {
@@ -25,10 +22,7 @@ export namespace demo {
 
     export interface SignedToken { "token": __gh_client_contract.SignedToken; }
 
-    export namespace other {
-
-      export interface Holder { "inner": __gh_Thing_2; }
-    }
+    export interface Holder { "inner": other.v1.Thing; }
   }
 }
 
@@ -38,12 +32,12 @@ export namespace other {
 
     export interface Thing { "n": bigint; }
 
-    export interface demo {  }
+    export interface demo { "holder": demo.v1.Holder; }
   }
 }
 
 export interface ShadowedAuthorizeArgs {
-  holder: __gh_Holder_3;
+  holder: demo.v1.Holder;
 }
 export type ShadowedAuthorizeResult = __gh_client_contract.SignedToken;
 
@@ -61,7 +55,7 @@ export const spec: __gh_client_contract.ContractSpec = {
         {
           name: s("authorize"),
           args: [
-            { name: s("holder"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo::other"), declared: s("Holder") } } },
+            { name: s("holder"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Holder") } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } },
         },
@@ -99,7 +93,7 @@ export const spec: __gh_client_contract.ContractSpec = {
     {
       v: __gh_contract_spec.ContractTypeDefKind.TypeDefStruct,
       struct_def: {
-        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo::other"), declared: s("Holder") },
+        name: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Holder") },
         fields: [
           { name: s("inner"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("other"), major: s("1"), module_path: s("other"), declared: s("Thing") } } },
         ],
@@ -110,6 +104,7 @@ export const spec: __gh_client_contract.ContractSpec = {
       struct_def: {
         name: { crate_name: s("other"), major: s("1"), module_path: s("other"), declared: s("demo") },
         fields: [
+          { name: s("holder"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: s("demo"), major: s("1"), module_path: s("demo"), declared: s("Holder") } } },
         ],
       },
     },
@@ -175,8 +170,8 @@ export const Shadowed = {
   }),
 } as const;
 
-const __gh_codecs = codecs;
 const __gh_spec = spec;
+const __gh_codecs = codecs;
 
 export namespace demo {
 
@@ -280,6 +275,6 @@ export namespace demo {
 
 export type ShadowedEvent = demo.v1.Record | demo.v1.codecs | demo.v1.spec.Pinged;
 
-export function decodeEvent(event: { topics: Uint8Array[]; data: Uint8Array }): ShadowedEvent | null {
+export function decodeEvent(event: { topics: globalThis.Uint8Array[]; data: globalThis.Uint8Array }): ShadowedEvent | null {
   return demo.v1.Record.decode(event) ?? demo.v1.codecs.decode(event) ?? demo.v1.spec.Pinged.decode(event);
 }

@@ -10,7 +10,8 @@ import type { demo, other } from "../shadowed_names.js";
 export const bytes: demo.v1.Uint8Array = { bytes: new Uint8Array() };
 export const token: demo.v1.SignedToken = { token: {} as SignedToken };
 export const thing: other.v1.Thing = { n: 1n };
-export const holder: demo.v1.other.Holder = { inner: thing };
+export const holder: demo.v1.Holder = { inner: thing };
+export const named: other.v1.demo = { holder };
 export const recordFilter: demo.v1.RecordFilter = {};
 export const record: demo.v1.Record = {
   name: "Record",
