@@ -411,9 +411,7 @@ pub(crate) struct QuarantinedScheduler {
 }
 
 /// Connect the scheduler's three pools: submission and tip, transaction
-/// lookup, and the one-connection health probe. The "x23 pool kind"
-/// section of `docs/gateway/system-design.md` covers the cancellation
-/// policies.
+/// lookup, and the one-connection health probe.
 pub(crate) async fn connect_optional_scheduler(
     pools: X23PoolSettings,
     address: &str,

@@ -436,8 +436,10 @@ chosen by `x23_pool` (`--x23-pool`, default `serial`):
   size settings keep their meaning as execution widths, enforced in the
   transport as a cap on calls in flight, and every data pool opens
   `x23_multiplex_connections` (`--x23-multiplex-connections`, default 4)
-  sockets instead. A canceled call's late reply is discarded and the connection
-  stays in service.
+  sockets instead. Roughly one connection per worker the backend serves with
+  is the useful range; each connection's read loop is one task, so more
+  sockets do not add throughput. A canceled call's late reply is discarded and
+  the connection stays in service.
 
 Admission does not change with the kind: lookups stay under the 68-call bound
 with `scheduler_lookup_pool_size` execution permits, the batchers keep their

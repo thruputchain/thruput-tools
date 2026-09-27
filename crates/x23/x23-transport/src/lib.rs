@@ -232,11 +232,8 @@ where
 }
 
 /// Establish a pool of `kind` over `connections` connections and construct
-/// the typed client. Fails hard on any error.
-///
-/// For a serial pool `connections` is also the execution width. For a
-/// multiplexed pool the width is the kind's `max_in_flight`, and a zero
-/// width is rejected like a zero connection count.
+/// the typed client. Fails hard on any error. A serial pool's width is
+/// `connections`; a multiplexed pool's is its `max_in_flight`.
 pub async fn connect_pool<C, F>(
     service: &'static str,
     addr: &str,

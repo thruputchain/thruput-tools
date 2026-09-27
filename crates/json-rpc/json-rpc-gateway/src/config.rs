@@ -459,11 +459,8 @@ pub struct GatewayConfig {
     /// see [`X23PoolKind`].
     pub x23_pool: X23PoolKind,
 
-    /// Connections per multiplexed x23 data pool (1..=64, default 4).
-    ///
-    /// Only read when `x23_pool = "multiplex"`. Roughly one connection per
-    /// worker the backend serves with is the useful range; each connection's
-    /// read loop is one task, so more sockets do not add throughput.
+    /// Connections per multiplexed x23 data pool (1..=64, default 4). Only
+    /// read when `x23_pool = "multiplex"`.
     pub x23_multiplex_connections: X23MultiplexConnections,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
