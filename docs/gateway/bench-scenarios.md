@@ -251,10 +251,12 @@ scripts/smoke-runtime-manifest-bench.sh
 ### `pool-compare`
 
 Compares the gateway's two x23 pool kinds on one mixed workload: tip reads,
-submissions, then confirmed receipt and status lookups over the hashes just
-committed. Each kind gets a gateway started fresh with `--x23-pool <kind>`;
-the CLI node and its runtime manifest are shared. Kinds alternate between
-repetitions so drift in the node does not favor whichever ran first.
+submissions, then confirmed receipt and status lookups. Each kind gets a
+gateway started fresh with `--x23-pool <kind>`; the CLI node and its runtime
+manifest are shared. Kinds alternate between repetitions so drift in the node
+does not favor whichever ran first. The first pass seeds one confirmed-hash
+corpus and every later pass imports and re-verifies it, so all the receipt and
+status results share one corpus identity.
 
 ```bash
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
@@ -269,7 +271,7 @@ confirmed-read passes):
 - `chainTip`: 250 rps, 30s, 2s warmup, 4 workers
 - `sendRawTransaction`: 100 rps, 30s, 2s warmup, 4 workers, 10 accounts
 - `getTransactionReceipt` and `getTransactionStatus`: 8 outstanding, 30s,
-  over a seeded corpus of 10 confirmed hashes
+  over the shared corpus of 10 confirmed hashes
 
 Useful knobs:
 
@@ -285,11 +287,24 @@ scripts/smoke-runtime-manifest-bench.sh
 ```
 
 Result labels carry the kind and repetition (`standalone gateway multiplex
-pool r1`), so `groundhog-bench compare` can pair each kind's passes. The size
-settings are the same for both kinds; only the socket count differs, per
-`x23_multiplex_connections`. Raise `POOL_COMPARE_SUBMIT_RATE` until the serial
-gateway reports `Overloaded` to see where the pools part: at the default rates
-a single local node is the bottleneck and the two kinds measure alike.
+pool r1`) as provenance. Each pass also records the gateway's effective
+configuration as runner-supplied target metadata, so the pool kind is a
+comparison control that `--vary pool-kind` declares, and any other setting
+that differs between the passes is rejected:
+
+```bash
+groundhog-bench compare \
+  --baseline bench-results/pool-compare-*/*serial-pool-r1-confirmed-status.json \
+  --baseline bench-results/pool-compare-*/*serial-pool-r2-confirmed-status.json \
+  --candidate bench-results/pool-compare-*/*multiplex-pool-r1-confirmed-status.json \
+  --candidate bench-results/pool-compare-*/*multiplex-pool-r2-confirmed-status.json \
+  --vary pool-kind
+```
+
+The size settings are the same for both kinds; only the socket count differs,
+per `x23_multiplex_connections`. Raise `POOL_COMPARE_SUBMIT_RATE` until the
+serial gateway reports `Overloaded` to see where the pools part: at the default
+rates a single local node is the bottleneck and the two kinds measure alike.
 
 Restart and timeout behavior is covered by the gateway's own tests under both
 kinds (`four_backend_restart_recovers_without_rebuilding_gateway` and
@@ -548,8 +563,9 @@ Add `--json` for the machine-readable comparison with per-trial server
 observations. Throughput and latency summaries show repeat spread; errors
 include drain failures. Failed outcomes remain visible and do not establish a
 performance improvement. Available experiment dimensions are `gateway-revision`,
-`pool-size`, `build-settings`, `allocator` and `logging`; undeclared material differences
-are rejected. Use separate comparisons for each method and outstanding count.
+`pool-size`, `pool-kind` (the x23 pool kind and its multiplexed connection
+count), `build-settings`, `allocator` and `logging`; undeclared material
+differences are rejected. Use separate comparisons for each method and outstanding count.
 Paths, timestamps, labels and endpoint addresses are provenance. Topology,
 hosts, benchmark binary, workload controls and resolved non-endpoint gateway
 settings are comparison controls. Omitted identities are reported as unknown,

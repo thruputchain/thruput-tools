@@ -25,6 +25,8 @@ pub(super) struct CompareArgs {
 enum Dimension {
     GatewayRevision,
     PoolSize,
+    /// The x23 pool kind and its multiplexed connection count.
+    PoolKind,
     BuildSettings,
     Allocator,
     Logging,
@@ -224,6 +226,19 @@ fn controls_with_dimensions(v: &Value, args: &CompareArgs, dimensions: &[Dimensi
                     remove(config, &["indexerPoolSize", "indexer_pool_size"]);
                 }
             }
+            Dimension::PoolKind => {
+                if let Some(config) = gateway.get_mut("effectiveConfig") {
+                    remove(
+                        config,
+                        &[
+                            "x23Pool",
+                            "x23_pool",
+                            "x23MultiplexConnections",
+                            "x23_multiplex_connections",
+                        ],
+                    );
+                }
+            }
             Dimension::BuildSettings => {
                 remove(
                     &mut gateway,
@@ -374,6 +389,21 @@ mod tests {
         let mut args = args();
         args.vary.push(Dimension::PoolSize);
         assert_eq!(controls(&a, &args), controls(&b, &args));
+    }
+    #[test]
+    fn pool_kind_requires_declaration_and_covers_its_connection_count() {
+        let a = json!({"target":{"runnerSupplied":{"gateway":{"effectiveConfig":{"x23_pool":"serial","x23_multiplex_connections":4,"indexer_pool_size":16}}}}});
+        let mut b = a.clone();
+        b["target"]["runnerSupplied"]["gateway"]["effectiveConfig"]["x23_pool"] =
+            json!("multiplex");
+        b["target"]["runnerSupplied"]["gateway"]["effectiveConfig"]["x23_multiplex_connections"] =
+            json!(8);
+        assert_ne!(controls(&a, &args()), controls(&b, &args()));
+        let mut args = args();
+        args.vary.push(Dimension::PoolKind);
+        assert_eq!(controls(&a, &args), controls(&b, &args));
+        b["target"]["runnerSupplied"]["gateway"]["effectiveConfig"]["indexer_pool_size"] = json!(8);
+        assert_ne!(controls(&a, &args), controls(&b, &args));
     }
     #[test]
     fn revision_changes_keep_wire_format_and_repeat_identity_controlled() {

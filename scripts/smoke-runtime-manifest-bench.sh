@@ -275,12 +275,13 @@ bench_chain_tip() {
     local duration="$5"
     local warmup="$6"
     local workers="$7"
+    shift 7
 
     log "Bench $label chainTip: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers"
     run_bench_command "$(benchmark_slug "$label")-chain-tip-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
         --url "$url" --runtime-manifest "$manifest" --method chainTip \
-        --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers"
+        --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" "$@"
 }
 
 bench_send_raw() {
@@ -292,13 +293,14 @@ bench_send_raw() {
     local warmup="$6"
     local workers="$7"
     local accounts="$8"
+    shift 8
 
     log "Bench $label sendRawTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
     run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
         --url "$url" --runtime-manifest "$manifest" --method sendRawTransaction \
         --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" \
-        --force
+        --force "$@"
 }
 
 run_bench_pair() {
@@ -372,59 +374,114 @@ run_submit_ramp() {
 }
 
 # One mixed pass against the gateway `label` names: tip reads, submissions,
-# then confirmed receipt and status lookups over the hashes just committed.
+# then confirmed receipt and status lookups. The first pass seeds the shared
+# corpus at `hashes`; every later pass imports and re-verifies it, so each
+# result carries the same corpus identity and `groundhog-bench compare` can
+# pair them without declaring an equivalent-corpus experiment. `target_info`
+# is the gateway's effective configuration for this pass.
 run_pool_compare_pass() {
     local label="$1"
     local gateway_url="$2"
     local manifest="$3"
+    local hashes="$4"
+    local target_info="$5"
     local slug
     slug="$(benchmark_slug "$label")"
-    local hashes="$WORK/$slug-hashes.json"
 
     bench_chain_tip "$label" "$gateway_url" "$manifest" \
         "$POOL_COMPARE_CHAIN_RATE" "$POOL_COMPARE_DURATION" \
-        "$POOL_COMPARE_WARMUP" "$POOL_COMPARE_WORKERS"
+        "$POOL_COMPARE_WARMUP" "$POOL_COMPARE_WORKERS" \
+        --target-info "$target_info"
     bench_send_raw "$label" "$gateway_url" "$manifest" \
         "$POOL_COMPARE_SUBMIT_RATE" "$POOL_COMPARE_DURATION" \
-        "$POOL_COMPARE_WARMUP" "$POOL_COMPARE_WORKERS" "$POOL_COMPARE_ACCOUNTS"
-    log "Bench $label confirmed receipts: seed $POOL_COMPARE_ACCOUNTS hashes, 8 outstanding"
-    run_bench_command "$slug-confirmed-receipts.json" \
-        --scenario "$BENCH_SCENARIO" --target-label "$label" \
-        --url "$gateway_url" --runtime-manifest "$manifest" \
-        --method getTransactionReceipt --outstanding 8 \
-        --seed-count "$POOL_COMPARE_ACCOUNTS" --seed-output "$hashes" \
-        --accounts "$POOL_COMPARE_ACCOUNTS" --force \
-        --duration "$POOL_COMPARE_DURATION" --warmup "$POOL_COMPARE_WARMUP" \
-        --workers "$POOL_COMPARE_WORKERS"
+        "$POOL_COMPARE_WARMUP" "$POOL_COMPARE_WORKERS" "$POOL_COMPARE_ACCOUNTS" \
+        --target-info "$target_info"
+    if [[ -f "$hashes" ]]; then
+        log "Bench $label confirmed receipts: import verified corpus, 8 outstanding"
+        run_bench_command "$slug-confirmed-receipts.json" \
+            --scenario "$BENCH_SCENARIO" --target-label "$label" \
+            --url "$gateway_url" --runtime-manifest "$manifest" \
+            --method getTransactionReceipt --outstanding 8 --hashes-file "$hashes" \
+            --duration "$POOL_COMPARE_DURATION" --warmup "$POOL_COMPARE_WARMUP" \
+            --workers "$POOL_COMPARE_WORKERS" --target-info "$target_info"
+    else
+        log "Bench $label confirmed receipts: seed $POOL_COMPARE_ACCOUNTS hashes, 8 outstanding"
+        run_bench_command "$slug-confirmed-receipts.json" \
+            --scenario "$BENCH_SCENARIO" --target-label "$label" \
+            --url "$gateway_url" --runtime-manifest "$manifest" \
+            --method getTransactionReceipt --outstanding 8 \
+            --seed-count "$POOL_COMPARE_ACCOUNTS" --seed-output "$hashes" \
+            --accounts "$POOL_COMPARE_ACCOUNTS" --force \
+            --duration "$POOL_COMPARE_DURATION" --warmup "$POOL_COMPARE_WARMUP" \
+            --workers "$POOL_COMPARE_WORKERS" --target-info "$target_info"
+    fi
     log "Bench $label confirmed status: import verified corpus, 8 outstanding"
     run_bench_command "$slug-confirmed-status.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
         --url "$gateway_url" --runtime-manifest "$manifest" \
         --method getTransactionStatus --outstanding 8 --hashes-file "$hashes" \
         --duration "$POOL_COMPARE_DURATION" --warmup "$POOL_COMPARE_WARMUP" \
-        --workers "$POOL_COMPARE_WORKERS"
+        --workers "$POOL_COMPARE_WORKERS" --target-info "$target_info"
+}
+
+# Writes the runner-supplied target metadata for a gateway started with the
+# given extra flags to `path`: the gateway's own effective configuration
+# (which names the pool kind and connection count), so a comparison can
+# declare `--vary pool-kind` and reject any other configuration drift.
+write_pool_compare_target_info() {
+    local path="$1"
+    shift
+    local effective_config
+    effective_config="$(RUST_LOG=off "$GATEWAY" --runtime-manifest "$RUNTIME_MANIFEST" \
+        --listen "127.0.0.1:$GATEWAY_PORT" --scheduler-reconnect-grace-ms 0 "$@" \
+        --dump-effective-config)"
+    python3 - "$path" "$BENCH_BUILD_PROFILE" "$effective_config" <<'PY'
+import json
+import sys
+
+path, build_profile, effective_config = sys.argv[1:4]
+info = {
+    "schemaVersion": 1,
+    "topology": "loopback CLI node, standalone gateway and generator on one host",
+    "gateway": {"buildProfile": build_profile, "effectiveConfig": json.loads(effective_config)},
+    "backend": {},
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(info, handle, indent=2)
+PY
 }
 
 # Runs the mixed pass once per pool kind and repetition, each against a
 # gateway started fresh with that kind, alternating the kind order between
-# repetitions. Result labels carry the kind and repetition.
+# repetitions. Result labels carry the kind and repetition; the first pass
+# seeds the corpus every later pass reads.
 run_pool_compare() {
     local manifest="$1"
-    local repeat kinds kind
+    local hashes="$WORK/pool-compare-hashes.json"
+    local repeat kind index target_info
+    local -a forward_kinds kinds
 
+    read -r -a forward_kinds <<< "$POOL_COMPARE_KINDS"
     for ((repeat = 1; repeat <= POOL_COMPARE_REPEATS; repeat++)); do
+        kinds=()
         if ((repeat % 2 == 1)); then
-            kinds="$POOL_COMPARE_KINDS"
+            kinds=("${forward_kinds[@]}")
         else
-            kinds="$(printf '%s\n' $POOL_COMPARE_KINDS | tac | tr '\n' ' ')"
+            for ((index = ${#forward_kinds[@]} - 1; index >= 0; index--)); do
+                kinds+=("${forward_kinds[index]}")
+            done
         fi
-        for kind in $kinds; do
+        for kind in "${kinds[@]}"; do
             stop_gateway
             start_gateway "pool-$kind-r$repeat" \
                 --x23-pool "$kind" \
                 --x23-multiplex-connections "$POOL_COMPARE_MULTIPLEX_CONNECTIONS"
+            target_info="$WORK/pool-$kind-r$repeat-target.json"
+            write_pool_compare_target_info "$target_info" \
+                --x23-pool "$kind" \
+                --x23-multiplex-connections "$POOL_COMPARE_MULTIPLEX_CONNECTIONS"
             run_pool_compare_pass "standalone gateway $kind pool r$repeat" \
-                "$GATEWAY_RPC_URL" "$manifest"
+                "$GATEWAY_RPC_URL" "$manifest" "$hashes" "$target_info"
         done
     done
 }
