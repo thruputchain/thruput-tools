@@ -422,7 +422,7 @@ fn event_type_def_index(
         if index.insert(id.clone(), definition).is_some() {
             return Err(SpecError::Duplicate {
                 context: "type definition name",
-                name: id_label(id),
+                name: id.to_string(),
             });
         }
     }
@@ -570,11 +570,13 @@ fn validate_named_type(
 ) -> Result<usize, SpecError> {
     let id = required_id(named, "named type")?;
     if !visiting.insert(id.clone()) {
-        return Err(SpecError::CyclicType { name: id_label(id) });
+        return Err(SpecError::CyclicType {
+            name: id.to_string(),
+        });
     }
-    let definition = type_defs
-        .get(id)
-        .ok_or_else(|| SpecError::UnresolvedType { name: id_label(id) })?;
+    let definition = type_defs.get(id).ok_or_else(|| SpecError::UnresolvedType {
+        name: id.to_string(),
+    })?;
     let result = validate_type_definition(
         definition,
         type_defs,
@@ -735,22 +737,6 @@ fn validate_named_fields(
         )?;
     }
     Ok(values)
-}
-
-/// An id rendered for a diagnostic, in the shape the codec uses.
-///
-/// Lossy: every caller has run `required_id` first, which rejects a segment
-/// that is not text, so the replacement characters are unreachable in
-/// practice and a diagnostic is the wrong place to fail a second time.
-fn id_label(id: &ContractSpecId) -> String {
-    let seg = |s: &ContractSpecString| String::from_utf8_lossy(s.as_ref()).into_owned();
-    format!(
-        "{}::{} ({}@{})",
-        seg(&id.module_path),
-        seg(&id.declared),
-        seg(&id.crate_name),
-        seg(&id.major)
-    )
 }
 
 /// Validate a spec id and hand back the id itself.

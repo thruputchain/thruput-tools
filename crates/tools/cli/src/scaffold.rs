@@ -33,7 +33,7 @@ const STUB_TEST_RV32: &str = include_str!("../templates/stub/test_rv32.rs.tmpl")
 /// newer nightly. The CI `cli-smoke` job builds and tests a fresh scaffold
 /// against the real registry, so an unpublished or incompatible pin fails
 /// there (and stays red until the pinned SDK is published).
-pub const SCAFFOLD_SDK_VERSION: &str = "0.38.0";
+pub const SCAFFOLD_SDK_VERSION: &str = "0.39.1";
 
 /// `groundhog-json-rpc-client` version pinned into scaffolded projects.
 ///

@@ -41,9 +41,16 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.38.0, standard interfaces 0.1.36, protocol-rs 0.39.0,
+This CLI uses SDK 0.39.1, standard interfaces 0.1.38, protocol-rs 0.41.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
-migrating an existing Rust project. SDK 0.38.0 moves to protocol-rs 0.39.0,
+migrating an existing Rust project. SDK 0.39.1 moves to protocol-rs 0.41.0
+and needs no contract changes. SDK 0.39.0 moves to protocol-rs 0.40.0, where
+storage writes no longer carry flags: a write through an exclusive handle
+(`set_exclusive`, `delete_exclusive`, `at_mut_exclusive`) takes a lock that
+lasts until it is cleared, other flags are set with `set_storage_flags` or a
+handle's `set_flags`, and `delete_with_flags` is removed. Rebuild contracts to
+take those locks: an older build still loads, but its exclusive writes lock
+nothing. SDK 0.38.0 moves to protocol-rs 0.39.0,
 which names a spec type by a four-part id -- crate, major version, module
 path and declared name -- rather than one joined string, so two types
 sharing a name in different crates or modules are no longer ambiguous.
