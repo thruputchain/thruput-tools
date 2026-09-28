@@ -7,6 +7,7 @@ use std::{
     process::{Command, Output, Stdio},
 };
 use tempfile::TempDir;
+mod support;
 
 struct Fixture {
     root: TempDir,
@@ -29,6 +30,7 @@ impl Fixture {
             .args(args)
             .current_dir(self.root.path())
             .env("XDG_CONFIG_HOME", self.root.path().join("config"))
+            .env("XDG_CACHE_HOME", self.root.path().join("cache"))
             .env("TERM", "xterm-256color")
             .env("LC_ALL", "C.UTF-8")
             .env_remove("NO_COLOR")
@@ -168,6 +170,81 @@ fn management_commands_use_result_cards_without_changing_operations() {
             screen.screen().contents()
         );
     }
+}
+
+#[test]
+fn archive_codegen_and_toolchain_actions_keep_complete_results_and_raw_source() {
+    let fixture = Fixture::new();
+    let root = fixture.root.path();
+    for dir in ["source/ramdb", "source/events", "source/indexer"] {
+        fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    fs::write(
+        root.join("source/hog-devnode-data.json"),
+        br#"{"schemaVersion":1,"kind":"hog-devnode-data"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("source/ramdb/state"), b"state").unwrap();
+    let elf = root.join("fixture.elf");
+    fs::write(
+        &elf,
+        support::minimal_rv32_elf_with_section(
+            groundhog_spec_tool::RAW_SECTION_NAME,
+            &support::minimal_contract_spec_raw(),
+        ),
+    )
+    .unwrap();
+    groundhog_cli::contract_spec::finalize_rv32_spec(
+        &elf,
+        &root.join("contract.rv32a"),
+        &groundhog_cli::Print::quiet(),
+    )
+    .unwrap();
+    for args in [
+        vec![
+            "chain",
+            "dump",
+            "--data-dir",
+            "source",
+            "--output",
+            "backup.json",
+        ],
+        vec![
+            "chain",
+            "restore",
+            "--data-dir",
+            "restored",
+            "--input",
+            "backup.json",
+        ],
+        vec![
+            "codegen",
+            "ts",
+            "contract.spec.xdr",
+            "--output",
+            "contract.ts",
+        ],
+        vec!["toolchain", "clean", "0.0.1"],
+    ] {
+        let output = terminal_capture(fixture.command(&args), 80, true);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains('╭'));
+    }
+    assert_eq!(
+        fs::read(root.join("restored/ramdb/state")).unwrap(),
+        b"state"
+    );
+    let raw = fixture
+        .command(&["codegen", "ts", "contract.spec.xdr"])
+        .output()
+        .unwrap();
+    assert!(raw.status.success() && raw.stderr.is_empty());
+    assert_eq!(raw.stdout, fs::read(root.join("contract.ts")).unwrap());
 }
 
 fn visible(output: &Output, columns: u16) -> String {

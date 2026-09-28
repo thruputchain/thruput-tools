@@ -110,7 +110,8 @@ pub fn install(
     }
 
     let source = artifact_source()?;
-    print.status(format_args!(
+    let task = crate::print::progress::Task::start(print, "Installing toolchain", true);
+    task.print().phase(format_args!(
         "Installing hog-devnode {} for {}",
         context.version, context.target
     ));
@@ -122,6 +123,7 @@ pub fn install(
         context.target,
         &source,
     ))?;
+    let _ = task.finish();
     let source_kind = if installation.installed_now() {
         ToolchainSourceKind::PublicArtifact
     } else {
@@ -359,7 +361,12 @@ fn emit_action(
     if print.is_json() {
         print.json(&CommandResult::new(command, report))
     } else {
-        print.summary_card(
+        print.outcome_card(
+            if report.changed {
+                crate::print::Outcome::Success
+            } else {
+                crate::print::Outcome::Unchanged
+            },
             "hog-devnode toolchain",
             &[
                 ("Version".to_string(), report.version),
