@@ -33,6 +33,15 @@ pub struct Print {
 }
 
 impl Print {
+    /// Apply the shared error color to framework diagnostics before argument parsing.
+    pub fn command_styles() -> clap::builder::Styles {
+        let (r, g, b) = theme::ERROR_RGB;
+        let error = clap::builder::styling::RgbColor(r, g, b)
+            .on_default()
+            .bold();
+        clap::builder::Styles::styled().error(error).invalid(error)
+    }
+
     pub fn new(quiet: bool, json: bool) -> Self {
         Self {
             quiet,

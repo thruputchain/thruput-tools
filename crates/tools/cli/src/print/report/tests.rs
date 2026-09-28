@@ -191,7 +191,7 @@ fn warnings_errors_and_outcomes_share_safe_width_aware_components() {
         Outcome::Ready,
         Outcome::Unconfirmed,
     ];
-    for width in [24, 40, 80] {
+    for width in [24, 40, 60, 80, 120] {
         let mut report = Report::new(policy(width, false));
         for outcome in outcomes {
             report.message(
@@ -349,7 +349,7 @@ fn tables_wrap_cells_and_stack_complete_records_on_narrow_screens() {
         vec!["alice".into(), address.clone()],
         vec!["bob".into(), "other".into()],
     ];
-    for width in [24, 40, 80] {
+    for width in [24, 40, 60, 80, 120] {
         let mut report = Report::new(policy(width, false));
         report.table("Wallets", &headers, &rows);
         let lines = report.into_lines();

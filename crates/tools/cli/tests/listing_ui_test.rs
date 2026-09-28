@@ -269,6 +269,42 @@ fn scaffolds_and_ready_init_use_shared_cards() {
     }
 }
 
+#[test]
+fn wallet_selection_and_secret_export_keep_their_output_contracts() {
+    let fixture = Fixture::new();
+    let generated = fixture
+        .command(&["keys", "generate", "owner", "--json"])
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let key: serde_json::Value = serde_json::from_slice(&generated.stdout).unwrap();
+    fs::write(fixture.root.path().join("groundhog.toml"), format!("default_profile = \"local\"\n[profile.local]\n[profile.local.wallets.owned]\naddress = \"0x{}\"\nowner_public_key = \"{}\"\n", "ab".repeat(32), key["data"]["key"]["public_key"].as_str().unwrap())).unwrap();
+    let selected = terminal_capture(fixture.command(&["wallet", "use", "owned"]), 80, true);
+    assert!(
+        selected.status.success() && selected.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert!(String::from_utf8_lossy(&selected.stderr).contains('╭'));
+    let plain = fixture
+        .command(&["keys", "export", "owner", "--force"])
+        .output()
+        .unwrap();
+    let json = fixture
+        .command(&["keys", "export", "owner", "--force", "--json"])
+        .output()
+        .unwrap();
+    assert!(plain.status.success() && json.status.success());
+    assert!(plain.stderr.is_empty() && json.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    // Compare without printing ephemeral secret bytes if an assertion fails.
+    assert!(
+        String::from_utf8_lossy(&plain.stdout).trim()
+            == value["data"]["key"]["privateKey"].as_str().unwrap()
+    );
+    assert!(!plain.stdout.contains(&0x1b));
+}
+
 fn visible(output: &Output, columns: u16) -> String {
     assert!(
         output.status.success(),
@@ -288,7 +324,7 @@ fn listings_render_on_stdout_at_wide_and_narrow_sizes_without_losing_values() {
     let keys = fixture.command(&["keys", "ls", "--json"]).output().unwrap();
     let keys: serde_json::Value = serde_json::from_slice(&keys.stdout).unwrap();
     let address = keys["data"]["keys"][0]["address"].as_str().unwrap();
-    for columns in [24, 40, 80, 120] {
+    for columns in [24, 40, 60, 80, 120] {
         for (args, values) in [
             (vec!["keys", "ls"], vec![address.to_owned()]),
             (
@@ -384,7 +420,7 @@ fn config_cards_preserve_merged_values_and_field_sources() {
     fs::create_dir_all(&config_dir).unwrap();
     fs::write(config_dir.join("config.toml"), "[profile.local]\nnetwork = \"local\"\nrpc_url = \"https://global.example\"\n[profile.local.contracts]\nshared = \"0x1234\"\n").unwrap();
     fs::write(fixture.root.path().join("groundhog.toml"), "default_profile = \"local\"\n[profile.local]\nrpc_url = \"https://project.example/long/path\"\n").unwrap();
-    for columns in [24, 40, 80, 120] {
+    for columns in [24, 40, 60, 80, 120] {
         for args in [vec!["config", "get"], vec!["config", "get", "--sources"]] {
             let output = terminal_output(fixture.command(&args), columns);
             let text = visible(&output, columns);

@@ -5,7 +5,8 @@ use super::policy::Policy;
 // ANSI palette slots can be remapped to unrelated hues by terminal themes.
 const SUCCESS: Color = Color::Rgb(79, 232, 143);
 const WARNING: Color = Color::Rgb(251, 191, 36);
-const ERROR: Color = Color::Rgb(248, 113, 113);
+pub(super) const ERROR_RGB: (u8, u8, u8) = (248, 113, 113);
+const ERROR: Color = Color::Rgb(ERROR_RGB.0, ERROR_RGB.1, ERROR_RGB.2);
 
 /// Human outcome labels; these do not determine a command's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

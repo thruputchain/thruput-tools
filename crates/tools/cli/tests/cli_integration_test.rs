@@ -2761,7 +2761,7 @@ fn init_boxes_respect_stderr_terminal_width() {
         .output()
         .unwrap();
     assert!(setup.status.success(), "{setup:?}");
-    for columns in [0, 40, 80, 120] {
+    for columns in [0, 24, 40, 60, 80, 120] {
         let mut command = groundhog();
         command
             .arg("init")
@@ -2777,7 +2777,7 @@ fn init_boxes_respect_stderr_terminal_width() {
         assert!(output.contains("Groundhog Ready"));
         let plain = strip_terminal_styles(&output);
         assert_eq!(plain.contains("╭─ Groundhog Setup"), columns > 0);
-        assert_eq!(plain.contains("╭─ ✓ Ready: Groundhog Ready"), columns > 0);
+        assert_eq!(plain.contains("╭─ ✓ Ready: Groundhog Ready"), columns >= 29);
         assert!(
             !output.contains("\x1b[2J"),
             "setup must preserve scrollback"

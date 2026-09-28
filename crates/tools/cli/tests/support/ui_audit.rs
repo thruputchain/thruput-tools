@@ -1,22 +1,179 @@
 //! Real command output review using isolated state and the existing RPC fixtures.
 use super::*;
 
-fn rendered(mut command: Command, width: u16) -> (ExitStatus, String) {
+fn captured(mut command: Command, width: u16) -> (std::process::Output, String) {
+    if !command.get_envs().any(|(name, _)| name == "NO_COLOR") {
+        command.env_remove("NO_COLOR");
+    }
     command
         .env("TERM", "xterm-256color")
-        .env("LC_ALL", "C.UTF-8")
-        .env_remove("NO_COLOR");
+        .env("LC_ALL", "C.UTF-8");
     let (child, terminal) = spawn_with_terminal_size(command, width, 100);
     let reader = terminal_output_reader(&terminal);
     let output = child.wait_with_output().unwrap();
     drop(terminal);
+    let raw = reader.join().unwrap();
+    assert!(!raw.contains("\x1b[2J"));
+    (output, raw)
+}
+
+fn rendered(command: Command, width: u16) -> (ExitStatus, String) {
+    let (output, raw) = captured(command, width);
     assert!(
         output.stdout.is_empty(),
         "human transaction data belongs on stderr"
     );
-    let raw = reader.join().unwrap();
-    assert!(!raw.contains("\x1b[2J"));
     (output.status, strip_terminal_styles(&raw))
+}
+
+fn command_paths() -> Vec<Vec<&'static str>> {
+    let spec = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../docs/specs/2026-09-21-cli-tui-mvp.md"
+    ));
+    spec.split_once("## 7.")
+        .unwrap()
+        .1
+        .split_once("### Flag")
+        .unwrap()
+        .0
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("| `")
+                .and_then(|line| line.split_once('`'))
+                .map(|(name, _)| name.split_whitespace().collect())
+        })
+        .collect()
+}
+
+#[test]
+fn every_documented_command_has_working_help_and_shared_argument_error_colors() {
+    let commands = command_paths();
+    assert_eq!(commands.len(), 43);
+    for args in commands {
+        let help = groundhog().args(&args).arg("--help").output().unwrap();
+        assert!(help.status.success(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&help.stdout).contains("Usage:"),
+            "{args:?}"
+        );
+        let mut command = groundhog();
+        command.args(&args).arg("--ui-audit-unknown-option");
+        let (output, raw) = captured(command, 80);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {raw}");
+        assert!(output.stdout.is_empty());
+        assert!(raw.contains("38;2;248;113;113"), "{args:?}: {raw:?}");
+        let plain = groundhog()
+            .args(&args)
+            .args(["--no-ui", "--ui-audit-unknown-option"])
+            .output()
+            .unwrap();
+        assert_eq!(plain.status.code(), Some(2));
+        assert!(!plain.stderr.contains(&0x1b));
+        let mut no_ui = groundhog();
+        no_ui
+            .args(&args)
+            .args(["--no-ui", "--ui-audit-unknown-option"]);
+        let (output, raw) = captured(no_ui, 40);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!raw.contains('\x1b'), "{args:?}: {raw:?}");
+    }
+}
+
+#[test]
+fn parser_errors_respect_no_color_on_a_terminal() {
+    let mut command = groundhog();
+    command
+        .args(["balance", "--ui-audit-unknown-option"])
+        .env("NO_COLOR", "1");
+    let (output, raw) = captured(command, 80);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!raw.contains('\x1b'));
+}
+
+#[test]
+fn toolchain_cache_actions_render_results_and_which_stays_a_raw_path() {
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("cache");
+    let config = temp.path().join("config");
+    let catalog = groundhog_toolchain::Catalog::embedded().unwrap();
+    let source = temp.path().join("hog-devnode-source");
+    std::fs::write(
+        &source,
+        format!(
+            "#!/bin/sh\nprintf 'hog-devnode {}\\n'\n",
+            catalog.default_version()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let binary = install_fake_managed_toolchain(&cache, &source);
+    for args in [
+        vec!["toolchain", "install", "--offline"],
+        vec!["toolchain", "use", catalog.default_version()],
+    ] {
+        let mut command = groundhog();
+        command
+            .args(args)
+            .env("XDG_CACHE_HOME", &cache)
+            .env("XDG_CONFIG_HOME", &config);
+        let (status, text) = rendered(command, 60);
+        assert!(status.success(), "{text}");
+        assert!(
+            text.contains('╭') && text.contains("hog-devnode toolchain"),
+            "{text}"
+        );
+    }
+    let path = groundhog()
+        .args(["toolchain", "which", "--quiet"])
+        .env("XDG_CACHE_HOME", &cache)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(path.status.success() && path.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&path.stdout).trim(),
+        binary.to_str().unwrap()
+    );
+}
+
+#[test]
+fn version_warning_uses_shared_presentation_without_framing_the_version() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("bundle.json");
+    write_bundle_manifest(&manifest, env!("CARGO_PKG_VERSION"), "not-this-build");
+    let mut command = groundhog();
+    command
+        .arg("--version")
+        .env("GROUNDHOG_BUNDLE_MANIFEST", manifest);
+    let (output, raw) = captured(command, 80);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("groundhog "));
+    assert!(!output.stdout.contains(&0x1b));
+    assert!(raw.contains("38;2;251;191;36"));
+    assert!(strip_terminal_styles(&raw).contains("Warning"));
+}
+
+#[test]
+fn framework_payloads_stay_raw_and_all_completion_shells_match_json() {
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let plain = groundhog().args(["completion", shell]).output().unwrap();
+        let json = groundhog()
+            .args(["completion", shell, "--json"])
+            .output()
+            .unwrap();
+        assert!(plain.status.success() && json.status.success());
+        assert!(plain.stderr.is_empty() && json.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+        assert_eq!(
+            plain.stdout,
+            value["data"]["script"].as_str().unwrap().as_bytes()
+        );
+        assert!(!plain.stdout.contains(&0x1b));
+    }
+    let skill = groundhog().arg("--skill").output().unwrap();
+    assert!(skill.status.success() && skill.stderr.is_empty());
+    assert!(skill.stdout.starts_with(b"---\nname: groundhog\n"));
 }
 
 #[test]
@@ -125,5 +282,148 @@ fn services_report_ready_without_exiting_and_stop_cleanly() {
         assert!(!raw.contains("\x1b[2J"));
         send_sigint(child.child());
         assert!(wait_child(child.into_inner(), Duration::from_secs(10)).success());
+    }
+}
+
+#[test]
+fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
+    for (poll, success, label) in [
+        (
+            TransferPollMock::Receipt {
+                status: serde_json::json!({"result":"ok"}),
+                events: serde_json::json!([]),
+                return_data: None,
+                abort_data: None,
+                mismatched_hash: false,
+            },
+            true,
+            "Transferred 1.5 HOG",
+        ),
+        (
+            TransferPollMock::Status(serde_json::json!({"status":"invalid", "reason":"denied"})),
+            false,
+            "Transfer rejected",
+        ),
+        (
+            TransferPollMock::Status(serde_json::json!({"status":"unknown"})),
+            false,
+            "Outcome unconfirmed",
+        ),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let sender = advertised_dev_wallet_address(0);
+        let manifest = write_runtime_manifest(temp.path(), 0, &sender, None);
+        let (rpc, server, hashes) = spawn_transfer_rpc(
+            TransferRpcMock {
+                submit: TransferSubmitMock::MatchingHash,
+                poll: Some(poll),
+            },
+            sender,
+        );
+        std::fs::write(temp.path().join("groundhog.toml"), format!("default_profile = \"default\"\n[profile.default]\nrpc_url = \"{rpc}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n", manifest.file_name().unwrap().to_str().unwrap())).unwrap();
+        let mut command = groundhog();
+        command
+            .args([
+                "transfer",
+                &format!("0x{}", "ab".repeat(32)),
+                "1.5",
+                "--force",
+            ])
+            .current_dir(temp.path())
+            .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+            .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0");
+        let (status, text) = rendered(command, 80);
+        assert_eq!(status.success(), success, "{text}");
+        assert!(text.contains(label) && text.contains('╭'), "{text}");
+        let compact: String = text
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '│')
+            .collect();
+        assert!(compact.contains(&hashes.recv().unwrap()), "{text}");
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn wallet_creation_reports_committed_prefunding_on_partial_failure() {
+    for fail in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config");
+        let faucet = advertised_dev_wallet_address(0);
+        let manifest = write_runtime_manifest(temp.path(), 0, &faucet, None);
+        let listener = MockListener::bind();
+        listener.set_nonblocking(true).unwrap();
+        let rpc = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            for step in 0..if fail { 5 } else { 7 } {
+                let (stream, request) = read_jsonrpc_request(&listener, deadline, "wallet create");
+                let result = match step {
+                    0 | 6 => {
+                        assert_eq!(request["method"], "groundhog_getBalance");
+                        serde_json::json!({"address":request["params"][0],"rawBalance":"100000000000","height":42})
+                    }
+                    1 => {
+                        assert_eq!(request["method"], "groundhog_chainTip");
+                        serde_json::json!({"height":42,"blockHash":format!("0x{}", "00".repeat(32))})
+                    }
+                    2 | 4 => {
+                        assert_eq!(request["method"], "groundhog_sendRawTransaction");
+                        if step == 4 && fail {
+                            send_jsonrpc_error_response(
+                                stream,
+                                &request["id"],
+                                -32000,
+                                "creation failed",
+                            );
+                            continue;
+                        }
+                        serde_json::json!(format!(
+                            "0x{}",
+                            if step == 2 { "11" } else { "22" }.repeat(32)
+                        ))
+                    }
+                    _ => {
+                        assert_eq!(request["method"], "groundhog_getTransactionReceipt");
+                        let mut receipt = sample_call_receipt(42);
+                        receipt["txHash"] = request["params"][0].clone();
+                        receipt
+                    }
+                };
+                send_jsonrpc_response(stream, &request["id"], result);
+            }
+        });
+        std::fs::write(temp.path().join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
+        std::fs::write(temp.path().join("groundhog.toml"), format!("default_profile = \"default\"\n[profile.default]\nrpc_url = \"{rpc}\"\nruntime_manifest = \"{}\"\n", manifest.file_name().unwrap().to_str().unwrap())).unwrap();
+        generate_key_public_key(&config, "owner");
+        let mut command = groundhog();
+        command
+            .args([
+                "wallet", "create", "--key", "owner", "--name", "trading", "--force",
+            ])
+            .current_dir(temp.path())
+            .env("XDG_CONFIG_HOME", config);
+        let (status, text) = rendered(command, 80);
+        server.join().unwrap();
+        assert_eq!(status.success(), !fail, "{text}");
+        assert!(text.contains("Prefund committed"), "{text}");
+        assert!(
+            text.contains(if fail {
+                "Partially completed"
+            } else {
+                "Wallet created"
+            }),
+            "{text}"
+        );
+        let saved: toml::Value =
+            toml::from_str(&std::fs::read_to_string(temp.path().join("groundhog.toml")).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved["profile"]["default"]
+                .get("wallets")
+                .and_then(|wallets| wallets.get("trading"))
+                .is_some(),
+            !fail
+        );
     }
 }
