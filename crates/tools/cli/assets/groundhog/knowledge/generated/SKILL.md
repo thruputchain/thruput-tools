@@ -269,6 +269,19 @@ The application flow is:
 6. Wait for the receipt.
 7. Decode the wallet root outcome, then decode child return data when needed.
 
+Generated methods sit under their interface's major, which the app selects once:
+
+```ts
+import { Counter as CounterVersions } from "./counter";
+import { DefaultWallet as DefaultWalletVersions } from "@groundhogchain/client/contracts";
+
+const Counter = CounterVersions.v0_1;
+const DefaultWallet = DefaultWalletVersions.v0_1;
+```
+
+These constants hold only values, so name generated types by their full path,
+as in `CounterVersions.v0_1.GetResult`.
+
 A read-only call goes through the generated descriptor:
 
 ```ts
