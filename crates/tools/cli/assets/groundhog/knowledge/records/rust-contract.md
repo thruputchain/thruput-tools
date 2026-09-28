@@ -22,9 +22,9 @@ groundhog test
 
 Use `cargo test` for fast native tests. Use `groundhog test` for the generated
 RV32 artifact. They exercise different paths and neither substitutes for the
-other. The scaffolded SDK downloads its test executor from public storage; no
-FFI download credentials are required. Cargo registry authentication follows
-the early-access setup instructions. Use `groundhog test --integration` for
+other. The scaffolded SDK downloads its test executor from public storage.
+Building a scaffold needs Cargo credentials for the Groundhog registry; the
+Getting Started guide covers that setup. Use `groundhog test --integration` for
 RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
 `groundhog test --workspace` runs the RV32 tests of every member that has a
 `tests/test_rv32.rs` target and reports them together.

@@ -45,7 +45,7 @@ pub struct TestOptions {
 /// Options for the `groundhog test --integration` orchestration path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IntegrationTestOptions {
-    /// Override the x23 protocol token used when launching the ephemeral
+    /// Override the hog-devnode handshake protocol token used when launching the ephemeral
     /// hog-devnode node (mirrors `groundhog node --hogd-protocol`). Useful
     /// when the local hog-devnode build is ahead of the published protocol
     /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`

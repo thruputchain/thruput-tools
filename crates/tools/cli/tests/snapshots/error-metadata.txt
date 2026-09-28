@@ -63,7 +63,7 @@ Io
 
 ProfileNotFound
   code: profile_not_found
-  hint text: add the profile to project or global config, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
+  hint format: create it with `groundhog config new {0} --network <NETWORK>`, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
 
 ProfileNotFoundInScope
   code: profile_not_found_in_scope
@@ -237,7 +237,7 @@ HttpClientInit
 
 MissingRpcUrl
   code: missing_rpc_url
-  hint text: set `rpc_url` in the selected profile in project or global config
+  hint text: for a local profile, start `groundhog node` in another terminal; otherwise run `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
 
 ProfileConfigInvalid
   code: profile_config_invalid
@@ -249,7 +249,7 @@ InteractiveInputRequired
 
 ConfirmationRequired
   code: confirmation_required
-  hint text: review the warning and rerun with `--force` to confirm non-interactively
+  hint text: rerun from an interactive terminal, or pass `--force` to proceed without a prompt
   details: computed
 
 FaucetService
@@ -263,7 +263,7 @@ MissingSigningKey
 
 MissingNetworkHash
   code: missing_network_hash
-  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash>` for this profile, or point it at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
+  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
 
 InvalidNetworkHash
   code: invalid_network_hash
