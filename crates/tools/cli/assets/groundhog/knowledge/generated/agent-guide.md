@@ -140,20 +140,7 @@ generated manifest.
 
 This CLI uses SDK 0.40.0, standard interfaces 0.1.40, protocol-rs 0.42.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
-migrating an existing Rust project. SDK 0.40.0 moves to protocol-rs 0.42.0,
-where `InvokeFlagSet` and `StorageDeltaFlagSet` are `u32` but `InvokeFlag` and
-`StorageDeltaFlags` values stay `i32`: convert with `cast_unsigned()` when
-filling flags by hand, as in `InvokeFlag::ReadOnly.0.cast_unsigned()`. SDK
-0.39.2 renames `ERC20Permit::permit` to `increase_allowance_signed`, adds an
-`amount` argument to `transfer_from_signed` and adds `clear_allowance_signed`;
-rebuild its implementers and callers together. SDK 0.39.1 moves to protocol-rs 0.41.0
-and needs no contract changes. SDK 0.39.0 moves to protocol-rs 0.40.0, where
-storage writes no longer carry flags: a write through an exclusive handle
-(`set_exclusive`, `delete_exclusive`, `at_mut_exclusive`) takes a lock that
-lasts until it is cleared, other flags are set with `set_storage_flags` or a
-handle's `set_flags`, and `delete_with_flags` is removed. Rebuild contracts to
-take those locks: an older build still loads, but its exclusive writes lock
-nothing. SDK 0.38.0 moves to protocol-rs 0.39.0,
+migrating an existing Rust project. SDK 0.38.0 moves to protocol-rs 0.39.0,
 which names a spec type by a four-part id -- crate, major version, module
 path and declared name -- rather than one joined string, so two types
 sharing a name in different crates or modules are no longer ambiguous.
