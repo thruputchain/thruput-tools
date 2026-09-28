@@ -200,7 +200,7 @@ pub fn remove(
                 scope_label(confirmation.scope()),
             ),
         )? {
-            print.note("Cancelled");
+            print.cancelled();
             return Ok(());
         }
         remove_confirmed_profile(confirmation)?
@@ -264,52 +264,66 @@ pub fn use_default(
 }
 
 fn render_mutation(action: &str, report: &ConfigMutationReport, print: &Print) {
-    let state = if report.changed {
-        action
-    } else {
-        "No change for"
-    };
-    let profile = terminal_safe(&report.profile);
-    if let Some(field) = report.field {
-        print.success(format_args!("{state} `{field}` in profile `{profile}`"));
-    } else {
-        print.success(format_args!("{state} default profile `{profile}`"));
-    }
-    print.detail("scope", scope_label(report.scope));
-    print.detail("path", terminal_safe(&report.path.display().to_string()));
+    print.group(
+        if report.changed {
+            crate::print::Outcome::Success
+        } else {
+            crate::print::Outcome::Unchanged
+        },
+        "Configuration",
+        |print| {
+            let state = if report.changed {
+                action
+            } else {
+                "No change for"
+            };
+            let profile = terminal_safe(&report.profile);
+            if let Some(field) = report.field {
+                print.success(format_args!("{state} `{field}` in profile `{profile}`"));
+            } else {
+                print.success(format_args!("{state} default profile `{profile}`"));
+            }
+            print.detail("scope", scope_label(report.scope));
+            print.detail("path", terminal_safe(&report.path.display().to_string()));
+        },
+    );
 }
 
 fn render_new_profile(report: &ConfigNewReport, print: &Print) {
-    print.success(format_args!(
-        "Created profile `{}`",
-        terminal_safe(&report.profile)
-    ));
-    print.detail("scope", scope_label(report.scope));
-    print.detail("path", terminal_safe(&report.path.display().to_string()));
-    print.detail(
-        "fields",
-        report
-            .created_fields
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    if report.selected {
-        print.detail("default", "selected");
-    }
+    print.group(crate::print::Outcome::Success, "Profile created", |print| {
+        print.success(format_args!(
+            "Created profile `{}`",
+            terminal_safe(&report.profile)
+        ));
+        print.detail("scope", scope_label(report.scope));
+        print.detail("path", terminal_safe(&report.path.display().to_string()));
+        print.detail(
+            "fields",
+            report
+                .created_fields
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        if report.selected {
+            print.detail("default", "selected");
+        }
+    });
 }
 
 fn render_remove_profile(report: &ConfigRemoveReport, print: &Print) {
-    print.success(format_args!(
-        "Removed profile `{}`",
-        terminal_safe(&report.profile)
-    ));
-    print.detail("scope", scope_label(report.scope));
-    print.detail("path", terminal_safe(&report.path.display().to_string()));
-    if report.cleared_default {
-        print.note("Default profile selection cleared");
-    }
+    print.group(crate::print::Outcome::Success, "Profile removed", |print| {
+        print.success(format_args!(
+            "Removed profile `{}`",
+            terminal_safe(&report.profile)
+        ));
+        print.detail("scope", scope_label(report.scope));
+        print.detail("path", terminal_safe(&report.path.display().to_string()));
+        if report.cleared_default {
+            print.note("Default profile selection cleared");
+        }
+    });
 }
 
 fn render_inherited_fallback(

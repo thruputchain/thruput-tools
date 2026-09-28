@@ -52,7 +52,11 @@ impl Fixture {
 }
 
 // Static tables only need a stdout terminal; stderr remains a separate pipe.
-fn terminal_output(mut command: Command, columns: u16) -> Output {
+fn terminal_output(command: Command, columns: u16) -> Output {
+    terminal_capture(command, columns, false)
+}
+
+fn terminal_capture(mut command: Command, columns: u16, status: bool) -> Output {
     let mut master = -1;
     let mut slave = -1;
     let size = libc::winsize {
@@ -77,12 +81,16 @@ fn terminal_output(mut command: Command, columns: u16) -> Output {
     // SAFETY: each fresh descriptor is owned by exactly one File.
     let mut master = unsafe { fs::File::from_raw_fd(master) };
     let slave = unsafe { fs::File::from_raw_fd(slave) };
-    let child = command
-        .stdout(slave)
+    command
         .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if status {
+        command.stderr(slave);
+    } else {
+        command.stdout(slave);
+    }
+    let child = command.spawn().unwrap();
     drop(command);
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -99,8 +107,67 @@ fn terminal_output(mut command: Command, columns: u16) -> Output {
         bytes
     });
     let mut output = child.wait_with_output().unwrap();
-    output.stdout = reader.join().unwrap();
+    if status {
+        output.stderr = reader.join().unwrap();
+    } else {
+        output.stdout = reader.join().unwrap();
+    }
     output
+}
+
+#[test]
+fn management_commands_use_result_cards_without_changing_operations() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    for args in [
+        vec!["keys", "generate", "second"],
+        vec!["keys", "use", "second"],
+        vec!["keys", "rm", "second", "--force"],
+        vec!["config", "new", "review", "--network", "local", "--project"],
+        vec![
+            "config",
+            "set",
+            "--profile",
+            "review",
+            "rpc-url",
+            "http://127.0.0.1:9545",
+            "--project",
+        ],
+        vec![
+            "config",
+            "unset",
+            "--profile",
+            "review",
+            "rpc-url",
+            "--project",
+        ],
+        vec![
+            "config",
+            "unset",
+            "--profile",
+            "review",
+            "rpc-url",
+            "--project",
+        ],
+        vec!["config", "use", "review", "--project"],
+        vec!["config", "rm", "review", "--project", "--force"],
+        vec!["wallet", "rm", "legacy", "--profile", "local", "--force"],
+    ] {
+        let output = terminal_capture(fixture.command(&args), 60, true);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        let mut screen = vt100::Parser::new(100, 60, 0);
+        screen.process(&output.stderr);
+        assert!(
+            screen.screen().contents().contains('╭'),
+            "{args:?}: {}",
+            screen.screen().contents()
+        );
+    }
 }
 
 fn visible(output: &Output, columns: u16) -> String {

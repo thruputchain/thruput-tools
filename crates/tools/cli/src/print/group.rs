@@ -10,6 +10,15 @@ pub(super) struct Content {
 }
 
 impl Print {
+    /// Report an existing declined action without introducing a new prompt.
+    pub(crate) fn cancelled(&self) {
+        if self.has_human_ui() {
+            self.outcome_card(Outcome::Cancelled, "Operation", &[]);
+        } else {
+            self.note("Cancelled");
+        }
+    }
+
     /// Group presentation-only detail/status calls into a result card on terminals.
     /// The callback must not perform operations or prompt; plain/quiet/JSON rules
     /// remain those of the original calls. Warnings follow the completed card.

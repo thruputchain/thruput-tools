@@ -635,11 +635,12 @@ pub fn remove(
             .or_else(|| inherited_profile.and_then(|profile| profile.default_wallet.clone()))
     };
     if !confirm_wallet_removal(name, &profile_name, force, print)? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
     remove_prepared_profile_wallet(prepared_removal)?;
 
+    print.group(crate::print::Outcome::Success, "Wallet removed", |print| {
     print.status(format_args!("Removed wallet `{}`.", name.trim()));
     if cleared_default
         && writes_project_profile
@@ -649,6 +650,7 @@ pub fn remove(
             "profile `{profile_name}` now inherits default wallet `{wallet_name}` from global config"
         ));
     }
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -743,7 +745,13 @@ pub fn use_wallet(
     resolve_sender_account(&resolved_profile, Some(name))?;
     save_profile_default_wallet(&project_root, Some(&resolved_profile.name), name)?;
 
-    print.status(format_args!("Using wallet `{name}` by default."));
+    print.group(
+        crate::print::Outcome::Success,
+        "Default wallet selected",
+        |print| {
+            print.status(format_args!("Using wallet `{name}` by default."));
+        },
+    );
     print.json(&CommandResult::new(
         cmd,
         json!({

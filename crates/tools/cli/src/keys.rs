@@ -63,7 +63,9 @@ pub fn generate(
         return Err(CliError::KeyExists(name.to_string()));
     }
 
-    let task = print.start_task(format_args!("Generating key `{name}`"));
+    if !print.has_human_ui() {
+        print.status(format_args!("Generating key `{name}`"));
+    }
     let mut secret = [0u8; 32];
     getrandom(&mut secret).map_err(|e| CliError::Other(e.to_string()))?;
     let signing_key = LocalSigner::from_secret_key(secret);
@@ -79,14 +81,16 @@ pub fn generate(
     };
     info.is_default = became_default;
 
-    task.success(format_args!("Generated key `{name}`"));
-    print.detail("address", &info.address);
-    if fund {
-        print.note("Faucet funding is not implemented yet; generated key only");
-    }
-    if became_default {
-        print.note(format_args!("Default key is now `{name}`"));
-    }
+    print.group(crate::print::Outcome::Success, "Key generated", |print| {
+        print.success(format_args!("Generated key `{name}`"));
+        print.detail("address", &info.address);
+        if fund {
+            print.note("Faucet funding is not implemented yet; generated key only");
+        }
+        if became_default {
+            print.note(format_args!("Default key is now `{name}`"));
+        }
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -144,7 +148,7 @@ pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         "export a private signing key",
         format_args!("Export private key `{name}` to standard output? Treat it as a secret."),
     )? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
 
@@ -188,7 +192,13 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
         ..info
     };
 
-    print.success(format_args!("Default key set to `{name}`"));
+    print.group(
+        crate::print::Outcome::Success,
+        "Default key selected",
+        |print| {
+            print.success(format_args!("Default key set to `{name}`"));
+        },
+    );
     print.json(&CommandResult::new(cmd, json!({ "key": info })))?;
     Ok(())
 }
@@ -206,7 +216,7 @@ pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         "remove a stored signing key",
         format_args!("Remove key `{name}`? This cannot be undone."),
     )? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
 
@@ -217,10 +227,12 @@ pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         crate::config::clear_default_key()?;
     }
 
-    print.success(format_args!("Removed key `{name}`"));
-    if cleared_default {
-        print.note("Default key selection cleared");
-    }
+    print.group(crate::print::Outcome::Success, "Key removed", |print| {
+        print.success(format_args!("Removed key `{name}`"));
+        if cleared_default {
+            print.note("Default key selection cleared");
+        }
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({
