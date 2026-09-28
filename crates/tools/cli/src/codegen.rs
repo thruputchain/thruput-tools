@@ -8,6 +8,7 @@ use groundhog_contract_spec::{
     ContractSpecId, ContractSpecInterface, ContractSpecMethod, ContractStructDef, ContractType,
     ContractTypeDef, ContractUnionCaseType, ContractUnionDef,
 };
+use groundhog_contract_util::semver::try_major_version_from_string;
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
 use crate::CliError;
@@ -20,15 +21,31 @@ struct TsIdPath {
 }
 
 impl TsIdPath {
+    fn segments(&self) -> impl Iterator<Item = &String> {
+        self.namespaces.iter().chain(std::iter::once(&self.name))
+    }
+
     /// The fully qualified reference, e.g. `groundhog_erc20_if.v0_1.ERC20Error`.
     fn qualified(&self) -> String {
-        let mut out = String::new();
-        for ns in &self.namespaces {
-            out.push_str(ns);
-            out.push('.');
-        }
-        out.push_str(&self.name);
-        out
+        self.segments()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    /// Its name in the `__gh_codegen` namespace: the segments joined by `$`,
+    /// e.g. `groundhog_erc20_if$v0_1$ERC20Error`. No spec name contains `$`, and
+    /// an escaped segment starts with one, so distinct paths never share it.
+    fn alias(&self) -> String {
+        self.segments()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("$")
+    }
+
+    /// A reference to it that no spec name can capture, wherever it is written.
+    fn codegen_ref(&self) -> String {
+        format!("{CODEGEN_NAMESPACE}.{}", self.alias())
     }
 }
 
@@ -51,26 +68,34 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
             groundhog_client::codec::spec_id_text(id)?
         )));
     }
+    if [crate_name, major, module_path, declared]
+        .iter()
+        .any(|part| part.contains('$'))
+    {
+        return Err(CliError::TsBindingsFailed(format!(
+            "{} has \"$\" in its name, which the generated TypeScript keeps for the names it \
+             escapes. Rename it.",
+            groundhog_client::codec::spec_id_text(id)?
+        )));
+    }
 
     let krate = crate_name.replace('-', "_");
-    let mut namespaces = vec![krate.clone(), format!("v{}", major.replace('.', "_"))];
+    let mut namespaces = vec![
+        escape_ts_root(&krate),
+        format!("v{}", major.replace('.', "_")),
+    ];
 
     let mut segments = module_path.split("::").filter(|s| !s.is_empty()).peekable();
     if segments.peek() == Some(&krate.as_str()) {
         segments.next();
     }
-    namespaces.extend(segments.map(str::to_owned));
+    namespaces.extend(segments.map(escape_ts_name));
 
     let path = TsIdPath {
         namespaces,
-        name: declared.to_owned(),
+        name: escape_ts_name(declared),
     };
-    if let Some(segment) = path
-        .namespaces
-        .iter()
-        .chain(std::iter::once(&path.name))
-        .find(|segment| !is_ts_identifier(segment) || *segment == "__proto__")
-    {
+    if let Some(segment) = path.segments().find(|segment| !is_ts_identifier(segment)) {
         return Err(CliError::TsBindingsFailed(format!(
             "{} would be \"{}\" in the generated TypeScript, where \"{segment}\" is not a \
              valid identifier. Rename it.",
@@ -79,6 +104,53 @@ fn ts_id_path(id: &ContractSpecId) -> Result<TsIdPath, CliError> {
         )));
     }
     Ok(path)
+}
+
+/// Where an interface's types and methods land in the generated TypeScript:
+/// its name, then its major, as in `ERC20.v0_1`. Name and major are what its
+/// entrypoints hash, so two interfaces never share them.
+fn ts_interface_path(iface: &ContractSpecInterface) -> Result<[String; 2], CliError> {
+    let name = spec_string_text(&iface.name)?;
+    let vers = spec_string_text(&iface.vers)?;
+    if name.contains('$') {
+        return Err(CliError::TsBindingsFailed(format!(
+            "interface \"{name}\" has \"$\" in its name, which the generated TypeScript keeps \
+             for the names it escapes. Rename it."
+        )));
+    }
+    let root = escape_ts_root(name);
+    validate_ts_identifier(&root, &format!("interface \"{name}\""))?;
+    let major = try_major_version_from_string(vers).ok_or_else(|| {
+        CliError::TsBindingsFailed(format!(
+            "interface \"{name}\" has version \"{vers}\", which is not a semantic version"
+        ))
+    })?;
+    let major = format!("v{}", major.replace('.', "_"));
+    validate_ts_identifier(&major, &format!("interface \"{name}\" version \"{vers}\""))?;
+    Ok([root, major])
+}
+
+/// A spec name as the bindings declare it. A reserved word or `__proto__`
+/// cannot name a namespace, a type or a value object's key, and a declaration
+/// named `globalThis` would capture the built-in types written through it, so
+/// each takes a leading `$`, which no spec name contains.
+fn escape_ts_name(name: &str) -> String {
+    if is_ts_reserved_word(name) || ["__proto__", "globalThis"].contains(&name) {
+        format!("${name}")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// [`escape_ts_name`] for a crate or interface name, which the bindings
+/// declare at top level. There the spec literal and the event decoder, which
+/// the generated code also declares, are escaped too.
+fn escape_ts_root(name: &str) -> String {
+    if ["spec", "decodeEvent"].contains(&name) {
+        format!("${name}")
+    } else {
+        escape_ts_name(name)
+    }
 }
 
 /// A declaration the bindings emit under a spec id's path.
@@ -139,6 +211,13 @@ const RUNTIME_MODULES: &[(&str, &str)] = &[
 /// The names the generator declares for itself carry this prefix, which
 /// `validate_spec` keeps every spec name out of.
 const RESERVED_PREFIX: &str = "__gh_";
+
+/// The namespace a binding declares last, naming every spec type the
+/// namespaces before it refer to. A reference written inside a namespace
+/// resolves its first segment to the nearest declaration of that name, so a
+/// module named after a crate would capture a reference written from the
+/// crate's root; nothing can capture this name.
+const CODEGEN_NAMESPACE: &str = "__gh_codegen";
 
 /// The id a type def declares itself under.
 fn type_def_id(def: &ContractTypeDef) -> Result<&ContractSpecId, CliError> {
@@ -231,7 +310,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
             Ok(format!("readonly [{}]", items.join(", ")))
         }
-        ContractType::Named { named } => Ok(ts_id_path(named)?.qualified()),
+        ContractType::Named { named } => Ok(ts_id_path(named)?.codegen_ref()),
         ContractType::SignedToken {
             signed_token_preimage,
         } => match signed_token_preimage.preimage_type.as_deref() {
@@ -247,12 +326,12 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     }
 }
 
-/// Write rendered declarations grouped under the namespaces their ids map to.
-fn emit_namespaced(out: &mut String, items: &[(TsIdPath, String)]) {
+/// Write rendered declarations grouped under the namespaces they nest in.
+fn emit_namespaced(out: &mut String, items: &[(Vec<String>, String)]) {
     let mut by_namespace: BTreeMap<&[String], Vec<&String>> = BTreeMap::new();
-    for (path, item) in items {
+    for (namespaces, item) in items {
         by_namespace
-            .entry(path.namespaces.as_slice())
+            .entry(namespaces.as_slice())
             .or_default()
             .push(item);
     }
@@ -302,10 +381,12 @@ fn emit_namespaced(out: &mut String, items: &[(TsIdPath, String)]) {
 fn emit_type_declarations(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
     let mut items = Vec::new();
     for def in spec.type_defs.iter() {
-        items.push((ts_id_path(type_def_id(def)?)?, emit_type_def(def)?));
+        let path = ts_id_path(type_def_id(def)?)?;
+        items.push((path.namespaces, emit_type_def(def)?));
     }
     for event in spec.events.iter() {
-        items.push((ts_id_path(&event.name)?, emit_event_types(event)?));
+        let path = ts_id_path(&event.name)?;
+        items.push((path.namespaces, emit_event_types(event)?));
     }
     emit_namespaced(out, &items);
     Ok(())
@@ -325,7 +406,7 @@ fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
 
 /// Emit a TypeScript interface for a contract struct definition.
 fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
-    let name = spec_string_text(&def.name.declared)?;
+    let name = escape_ts_name(spec_string_text(&def.name.declared)?);
     let mut fields = String::new();
     for field in def.fields.iter() {
         let field_name = spec_string_text(&field.name)?;
@@ -341,7 +422,7 @@ fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
 /// Emit the type of a contract enum's values, which its crate's value object
 /// holds.
 fn emit_enum(def: &ContractEnumDef) -> Result<String, CliError> {
-    let name = spec_string_text(&def.name.declared)?;
+    let name = escape_ts_name(spec_string_text(&def.name.declared)?);
     let values: Vec<String> = def
         .variants
         .iter()
@@ -357,7 +438,7 @@ fn emit_enum(def: &ContractEnumDef) -> Result<String, CliError> {
 
 /// Emit a TypeScript discriminated union for a contract union definition.
 fn emit_union(def: &ContractUnionDef) -> Result<String, CliError> {
-    let name = spec_string_text(&def.name.declared)?;
+    let name = escape_ts_name(spec_string_text(&def.name.declared)?);
     let mut cases: Vec<String> = Vec::new();
 
     for case in def.cases.iter() {
@@ -444,6 +525,7 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         .collect::<Result<_, CliError>>()?;
     let public_method_names_by_interface = public_method_names_by_interface(spec)?;
     validate_spec(spec, &public_method_names_by_interface)?;
+    let interface_groups = interface_groups(spec)?;
     let has_methods = spec
         .interfaces
         .iter()
@@ -454,25 +536,27 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
     emit_imports(&mut out);
 
     let _ = writeln!(out);
-    let _ = writeln!(out, "const s = __gh_contract_spec.contractSpecString;");
+    let _ = writeln!(out, "const __gh_s = __gh_contract_spec.contractSpecString;");
 
     // 3. Entrypoints
     if has_methods {
-        emit_entrypoints(&mut out, spec, &public_method_names_by_interface)?;
+        emit_entrypoints(
+            &mut out,
+            &interface_groups,
+            &public_method_names_by_interface,
+        )?;
     }
 
     // 4. Named type declarations, nested under the namespaces their ids map to
     emit_type_declarations(&mut out, spec)?;
 
-    // 5. Method argument, result, and exception declarations
-    for (iface_index, iface) in spec.interfaces.iter().enumerate() {
-        let _ = writeln!(out);
-        emit_interface_types(
-            &mut out,
-            iface,
-            &public_method_names_by_interface[iface_index],
-        )?;
-    }
+    // 5. Method argument, result, and exception types, nested under each
+    // interface's name and major
+    emit_interface_types(
+        &mut out,
+        &interface_groups,
+        &public_method_names_by_interface,
+    )?;
 
     // 6. Spec literal
     let _ = writeln!(out);
@@ -483,19 +567,14 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         let _ = writeln!(out);
         let _ = writeln!(
             out,
-            "const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);"
+            "const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);"
         );
     }
 
-    // 8. Per-interface method descriptors
-    for (iface_index, iface) in spec.interfaces.iter().enumerate() {
+    // 8. Method descriptors, one object per interface name
+    for group in &interface_groups {
         let _ = writeln!(out);
-        emit_interface_object(
-            &mut out,
-            iface,
-            iface_index,
-            &public_method_names_by_interface[iface_index],
-        )?;
+        emit_interface_object(&mut out, group, &public_method_names_by_interface)?;
     }
 
     // 9. Enum values and event descriptors, one object per crate
@@ -507,7 +586,35 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         emit_decode_event(&mut out, spec)?;
     }
 
+    // 11. The names the namespaces refer to spec types through
+    emit_codegen_namespace(&mut out, spec)?;
+
     Ok(out)
+}
+
+/// The interfaces sharing one name, which the bindings declare once: a
+/// namespace and an object holding each interface under its major.
+struct InterfaceGroup<'a> {
+    root: String,
+    /// Each interface's major segment, index in the spec, and the interface.
+    versions: Vec<(String, usize, &'a ContractSpecInterface)>,
+}
+
+/// The spec's interfaces grouped by name, in the order each name first appears.
+fn interface_groups(spec: &ContractSpec) -> Result<Vec<InterfaceGroup<'_>>, CliError> {
+    let mut groups: Vec<InterfaceGroup> = Vec::new();
+    for (index, iface) in spec.interfaces.iter().enumerate() {
+        let [root, major] = ts_interface_path(iface)?;
+        let version = (major, index, iface);
+        match groups.iter_mut().find(|group| group.root == root) {
+            Some(group) => group.versions.push(version),
+            None => groups.push(InterfaceGroup {
+                root,
+                versions: vec![version],
+            }),
+        }
+    }
+    Ok(groups)
 }
 
 // ---------------------------------------------------------------------------
@@ -536,34 +643,37 @@ fn emit_imports(out: &mut String) {
     }
 }
 
-/// Emit the `entrypoints` const mapping interface/method names to their IDs.
+/// Emit the `__gh_entrypoints` const, holding each method's entrypoint ID
+/// under its interface's name and major.
 fn emit_entrypoints(
     out: &mut String,
-    spec: &ContractSpec,
+    interface_groups: &[InterfaceGroup],
     public_method_names: &[Vec<String>],
 ) -> Result<(), CliError> {
     let _ = writeln!(out);
-    let _ = writeln!(out, "const entrypoints = {{");
-
-    for (iface_index, iface) in spec.interfaces.iter().enumerate() {
-        let iface_name = spec_string_text(&iface.name)?;
-        let iface_vers = spec_string_text(&iface.vers)?;
-        let _ = writeln!(out, "  {iface_name}: {{");
-        for (method_index, method) in iface.methods.iter().enumerate() {
-            let method_name = spec_string_text(&method.name)?;
-            let public_method_name = &public_method_names[iface_index][method_index];
-            let sig = NormalizedMethodSignature::new(method_name);
-            let id = contract_entrypoint_id(Some(iface_name), iface_vers, &sig);
-            let hex = hex::encode(id.as_ref());
-            let _ = writeln!(
-                out,
-                "    {public_method_name}: __gh_protocol.contractEntrypointID(\
-                 __gh_protocol_utils.fromHex(\"{hex}\")),",
-            );
+    let _ = writeln!(out, "const __gh_entrypoints = {{");
+    for group in interface_groups {
+        let _ = writeln!(out, "  {}: {{", group.root);
+        for (major, iface_index, iface) in &group.versions {
+            let iface_name = spec_string_text(&iface.name)?;
+            let iface_vers = spec_string_text(&iface.vers)?;
+            let _ = writeln!(out, "    {major}: {{");
+            for (method, public_method_name) in
+                iface.methods.iter().zip(&public_method_names[*iface_index])
+            {
+                let sig = NormalizedMethodSignature::new(spec_string_text(&method.name)?);
+                let id = contract_entrypoint_id(Some(iface_name), iface_vers, &sig);
+                let hex = hex::encode(id.as_ref());
+                let _ = writeln!(
+                    out,
+                    "      {public_method_name}: __gh_protocol.contractEntrypointID(\
+                     __gh_protocol_utils.fromHex(\"{hex}\")),",
+                );
+            }
+            let _ = writeln!(out, "    }},");
         }
         let _ = writeln!(out, "  }},");
     }
-
     let _ = writeln!(out, "}} as const;");
     Ok(())
 }
@@ -607,7 +717,7 @@ fn emit_spec_literal(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
 /// every consumer back the ambiguity the segments remove.
 fn ts_spec_id_literal(id: &ContractSpecId) -> Result<String, CliError> {
     Ok(format!(
-        "{{ crate_name: s({}), major: s({}), module_path: s({}), declared: s({}) }}",
+        "{{ crate_name: __gh_s({}), major: __gh_s({}), module_path: __gh_s({}), declared: __gh_s({}) }}",
         ts_string_literal(spec_string_text(&id.crate_name)?),
         ts_string_literal(spec_string_text(&id.major)?),
         ts_string_literal(spec_string_text(&id.module_path)?),
@@ -632,7 +742,7 @@ fn emit_spec_event_literal(out: &mut String, event: &ContractEventDef) -> Result
         let ty_lit = spec_type_to_ts_literal(&field.ty)?;
         let _ = writeln!(
             out,
-            "        {{ name: s({}), ty: {ty_lit} }},",
+            "        {{ name: __gh_s({}), ty: {ty_lit} }},",
             ts_string_literal(fname)
         );
     }
@@ -644,7 +754,7 @@ fn emit_spec_event_literal(out: &mut String, event: &ContractEventDef) -> Result
         let ty_lit = spec_type_to_ts_literal(&field.ty)?;
         let _ = writeln!(
             out,
-            "        {{ name: s({}), ty: {ty_lit} }},",
+            "        {{ name: __gh_s({}), ty: {ty_lit} }},",
             ts_string_literal(fname)
         );
     }
@@ -662,8 +772,8 @@ fn emit_spec_interface_literal(
     let name = spec_string_text(&iface.name)?;
     let vers = spec_string_text(&iface.vers)?;
     let _ = writeln!(out, "    {{");
-    let _ = writeln!(out, "      name: s({}),", ts_string_literal(name));
-    let _ = writeln!(out, "      vers: s({}),", ts_string_literal(vers));
+    let _ = writeln!(out, "      name: __gh_s({}),", ts_string_literal(name));
+    let _ = writeln!(out, "      vers: __gh_s({}),", ts_string_literal(vers));
 
     // throws
     let _ = writeln!(out, "      throws: [");
@@ -701,7 +811,7 @@ fn emit_spec_exception_literal(
 fn emit_spec_method_literal(out: &mut String, method: &ContractSpecMethod) -> Result<(), CliError> {
     let name = spec_string_text(&method.name)?;
     let _ = writeln!(out, "        {{");
-    let _ = writeln!(out, "          name: s({}),", ts_string_literal(name));
+    let _ = writeln!(out, "          name: __gh_s({}),", ts_string_literal(name));
 
     // args
     let _ = writeln!(out, "          args: [");
@@ -710,7 +820,7 @@ fn emit_spec_method_literal(out: &mut String, method: &ContractSpecMethod) -> Re
         let ty_lit = spec_type_to_ts_literal(&arg.ty)?;
         let _ = writeln!(
             out,
-            "            {{ name: s({}), ty: {ty_lit} }},",
+            "            {{ name: __gh_s({}), ty: {ty_lit} }},",
             ts_string_literal(arg_name),
         );
     }
@@ -742,7 +852,7 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
                 let ty_lit = spec_type_to_ts_literal(&field.ty)?;
                 let _ = writeln!(
                     out,
-                    "          {{ name: s({}), ty: {ty_lit} }},",
+                    "          {{ name: __gh_s({}), ty: {ty_lit} }},",
                     ts_string_literal(fname)
                 );
             }
@@ -764,7 +874,7 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
                 let vname = spec_string_text(&variant.name)?;
                 let _ = writeln!(
                     out,
-                    "          {{ name: s({}), value: {}n }},",
+                    "          {{ name: __gh_s({}), value: {}n }},",
                     ts_string_literal(vname),
                     variant.value,
                 );
@@ -812,7 +922,11 @@ fn emit_spec_union_case_literal(
     match case_type {
         ContractUnionCaseType::UnionCaseVoid => {
             let _ = writeln!(out, "          {{");
-            let _ = writeln!(out, "            name: s({}),", ts_string_literal(name));
+            let _ = writeln!(
+                out,
+                "            name: __gh_s({}),",
+                ts_string_literal(name)
+            );
             let _ = writeln!(out, "            discriminant: {discriminant}n,");
             let _ = writeln!(
                 out,
@@ -823,7 +937,11 @@ fn emit_spec_union_case_literal(
         }
         ContractUnionCaseType::UnionCaseTuple { tuple } => {
             let _ = writeln!(out, "          {{");
-            let _ = writeln!(out, "            name: s({}),", ts_string_literal(name));
+            let _ = writeln!(
+                out,
+                "            name: __gh_s({}),",
+                ts_string_literal(name)
+            );
             let _ = writeln!(out, "            discriminant: {discriminant}n,");
             let items: Vec<String> = tuple
                 .iter()
@@ -839,7 +957,11 @@ fn emit_spec_union_case_literal(
         }
         ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
             let _ = writeln!(out, "          {{");
-            let _ = writeln!(out, "            name: s({}),", ts_string_literal(name));
+            let _ = writeln!(
+                out,
+                "            name: __gh_s({}),",
+                ts_string_literal(name)
+            );
             let _ = writeln!(out, "            discriminant: {discriminant}n,");
             let mut fields_str = String::from("[");
             for (i, field) in struct_fields.iter().enumerate() {
@@ -850,7 +972,7 @@ fn emit_spec_union_case_literal(
                 let ty_lit = spec_type_to_ts_literal(&field.ty)?;
                 let _ = write!(
                     fields_str,
-                    "{{ name: s({}), ty: {ty_lit} }}",
+                    "{{ name: __gh_s({}), ty: {ty_lit} }}",
                     ts_string_literal(fname)
                 );
             }
@@ -952,38 +1074,65 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
     }
 }
 
-/// Emit the exported object that groups methods for one contract interface.
+/// Emit the exported object holding the methods of the interfaces that share
+/// one name, each under its major, as in `ERC20.v0_1.transfer`. It merges with
+/// the namespace of the same path holding their types.
 fn emit_interface_object(
     out: &mut String,
-    iface: &ContractSpecInterface,
-    iface_index: usize,
-    public_method_names: &[String],
+    group: &InterfaceGroup,
+    public_method_names: &[Vec<String>],
 ) -> Result<(), CliError> {
-    let iface_name = spec_string_text(&iface.name)?;
-    let _ = writeln!(out, "export const {iface_name} = {{");
-    for (method_index, method) in iface.methods.iter().enumerate() {
-        emit_interface_method(
-            out,
-            iface,
-            iface_name,
-            iface_index,
-            method,
-            method_index,
-            &public_method_names[method_index],
-        )?;
+    let _ = writeln!(out, "export const {} = {{", group.root);
+    for (major, iface_index, iface) in &group.versions {
+        let _ = writeln!(out, "  {major}: {{");
+        let path = format!("{}.{major}", group.root);
+        for (method_index, method) in iface.methods.iter().enumerate() {
+            let rendered = render_interface_method(
+                iface,
+                &path,
+                *iface_index,
+                method,
+                method_index,
+                &public_method_names[*iface_index][method_index],
+            )?;
+            for line in rendered.lines() {
+                let _ = writeln!(out, "    {line}");
+            }
+        }
+        let _ = writeln!(out, "  }},");
     }
     let _ = writeln!(out, "}} as const;");
     Ok(())
 }
 
+/// Emit each interface's argument, result and exception types, nested under
+/// its name and major. The names are the generator's own, so none collides
+/// with a spec type, which nests under its crate.
 fn emit_interface_types(
     out: &mut String,
+    interface_groups: &[InterfaceGroup],
+    public_method_names: &[Vec<String>],
+) -> Result<(), CliError> {
+    let mut items = Vec::new();
+    for group in interface_groups {
+        for (major, iface_index, iface) in &group.versions {
+            items.push((
+                vec![group.root.clone(), major.clone()],
+                render_interface_types(iface, &public_method_names[*iface_index])?,
+            ));
+        }
+    }
+    emit_namespaced(out, &items);
+    Ok(())
+}
+
+fn render_interface_types(
     iface: &ContractSpecInterface,
     public_method_names: &[String],
-) -> Result<(), CliError> {
-    let iface_name = spec_string_text(&iface.name)?;
-    for (method_index, method) in iface.methods.iter().enumerate() {
-        let stem = method_type_stem(iface_name, &public_method_names[method_index]);
+) -> Result<String, CliError> {
+    let mut out = String::new();
+    for (method, public_method_name) in iface.methods.iter().zip(public_method_names) {
+        let stem = method_type_stem(public_method_name);
         if method.args.is_empty() {
             let _ = writeln!(out, "export type {stem}Args = void;");
         } else {
@@ -1003,11 +1152,10 @@ fn emit_interface_types(
         let _ = writeln!(out);
     }
 
-    let declared_exception = format!("{iface_name}DeclaredException");
     if iface.throws.is_empty() {
-        let _ = writeln!(out, "export type {declared_exception} = never;");
+        let _ = writeln!(out, "export type DeclaredException = never;");
     } else {
-        let _ = writeln!(out, "export type {declared_exception} =");
+        let _ = writeln!(out, "export type DeclaredException =");
         for (index, exception) in iface.throws.iter().enumerate() {
             let prefix = if index == 0 { "  " } else { "  | " };
             let name = exception_name(&exception.ty)?;
@@ -1029,93 +1177,98 @@ fn emit_interface_types(
     }
     let _ = writeln!(
         out,
-        "export type {iface_name}Exception = \
-         __gh_client_contract.ContractException<{declared_exception}>;"
+        "export type Exception = __gh_client_contract.ContractException<DeclaredException>;"
     );
-    Ok(())
+    Ok(out)
 }
 
-/// Emit one contract method descriptor.
-fn emit_interface_method(
-    out: &mut String,
+/// Render one contract method descriptor. `path` is where its interface's
+/// types sit, read from the top level, where only a root can claim a name.
+fn render_interface_method(
     iface: &ContractSpecInterface,
-    iface_name: &str,
+    path: &str,
     iface_index: usize,
     method: &ContractSpecMethod,
     method_index: usize,
     public_method_name: &str,
-) -> Result<(), CliError> {
-    let stem = method_type_stem(iface_name, public_method_name);
+) -> Result<String, CliError> {
+    let stem = method_type_stem(public_method_name);
+    let mut out = String::new();
     let _ = writeln!(
         out,
-        "  {public_method_name}: __gh_client_contract.defineContractMethod<"
+        "{public_method_name}: __gh_client_contract.defineContractMethod<"
     );
-    let _ = writeln!(out, "    {stem}Args,");
-    let _ = writeln!(out, "    {stem}Result,");
-    let _ = writeln!(out, "    {iface_name}DeclaredException");
-    let _ = writeln!(out, "  >({{");
-    let _ = writeln!(out, "    interfaceName: {},", ts_string_literal(iface_name));
+    let _ = writeln!(out, "  {path}.{stem}Args,");
+    let _ = writeln!(out, "  {path}.{stem}Result,");
+    let _ = writeln!(out, "  {path}.DeclaredException");
+    let _ = writeln!(out, ">({{");
     let _ = writeln!(
         out,
-        "    interfaceVersion: {},",
+        "  interfaceName: {},",
+        ts_string_literal(spec_string_text(&iface.name)?)
+    );
+    let _ = writeln!(
+        out,
+        "  interfaceVersion: {},",
         ts_string_literal(spec_string_text(&iface.vers)?)
     );
     let _ = writeln!(
         out,
-        "    abiName: {},",
+        "  abiName: {},",
         ts_string_literal(spec_string_text(&method.name)?)
     );
     let _ = writeln!(
         out,
-        "    publicName: {},",
+        "  publicName: {},",
         ts_string_literal(public_method_name)
     );
     let _ = writeln!(
         out,
-        "    entrypoint: entrypoints.{iface_name}.{public_method_name},"
+        "  entrypoint: __gh_entrypoints.{path}.{public_method_name},"
     );
-    let _ = writeln!(out, "    args: [");
+    let _ = writeln!(out, "  args: [");
     for (arg_index, arg) in method.args.iter().enumerate() {
         let abi_name = spec_string_text(&arg.name)?;
         let public_name = to_camel_case(abi_name);
-        let _ = writeln!(out, "      {{");
-        let _ = writeln!(out, "        abiName: {},", ts_string_literal(abi_name));
+        let _ = writeln!(out, "    {{");
+        let _ = writeln!(out, "      abiName: {},", ts_string_literal(abi_name));
         let _ = writeln!(
             out,
-            "        publicName: {},",
+            "      publicName: {},",
             ts_string_literal(&public_name)
         );
         let _ = writeln!(
             out,
-            "        type: spec.interfaces[{iface_index}]!.methods[{method_index}]!.args[{arg_index}]!.ty,"
+            "      type: spec.interfaces[{iface_index}]!.methods[{method_index}]!.args[{arg_index}]!.ty,"
         );
-        let _ = writeln!(out, "      }},");
+        let _ = writeln!(out, "    }},");
     }
-    let _ = writeln!(out, "    ],");
+    let _ = writeln!(out, "  ],");
     let _ = writeln!(
         out,
-        "    returnType: spec.interfaces[{iface_index}]!.methods[{method_index}]!.return_type,"
+        "  returnType: spec.interfaces[{iface_index}]!.methods[{method_index}]!.return_type,"
     );
-    let _ = writeln!(out, "    throws: [");
+    let _ = writeln!(out, "  throws: [");
     for (exception_index, exception) in iface.throws.iter().enumerate() {
-        let _ = writeln!(out, "      {{");
-        let _ = writeln!(out, "        selector: 0x{:x}n,", exception.selector);
-        let _ = writeln!(out, "        name: {},", exception_name(&exception.ty)?);
+        let _ = writeln!(out, "    {{");
+        let _ = writeln!(out, "      selector: 0x{:x}n,", exception.selector);
+        let _ = writeln!(out, "      name: {},", exception_name(&exception.ty)?);
         let _ = writeln!(
             out,
-            "        type: spec.interfaces[{iface_index}]!.throws[{exception_index}]!.ty,"
+            "      type: spec.interfaces[{iface_index}]!.throws[{exception_index}]!.ty,"
         );
-        let _ = writeln!(out, "      }},");
+        let _ = writeln!(out, "    }},");
     }
-    let _ = writeln!(out, "    ],");
-    let _ = writeln!(out, "    codecs,");
-    let _ = writeln!(out, "  }}),");
-    Ok(())
+    let _ = writeln!(out, "  ],");
+    let _ = writeln!(out, "  codecs: __gh_codecs,");
+    let _ = writeln!(out, "}}),");
+    Ok(out)
 }
 
 /// Emit an event's decoded and filter types.
 fn emit_event_types(event: &ContractEventDef) -> Result<String, CliError> {
-    let name = spec_string_text(&event.name.declared)?;
+    let declared = spec_string_text(&event.name.declared)?;
+    let name = escape_ts_name(declared);
     let mut topic_fields = Vec::new();
     let mut filter_fields = Vec::new();
     for field in event.topics.iter() {
@@ -1152,7 +1305,7 @@ fn emit_event_types(event: &ContractEventDef) -> Result<String, CliError> {
         out,
         "export interface {name} extends __gh_client_contract.DecodedContractEvent<"
     );
-    let _ = writeln!(out, "  {},", ts_string_literal(name));
+    let _ = writeln!(out, "  {},", ts_string_literal(declared));
     let _ = writeln!(out, "  {{ {} }},", topic_fields.join("; "));
     let _ = writeln!(out, "  {{ {} }}", payload_fields.join("; "));
     let _ = writeln!(out, "> {{}}");
@@ -1229,8 +1382,8 @@ fn render_value_node(node: &ValueNode) -> Result<String, CliError> {
     Ok(out)
 }
 
-/// Render an event's descriptor. It sits at top level, where `spec` and
-/// `codecs` are the generated bindings.
+/// Render an event's descriptor. It sits at top level, where no spec name can
+/// take `spec`, and names its event's types from their crate's root down.
 fn render_event_descriptor(event: &ContractEventDef, index: usize) -> Result<String, CliError> {
     let name = ts_string_literal(spec_string_text(&event.name.declared)?);
     let path = ts_id_path(&event.name)?.qualified();
@@ -1270,7 +1423,7 @@ fn render_event_descriptor(event: &ContractEventDef, index: usize) -> Result<Str
         );
     }
     let _ = writeln!(out, "  ],");
-    let _ = writeln!(out, "  codecs,");
+    let _ = writeln!(out, "  codecs: __gh_codecs,");
     out.push_str("})");
     Ok(out)
 }
@@ -1301,17 +1454,45 @@ fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
         event_names.join(" | "),
     );
     let _ = writeln!(out);
+    // The parameter's name is the generator's own: a crate named like it would
+    // otherwise lose its descriptors to it in the body.
     let _ = writeln!(
         out,
-        "export function decodeEvent(event: {{ topics: globalThis.Uint8Array[]; \
+        "export function decodeEvent(__gh_event: {{ topics: globalThis.Uint8Array[]; \
          data: globalThis.Uint8Array }}): {union_name} | null {{"
     );
     let chain = event_names
         .iter()
-        .map(|n| format!("{n}.decode(event)"))
+        .map(|n| format!("{n}.decode(__gh_event)"))
         .collect::<Vec<_>>()
         .join(" ?? ");
     let _ = writeln!(out, "  return {chain};");
+    let _ = writeln!(out, "}}");
+    Ok(())
+}
+
+/// Emit the namespace every reference to a spec type goes through, with one
+/// alias per type def. Its own references resolve at top level, where only a
+/// root can claim a name.
+fn emit_codegen_namespace(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    if spec.type_defs.is_empty() {
+        return Ok(());
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "// The types the namespaces above refer to, under names no declaration can capture."
+    );
+    let _ = writeln!(out, "export namespace {CODEGEN_NAMESPACE} {{");
+    for def in spec.type_defs.iter() {
+        let path = ts_id_path(type_def_id(def)?)?;
+        let _ = writeln!(
+            out,
+            "  export type {} = {};",
+            path.alias(),
+            path.qualified()
+        );
+    }
     let _ = writeln!(out, "}}");
     Ok(())
 }
@@ -1326,10 +1507,6 @@ fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
 )]
 fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Result<(), CliError> {
     let mut top_level_values = BTreeMap::new();
-    let has_methods = spec
-        .interfaces
-        .iter()
-        .any(|iface| !iface.methods.is_empty());
     let has_events = !spec.events.is_empty();
     // A crate's value object puts every value under its path. An event's
     // descriptor cannot also hold the values of a module named after it, and
@@ -1381,15 +1558,10 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         }
     }
 
-    // Runtime names are written through their module's alias, so only the
-    // file's own top-level bindings need a name to themselves.
-    let mut generated = vec!["s", "spec"];
-    if has_methods {
-        generated.push("entrypoints");
-    }
-    if has_methods || has_events {
-        generated.push("codecs");
-    }
+    // Runtime names are written through their module's alias, and the file's
+    // internal bindings carry the reserved prefix, so only its exported
+    // bindings need a name to themselves. A root named after one is escaped.
+    let mut generated = vec!["spec"];
     if has_events {
         generated.push("decodeEvent");
     }
@@ -1400,12 +1572,6 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
             "generated binding".into(),
         )?;
     }
-    // Built-in types are written `globalThis.X`.
-    reserve_ts_value_name(
-        &mut top_level_values,
-        "globalThis".into(),
-        "TypeScript standard library".into(),
-    )?;
     // Roots are reserved once, since defs share them; names are reserved per
     // qualified path, where a def and an event would merge.
     let mut defined_types = BTreeSet::new();
@@ -1430,28 +1596,25 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
         defined_types.insert(id.clone());
     }
 
+    // Interfaces sharing a name share its root, each under its own major.
+    let mut interface_versions: BTreeMap<[String; 2], &str> = BTreeMap::new();
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
         let iface_name = spec_string_text(&iface.name)?;
-        validate_ts_identifier(iface_name, &format!("interface \"{iface_name}\""))?;
-        reserve_ts_value_name(
-            &mut top_level_values,
-            iface_name.to_owned(),
-            format!("interface \"{iface_name}\""),
-        )?;
-        let declared_exception = format!("{iface_name}DeclaredException");
-        let exception = format!("{iface_name}Exception");
-        for (name, source) in [
-            (
-                declared_exception,
-                format!("interface \"{iface_name}\" exception union"),
-            ),
-            (
-                exception,
-                format!("interface \"{iface_name}\" public exception"),
-            ),
-        ] {
-            validate_ts_identifier(&name, &source)?;
-            reserve_ts_value_name(&mut top_level_values, name, source)?;
+        let iface_vers = spec_string_text(&iface.vers)?;
+        let path = ts_interface_path(iface)?;
+        if !interface_versions.keys().any(|[root, _]| *root == path[0]) {
+            reserve_ts_value_name(
+                &mut top_level_values,
+                path[0].clone(),
+                format!("interface \"{iface_name}\""),
+            )?;
+        }
+        if let Some(existing) = interface_versions.insert(path.clone(), iface_vers) {
+            return Err(CliError::TsBindingsFailed(format!(
+                "interface \"{iface_name}\" versions {existing} and {iface_vers} would both be \
+                 \"{}\" in the generated TypeScript",
+                path.join(".")
+            )));
         }
         validate_interface_method_name_collisions(
             iface_name,
@@ -1476,20 +1639,9 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
                 ),
             )?;
         }
-        for (method_index, method) in iface.methods.iter().enumerate() {
+        for method in iface.methods.iter() {
             let method_name = spec_string_text(&method.name)?;
             validate_method_arg_name_collisions(method_name, method)?;
-            let stem =
-                method_type_stem(iface_name, &public_method_names[iface_index][method_index]);
-            for suffix in ["Args", "Result"] {
-                let name = format!("{stem}{suffix}");
-                validate_ts_identifier(&name, &format!("method \"{iface_name}.{method_name}\""))?;
-                reserve_ts_value_name(
-                    &mut top_level_values,
-                    name,
-                    format!("method \"{iface_name}.{method_name}\" {suffix} type"),
-                )?;
-            }
             for arg in method.args.iter() {
                 let arg_name = spec_string_text(&arg.name)?;
                 validate_contract_type(
@@ -1599,14 +1751,6 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
                 .map(|name| (name, &decl.what))
         })
         .collect();
-    // Reserved at top level above; below a root, a spec name would shadow it.
-    if let Some((_, source)) = nested.iter().find(|(name, _)| *name == "globalThis") {
-        return Err(CliError::TsBindingsFailed(format!(
-            "{source} has \"globalThis\" in its generated TypeScript path, where it would \
-             shadow the global object the bindings reach built-in types through. Rename the \
-             module or type."
-        )));
-    }
     if let Some((name, source)) = top_level_values
         .iter()
         .chain(nested.iter().copied())
@@ -1618,27 +1762,6 @@ fn validate_spec(spec: &ContractSpec, public_method_names: &[Vec<String>]) -> Re
              that prefix."
         )));
     }
-    // A named type is written from its crate's root down, and TypeScript
-    // resolves that first segment to the nearest namespace of that name. A
-    // module named after a crate would take over references to its types.
-    let crates = defined_types
-        .iter()
-        .map(|id| ts_id_path(id).map(|path| path.namespaces[0].clone()))
-        .collect::<Result<BTreeSet<_>, CliError>>()?;
-    for decl in &declared {
-        if let Some(module) = decl.path.namespaces[1..]
-            .iter()
-            .find(|segment| crates.contains(*segment))
-        {
-            return Err(CliError::TsBindingsFailed(format!(
-                "{} has \"{module}\" in its generated TypeScript path, which is also the name \
-                 of a crate whose types the bindings write as \"{module}.…\". Inside that \
-                 namespace the name would resolve to the module instead. Rename the module.",
-                decl.what
-            )));
-        }
-    }
-
     for def in spec.type_defs.iter() {
         validate_type_def(def, &defined_types)?;
     }
@@ -1668,6 +1791,7 @@ fn validate_interface_method_name_collisions(
     public_method_names: &[String],
 ) -> Result<(), CliError> {
     let mut methods: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut stems: BTreeMap<String, &str> = BTreeMap::new();
     for (method_index, method) in iface.methods.iter().enumerate() {
         let method_name = spec_string_text(&method.name)?;
         let public_method_name = public_method_names[method_index].as_str();
@@ -1681,6 +1805,15 @@ fn validate_interface_method_name_collisions(
             )));
         }
         methods.insert(public_method_name, method_name);
+        // Names differing only in their first letter's case share a stem.
+        let stem = method_type_stem(public_method_name);
+        if let Some(existing) = stems.get(&stem) {
+            return Err(CliError::TsBindingsFailed(format!(
+                "interface \"{iface_name}\" methods \"{existing}\" and \"{method_name}\" would \
+                 both declare \"{stem}Args\" and \"{stem}Result\" in the generated TypeScript"
+            )));
+        }
+        stems.insert(stem, method_name);
     }
     Ok(())
 }
@@ -1718,6 +1851,12 @@ fn validate_ts_property_identifier(name: &str, source: &str) -> Result<(), CliEr
 }
 
 fn is_ts_identifier(name: &str) -> bool {
+    !is_ts_reserved_word(name) && is_ts_identifier_name(name)
+}
+
+/// Whether `name` is a word the bindings cannot declare a namespace, type or
+/// strict-mode binding by: a reserved word, or a type TypeScript predefines.
+fn is_ts_reserved_word(name: &str) -> bool {
     const RESERVED: &[&str] = &[
         "arguments",
         "any",
@@ -1782,10 +1921,7 @@ fn is_ts_identifier(name: &str) -> bool {
         "with",
         "yield",
     ];
-    if RESERVED.contains(&name) {
-        return false;
-    }
-    is_ts_identifier_name(name)
+    RESERVED.contains(&name)
 }
 
 fn is_ts_identifier_name(name: &str) -> bool {
@@ -1993,16 +2129,14 @@ fn validate_property_name(name: &str, location: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-fn method_type_stem(interface_name: &str, public_method_name: &str) -> String {
+/// The public method name with its first letter capitalized, which names the
+/// method's `Args` and `Result` types in its interface's namespace.
+fn method_type_stem(public_method_name: &str) -> String {
     let mut chars = public_method_name.chars();
-    let Some(first) = chars.next() else {
-        return interface_name.to_owned();
-    };
-    format!(
-        "{interface_name}{}{}",
-        first.to_ascii_uppercase(),
-        chars.collect::<String>()
-    )
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
 }
 
 /// The exception's name as a TypeScript string literal.
@@ -2313,14 +2447,14 @@ mod tests {
         };
         assert_eq!(
             ts_type_ref(&typed).unwrap(),
-            "__gh_client_contract.SignedToken<demo.v1.Auth>"
+            "__gh_client_contract.SignedToken<__gh_codegen.demo$v1$Auth>"
         );
         assert_eq!(
             spec_type_to_ts_literal(&typed).unwrap(),
             "{ v: __gh_contract_spec.ContractTypeKind.SignedToken, signed_token_preimage: \
              { preimage_type: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: \
-             s(\"demo\"), major: s(\"1\"), module_path: s(\"demo\"), declared: \
-             s(\"Auth\") } } } }"
+             __gh_s(\"demo\"), major: __gh_s(\"1\"), module_path: __gh_s(\"demo\"), declared: \
+             __gh_s(\"Auth\") } } } }"
         );
 
         let list = ContractType::Vector {
@@ -2362,9 +2496,7 @@ mod tests {
         );
         let output = generate_ts_bindings(&spec, "wallet.spec.xdr").unwrap();
         assert!(
-            output.contains(
-                "export type CounterAuthorizeResult = __gh_client_contract.SignedToken[];"
-            ),
+            output.contains("export type AuthorizeResult = __gh_client_contract.SignedToken[];"),
             "return type must be a token placeholder list:\n{output}"
         );
         assert!(
@@ -2507,8 +2639,7 @@ mod tests {
             "spec type must still be declared:\n{output}"
         );
         assert!(
-            output
-                .contains("export type CounterAuthorizeResult = __gh_client_contract.SignedToken;"),
+            output.contains("export type AuthorizeResult = __gh_client_contract.SignedToken;"),
             "the method result must resolve to the runtime type:\n{output}"
         );
     }
@@ -2606,7 +2737,7 @@ mod tests {
         let ty = ContractType::Named {
             named: spec_id("ERC20Error"),
         };
-        assert_eq!(ts_type_ref(&ty).unwrap(), "demo.v1.ERC20Error");
+        assert_eq!(ts_type_ref(&ty).unwrap(), "__gh_codegen.demo$v1$ERC20Error");
     }
 
     #[test]
@@ -2765,13 +2896,13 @@ export type Result =
         );
         assert!(
             output.contains(
-                "{ name: s(\"tag\"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } }"
+                "{ name: __gh_s(\"tag\"), ty: { v: __gh_contract_spec.ContractTypeKind.U64 } }"
             ),
             "event topic field literal missing:\n{output}"
         );
         assert!(
             output.contains(
-                "{ name: s(\"note\"), ty: { v: __gh_contract_spec.ContractTypeKind.String } }"
+                "{ name: __gh_s(\"note\"), ty: { v: __gh_contract_spec.ContractTypeKind.String } }"
             ),
             "event payload field literal missing:\n{output}"
         );
@@ -2821,17 +2952,17 @@ export type Result =
         );
         assert!(
             output.contains(
-                "export function decodeEvent(event: { topics: globalThis.Uint8Array[]; \
+                "export function decodeEvent(__gh_event: { topics: globalThis.Uint8Array[]; \
                  data: globalThis.Uint8Array }): CounterEvent | null"
             ),
             "missing decodeEvent:\n{output}"
         );
         assert!(
-            output.contains("return demo.v1.PingEvent.decode(event);"),
+            output.contains("return demo.v1.PingEvent.decode(__gh_event);"),
             "missing dispatch body:\n{output}"
         );
         assert!(
-            output.contains("codecs,"),
+            output.contains("codecs: __gh_codecs,"),
             "missing shared codecs:\n{output}"
         );
         assert!(!output.contains("CxsReader"));
@@ -2842,8 +2973,8 @@ export type Result =
     fn event_only_binding_defines_spec_string_helper() {
         let output = generate_ts_bindings(&spec_with_events(), "counter.spec.xdr").unwrap();
 
-        assert!(output.contains("const s = __gh_contract_spec.contractSpecString;"));
-        assert!(output.contains("name: s(\"Counter\")"));
+        assert!(output.contains("const __gh_s = __gh_contract_spec.contractSpecString;"));
+        assert!(output.contains("name: __gh_s(\"Counter\")"));
     }
 
     #[test]
@@ -2870,7 +3001,7 @@ export type Result =
         spec.events = vec![event].try_into().unwrap();
         let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
         assert!(output.contains("export type CounterEvent = demo.v1.CounterEvent;"));
-        assert!(output.contains("return demo.v1.CounterEvent.decode(event);"));
+        assert!(output.contains("return demo.v1.CounterEvent.decode(__gh_event);"));
     }
 
     #[test]
@@ -2892,47 +3023,28 @@ export type Result =
     }
 
     #[test]
-    fn generated_method_type_names_are_namespaced_apart_from_spec_types() {
-        // Method argument and result types are emitted at top level. A spec
-        // type declared with the same name used to collide with them; it now
-        // lands inside its id's namespaces instead.
-        for suffix in ["Args", "Result"] {
-            let name = format!("ERC20Transfer{suffix}");
-            let mut spec = erc20_spec();
-            spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
-                struct_def: ContractStructDef {
-                    name: spec_id(&name),
-                    fields: vec![].try_into().unwrap(),
-                },
-            });
-
-            let output = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
-            // The generated one stays top level, the spec type is nested
-            // inside its id's namespaces, so both can exist at once.
-            assert!(output.contains(&format!("export interface {name} {{")));
-            assert!(output.contains(&format!("    export interface {name} {{")));
+    fn interface_types_are_namespaced_apart_from_spec_types() {
+        // Spec types named like the generated ones nest under their crate, and
+        // the generated ones under their interface's name and major.
+        let mut spec = erc20_spec();
+        for name in [
+            "TransferArgs",
+            "TransferResult",
+            "DeclaredException",
+            "Exception",
+        ] {
+            spec.type_defs.0.push(struct_at(spec_id(name)));
         }
-    }
-
-    #[test]
-    fn method_type_suffixes_allow_noncolliding_spec_types() {
-        for name in ["TransferArgs", "TransferResult"] {
-            let mut spec = erc20_spec();
-            spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
-                struct_def: ContractStructDef {
-                    name: spec_id(name),
-                    fields: vec![ContractField {
-                        name: spec_string("value"),
-                        ty: ContractType::U64,
-                    }]
-                    .try_into()
-                    .unwrap(),
-                },
-            });
-
-            let output = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
-            assert!(output.contains(&format!("export interface {name} {{")));
-            assert!(output.contains("export interface ERC20TransferArgs {"));
+        let output = generate_ts_bindings(&spec, "erc20.spec.xdr").unwrap();
+        for expected in [
+            "export namespace ERC20 {\n\n  export namespace v0_1 {\n\n    export interface \
+             TransferArgs {",
+            "    export interface TransferArgs { \"x\": bigint; }",
+            "    export type Exception = __gh_client_contract.ContractException<DeclaredException>;",
+            "    export interface Exception { \"x\": bigint; }",
+            "    ERC20.v0_1.TransferArgs,",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
         }
     }
 
@@ -3006,11 +3118,162 @@ export type Result =
         let output = generate_ts_bindings(&spec, "token.spec.xdr").unwrap();
         assert!(output.contains("export const ERC20 = {"));
         assert!(output.contains("export const ERC20Metadata = {"));
-        assert!(output.contains("  initialize: __gh_client_contract.defineContractMethod<"));
-        assert!(output.contains("entrypoint: entrypoints.ERC20.initialize,"));
-        assert!(output.contains("entrypoint: entrypoints.ERC20Metadata.initialize,"));
+        assert!(output.contains("    initialize: __gh_client_contract.defineContractMethod<"));
+        assert!(output.contains("entrypoint: __gh_entrypoints.ERC20.v0_1.initialize,"));
+        assert!(output.contains("entrypoint: __gh_entrypoints.ERC20Metadata.v0_1.initialize,"));
         assert!(output.contains("type: spec.interfaces[0]!.methods[0]!.args[0]!.ty"));
         assert!(output.contains("type: spec.interfaces[1]!.methods[0]!.args[0]!.ty"));
+    }
+
+    /// An interface named `name` at version `vers` with one method.
+    fn interface(name: &str, vers: &str, method: &str) -> ContractSpecInterface {
+        ContractSpecInterface {
+            name: spec_string(name),
+            vers: spec_string(vers),
+            throws: vec![].try_into().unwrap(),
+            methods: vec![ContractSpecMethod {
+                name: spec_string(method),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
+    fn spec_with_interfaces(interfaces: Vec<ContractSpecInterface>) -> ContractSpec {
+        ContractSpec {
+            interfaces: interfaces.try_into().unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn interfaces_nest_under_their_name_and_major() {
+        // Its name and major are what an interface's entrypoints hash, so one
+        // interface at two majors keeps both apart under one name.
+        let spec = spec_with_interfaces(vec![
+            interface("Token", "0.4.2", "balance"),
+            interface("Token", "1.3.0", "balance"),
+            interface("Token", "0.0.7", "balance"),
+        ]);
+        let output = generate_ts_bindings(&spec, "token.spec.xdr").unwrap();
+        for expected in [
+            "const __gh_entrypoints = {\n  Token: {\n    v0_4: {\n",
+            "export namespace Token {\n\n  export namespace v0_0_7 {\n\n    export type \
+             BalanceArgs = void;",
+            "  export namespace v0_4 {\n\n    export type BalanceArgs = void;",
+            "  export namespace v1 {\n\n    export type BalanceArgs = void;",
+            "export const Token = {\n  v0_4: {\n    balance: ",
+            "  v1: {\n    balance: ",
+            "  v0_0_7: {\n    balance: ",
+            "      Token.v1.BalanceResult,",
+            "      entrypoint: __gh_entrypoints.Token.v1.balance,",
+            "      interfaceVersion: \"1.3.0\",",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
+        assert_eq!(
+            output.matches("export const Token = {").count(),
+            1,
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn an_interface_repeated_at_one_major_errors() {
+        let spec = spec_with_interfaces(vec![
+            interface("Token", "1.0.0", "balance"),
+            interface("Token", "1.2.0", "supply"),
+        ]);
+        let error = generate_ts_bindings(&spec, "token.spec.xdr").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "cannot generate TypeScript bindings: interface \"Token\" versions 1.0.0 and 1.2.0 \
+             would both be \"Token.v1\" in the generated TypeScript"
+        );
+    }
+
+    #[test]
+    fn an_interface_version_must_be_semantic() {
+        let spec = spec_with_interfaces(vec![interface("Token", "1", "balance")]);
+        let error = generate_ts_bindings(&spec, "token.spec.xdr").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("interface \"Token\" has version \"1\", which is not a semantic version"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_interface_named_after_a_crate_errors() {
+        let mut spec = spec_with_interfaces(vec![interface("demo", "0.1.0", "get")]);
+        spec.type_defs = vec![struct_at(spec_id("Thing"))].try_into().unwrap();
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "generated TypeScript value name \"demo\" collides between spec id namespace \
+                 \"demo\" and interface \"demo\""
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn method_names_sharing_a_stem_error() {
+        let mut iface = interface("Token", "1.0.0", "balance");
+        iface.methods.0.push(ContractSpecMethod {
+            name: spec_string("Balance"),
+            args: vec![].try_into().unwrap(),
+            return_type: ContractType::U64,
+        });
+        let error =
+            generate_ts_bindings(&spec_with_interfaces(vec![iface]), "x.spec.xdr").unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "interface \"Token\" methods \"balance\" and \"Balance\" would both declare \
+                 \"BalanceArgs\" and \"BalanceResult\""
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn roots_named_after_top_level_bindings_are_escaped() {
+        // A crate may be named `spec`; its root is escaped, and so is every
+        // path through it, types and values alike.
+        let mut spec = spec_with_events();
+        spec.type_defs = vec![struct_at(spec_id_at("spec", "spec", "Thing"))]
+            .try_into()
+            .unwrap();
+        spec.events.0[0].name = spec_id_at("decodeEvent", "decodeEvent", "Ping");
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        for expected in [
+            "export namespace $spec {\n\n  export namespace v1 {\n\n    export interface Thing",
+            "export namespace $decodeEvent {",
+            "export const $decodeEvent = {\n  v1: {\n    Ping: ",
+            "      $decodeEvent.v1.Ping[\"topics\"],",
+            "export type CounterEvent = $decodeEvent.v1.Ping;",
+            "  return $decodeEvent.v1.Ping.decode(__gh_event);",
+            "  export type $spec$v1$Thing = $spec.v1.Thing;",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
+    }
+
+    #[test]
+    fn the_decoder_reaches_a_crate_named_after_its_parameter() {
+        // Inside `decodeEvent`, a parameter named `event` would capture a crate
+        // of that name; the generator names its parameter itself.
+        let mut spec = spec_with_events();
+        spec.events.0[0].name = spec_id_at("event", "event", "Ping");
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        assert!(
+            output.contains("  return event.v1.Ping.decode(__gh_event);"),
+            "{output}"
+        );
     }
 
     #[test]
@@ -3060,11 +3323,23 @@ export type Result =
     }
 
     #[test]
-    fn interface_name_colliding_with_event_decoder_errors() {
-        let spec = counter_spec_with_interface_name("decodeEvent", vec![], true);
-
-        let err = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
-        assert!(err.to_string().contains("decodeEvent"));
+    fn interfaces_named_after_top_level_bindings_are_escaped() {
+        for name in ["spec", "decodeEvent", "globalThis"] {
+            let spec = counter_spec_with_interface_name(name, vec![], true);
+            let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+            for expected in [
+                format!("export namespace ${name} {{"),
+                format!("export const ${name} = {{"),
+                format!("export type {name}Event = demo.v1.PingEvent;"),
+                "export const spec: __gh_client_contract.ContractSpec = {".to_owned(),
+                "export function decodeEvent(".to_owned(),
+            ] {
+                assert!(
+                    output.contains(&expected),
+                    "{name}: missing {expected}:\n{output}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3164,28 +3439,30 @@ export type Result =
     fn embeds_a_type_declared_in_another_crate() {
         let output = generate_ts_bindings(&cross_crate_spec("demo"), "x.spec.xdr").unwrap();
 
-        // The reference is written from the other crate's root down, and that
-        // root is a top-level namespace, so it resolves from inside `demo`.
+        // The reference goes through `__gh_codegen`, whose alias names the
+        // other crate from the top level, where its root resolves to itself.
         assert!(
-            output.contains(r#"export interface Holder { "inner": other.v1.Thing; }"#),
+            output.contains(r#"export interface Holder { "inner": __gh_codegen.other$v1$Thing; }"#),
             "cross-crate reference missing:\n{output}"
         );
         assert!(output.contains("export namespace other {"));
+        assert!(
+            output.contains("  export type other$v1$Thing = other.v1.Thing;\n"),
+            "{output}"
+        );
     }
 
     #[test]
-    fn a_module_named_after_a_crate_errors() {
+    fn a_module_named_after_a_crate_leaves_it_reachable() {
         // `Holder` sits in `demo::other`, where `other.v1.Thing` would resolve
-        // to its own enclosing module rather than to crate `other`.
-        let error = generate_ts_bindings(&cross_crate_spec("demo::other"), "x.spec.xdr")
-            .unwrap_err()
-            .to_string();
+        // to its own enclosing module; the alias is written outside it.
+        let output = generate_ts_bindings(&cross_crate_spec("demo::other"), "x.spec.xdr").unwrap();
         assert!(
-            error.contains(
-                "struct demo::other::Holder (demo@1) has \"other\" in its generated \
-                 TypeScript path"
+            output.contains(
+                "    export namespace other {\n\n      export interface Holder { \"inner\": \
+                 __gh_codegen.other$v1$Thing; }"
             ),
-            "{error}"
+            "{output}"
         );
     }
 
@@ -3199,7 +3476,7 @@ export type Result =
             .push(struct_at(spec_id_at("demo", "demo", "other")));
         let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
         assert!(
-            output.contains(r#"export interface Holder { "inner": other.v1.Thing; }"#),
+            output.contains(r#"export interface Holder { "inner": __gh_codegen.other$v1$Thing; }"#),
             "{output}"
         );
     }
@@ -3220,7 +3497,7 @@ export type Result =
         for expected in [
             "signature: spec.events[0]!.signature,",
             "type: spec.events[1]!.fields[0]!.ty",
-            "      codecs,\n",
+            "      codecs: __gh_codecs,\n",
         ] {
             assert!(output.contains(expected), "missing {expected}:\n{output}");
         }
@@ -3230,7 +3507,7 @@ export type Result =
                 .find(needle)
                 .unwrap_or_else(|| panic!("missing {needle}:\n{output}"))
         };
-        assert!(at("const codecs = ") < at("export const demo = {"));
+        assert!(at("const __gh_codecs = ") < at("export const demo = {"));
     }
 
     #[test]
@@ -3261,36 +3538,37 @@ export type Result =
     }
 
     #[test]
-    fn global_this_is_reserved_wherever_a_spec_name_lands() {
+    fn global_this_is_escaped_wherever_a_spec_name_lands() {
         // Built-in types are written `globalThis.X`, which a module or type of
         // that name would capture, still compiling with the wrong type.
-        for id in [
-            spec_id_at("demo", "demo::globalThis", "Uint8Array"),
-            spec_id_at("demo", "demo", "globalThis"),
-        ] {
-            let mut spec = counter_spec();
-            spec.type_defs = vec![struct_at(id)].try_into().unwrap();
-            let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("has \"globalThis\" in its generated TypeScript path"),
-                "{error}"
-            );
-        }
-
-        // A crate root named `globalThis` would shadow it at top level.
         let mut spec = counter_spec();
-        spec.type_defs = vec![struct_at(spec_id_at("globalThis", "globalThis", "Thing"))]
-            .try_into()
-            .unwrap();
-        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("\"globalThis\" collides between TypeScript standard library"),
-            "{error}"
-        );
+        spec.type_defs = vec![
+            ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_id_at("demo", "demo::globalThis", "Uint8Array"),
+                    fields: vec![ContractField {
+                        name: spec_string("bytes"),
+                        ty: ContractType::Bytes,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            },
+            struct_at(spec_id_at("demo", "demo", "globalThis")),
+            struct_at(spec_id_at("globalThis", "globalThis", "Thing")),
+        ]
+        .try_into()
+        .unwrap();
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        for expected in [
+            "    export namespace $globalThis {\n\n      export interface Uint8Array { \"bytes\": \
+             globalThis.Uint8Array; }",
+            "    export interface $globalThis { \"x\": bigint; }",
+            "export namespace $globalThis {\n\n  export namespace v1 {",
+            "  export type $globalThis$v1$Thing = $globalThis.v1.Thing;",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
     }
 
     fn struct_at(name: ContractSpecId) -> ContractTypeDef {
@@ -3432,18 +3710,71 @@ export type Result =
 
     #[test]
     fn an_invalid_path_segment_names_its_declaration() {
-        // `default` is a valid Rust module name and a reserved word in TypeScript.
         let mut spec = spec_with_events();
         spec.events = vec![].try_into().unwrap();
-        spec.type_defs = vec![struct_at(spec_id_at("demo", "demo::default", "Config"))]
+        spec.type_defs = vec![struct_at(spec_id_at("demo", "demo::default", "Has-Dash"))]
             .try_into()
             .unwrap();
         let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "cannot generate TypeScript bindings: demo::default::Config (demo@1) would be \
-             \"demo.v1.default.Config\" in the generated TypeScript, where \"default\" is not a \
-             valid identifier. Rename it."
+            "cannot generate TypeScript bindings: demo::default::Has-Dash (demo@1) would be \
+             \"demo.v1.$default.Has-Dash\" in the generated TypeScript, where \"Has-Dash\" is not \
+             a valid identifier. Rename it."
+        );
+    }
+
+    #[test]
+    fn reserved_words_in_a_path_are_escaped() {
+        // `default` is a valid Rust module name, and a type may take any name
+        // through `#[contract_type(name = "...")]`. Types and values escape
+        // alike, so one path still names both.
+        let mut spec = counter_spec();
+        spec.type_defs = vec![
+            enum_at(spec_id_at("demo", "demo::default", "Kind")),
+            struct_at(spec_id_at("demo", "demo", "string")),
+            struct_at(spec_id_at("demo", "demo", "__proto__")),
+            struct_at(spec_id_at("default", "default", "Thing")),
+        ]
+        .try_into()
+        .unwrap();
+        let output = generate_ts_bindings(&spec, "x.spec.xdr").unwrap();
+        for expected in [
+            "    export namespace $default {\n\n      export type Kind = 1n;",
+            "    export interface $string { \"x\": bigint; }",
+            "    export interface $__proto__ { \"x\": bigint; }",
+            "export namespace $default {\n\n  export namespace v1 {",
+            "    $default: {\n      Kind: {\n        \"A\": 1n,",
+            "  export type demo$v1$$default$Kind = demo.v1.$default.Kind;",
+            "  export type demo$v1$$string = demo.v1.$string;",
+            "  export type $default$v1$Thing = $default.v1.Thing;",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
+    }
+
+    #[test]
+    fn dollar_signs_in_spec_names_are_rejected() {
+        // The alias and escaped names use `$`; a spec name with one could
+        // collide with them.
+        let mut spec = counter_spec();
+        spec.type_defs = vec![struct_at(spec_id_at("demo", "demo", "A$b"))]
+            .try_into()
+            .unwrap();
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "cannot generate TypeScript bindings: demo::A$b (demo@1) has \"$\" in its name, which \
+             the generated TypeScript keeps for the names it escapes. Rename it."
+        );
+
+        let spec = counter_spec_with_interface_name("Count$r", vec![], false);
+        let error = generate_ts_bindings(&spec, "x.spec.xdr").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("interface \"Count$r\" has \"$\""),
+            "{error}"
         );
     }
 
@@ -3489,12 +3820,32 @@ export type Result =
     }
 
     #[test]
-    fn strict_mode_binding_names_are_rejected() {
-        for name in ["eval", "arguments"] {
-            let spec = counter_spec_with_interface_name(name, vec![], false);
-
-            let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
-            assert!(error.to_string().contains(name));
+    fn reserved_interface_names_are_escaped() {
+        // The escape is the binding's own; the wire keeps the interface's name.
+        for name in [
+            "eval",
+            "arguments",
+            "any",
+            "bigint",
+            "infer",
+            "keyof",
+            "string",
+            "unknown",
+        ] {
+            let spec = counter_spec_with_interface_name(name, counter_spec_methods(), false);
+            let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
+            for expected in [
+                format!("export namespace ${name} {{"),
+                format!("export const ${name} = {{"),
+                format!("  ${name}.v0_1.GetArgs,"),
+                format!("  entrypoint: __gh_entrypoints.${name}.v0_1.get,"),
+                format!("  interfaceName: \"{name}\","),
+            ] {
+                assert!(
+                    output.contains(&expected),
+                    "{name}: missing {expected}:\n{output}"
+                );
+            }
         }
     }
 
@@ -3515,19 +3866,9 @@ export type Result =
         );
 
         let output = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap();
-        assert!(output.contains("export interface CounterSymbolArgs"));
+        assert!(output.contains("export interface SymbolArgs"));
         assert!(output.contains("  return: string;"));
         assert!(output.contains("  symbol: __gh_client_contract.defineContractMethod<"));
-    }
-
-    #[test]
-    fn intrinsic_type_names_are_rejected() {
-        for name in ["any", "bigint", "infer", "keyof", "string", "unknown"] {
-            let spec = counter_spec_with_interface_name(name, vec![], false);
-
-            let error = generate_ts_bindings(&spec, "counter.spec.xdr").unwrap_err();
-            assert!(error.to_string().contains(name));
-        }
     }
 
     #[test]
@@ -3610,29 +3951,30 @@ export type Result =
         }
     }
 
-    /// Build a minimal counter contract spec: `get() -> U64` and
-    /// `increment(amount: U64) -> Void`.
+    /// `get() -> U64` and `increment(amount: U64) -> Void`.
+    fn counter_spec_methods() -> Vec<ContractSpecMethod> {
+        vec![
+            ContractSpecMethod {
+                name: spec_string("get"),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::U64,
+            },
+            ContractSpecMethod {
+                name: spec_string("increment"),
+                args: vec![ContractField {
+                    name: spec_string("amount"),
+                    ty: ContractType::U64,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Void,
+            },
+        ]
+    }
+
+    /// Build a minimal counter contract spec with [`counter_spec_methods`].
     fn counter_spec() -> ContractSpec {
-        counter_spec_with_methods(
-            vec![
-                ContractSpecMethod {
-                    name: spec_string("get"),
-                    args: vec![].try_into().unwrap(),
-                    return_type: ContractType::U64,
-                },
-                ContractSpecMethod {
-                    name: spec_string("increment"),
-                    args: vec![ContractField {
-                        name: spec_string("amount"),
-                        ty: ContractType::U64,
-                    }]
-                    .try_into()
-                    .unwrap(),
-                    return_type: ContractType::Void,
-                },
-            ],
-            false,
-        )
+        counter_spec_with_methods(counter_spec_methods(), false)
     }
 
     #[test]
@@ -3662,31 +4004,34 @@ export type Result =
         assert!(output.contains("counter.spec.xdr"));
         assert!(output.contains("Counter interface v0.1.0"));
 
-        // Entrypoints block
-        assert!(output.contains("const entrypoints = {"));
-        assert!(output.contains("  Counter: {"));
+        // Entrypoints block, keyed by interface name and major
+        assert!(output.contains("const __gh_entrypoints = {\n  Counter: {\n    v0_1: {\n"));
         assert!(output.contains("} as const;"));
 
         // Spec literal
         assert!(output.contains("export const spec: __gh_client_contract.ContractSpec"));
 
         assert!(output.contains(
-            "const codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);"
+            "const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_defs);"
         ));
 
-        assert!(output.contains("export const Counter = {"));
-        assert!(output.contains("export type CounterGetArgs = void;"));
-        assert!(output.contains("export type CounterGetResult = bigint;"));
-        assert!(output.contains("export interface CounterIncrementArgs"));
+        // Types and methods sit under the interface's name and major.
+        assert!(output.contains("export namespace Counter {\n\n  export namespace v0_1 {\n"));
+        assert!(output.contains("export const Counter = {\n  v0_1: {\n"));
+        assert!(output.contains("    export type GetArgs = void;"));
+        assert!(output.contains("    export type GetResult = bigint;"));
+        assert!(output.contains("    export interface IncrementArgs"));
         assert!(output.contains("amount: bigint"));
-        assert!(output.contains("export type CounterIncrementResult = void;"));
-        assert!(output.contains("export type CounterDeclaredException = never;"));
+        assert!(output.contains("    export type IncrementResult = void;"));
+        assert!(output.contains("    export type DeclaredException = never;"));
         assert!(output.contains(
-            "export type CounterException = \
-             __gh_client_contract.ContractException<CounterDeclaredException>;"
+            "    export type Exception = \
+             __gh_client_contract.ContractException<DeclaredException>;"
         ));
-        assert!(output.contains("  get: __gh_client_contract.defineContractMethod<"));
-        assert!(output.contains("  increment: __gh_client_contract.defineContractMethod<"));
+        assert!(output.contains("    get: __gh_client_contract.defineContractMethod<"));
+        assert!(output.contains("      Counter.v0_1.GetArgs,"));
+        assert!(output.contains("    increment: __gh_client_contract.defineContractMethod<"));
+        assert!(output.contains("      entrypoint: __gh_entrypoints.Counter.v0_1.increment,"));
         assert!(output.contains("interfaceName: \"Counter\""));
         assert!(output.contains("interfaceVersion: \"0.1.0\""));
         assert!(output.contains("abiName: \"increment\""));
@@ -3848,18 +4193,18 @@ export type Result =
         );
 
         assert!(
-            output.contains("export interface ERC20TransferArgs")
+            output.contains("export interface TransferArgs")
                 && output.contains("to: __gh_protocol.ContractAddress")
                 && output.contains("amount: bigint"),
             "transfer 'to' arg type mismatch"
         );
         assert!(
-            output.contains("export interface ERC20GetBalanceOfArgs")
+            output.contains("export interface GetBalanceOfArgs")
                 && output.contains("accountId: __gh_protocol.ContractAddress"),
             "getBalanceOf 'accountId' arg type mismatch"
         );
         assert!(
-            output.contains("entrypoint: entrypoints.ERC20.getBalanceOf"),
+            output.contains("entrypoint: __gh_entrypoints.ERC20.v0_1.getBalanceOf"),
             "getBalanceOf should read the nested camelCase entrypoint key"
         );
         assert!(
@@ -3867,17 +4212,16 @@ export type Result =
             "source method name should be preserved in the spec"
         );
         assert!(
-            output.contains("name: s(\"account_id\")"),
+            output.contains("name: __gh_s(\"account_id\")"),
             "source arg name should be preserved in the spec literal"
         );
         assert!(output.contains("abiName: \"account_id\""));
         assert!(output.contains("publicName: \"accountId\""));
-        assert!(output.contains("export type ERC20DeclaredException ="));
+        assert!(output.contains("export type DeclaredException ="));
         assert!(output.contains("name: \"ERC20Error\";"));
-        assert!(output.contains("value: demo.v1.ERC20Error;"));
+        assert!(output.contains("value: __gh_codegen.demo$v1$ERC20Error;"));
         assert!(output.contains(
-            "export type ERC20Exception = \
-             __gh_client_contract.ContractException<ERC20DeclaredException>;"
+            "export type Exception = __gh_client_contract.ContractException<DeclaredException>;"
         ));
         assert!(output.contains("type: spec.interfaces[0]!.throws[0]!.ty"));
 
@@ -3970,17 +4314,17 @@ export type Result =
             "Tree.value field missing"
         );
         assert!(
-            output.contains("\"left\": demo.v1.Tree | null;"),
+            output.contains("\"left\": __gh_codegen.demo$v1$Tree | null;"),
             "Tree.left field missing"
         );
         assert!(
-            output.contains("\"right\": demo.v1.Tree | null;"),
+            output.contains("\"right\": __gh_codegen.demo$v1$Tree | null;"),
             "Tree.right field missing"
         );
 
         assert!(
-            output.contains("export interface RecursiveTypeContractDepthArgs")
-                && output.contains("tree: demo.v1.Tree"),
+            output.contains("export interface DepthArgs")
+                && output.contains("tree: __gh_codegen.demo$v1$Tree"),
             "depth 'tree' arg type mismatch"
         );
     }
@@ -4495,7 +4839,8 @@ export type Result =
     }
 
     /// A spec named after what the bindings reach for: standard-library and runtime
-    /// types, the generated `spec` and `codecs`, and another crate.
+    /// types, the generated `spec`, the decoder's parameter, and another crate,
+    /// including from inside a module of that crate's name.
     #[expect(
         clippy::too_many_lines,
         reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
@@ -4593,6 +4938,32 @@ export type Result =
                         .unwrap(),
                     },
                 },
+                // In a module named after crate `other`, referring to that crate.
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id_at("demo", "demo::other", "Holder"),
+                        fields: vec![ContractField {
+                            name: spec_string("inner"),
+                            ty: ContractType::Named {
+                                named: spec_id_at("other", "other", "Thing"),
+                            },
+                        }]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                // In a module named after the global object, holding bytes.
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id_at("demo", "demo::globalThis", "Blob"),
+                        fields: vec![ContractField {
+                            name: spec_string("bytes"),
+                            ty: ContractType::Bytes,
+                        }]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
             ]
             .try_into()
             .unwrap(),
@@ -4604,10 +4975,10 @@ export type Result =
                     event.topics.0[0].ty = ContractType::String;
                     event
                 },
-                // Declares a const named after the codec context.
+                // Declared in a crate named like the decoder's parameter.
                 {
                     let mut event = ping_event_def();
-                    event.name = spec_id("codecs");
+                    event.name = spec_id_at("event", "event", "Ping");
                     event.signature = [0xCD; 32].into();
                     event
                 },
@@ -4667,6 +5038,107 @@ export type Result =
         }
     }
 
+    /// A spec whose names the bindings escape: a reserved word as a module, a
+    /// type and an interface name, and a crate named after the spec literal;
+    /// and one interface at two majors.
+    fn escaped_names_spec() -> ContractSpec {
+        let kind = || ContractType::Named {
+            named: spec_id_at("demo", "demo::default", "Kind"),
+        };
+        let token = |vers: &str, args: Vec<ContractField>, return_type| ContractSpecInterface {
+            name: spec_string("Token"),
+            vers: spec_string(vers),
+            throws: vec![].try_into().unwrap(),
+            methods: vec![ContractSpecMethod {
+                name: spec_string("balance"),
+                args: args.try_into().unwrap(),
+                return_type,
+            }]
+            .try_into()
+            .unwrap(),
+        };
+        ContractSpec {
+            interfaces: vec![
+                ContractSpecInterface {
+                    name: spec_string("default"),
+                    vers: spec_string("0.1.0"),
+                    throws: vec![ContractExceptionType {
+                        selector: 0x1,
+                        ty: kind(),
+                    }]
+                    .try_into()
+                    .unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string("get"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: kind(),
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+                token("0.4.0", vec![], ContractType::U64),
+                token(
+                    "1.2.0",
+                    vec![ContractField {
+                        name: spec_string("of"),
+                        ty: ContractType::Address,
+                    }],
+                    ContractType::U128,
+                ),
+            ]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![
+                ContractTypeDef::TypeDefEnum {
+                    enum_def: ContractEnumDef {
+                        name: spec_id_at("demo", "demo::default", "Kind"),
+                        variants: vec![
+                            ContractEnumVariant {
+                                name: spec_string("Active"),
+                                value: 1,
+                            },
+                            ContractEnumVariant {
+                                name: spec_string("Frozen"),
+                                value: 2,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_id_at("demo", "demo", "string"),
+                        fields: vec![
+                            ContractField {
+                                name: spec_string("kind"),
+                                ty: kind(),
+                            },
+                            ContractField {
+                                name: spec_string("thing"),
+                                ty: ContractType::Named {
+                                    named: spec_id_at("spec", "spec", "Thing"),
+                                },
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                struct_at(spec_id_at("spec", "spec", "Thing")),
+            ]
+            .try_into()
+            .unwrap(),
+            events: vec![{
+                let mut event = ping_event_def();
+                event.name = spec_id_at("spec", "spec", "Minted");
+                event
+            }]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
     #[test]
     fn generated_bindings_match_snapshots() {
         for (name, source_name, spec) in [
@@ -4690,6 +5162,11 @@ export type Result =
                 "namespace_merges",
                 "namespace_merges.spec.xdr",
                 namespace_merges_spec(),
+            ),
+            (
+                "escaped_names",
+                "escaped_names.spec.xdr",
+                escaped_names_spec(),
             ),
         ] {
             let output = generate_ts_bindings(&spec, source_name).unwrap();
