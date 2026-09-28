@@ -77,7 +77,7 @@ pub fn run(
         Err(error) => {
             for warning in warnings {
                 if compact {
-                    print.defer_build_warning(warning);
+                    print.defer_warning(warning);
                 } else {
                     print.warn(warning);
                 }

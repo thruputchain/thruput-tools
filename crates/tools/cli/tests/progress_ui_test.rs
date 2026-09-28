@@ -77,6 +77,15 @@ if [ "$1" = config ]; then
   printf '%s' '["-C","link-arg=-Tgroundhog-rv32.ld"]'
   exit 0
 fi
+if [ "$1" = test ]; then
+  sleep 0.3
+  if [ "$BUILD_UI_MODE" = test-fail ]; then
+    printf 'running 1 test\ntest tests::fails ... FAILED\n\nassertion failed: expected value\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
+    exit 101
+  fi
+  printf 'running 1 test\ntest tests::passes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
+  exit 0
+fi
 trap 'printf stopped > cargo-stopped; exit 130' INT
 printf '%s' "$$" > cargo.pid
 printf '%s' "$*" > cargo.args
@@ -146,9 +155,13 @@ fi
     }
 
     fn command(&self, mode: &str) -> Command {
+        self.command_for("build", mode)
+    }
+
+    fn command_for(&self, name: &str, mode: &str) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
         command
-            .arg("build")
+            .arg(name)
             .current_dir(&self.root)
             .env("BUILD_UI_MODE", mode)
             .env("TERM", "xterm-256color")
@@ -175,6 +188,39 @@ fi
         command.arg("--verbose");
         command
     }
+}
+
+#[test]
+fn test_summary_condenses_passing_logs_and_retains_failure_details() {
+    for (mode, success) in [("slow", true), ("test-fail", false)] {
+        let fixture = Fixture::new();
+        let mut pty = Pty::spawn(fixture.command_for("test", mode));
+        assert_eq!(pty.finish().success(), success, "{}", pty.history());
+        let history = pty.history();
+        assert!(
+            history.contains("Tests") && history.contains("Package"),
+            "{history}"
+        );
+        if success {
+            assert!(history.contains("1 passed"));
+            assert!(!history.contains("tests::passes ... ok"));
+        } else {
+            assert!(
+                history.contains("assertion failed: expected value"),
+                "{history}"
+            );
+            assert!(
+                history.find("Tests").unwrap() < history.find("assertion failed").unwrap(),
+                "{history}"
+            );
+        }
+    }
+    let fixture = Fixture::new();
+    let mut command = fixture.command_for("test", "slow");
+    command.arg("--show-output");
+    let mut pty = Pty::spawn(command);
+    assert!(pty.finish().success());
+    assert!(pty.history().contains("tests::passes ... ok"));
 }
 
 struct Pty {

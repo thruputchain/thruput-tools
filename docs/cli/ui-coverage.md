@@ -15,7 +15,7 @@ rules, and raw payloads remain command contracts.
 | GH-417 | toolchain actions, archives, codegen | Shared acquisition/archive progress and action results; raw codegen/which output retained | Workspace suite and archive round-trip/codegen/raw-source/clean-no-op PTYs passed |
 | GH-396 | new, init | Shared setup cards, outcomes, next steps; removed fixed ANSI boxes and screen clearing | Workspace suite, counter/stub/ready-init PTYs and declined-step scrollback test passed |
 | GH-393 | deploy, call, transfer, airdrop, wallet create | Shared review/dry-run/live/error/unconfirmed results; prepared hashes and prefund progress retained; explicit wallet binding partial outcome | Workspace suite and live call/deploy success/failure PTYs passed; remote dry-run fixtures verify no service contact; final matrix audit pending |
-| GH-392 | test: single/workspace/watch/integration | Pending | Pending |
+| GH-392 | test: single/workspace/watch/integration | Shared per-run/workspace summaries and outcomes; foreground default runs collect passing logs and retain failed output; `--show-output`, no-capture, passthrough, and integration supervisors use append-only child output | Workspace suite, existing watch/JSONL/workspace/integration tests, and compact/failure/full-output PTYs passed |
 | GH-395 | node, docs | Pending | Pending |
 | GH-394 | recursive command/mode audit, raw/framework output | Pending | Pending |
 

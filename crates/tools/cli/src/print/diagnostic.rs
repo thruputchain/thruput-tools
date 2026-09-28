@@ -49,7 +49,7 @@ impl Print {
         }
     }
 
-    pub(crate) fn defer_build_warning(&self, text: String) {
+    pub(crate) fn defer_warning(&self, text: String) {
         self.collect_diagnostic(Diagnostic {
             outcome: Outcome::Warning,
             code: None,
