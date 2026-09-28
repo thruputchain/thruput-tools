@@ -592,13 +592,71 @@ fn build_rv32_project_warns_when_typescript_codegen_would_refuse_the_spec() {
     );
 }
 
+#[test]
+#[serial]
+fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    let fake_bin = write_demo_contract_rv32(
+        &project_root,
+        &encode_fragments(&counter_fragments("__gh_Counter")),
+    );
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .current_dir(&project_root)
+        .env("PATH", &fake_bin)
+        .env("XDG_CONFIG_HOME", project_root.join("config-home"))
+        .args(["--json", "build"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "build");
+    assert_eq!(payload["data"]["schemaVersion"], 1);
+    let warnings = payload["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["level"], "warn");
+    assert_eq!(warnings[0]["code"], "ts_bindings_failed");
+    let message = warnings[0]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("cannot generate TypeScript bindings: "),
+        "{message}"
+    );
+}
+
 /// Build `demo-contract-rv32` through a stand-in cargo that emits an ELF
 /// carrying `raw_spec`, without requesting any bindings.
 fn build_demo_contract_rv32(raw_spec: &[u8]) -> groundhog_cli::build::BuildResult {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
-    write_active_profile(&project_root);
+    let fake_bin = write_demo_contract_rv32(&project_root, raw_spec);
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &[],
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: rv32 build should succeed")
+}
+
+/// Lay out `demo-contract-rv32` with a stand-in cargo that emits an ELF
+/// carrying `raw_spec`, and return the directory holding that cargo.
+fn write_demo_contract_rv32(project_root: &Path, raw_spec: &[u8]) -> PathBuf {
+    write_active_profile(project_root);
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
@@ -606,7 +664,7 @@ fn build_demo_contract_rv32(raw_spec: &[u8]) -> groundhog_cli::build::BuildResul
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
     fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
-    write_contract_toml(&project_root);
+    write_contract_toml(project_root);
 
     let target_dir = project_root.join("target");
     let raw_elf = target_dir
@@ -649,20 +707,7 @@ fn build_demo_contract_rv32(raw_spec: &[u8]) -> groundhog_cli::build::BuildResul
         perms.set_mode(0o755);
         fs::set_permissions(&cargo, perms).unwrap();
     }
-
-    let _cwd = CurrentDirGuard::enter(&project_root);
-    let _path = PathGuard::set(fake_bin.as_os_str());
-
-    groundhog_cli::build::build_rv32_project(
-        Some("demo-contract-rv32"),
-        &[],
-        &groundhog_cli::artifacts::ArtifactOptions::default(),
-        None,
-        None,
-        &[],
-        &groundhog_cli::Print::quiet(),
-    )
-    .expect("bug: rv32 build should succeed")
+    fake_bin
 }
 
 #[test]

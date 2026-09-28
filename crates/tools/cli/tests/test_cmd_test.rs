@@ -293,6 +293,86 @@ fn test_failed_rv32_tests_update_rerun_cache() {
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
+/// A build warning reaches `test --json`, so automation learns that the
+/// contract's TypeScript bindings cannot be generated even when its tests pass.
+#[test]
+#[serial]
+fn test_json_lists_a_build_warning() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    let (elf_fixture, raw_elf) = write_rv32_build_fixture(tmp.path());
+    // The bindings reserve the `__gh_` prefix, so codegen would refuse this spec.
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(
+            groundhog_spec_tool::RAW_SECTION_NAME,
+            &support::contract_spec_raw_for_interface("__gh_Counter"),
+        ),
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","version":"0.1.0","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  /bin/cp '{}' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"test\" ]; then\n  printf 'running 1 test\\n'\n  printf 'test tests::works ... ok\\n'\n  exit 0\nfi\nexit 0\n",
+            metadata_json,
+            raw_elf.parent().unwrap().display(),
+            elf_fixture.display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))
+        .args(["--json", "test"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 1, "expected one JSON record, got: {stdout}");
+    let payload: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["data"]["success"], true);
+    let warnings = payload["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["code"], "ts_bindings_failed");
+}
+
 /// `groundhog test` runs host tests without an explicit `--target`, so its
 /// artifacts share `target/debug` with plain `cargo test` and IDE builds
 /// instead of populating a second per-triple host tree.
