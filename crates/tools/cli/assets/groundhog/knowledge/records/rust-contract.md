@@ -22,9 +22,9 @@ groundhog test
 
 Use `cargo test` for fast native tests. Use `groundhog test` for the generated
 RV32 artifact. They exercise different paths and neither substitutes for the
-other. The scaffolded SDK downloads its test executor from public storage; no
-FFI download credentials are required. Cargo registry authentication follows
-the early-access setup instructions. Use `groundhog test --integration` for
+other. The scaffolded SDK downloads its test executor from public storage.
+Building a scaffold needs Cargo credentials for the Groundhog registry; the
+Getting Started guide covers that setup. Use `groundhog test --integration` for
 RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
 `groundhog test --workspace` runs the RV32 tests of every member that has a
 `tests/test_rv32.rs` target and reports them together.
@@ -41,19 +41,9 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.38.0, standard interfaces 0.1.36, protocol-rs 0.39.0,
+This CLI uses SDK 0.40.0, standard interfaces 0.1.40, protocol-rs 0.42.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
-migrating an existing Rust project. SDK 0.38.0 moves to protocol-rs 0.39.0,
-which names a spec type by a four-part id -- crate, major version, module
-path and declared name -- rather than one joined string, so two types
-sharing a name in different crates or modules are no longer ambiguous.
-SDK 0.37.0 moves to protocol-rs 0.38.0, which commits each transaction's
-gas consumption in its event log; `getTransactionReceipt` reports it as
-`gasUsed`. SDK 0.36.0 removes the
-implicit `Clone` derive from contract exceptions and encodes supported scalar
-event topics directly as padded 32-byte big-endian values. Rebuild contracts
-and regenerate TypeScript bindings together to adopt that topic encoding; event
-signatures alone do not distinguish it from the previous hashed representation.
+migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or

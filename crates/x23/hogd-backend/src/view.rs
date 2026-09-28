@@ -54,7 +54,7 @@ pub fn view_query(
         // `ViewingModeData` is what sandboxes the run — writes don't commit,
         // and `log_event` is permitted so wallet-preview callers can see what
         // events a real submit would produce.
-        invoke_flags: InvokeFlag::None.0,
+        invoke_flags: InvokeFlag::None.0.cast_unsigned(),
     })
 }
 

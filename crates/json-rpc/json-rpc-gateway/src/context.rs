@@ -17,8 +17,8 @@ use groundhog_scheduler::sched_gateway::{
 use groundhog_scp::network::ProtocolCommit;
 use groundhog_view::ViewGateway_ViewGateway1_Client;
 use groundhog_x23_transport::{
-    ConnectError, hogd_large_message_config, try_connect, try_connect_with_canceled_call_policy,
-    try_connect_with_config, try_connect_with_config_and_canceled_call_policy,
+    ConnectError, PoolKind, hogd_large_message_config, try_connect, try_connect_pool,
+    try_connect_with_canceled_call_policy,
 };
 use groundhog_xdr::PROTOCOL_VERSION;
 use rpc_driver::{CanceledCallPolicy, ConnectionConfig, RpcSender};
@@ -28,7 +28,7 @@ use tokio::{
     time::Instant,
 };
 
-use crate::config::{GatewayConfig, HealthBackend};
+use crate::config::{GatewayConfig, HealthBackend, X23MultiplexConnections};
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 use crate::storage_batcher::{DbGatewaySink, StorageReadBatcher, StorageReadSink};
 use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
@@ -229,19 +229,12 @@ impl GatewayContext {
             })?;
         let protocol = protocol_override.unwrap_or(PROTOCOL_VERSION);
 
-        // `FixedSerialPool` is 1 in-flight per connection by choice (FIFO
-        // dispatch per connection, modeling x23 sync RPC; the x23 wire
-        // protocol itself multiplexes via xid).  Size the pool to cover the
-        // batch submitter (`max_inflight_batches` × shards) plus the tip
-        // coalescer (`max_inflight_tips`) plus slack for ad-hoc RPCs.
         let startup_timeout = Duration::from_millis(config.backend_connect_timeout_ms.max(1));
-        let sched_pool_size = scheduler_pool_size(&config);
         let scheduler_candidate = if let Ok(result) = tokio::time::timeout(
             startup_timeout,
             connect_optional_scheduler(
+                config.x23_multiplex_connections,
                 &config.scheduler_address,
-                sched_pool_size,
-                config.scheduler_lookup_pool_size.get(),
                 protocol,
                 Some(&metrics),
             ),
@@ -261,8 +254,8 @@ impl GatewayContext {
 
         let indexer = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_indexer(
+                config.x23_multiplex_connections,
                 config.indexer_address.as_deref(),
-                config.indexer_pool_size.get(),
                 protocol_override,
                 startup_timeout,
                 Some(&metrics),
@@ -270,11 +263,10 @@ impl GatewayContext {
             .await,
         )?));
 
-        let db_gateway_pool = db_gateway_pool_size(&config);
         let db_gateway = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_db_gateway(
+                config.x23_multiplex_connections,
                 config.db_gateway_address.as_deref(),
-                db_gateway_pool,
                 protocol_override,
                 startup_timeout,
                 Some(&metrics),
@@ -284,6 +276,7 @@ impl GatewayContext {
 
         let view_gateway = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_view_gateway(
+                config.x23_multiplex_connections,
                 config.view_gateway_address.as_deref(),
                 protocol_override,
                 startup_timeout,
@@ -408,30 +401,34 @@ pub(crate) struct QuarantinedScheduler {
     pub(crate) ready_at: Instant,
 }
 
+/// Connect the scheduler's three pools: submission and tip, transaction
+/// lookup, and the one-connection health probe.
 pub(crate) async fn connect_optional_scheduler(
+    connections: X23MultiplexConnections,
     address: &str,
-    pool_size: usize,
-    lookup_pool_size: usize,
     protocol: ProtocolCommit,
     metrics: Option<&GatewayMetrics>,
 ) -> Result<Option<SchedulerClient>, ConnectError> {
-    let Some(client) = try_connect_with_canceled_call_policy(
+    let Some(client) = try_connect_pool(
         "scheduler",
         address,
-        pool_size,
-        CanceledCallPolicy::PoisonConnection,
+        PoolKind::Multiplex,
+        connections.get(),
+        ConnectionConfig::default(),
         SchedGateway_SchedGateway1_Client::new,
     )
     .await?
     else {
         return Ok(None);
     };
-    let Some(lookup_client) = try_connect_with_config_and_canceled_call_policy(
+    // Lookups are bounded by the context's admission and execution
+    // semaphores, not by this pool.
+    let Some(lookup_client) = try_connect_pool(
         "scheduler_lookup",
         address,
-        lookup_pool_size,
+        PoolKind::Multiplex,
+        connections.get(),
         hogd_large_message_config(),
-        CanceledCallPolicy::ReplaceConnection,
         SchedGateway_SchedGateway1_Client::new,
     )
     .await?
@@ -508,25 +505,35 @@ fn intro_rejection_reason(outcome: IntroOutcome, protocol_version: &str) -> Stri
 }
 
 async fn connect_backend_pair<C, F>(
-    service: &'static str,
-    probe_service: &'static str,
+    spec: OptionalBackend<F>,
     address: &str,
-    pool_size: usize,
-    connection_config: ConnectionConfig,
     startup_timeout: Duration,
-    build: F,
 ) -> Result<Option<BackendClient<C>>, ConnectError>
 where
     F: Fn(Arc<dyn RpcSender>) -> C + Copy,
 {
+    let OptionalBackend {
+        names,
+        connections,
+        connection_config,
+        build,
+    } = spec;
+    let service = names.service;
     let result = tokio::time::timeout(startup_timeout, async {
-        let Some(client) =
-            try_connect_with_config(service, address, pool_size, connection_config, build).await?
+        let Some(client) = try_connect_pool(
+            service,
+            address,
+            PoolKind::Multiplex,
+            connections.get(),
+            connection_config,
+            build,
+        )
+        .await?
         else {
             return Ok(None);
         };
         let Some(probe_client) =
-            try_connect(probe_service, address, HEALTH_PROBE_POOL_SIZE, build).await?
+            try_connect(names.probe_service, address, HEALTH_PROBE_POOL_SIZE, build).await?
         else {
             return Ok(None);
         };
@@ -586,7 +593,7 @@ pub(crate) const VIEW_GATEWAY_NAMES: OptionalBackendNames = OptionalBackendNames
 /// How one optional backend is pooled and introduced.
 struct OptionalBackend<F> {
     names: &'static OptionalBackendNames,
-    pool_size: usize,
+    connections: X23MultiplexConnections,
     connection_config: ConnectionConfig,
     build: F,
 }
@@ -615,17 +622,7 @@ where
 
     let names = spec.names;
     let connect_started_at = Instant::now();
-    let Some(client) = connect_backend_pair(
-        names.service,
-        names.probe_service,
-        address,
-        spec.pool_size,
-        spec.connection_config,
-        startup_timeout,
-        spec.build,
-    )
-    .await?
-    else {
+    let Some(client) = connect_backend_pair(spec, address, startup_timeout).await? else {
         return Ok(None);
     };
     let timed_out = || ConnectError::StartupProbeTimedOut {
@@ -695,8 +692,8 @@ where
 }
 
 pub(crate) async fn connect_optional_indexer(
+    connections: X23MultiplexConnections,
     address: Option<&str>,
-    pool_size: usize,
     protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
@@ -704,7 +701,7 @@ pub(crate) async fn connect_optional_indexer(
     connect_optional_backend(
         OptionalBackend {
             names: &INDEXER_NAMES,
-            pool_size,
+            connections,
             connection_config: hogd_large_message_config(),
             build: IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
         },
@@ -719,8 +716,8 @@ pub(crate) async fn connect_optional_indexer(
 }
 
 pub(crate) async fn connect_optional_db_gateway(
+    connections: X23MultiplexConnections,
     address: Option<&str>,
-    pool_size: usize,
     protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
@@ -728,7 +725,7 @@ pub(crate) async fn connect_optional_db_gateway(
     connect_optional_backend(
         OptionalBackend {
             names: &DB_GATEWAY_NAMES,
-            pool_size,
+            connections,
             connection_config: ConnectionConfig::default(),
             build: DbGateway_DbGateway1_Client::new,
         },
@@ -743,6 +740,7 @@ pub(crate) async fn connect_optional_db_gateway(
 }
 
 pub(crate) async fn connect_optional_view_gateway(
+    connections: X23MultiplexConnections,
     address: Option<&str>,
     protocol_override: Option<ProtocolCommit>,
     startup_timeout: Duration,
@@ -751,7 +749,7 @@ pub(crate) async fn connect_optional_view_gateway(
     connect_optional_backend(
         OptionalBackend {
             names: &VIEW_GATEWAY_NAMES,
-            pool_size: view_gateway_pool_size(),
+            connections,
             connection_config: ConnectionConfig::default(),
             build: ViewGateway_ViewGateway1_Client::new,
         },
@@ -763,31 +761,6 @@ pub(crate) async fn connect_optional_view_gateway(
         intro::view_gateway,
     )
     .await
-}
-
-/// Pick a scheduler pool size that covers every concurrent RPC the gateway
-/// may have in flight against it.  x23 serializes one RPC per connection.
-/// Transaction lookups use their own admission-matched pool.
-pub(crate) fn scheduler_pool_size(config: &GatewayConfig) -> usize {
-    let tip = config.tip.max_inflight_tips.max(1) as usize;
-    config.batch.max_concurrent_rpcs().saturating_add(tip)
-}
-
-/// Pick a `db_gateway` pool size that matches the storage batcher's own
-/// in-flight cap, so the batcher's `Overloaded` is the saturation
-/// signal rather than transport-layer queuing.  Slack covers transient
-/// reconnection overlap; no ad-hoc reads share this pool today.
-pub(crate) fn db_gateway_pool_size(config: &GatewayConfig) -> usize {
-    const SLACK: usize = 2;
-    config.storage.max_concurrent_rpcs().saturating_add(SLACK)
-}
-
-/// Keep `ViewGateway` concurrency bounded independently from JSON-RPC
-/// `max_connections`. View calls are unbatched and may be expensive, so this
-/// intentionally starts conservative until the gateway has per-method
-/// concurrency limits or view-specific load data.
-pub(crate) fn view_gateway_pool_size() -> usize {
-    4
 }
 
 #[cfg(test)]
@@ -1200,21 +1173,39 @@ mod tests {
 
     #[tokio::test]
     async fn optional_view_gateway_without_address_is_absent() {
-        let client = connect_optional_view_gateway(None, None, Duration::from_secs(1), None)
-            .await
-            .expect("missing optional ViewGateway should not fail startup");
+        let client = connect_optional_view_gateway(
+            X23MultiplexConnections::default(),
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .expect("missing optional ViewGateway should not fail startup");
 
         assert!(client.is_none());
     }
 
     #[tokio::test]
     async fn optional_indexer_and_db_gateway_without_address_are_absent() {
-        let indexer = connect_optional_indexer(None, 4, None, Duration::from_secs(1), None)
-            .await
-            .expect("missing optional indexer should not fail startup");
-        let db_gateway = connect_optional_db_gateway(None, 1, None, Duration::from_secs(1), None)
-            .await
-            .expect("missing optional DbGateway should not fail startup");
+        let indexer = connect_optional_indexer(
+            X23MultiplexConnections::default(),
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .expect("missing optional indexer should not fail startup");
+        let db_gateway = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
+            None,
+            None,
+            Duration::from_secs(1),
+            None,
+        )
+        .await
+        .expect("missing optional DbGateway should not fail startup");
 
         assert!(indexer.is_none());
         assert!(db_gateway.is_none());
@@ -1225,6 +1216,7 @@ mod tests {
         let (addr, _server) = start_intro_rejected_view_gateway().await;
 
         let Err(err) = connect_optional_view_gateway(
+            X23MultiplexConnections::default(),
             Some(&addr.to_string()),
             None,
             Duration::from_secs(1),
@@ -1250,8 +1242,13 @@ mod tests {
     async fn configured_scheduler_gateway_intro_rejection_fails_startup_probe() {
         let (addr, _server) = start_test_scheduler_gateway(IntroMode::Reject).await;
 
-        let Err(err) =
-            connect_optional_scheduler(&addr.to_string(), 1, 4, PROTOCOL_VERSION, None).await
+        let Err(err) = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
         else {
             panic!("configured scheduler gateway intro rejection should fail startup");
         };
@@ -1272,8 +1269,8 @@ mod tests {
         let (addr, _server) = start_test_indexer(IntroMode::Reject).await;
 
         let Err(err) = connect_optional_indexer(
+            X23MultiplexConnections::default(),
             Some(&addr.to_string()),
-            4,
             None,
             Duration::from_secs(1),
             None,
@@ -1299,8 +1296,8 @@ mod tests {
         let (addr, _server) = start_test_db_gateway(IntroMode::Reject).await;
 
         let Err(err) = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
             Some(&addr.to_string()),
-            1,
             None,
             Duration::from_secs(1),
             None,
@@ -1326,6 +1323,7 @@ mod tests {
         let (addr, _server) = start_protocol_checking_view_gateway("hogp/test-smoke00000").await;
 
         let client = connect_optional_view_gateway(
+            X23MultiplexConnections::default(),
             Some(&addr.to_string()),
             Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
@@ -1339,16 +1337,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scheduler_pools_connect_over_several_sockets_and_pass_startup_probe() {
+        let (addr, _server) =
+            start_test_scheduler_gateway(IntroMode::Expect("hogp/test-smoke00000")).await;
+        let protocol =
+            protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes");
+        let connections =
+            X23MultiplexConnections::try_from(2).expect("bug: two connections is in range");
+
+        // Two sockets per data pool; the probe pool is still one serial
+        // connection.
+        let client = connect_optional_scheduler(connections, &addr.to_string(), protocol, None)
+            .await
+            .expect("scheduler pools should pass the startup probe")
+            .expect("configured scheduler gateway should be connected");
+        let intro = client
+            .lookup_client()
+            .schedgateway_intro(&protocol)
+            .await
+            .expect("bug: intro over the lookup pool should succeed");
+        assert!(intro::sched_gateway(intro).accepted());
+        drop(client);
+    }
+
+    #[tokio::test]
     async fn configured_scheduler_gateway_uses_protocol_override_for_startup_probe() {
         let (addr, _server) =
             start_test_scheduler_gateway(IntroMode::Expect("hogp/test-smoke00000")).await;
         let protocol =
             protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes");
 
-        let client = connect_optional_scheduler(&addr.to_string(), 1, 4, protocol, None)
-            .await
-            .expect("matching scheduler gateway protocol override should pass startup")
-            .expect("configured scheduler gateway should be connected");
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &addr.to_string(),
+            protocol,
+            None,
+        )
+        .await
+        .expect("matching scheduler gateway protocol override should pass startup")
+        .expect("configured scheduler gateway should be connected");
 
         drop(client);
     }
@@ -1361,8 +1388,8 @@ mod tests {
             start_test_db_gateway(IntroMode::Expect("hogp/test-smoke00000")).await;
 
         let indexer = connect_optional_indexer(
+            X23MultiplexConnections::default(),
             Some(&indexer_addr.to_string()),
-            4,
             Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
             None,
@@ -1371,8 +1398,8 @@ mod tests {
         .expect("matching indexer protocol override should pass startup")
         .expect("configured indexer should be connected");
         let db_gateway = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
             Some(&db_addr.to_string()),
-            1,
             Some(protocol_from_text("hogp/test-smoke00000").expect("bug: test token is 20 bytes")),
             Duration::from_secs(1),
             None,
@@ -1390,6 +1417,7 @@ mod tests {
         let (addr, _server) = start_slow_intro_view_gateway().await;
 
         let result = connect_optional_view_gateway(
+            X23MultiplexConnections::default(),
             Some(&addr.to_string()),
             None,
             Duration::from_millis(10),
@@ -1424,16 +1452,16 @@ mod tests {
         let (db_addr, _db_server) = start_test_db_gateway(IntroMode::Slow).await;
 
         let indexer = connect_optional_indexer(
+            X23MultiplexConnections::default(),
             Some(&indexer_addr.to_string()),
-            4,
             None,
             Duration::from_millis(10),
             None,
         )
         .await;
         let db_gateway = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
             Some(&db_addr.to_string()),
-            1,
             None,
             Duration::from_millis(10),
             None,
@@ -1462,8 +1490,8 @@ mod tests {
         let (db_addr, _db_server) = start_test_db_gateway(IntroMode::RpcFail).await;
 
         let indexer = connect_optional_indexer(
+            X23MultiplexConnections::default(),
             Some(&indexer_addr.to_string()),
-            4,
             None,
             Duration::from_secs(1),
             None,
@@ -1471,8 +1499,8 @@ mod tests {
         .await
         .expect("indexer intro RPC errors should preserve degraded startup");
         let db_gateway = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
             Some(&db_addr.to_string()),
-            1,
             None,
             Duration::from_secs(1),
             None,

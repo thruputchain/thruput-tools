@@ -20,6 +20,7 @@ struct Cli {
 
 #[derive(Parser)]
 #[allow(clippy::struct_excessive_bools)]
+#[command(next_help_heading = "Global options")]
 struct GlobalArgs {
     /// Suppress status messages
     #[arg(long, short, global = true)]
@@ -208,7 +209,7 @@ enum Command {
     #[command(
         long_about = "Start a local development node \
                       backed by a supervised hog-devnode process.",
-        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the protocol token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node(NodeArgs),
     /// Dump or restore persistent local-chain state
@@ -321,7 +322,7 @@ impl Command {
 
 #[derive(Args)]
 struct NewArgs {
-    /// Project name
+    /// Project name: lowercase letters, digits, and single hyphens, starting with a letter
     name: String,
     /// Project template
     #[arg(
@@ -478,7 +479,7 @@ struct TestArgs {
     /// Only used with --integration. Logs are written to stderr.
     #[arg(long, short = 'v', requires = "integration")]
     verbose: bool,
-    /// Override the x23 protocol token for the ephemeral integration node
+    /// Override the hog-devnode handshake protocol token for the ephemeral integration node
     ///
     /// (Only used with --integration)
     /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
@@ -852,7 +853,7 @@ struct NodeArgs {
     /// Directory for persistent hog-devnode state; omit for an ephemeral node
     #[arg(long, value_name = "DIR")]
     data_dir: Option<PathBuf>,
-    /// Override hog-devnode x23 intro protocol token
+    /// Override the hog-devnode handshake protocol token
     #[arg(long)]
     hogd_protocol: Option<String>,
     /// Override hog-devnode readiness timeout for smoke tests

@@ -17,7 +17,7 @@ use crate::{
         BackendClient, DB_GATEWAY_NAMES, GatewayContext, INDEXER_NAMES, OptionalBackendNames,
         QuarantinedScheduler, VIEW_GATEWAY_NAMES, clear_scheduler_if_current,
         connect_optional_db_gateway, connect_optional_indexer, connect_optional_scheduler,
-        connect_optional_view_gateway, db_gateway_pool_size, scheduler_pool_size,
+        connect_optional_view_gateway,
     },
     handlers::SCHEDULER,
     metrics::{BackendReconnectOutcome, BackendRequestOutcome},
@@ -533,9 +533,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
             let result = tokio::time::timeout(
                 reconnect_timeout,
                 connect_optional_scheduler(
+                    ctx.config.x23_multiplex_connections,
                     &ctx.config.scheduler_address,
-                    scheduler_pool_size(&ctx.config),
-                    ctx.config.scheduler_lookup_pool_size.get(),
                     ctx.protocol,
                     Some(&ctx.metrics),
                 ),
@@ -591,8 +590,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         let ctx = ctx.clone();
         spawn_once(&mut attempts.indexer, move || async move {
             let connect = connect_optional_indexer(
+                ctx.config.x23_multiplex_connections,
                 ctx.config.indexer_address.as_deref(),
-                ctx.config.indexer_pool_size.get(),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
@@ -605,8 +604,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         let ctx = ctx.clone();
         spawn_once(&mut attempts.db_gateway, move || async move {
             let connect = connect_optional_db_gateway(
+                ctx.config.x23_multiplex_connections,
                 ctx.config.db_gateway_address.as_deref(),
-                db_gateway_pool_size(&ctx.config),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
@@ -620,6 +619,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         let ctx = ctx.clone();
         spawn_once(&mut attempts.view_gateway, move || async move {
             let connect = connect_optional_view_gateway(
+                ctx.config.x23_multiplex_connections,
                 ctx.config.view_gateway_address.as_deref(),
                 Some(ctx.protocol),
                 reconnect_timeout,
@@ -1536,6 +1536,7 @@ mod tests {
 
     use crate::{
         backend::GatewayBackend,
+        config::X23MultiplexConnections,
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
         tip_coalescer::{SchedulerTipSink, TipSink},
@@ -2269,7 +2270,7 @@ mod tests {
                 },
             },
             forwarded_tokens: VecM(vec![]),
-            invoke_flags: InvokeFlag::None.0,
+            invoke_flags: InvokeFlag::None.0.cast_unsigned(),
         }
     }
 
@@ -2704,11 +2705,15 @@ mod tests {
     async fn slow_optional_reconnect_keeps_degraded_readiness_fresh() {
         let (scheduler_addr, _scheduler_server, _) =
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
-        let scheduler =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let scheduler = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let (indexer_addr, _indexer_server, intros, release) = start_slow_intro_indexer().await;
         let config = Arc::new(GatewayConfig {
             scheduler_address: scheduler_addr.to_string(),
@@ -2813,11 +2818,15 @@ mod tests {
     async fn scheduler_request_deadline_fails_closed_before_worker_cancellation() {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let metrics = GatewayMetrics::for_tests();
         let scheduler = Arc::new(RwLock::new(Some(client)));
         let sink =
@@ -2842,16 +2851,24 @@ mod tests {
     async fn old_scheduler_timeout_does_not_clear_new_generation() {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
-        let old_client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("old scheduler connection should succeed")
-                .expect("old scheduler should be connected");
-        let new_client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("new scheduler connection should succeed")
-                .expect("new scheduler should be connected");
+        let old_client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("old scheduler connection should succeed")
+        .expect("old scheduler should be connected");
+        let new_client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("new scheduler connection should succeed")
+        .expect("new scheduler should be connected");
         let new_generation = new_client.generation();
         let scheduler = Arc::new(RwLock::new(Some(old_client)));
         let sink = Arc::new(SchedulerTipSink::new(
@@ -3150,11 +3167,15 @@ mod tests {
             view_gateway_address: None,
             ..GatewayConfig::default()
         });
-        let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
             PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client))),
@@ -3187,11 +3208,15 @@ mod tests {
             ..GatewayConfig::default()
         });
         let metrics = GatewayMetrics::for_tests();
-        let client =
-            connect_optional_scheduler(&scheduler_addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                .await
-                .expect("scheduler connection should succeed")
-                .expect("scheduler should be connected");
+        let client = connect_optional_scheduler(
+            X23MultiplexConnections::default(),
+            &scheduler_addr.to_string(),
+            PROTOCOL_VERSION,
+            None,
+        )
+        .await
+        .expect("scheduler connection should succeed")
+        .expect("scheduler should be connected");
         let ctx = GatewayContext::assemble(
             PROTOCOL_VERSION,
             Arc::new(RwLock::new(Some(client.clone()))),
@@ -3238,8 +3263,8 @@ mod tests {
             start_saturated_view_gateway().await;
         let startup_timeout = Duration::from_secs(1);
         let indexer = connect_optional_indexer(
+            X23MultiplexConnections::default(),
             Some(&indexer_addr.to_string()),
-            32,
             None,
             startup_timeout,
             None,
@@ -3248,8 +3273,8 @@ mod tests {
         .expect("bug: indexer connection should succeed")
         .expect("bug: indexer should be connected");
         let db_gateway = connect_optional_db_gateway(
+            X23MultiplexConnections::default(),
             Some(&db_gateway_addr.to_string()),
-            1,
             None,
             startup_timeout,
             None,
@@ -3258,6 +3283,7 @@ mod tests {
         .expect("bug: db_gateway connection should succeed")
         .expect("bug: db_gateway should be connected");
         let view_gateway = connect_optional_view_gateway(
+            X23MultiplexConnections::default(),
             Some(&view_gateway_addr.to_string()),
             None,
             startup_timeout,
@@ -3268,7 +3294,6 @@ mod tests {
         .expect("bug: view_gateway should be connected");
         let config = Arc::new(GatewayConfig {
             indexer_address: Some(indexer_addr.to_string()),
-            indexer_pool_size: 32.try_into().unwrap(),
             scheduler_address: "127.0.0.1:0".into(),
             db_gateway_address: Some(db_gateway_addr.to_string()),
             view_gateway_address: Some(view_gateway_addr.to_string()),

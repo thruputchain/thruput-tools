@@ -268,11 +268,10 @@ same profile, toolchain, and target directory. Run `groundhog build -p
 
 ### `groundhog test`
 
-Run contract tests against the test executor. During early access, follow the
-invite instructions to authenticate Cargo with the private Groundhog registry
-before building generated projects. The SDK downloads checksum-verified
-mock-executor FFI artifacts from public storage without download credentials.
-Tests target the host platform so they run natively.
+Run contract tests against the test executor. Building generated projects
+resolves the SDK from the Groundhog Cargo registry, so configure a Cargo
+credential provider first. The SDK downloads its checksum-verified test
+executor from public storage. Tests target the host platform so they run natively.
 
 ```bash
 groundhog test                              # run all tests
