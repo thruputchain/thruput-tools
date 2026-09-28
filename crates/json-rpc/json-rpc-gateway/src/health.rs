@@ -2270,7 +2270,7 @@ mod tests {
                 },
             },
             forwarded_tokens: VecM(vec![]),
-            invoke_flags: InvokeFlag::None.0,
+            invoke_flags: InvokeFlag::None.0.cast_unsigned(),
         }
     }
 

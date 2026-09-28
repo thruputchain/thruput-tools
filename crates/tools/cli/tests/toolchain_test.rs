@@ -17,7 +17,7 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let cache = root.path().join("cache");
 
     let use_output = groundhog(&config, &cache)
-        .args(["--json", "toolchain", "use", "0.1.28-rc.3"])
+        .args(["--json", "toolchain", "use", "0.1.29-rc.3"])
         .output()
         .expect("bug: groundhog should run");
     assert!(use_output.status.success());
@@ -25,7 +25,7 @@ fn toolchain_use_persists_an_exact_catalog_version() {
         serde_json::from_slice(&use_output.stdout).expect("bug: use output should be JSON");
     assert_eq!(use_json["command"], "toolchain.use");
     assert_eq!(use_json["data"]["schemaVersion"], 1);
-    assert_eq!(use_json["data"]["version"], "0.1.28-rc.3");
+    assert_eq!(use_json["data"]["version"], "0.1.29-rc.3");
     assert_eq!(use_json["data"]["active"], true);
     assert_eq!(use_json["data"]["installed"], false);
     assert_eq!(use_json["data"]["changed"], true);
@@ -33,7 +33,7 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let config_text = std::fs::read_to_string(config.join("groundhog/config.toml"))
         .expect("bug: global config should exist");
     assert!(config_text.contains("[toolchain]"));
-    assert!(config_text.contains("hog_devnode_version = \"0.1.28-rc.3\""));
+    assert!(config_text.contains("hog_devnode_version = \"0.1.29-rc.3\""));
 
     let list_output = groundhog(&config, &cache)
         .args(["--json", "toolchain", "list"])
@@ -43,11 +43,11 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let list_json: serde_json::Value =
         serde_json::from_slice(&list_output.stdout).expect("bug: list output should be JSON");
     assert_eq!(list_json["command"], "toolchain.list");
-    assert_eq!(list_json["data"]["selectedVersion"], "0.1.28-rc.3");
+    assert_eq!(list_json["data"]["selectedVersion"], "0.1.29-rc.3");
     assert_eq!(list_json["data"]["toolchains"][0]["active"], true);
 
     let repeated_use_output = groundhog(&config, &cache)
-        .args(["--json", "toolchain", "use", "0.1.28-rc.3"])
+        .args(["--json", "toolchain", "use", "0.1.29-rc.3"])
         .output()
         .expect("bug: groundhog should run");
     assert!(repeated_use_output.status.success());
@@ -74,7 +74,7 @@ fn offline_install_fails_without_touching_the_network() {
     assert_eq!(json["error"]["code"], "toolchain_offline_missing");
     assert!(
         !cache
-            .join("groundhog/toolchain/hog-devnode/0.1.28-rc.3")
+            .join("groundhog/toolchain/hog-devnode/0.1.29-rc.3")
             .exists()
     );
 }
@@ -150,7 +150,7 @@ fn toolchain_list_human_output_is_stdout_data() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).expect("bug: list output should be UTF-8");
-    assert!(stdout.contains("0.1.28-rc.3 (active) — available"));
+    assert!(stdout.contains("0.1.29-rc.3 (active) — available"));
 }
 
 #[test]
@@ -278,7 +278,7 @@ fn which_reports_the_executable_and_offline_reuse_needs_no_source() {
 fn toolchain_clean_invalid_version_preserves_catalog_error_and_hint() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
     let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
-        .args(["--json", "toolchain", "clean", "../0.1.28-rc.3"])
+        .args(["--json", "toolchain", "clean", "../0.1.29-rc.3"])
         .output()
         .expect("bug: groundhog should run");
     assert!(!output.status.success());
@@ -314,13 +314,13 @@ fn toolchain_install_rejects_invalid_proxy_without_exposing_credentials() {
 fn toolchain_clean_accepts_safe_retired_version_names() {
     let root = tempfile::tempdir().expect("bug: tempdir should create");
     let output = groundhog(&root.path().join("config"), &root.path().join("cache"))
-        .args(["--json", "toolchain", "clean", "v0.1.28-rc.3"])
+        .args(["--json", "toolchain", "clean", "v0.1.29-rc.3"])
         .output()
         .expect("bug: groundhog should run");
     assert!(output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("bug: clean output should be JSON");
-    assert_eq!(json["data"]["version"], "v0.1.28-rc.3");
+    assert_eq!(json["data"]["version"], "v0.1.29-rc.3");
     assert_eq!(json["data"]["changed"], false);
 }
 

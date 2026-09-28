@@ -354,14 +354,13 @@ pub fn format_contract_address(address: &ContractAddress) -> String {
 /// Only for messages. Lookups compare whole [`ContractSpecId`]s, which is
 /// what keeps two same-named types in different crates or modules apart;
 /// this rendering joins the segments and so cannot be taken apart again.
-/// The shape matches `groundhog_spec_tool`'s `spec_id_lossy`, so the CLI and
-/// the spec tool name the same type the same way.
+/// The rendering is `ContractSpecId`'s own `Display`, which the spec tool uses
+/// too, so the CLI and the spec tool name the same type the same way.
 pub fn spec_id_text(id: &ContractSpecId) -> Result<String, Error> {
-    let crate_name = spec_string_text(&id.crate_name)?;
-    let major = spec_string_text(&id.major)?;
-    let module_path = spec_string_text(&id.module_path)?;
-    let declared = spec_string_text(&id.declared)?;
-    Ok(format!("{module_path}::{declared} ({crate_name}@{major})"))
+    for segment in [&id.crate_name, &id.major, &id.module_path, &id.declared] {
+        spec_string_text(segment)?;
+    }
+    Ok(id.to_string())
 }
 
 /// Decode a spec string as UTF-8 text and validate it as a safe identifier.
