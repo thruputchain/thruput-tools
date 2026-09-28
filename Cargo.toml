@@ -90,7 +90,7 @@ groundhog_coordinator = { version = "=0.41.0", registry = "groundhog" }
 groundhog-trace = { version = "=0.41.0", registry = "groundhog" }
 xdrs = { version = "=0.10.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "=0.10.1", registry = "groundhog" }
-rpc_driver = { version = "=0.12.0", registry = "groundhog" }
+rpc_driver = { version = "=0.13.1", registry = "groundhog" }
 # from the sdk crate:
 groundhog-spec-tool = { version = "=0.39.1", registry = "groundhog" }
 groundhog-contract-util = { version = "=0.39.1", registry = "groundhog" }

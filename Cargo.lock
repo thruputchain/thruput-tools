@@ -3530,9 +3530,9 @@ dependencies = [
 
 [[package]]
 name = "rpc_driver"
-version = "0.12.0"
+version = "0.13.1"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "24d80eaff14b6eafba3495b8a16d430eeefe9274ce9493388d36347bf44a3e28"
+checksum = "4864cce183b37ca5c62ce61c1dc4fccf438ca3c185acf284094f6a5c7960ed63"
 dependencies = [
  "async-trait",
  "libc",

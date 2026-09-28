@@ -18,8 +18,8 @@ workspace = true
 [dependencies]
 rpc_driver = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-tokio = { workspace = true }
