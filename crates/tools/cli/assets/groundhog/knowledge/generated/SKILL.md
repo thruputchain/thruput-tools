@@ -120,8 +120,9 @@ groundhog test
 Use `cargo test` for fast native tests. Use `groundhog test` for the generated
 RV32 artifact. They exercise different paths and neither substitutes for the
 other. The scaffolded SDK downloads its test executor from public storage; no
-FFI download credentials are required. Cargo registry authentication follows
-the early-access setup instructions. Use `groundhog test --integration` for
+FFI download credentials are required. Building a scaffold needs Cargo
+credentials for the Groundhog registry; the Getting Started guide covers that
+setup. Use `groundhog test --integration` for
 RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
 `groundhog test --workspace` runs the RV32 tests of every member that has a
 `tests/test_rv32.rs` target and reports them together.
@@ -252,8 +253,8 @@ filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
 extension, not compact XDR scalar encodings. Strings and byte slices remain
 hash-only. Rebuild contracts and regenerate their bindings together when adopting
 this encoding; an older artifact's event bytes are not changed by regeneration.
-The workspace SDK dependencies and newly scaffolded contracts are pinned to
-SDK 0.36.0 so they emit the representation these bindings describe.
+SDK 0.36.0 and later emit the representation these bindings describe; the
+workspace and newly scaffolded contracts pin the SDK version stated above.
 
 ## TypeScript Application Path
 

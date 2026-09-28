@@ -71,5 +71,5 @@ filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
 extension, not compact XDR scalar encodings. Strings and byte slices remain
 hash-only. Rebuild contracts and regenerate their bindings together when adopting
 this encoding; an older artifact's event bytes are not changed by regeneration.
-The workspace SDK dependencies and newly scaffolded contracts are pinned to
-SDK 0.36.0 so they emit the representation these bindings describe.
+SDK 0.36.0 and later emit the representation these bindings describe; the
+workspace and newly scaffolded contracts pin the SDK version stated above.

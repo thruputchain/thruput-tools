@@ -138,9 +138,8 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     #[hint(
-        "add the profile to project or global config, or switch to \
-         an existing one with `--profile` or \
-         `GROUNDHOG_PROFILE`"
+        "create it with `groundhog config new {0} --network <NETWORK>`, or switch to \
+         an existing one with `--profile` or `GROUNDHOG_PROFILE`"
     )]
     ProfileNotFound(String),
     #[error("profile `{profile}` not found in {scope} config")]
@@ -367,7 +366,10 @@ pub enum CliError {
     #[hint("check the standard proxy environment variables, then retry")]
     HttpClientInit,
     #[error("no rpc_url configured for the selected profile")]
-    #[hint("set `rpc_url` in the selected profile in project or global config")]
+    #[hint(
+        "for a local profile, start `groundhog node` in another terminal; otherwise run \
+         `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`"
+    )]
     MissingRpcUrl,
     #[error("profile `{profile}` {message}")]
     #[hint(
@@ -378,8 +380,8 @@ pub enum CliError {
     #[error("interactive input is unavailable")]
     #[hint("provide the required input explicitly; for key import, pipe the seed on stdin")]
     InteractiveInputRequired,
-    #[error("confirmation required to {action}")]
-    #[hint("review the warning and rerun with `--force` to confirm non-interactively")]
+    #[error("cannot confirm the request to {action}: no interactive terminal is available")]
+    #[hint("rerun from an interactive terminal, or pass `--force` to proceed without a prompt")]
     #[details(expr = Some(json!({ "action": action, "requiredFlag": "--force" })))]
     ConfirmationRequired { action: &'static str },
     #[error(
@@ -409,8 +411,8 @@ pub enum CliError {
     #[error("cannot determine the network hash for this profile")]
     #[hint(
         "signing binds each transaction to a network: run `groundhog config set \
-         network-hash <hash>` for this profile, or point it at a runtime manifest \
-         from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
+         network-hash <hash> --profile <name>`, or point the profile at a runtime \
+         manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
          profile.<name>.runtime_manifest"
     )]
     MissingNetworkHash,
