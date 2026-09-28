@@ -91,9 +91,21 @@ impl Print {
     }
 
     fn write_report(&self, output: report::Report) {
-        for line in output.into_lines() {
+        let lines = output.into_lines();
+        if !self.is_live() {
+            if !lines.is_empty() {
+                eprintln!("{}", lines.join("\n"));
+            }
+            return;
+        }
+        for line in lines {
             self.emit_human(&line);
         }
+    }
+
+    /// Per-record append-only writer for background service tracing.
+    pub(crate) fn log_writer(&self) -> log::Writer {
+        log::Writer::new(policy::Policy::stderr(self.no_ui || self.json))
     }
 
     fn emit_human(&self, line: &str) {
@@ -552,24 +564,6 @@ impl Print {
     }
 }
 
-pub(crate) fn supports_ansi_stderr() -> bool {
-    io::stderr().is_terminal()
-        && terminal_allows_ansi(
-            std::env::var_os("TERM").as_deref(),
-            std::env::var_os("NO_COLOR").as_deref(),
-        )
-}
-
-fn terminal_allows_ansi(
-    term: Option<&std::ffi::OsStr>,
-    no_color: Option<&std::ffi::OsStr>,
-) -> bool {
-    if no_color.is_some() {
-        return false;
-    }
-    !matches!(term.and_then(std::ffi::OsStr::to_str), Some("dumb"))
-}
-
 fn terminals_allow_prompt(stdin_tty: bool, stderr_tty: bool) -> bool {
     stdin_tty && stderr_tty
 }
@@ -616,10 +610,8 @@ fn render_command(command: &std::process::Command) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Print, confirmation_answer, render_command, terminal_allows_ansi, terminals_allow_prompt,
-        wizard_answer,
+        Print, confirmation_answer, render_command, terminals_allow_prompt, wizard_answer,
     };
-    use std::ffi::OsStr;
     use std::process::Command;
 
     #[test]
@@ -638,15 +630,20 @@ mod tests {
 
     #[test]
     fn terminal_allows_ansi_respects_no_color_and_dumb_term() {
-        assert!(terminal_allows_ansi(
-            Some(OsStr::new("xterm-256color")),
-            None
-        ));
-        assert!(!terminal_allows_ansi(
-            Some(OsStr::new("xterm-256color")),
-            Some(OsStr::new("1"))
-        ));
-        assert!(!terminal_allows_ansi(Some(OsStr::new("dumb")), None));
+        let color = |term, no_color| {
+            super::policy::Policy::resolve(
+                false,
+                true,
+                Some(term),
+                no_color,
+                Some("C.UTF-8"),
+                Some(80),
+            )
+            .color
+        };
+        assert!(color("xterm-256color", false));
+        assert!(!color("xterm-256color", true));
+        assert!(!color("dumb", false));
     }
 
     #[test]

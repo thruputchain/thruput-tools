@@ -93,3 +93,37 @@ fn remote_funding_dry_runs_are_explicit_and_do_not_contact_services() {
         assert!(text.contains("submitted: no"), "{text}");
     }
 }
+
+#[test]
+fn services_report_ready_without_exiting_and_stop_cleanly() {
+    for node in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let mut command = groundhog();
+        let needle = if node {
+            command
+                .args(["node", "--port", "0", "--hog-devnode-binary"])
+                .arg(fake_hogd_dev_binary())
+                .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer");
+            "dev-key manifest"
+        } else {
+            command.args(["docs", "--port", "0"]);
+            "Ctrl-C to stop"
+        };
+        command
+            .current_dir(temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("config"))
+            .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .env("TERM", "xterm-256color")
+            .env("LC_ALL", "C.UTF-8")
+            .env_remove("NO_COLOR");
+        let (child, terminal) = spawn_with_terminal_size(command, 80, 100);
+        let mut child = ChildGuard::new(child);
+        let raw = read_until_with_timeout(terminal, needle, Duration::from_secs(15)).unwrap();
+        let text = strip_terminal_styles(&raw);
+        assert!(text.contains("Ready:") && text.contains('╭'), "{text}");
+        assert!(child.child_mut().try_wait().unwrap().is_none());
+        assert!(!raw.contains("\x1b[2J"));
+        send_sigint(child.child());
+        assert!(wait_child(child.into_inner(), Duration::from_secs(10)).success());
+    }
+}

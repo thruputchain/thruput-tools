@@ -6,7 +6,6 @@ use crate::result::CommandResult;
 use groundhog_node_supervisor::ConfigParamName;
 use serde_json::json;
 use std::future::Future;
-use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -298,9 +297,7 @@ async fn run_hogd_dev(
         }
     };
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
-    if !print.is_json() {
-        print.status("Starting Groundhog local node");
-    }
+    print.phase("Starting Groundhog local node");
     let started = start_resolved_local_node(options, lease).await?;
     let local_runtime_state_path = match write_started_local_runtime_state(
         &started,
@@ -365,10 +362,14 @@ async fn run_hogd_dev(
     let outcome = outcome?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
-            if !print.is_json() {
-                print.note(format_args!("hog-devnode exited with status {status}"));
-            }
             if status.success() {
+                print.group(
+                    crate::print::Outcome::Success,
+                    "Local node stopped",
+                    |print| {
+                        print.note(format_args!("hog-devnode exited with status {status}"));
+                    },
+                );
                 Ok(())
             } else {
                 Err(CliError::NodeSupervisor(format!(
@@ -376,7 +377,10 @@ async fn run_hogd_dev(
                 )))
             }
         }
-        SupervisorStop::RpcStopped(_) | SupervisorStop::StopRequested(_) => Ok(()),
+        SupervisorStop::RpcStopped(_) | SupervisorStop::StopRequested(_) => {
+            print.group(crate::print::Outcome::Success, "Local node stopped", |_| {});
+            Ok(())
+        }
         other => Err(CliError::NodeSupervisor(format!(
             "unexpected supervisor stop state: {other:?}"
         ))),
@@ -433,52 +437,58 @@ fn print_started_local_node(
     local_runtime_state_result: &Result<PathBuf, CliError>,
     print: &Print,
 ) {
-    print.success("Groundhog local node ready");
-    print.detail("chain", &started.readiness().network_hash);
-    if let Some(chain_state) = started.readiness().chain_state {
-        print.detail("chain state", chain_state);
-    }
-    if started.backend_planes().read.is_indexer_backed() {
-        print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
-    } else {
-        print.warn(
+    print.group(crate::print::Outcome::Ready, "Local node", |print| {
+        print.success("Groundhog local node ready");
+        print.detail("chain", &started.readiness().network_hash);
+        if let Some(chain_state) = started.readiness().chain_state {
+            print.detail("chain state", chain_state);
+        }
+        if started.backend_planes().read.is_indexer_backed() {
+            if print.has_human_ui() {
+                print.detail("backend", "hog-devnode (chainTip, submit, and reads live)");
+            } else {
+                print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
+            }
+        } else {
+            print.warn(
             "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
         );
-    }
-    print.detail("rpc", started.rpc_url());
-    if started.rpc_addr().ip().is_unspecified() {
-        print.detail("rpc listen", started.rpc_addr());
-    }
-    if let Some(data_dir) = started.data_dir() {
-        print.detail("data dir", data_dir.display());
-    }
-    print.detail("scheduler", started.readiness().endpoints.scheduler_coord);
-    if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
-        print.detail("indexer", indexer);
-    }
-    if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
-        print.detail("db gateway", db_gateway);
-    }
-    if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
-        print.detail("view gateway", view_gateway);
-    }
-    if let Some(dev_control) = started.readiness().endpoints.dev_control {
-        print.detail("dev control", dev_control);
-    }
-    if let Some(path) = &started.readiness().manifest_path {
-        print.detail("runtime manifest", path.display());
-        match local_runtime_state_result {
-            Ok(path) => print.detail("config", format_args!("updated {}", path.display())),
-            Err(error) => print.warn(format!("local runtime state was not updated: {error}")),
         }
-        print.detail(
-            "dev-key manifest",
-            format_args!(
-                "export GROUNDHOG_RUNTIME_MANIFEST={}",
-                crate::terminal::render_shell_arg(&path.to_string_lossy()),
-            ),
-        );
-    }
+        print.detail("rpc", started.rpc_url());
+        if started.rpc_addr().ip().is_unspecified() {
+            print.detail("rpc listen", started.rpc_addr());
+        }
+        if let Some(data_dir) = started.data_dir() {
+            print.detail("data dir", data_dir.display());
+        }
+        print.detail("scheduler", started.readiness().endpoints.scheduler_coord);
+        if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
+            print.detail("indexer", indexer);
+        }
+        if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
+            print.detail("db gateway", db_gateway);
+        }
+        if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
+            print.detail("view gateway", view_gateway);
+        }
+        if let Some(dev_control) = started.readiness().endpoints.dev_control {
+            print.detail("dev control", dev_control);
+        }
+        if let Some(path) = &started.readiness().manifest_path {
+            print.detail("runtime manifest", path.display());
+            match local_runtime_state_result {
+                Ok(path) => print.detail("config", format_args!("updated {}", path.display())),
+                Err(error) => print.warn(format!("local runtime state was not updated: {error}")),
+            }
+            print.detail(
+                "dev-key manifest",
+                format_args!(
+                    "export GROUNDHOG_RUNTIME_MANIFEST={}",
+                    crate::terminal::render_shell_arg(&path.to_string_lossy()),
+                ),
+            );
+        }
+    });
 }
 
 fn write_started_local_runtime_state(
@@ -1019,55 +1029,31 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 }
 
 pub(crate) fn init_node_tracing(verbose: bool, print: &Print) {
-    init_tracing(default_tracing_filter(verbose, print.is_json()), print);
+    init_tracing(default_tracing_filter(verbose), print);
 }
 
-fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
+fn default_tracing_filter(verbose: bool) -> &'static str {
     if verbose {
         "groundhog_node_supervisor=info,hogd_dev=info"
-    } else if json {
-        "groundhog_node_supervisor=warn,hogd_dev=error"
     } else {
-        "groundhog_node_supervisor=info,hogd_dev=error"
+        "groundhog_node_supervisor=warn,hogd_dev=warn"
     }
 }
 
 fn init_tracing(default_filter: &str, print: &Print) {
     use tracing_subscriber::EnvFilter;
 
-    let dim_logs = !print.is_json() && !print.is_no_ui() && crate::print::supports_ansi_stderr();
+    let print = print.clone();
 
     let _ = tracing_subscriber::fmt()
-        .with_ansi(dim_logs)
+        .with_ansi(false)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
         )
-        .with_writer(move || ForwardedLogWriter { dim: dim_logs })
+        .with_writer(move || print.log_writer())
         .with_target(false)
         .without_time()
         .try_init();
-}
-
-struct ForwardedLogWriter {
-    dim: bool,
-}
-
-impl Write for ForwardedLogWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut stderr = io::stderr().lock();
-        if self.dim {
-            stderr.write_all(b"\x1b[2m")?;
-            stderr.write_all(buf)?;
-            stderr.write_all(b"\x1b[0m")?;
-        } else {
-            stderr.write_all(buf)?;
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        io::stderr().lock().flush()
-    }
 }
 
 fn hogd_dev_startup_payload(
@@ -1628,22 +1614,14 @@ mod tests {
     }
 
     #[test]
-    fn verbose_tracing_filter_is_honored_with_json_output() {
+    fn verbose_tracing_expands_default_service_logs() {
         assert_eq!(
-            default_tracing_filter(true, true),
+            default_tracing_filter(true),
             "groundhog_node_supervisor=info,hogd_dev=info"
         );
         assert_eq!(
-            default_tracing_filter(true, false),
-            "groundhog_node_supervisor=info,hogd_dev=info"
-        );
-        assert_eq!(
-            default_tracing_filter(false, true),
-            "groundhog_node_supervisor=warn,hogd_dev=error"
-        );
-        assert_eq!(
-            default_tracing_filter(false, false),
-            "groundhog_node_supervisor=info,hogd_dev=error"
+            default_tracing_filter(false),
+            "groundhog_node_supervisor=warn,hogd_dev=warn"
         );
     }
 

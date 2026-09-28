@@ -12,9 +12,16 @@ use super::theme::{Outcome, Theme};
 pub(super) fn line(text: &str, theme: Theme) -> Line<'_> {
     let content = text.trim_start();
     let indent = text.len() - content.len();
-    for (label, outcome) in [("warning", Outcome::Warning), ("error", Outcome::Error)] {
+    for (label, outcome) in [
+        ("warning", Outcome::Warning),
+        ("error", Outcome::Error),
+        ("WARN", Outcome::Warning),
+        ("ERROR", Outcome::Error),
+    ] {
         if let Some(suffix) = content.strip_prefix(label) {
-            let heading = if suffix.starts_with(':') {
+            let heading = if matches!(label, "WARN" | "ERROR") && suffix.starts_with(' ') {
+                Some(label.len())
+            } else if suffix.starts_with(':') {
                 Some(label.len() + 1)
             } else if suffix.starts_with('[') {
                 suffix.find("]:").map(|end| label.len() + end + 2)
@@ -51,6 +58,9 @@ pub(super) fn is_routine(text: &str) -> bool {
         "Fresh",
         "Finished",
         "Wrote",
+        "INFO",
+        "DEBUG",
+        "TRACE",
     ]
     .iter()
     .any(|prefix| {
@@ -58,6 +68,46 @@ pub(super) fn is_routine(text: &str) -> bool {
             .strip_prefix(prefix)
             .is_some_and(|suffix| suffix.starts_with(' '))
     })
+}
+
+/// Buffers one tracing record so styles and UTF-8 are not split across writes.
+#[derive(Debug)]
+pub(crate) struct Writer {
+    policy: super::policy::Policy,
+    bytes: Vec<u8>,
+}
+
+impl Writer {
+    pub(super) fn new(policy: super::policy::Policy) -> Self {
+        Self {
+            policy,
+            bytes: Vec::new(),
+        }
+    }
+}
+
+impl std::io::Write for Writer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let bytes = std::mem::take(&mut self.bytes);
+        let mut stderr = std::io::stderr().lock();
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            let safe = crate::terminal::terminal_safe(line);
+            stderr.write_all(append_line(&safe, Theme(self.policy)).as_bytes())?;
+        }
+        stderr.flush()
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        use std::io::Write;
+        let _ = self.flush();
+    }
 }
 
 /// Use the same styles before the inline viewport starts and after its fallback.
@@ -103,6 +153,8 @@ mod tests {
             "       Fresh foo",
             "    Finished `release` profile in 1s",
             "Wrote /a/path/contract.spec.xdr",
+            " INFO service started",
+            "DEBUG connection opened",
         ] {
             let rendered = line(text, theme(true));
             assert_eq!(rendered.to_string(), text);
@@ -123,6 +175,8 @@ mod tests {
             ),
             ("error[E0425]: cannot find value", Color::Rgb(248, 113, 113)),
             ("error: could not compile", Color::Rgb(248, 113, 113)),
+            (" WARN service warning", Color::Rgb(251, 191, 36)),
+            ("ERROR service failure", Color::Rgb(248, 113, 113)),
         ] {
             let rendered = line(text, theme(true));
             assert_eq!(rendered.to_string(), text);
