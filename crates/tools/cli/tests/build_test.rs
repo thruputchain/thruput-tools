@@ -458,38 +458,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         .join("demo_contract_rv32.spec.xdr");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
-    let raw_spec = encode_fragments(&[
-        groundhog_spec_tool::SpecFragment::SpecInterface {
-            interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
-                interface_name: spec_string("Counter"),
-                interface_version: spec_string("0.1.0"),
-                declared_by: declarer(),
-                throws: vec![].try_into().unwrap(),
-                emits: vec![].try_into().unwrap(),
-            },
-        },
-        // Spec shaking keeps only anchored interfaces; a real build emits
-        // this anchor from the contract impl site.
-        groundhog_spec_tool::SpecFragment::InterfaceAnchor {
-            interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
-                interface_name: spec_string("Counter"),
-                interface_version: spec_string("0.1.0"),
-                declared_by: declarer(),
-            },
-        },
-        groundhog_spec_tool::SpecFragment::SpecMethod {
-            method_fragment: groundhog_spec_tool::SpecMethodFragment {
-                interface_name: spec_string("Counter"),
-                interface_version: spec_string("0.1.0"),
-                declared_by: declarer(),
-                method: groundhog_spec_tool::ContractSpecMethod {
-                    name: spec_string("get"),
-                    args: vec![].try_into().unwrap(),
-                    return_type: groundhog_spec_tool::ContractType::U64,
-                },
-            },
-        },
-    ]);
+    let raw_spec = encode_fragments(&counter_fragments("Counter"));
     fs::write(
         &elf_fixture,
         support::minimal_rv32_elf_with_section(groundhog_spec_tool::RAW_SECTION_NAME, &raw_spec),
@@ -547,6 +516,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(result.metadata, processed_metadata);
     assert_eq!(result.spec_json, Some(processed_spec_json.clone()));
     assert_eq!(result.spec_xdr, Some(processed_spec_xdr.clone()));
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     // Only the minimal nonzero data span is stored; the spec-metadata section
     // is skipped, so the artifact is header + code, far below the full image.
     assert!(result.size_bytes < 64 * 1024);
@@ -594,6 +564,150 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         metadata["build_flags"],
         "cargo --config .cargo/contract.toml build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
+}
+
+#[test]
+#[serial]
+fn build_rv32_project_warns_when_typescript_codegen_would_refuse_the_spec() {
+    // The bindings reserve the `__gh_` prefix, so this contract builds but
+    // `groundhog codegen ts` would refuse its spec.
+    let result = build_demo_contract_rv32(&encode_fragments(&counter_fragments("__gh_Counter")));
+
+    let [warning] = result.warnings.as_slice() else {
+        panic!("expected one warning, got {:?}", result.warnings);
+    };
+    assert_eq!(warning.level, groundhog_cli::checks::FindingLevel::Warn);
+    assert_eq!(warning.code, "ts_bindings_failed");
+    assert!(
+        warning
+            .message
+            .starts_with("cannot generate TypeScript bindings: "),
+        "{}",
+        warning.message
+    );
+    assert!(
+        warning.message.contains("__gh_Counter"),
+        "{}",
+        warning.message
+    );
+}
+
+#[test]
+#[serial]
+fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    let fake_bin = write_demo_contract_rv32(
+        &project_root,
+        &encode_fragments(&counter_fragments("__gh_Counter")),
+    );
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .current_dir(&project_root)
+        .env("PATH", &fake_bin)
+        .env("XDG_CONFIG_HOME", project_root.join("config-home"))
+        .args(["--json", "build"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "build");
+    assert_eq!(payload["data"]["schemaVersion"], 1);
+    let warnings = payload["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["level"], "warn");
+    assert_eq!(warnings[0]["code"], "ts_bindings_failed");
+    let message = warnings[0]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("cannot generate TypeScript bindings: "),
+        "{message}"
+    );
+}
+
+/// Build `demo-contract-rv32` through a stand-in cargo that emits an ELF
+/// carrying `raw_spec`, without requesting any bindings.
+fn build_demo_contract_rv32(raw_spec: &[u8]) -> groundhog_cli::build::BuildResult {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    let fake_bin = write_demo_contract_rv32(&project_root, raw_spec);
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &[],
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: rv32 build should succeed")
+}
+
+/// Lay out `demo-contract-rv32` with a stand-in cargo that emits an ELF
+/// carrying `raw_spec`, and return the directory holding that cargo.
+fn write_demo_contract_rv32(project_root: &Path, raw_spec: &[u8]) -> PathBuf {
+    write_active_profile(project_root);
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_contract_toml(project_root);
+
+    let target_dir = project_root.join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract_rv32");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(groundhog_spec_tool::RAW_SECTION_NAME, raw_spec),
+    )
+    .unwrap();
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","version":"0.1.0","manifest_path":"{}","features":{{"entrypoints":[]}}}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+    fake_bin
 }
 
 #[test]
@@ -1231,6 +1345,42 @@ fn build_rv32_refuses_a_missing_contract_toml() {
         stderr.contains("build-std") && stderr.contains("[target.*]"),
         "expected the build-std hint, got: {stderr}"
     );
+}
+
+/// Raw spec fragments for an anchored interface with one `get` method.
+fn counter_fragments(interface_name: &str) -> Vec<groundhog_spec_tool::SpecFragment> {
+    vec![
+        groundhog_spec_tool::SpecFragment::SpecInterface {
+            interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
+                interface_name: spec_string(interface_name),
+                interface_version: spec_string("0.1.0"),
+                declared_by: declarer(),
+                throws: vec![].try_into().unwrap(),
+                emits: vec![].try_into().unwrap(),
+            },
+        },
+        // Spec shaking keeps only anchored interfaces; a real build emits
+        // this anchor from the contract impl site.
+        groundhog_spec_tool::SpecFragment::InterfaceAnchor {
+            interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
+                interface_name: spec_string(interface_name),
+                interface_version: spec_string("0.1.0"),
+                declared_by: declarer(),
+            },
+        },
+        groundhog_spec_tool::SpecFragment::SpecMethod {
+            method_fragment: groundhog_spec_tool::SpecMethodFragment {
+                interface_name: spec_string(interface_name),
+                interface_version: spec_string("0.1.0"),
+                declared_by: declarer(),
+                method: groundhog_spec_tool::ContractSpecMethod {
+                    name: spec_string("get"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: groundhog_spec_tool::ContractType::U64,
+                },
+            },
+        },
+    ]
 }
 
 fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {

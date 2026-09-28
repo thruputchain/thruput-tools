@@ -1,5 +1,7 @@
 use crate::artifacts::{self, ArtifactKind, ArtifactOptions, ManifestFlags};
+use crate::checks::{Finding, FindingLevel};
 use crate::{CliError, Print};
+use groundhog_contract_spec::ContractSpec;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;
@@ -41,6 +43,9 @@ pub struct BuildResult {
     pub cargo_stdout: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub cargo_stderr: String,
+    /// Findings `build --json` lists in its envelope's `warnings`.
+    #[serde(skip_serializing)]
+    pub warnings: Vec<Finding>,
 }
 
 /// Build the contract to an RV32 artifact.
@@ -62,8 +67,9 @@ pub fn run(
         bindings,
         print,
     )?;
-    print.json(&crate::result::CommandResult::new(
+    print.json(&crate::result::CommandResult::with_warnings(
         "build",
+        result.warnings,
         json!({
             "schemaVersion": BUILD_JSON_SCHEMA_VERSION,
             "projectName": result.project_name,
@@ -452,13 +458,14 @@ pub fn build_rv32_project(
     let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
     let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
     let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
+    let source_name = rv32
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    let mut warnings = Vec::new();
     let bindings_ts = if bindings.iter().any(|binding| binding == "ts") {
         if let Some(ref finalized) = finalized {
             let ts_path = rv32.with_extension("ts");
-            let source_name = rv32
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("unknown");
             let ts = crate::codegen::generate_ts_bindings(&finalized.spec, source_name)?;
             fs::write(&ts_path, ts.as_bytes())?;
             print.status(format_args!("Wrote {}", ts_path.display()));
@@ -468,6 +475,12 @@ pub fn build_rv32_project(
             None
         }
     } else {
+        if let Some(ref finalized) = finalized
+            && let Some(warning) = ts_bindings_warning(&finalized.spec, source_name)
+        {
+            print.warn(&warning.message);
+            warnings.push(warning);
+        }
         None
     };
 
@@ -497,6 +510,19 @@ pub fn build_rv32_project(
         profile,
         cargo_stdout,
         cargo_stderr,
+        warnings,
+    })
+}
+
+/// The warning for a spec `groundhog codegen ts` would refuse, so the author
+/// hears at build time rather than when someone generates bindings.
+fn ts_bindings_warning(spec: &ContractSpec, source_name: &str) -> Option<Finding> {
+    let refusal = crate::codegen::generate_ts_bindings(spec, source_name).err()?;
+    Some(Finding {
+        level: FindingLevel::Warn,
+        code: refusal.code(),
+        message: refusal.to_string(),
+        hint: None,
     })
 }
 
@@ -1078,10 +1104,13 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ByteSizeValue, CliError, GuestLayout, Rv32ConfigCheck, classify_rv32_config_probe,
-        member_leftover_cargo_config, parse_initial_memory_bytes, parse_stack_size,
-        rv32_linker_script, stack_size_defsym_ignored,
+        ByteSizeValue, CliError, ContractSpec, FindingLevel, GuestLayout, Path, Rv32ConfigCheck,
+        classify_rv32_config_probe, member_leftover_cargo_config, parse_initial_memory_bytes,
+        parse_stack_size, rv32_linker_script, stack_size_defsym_ignored, ts_bindings_warning,
     };
+    use crate::codegen::generate_ts_bindings;
+    use crate::contract_spec::load_contract_spec_from_xdr;
+    use groundhog_contract_spec::{ContractStructDef, ContractTypeDef};
     use tempfile::TempDir;
 
     fn tokens(raw: &[&str]) -> Vec<String> {
@@ -1328,6 +1357,46 @@ mod tests {
         assert!(!stack_size_defsym_ignored(0x7000, 4, 0x6000));
         // No stored data at all: nothing to infer, stay quiet.
         assert!(!stack_size_defsym_ignored(0, 0, 0x6000));
+    }
+
+    fn codegen_fixture_spec(name: &str) -> ContractSpec {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/codegen")
+            .join(format!("{name}.spec.xdr"));
+        load_contract_spec_from_xdr(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_spec_the_codegen_accepts_raises_no_bindings_warning() {
+        let spec = codegen_fixture_spec("typed_contract");
+
+        assert!(ts_bindings_warning(&spec, "typed_contract.rv32a").is_none());
+    }
+
+    #[test]
+    fn a_spec_the_codegen_refuses_raises_its_refusal_as_a_warning() {
+        // A struct on an event's path, where the bindings cannot declare both.
+        let mut spec = codegen_fixture_spec("typed_contract");
+        let name = spec.events.0[0].name.clone();
+        spec.type_defs.0.push(ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name,
+                fields: vec![].try_into().unwrap(),
+            },
+        });
+
+        let warning = ts_bindings_warning(&spec, "typed_contract.rv32a")
+            .expect("the codegen refuses a struct and an event on one path");
+
+        let refusal = generate_ts_bindings(&spec, "typed_contract.rv32a").unwrap_err();
+        assert_eq!(warning.level, FindingLevel::Warn);
+        assert_eq!(warning.code, "ts_bindings_failed");
+        assert_eq!(warning.message, refusal.to_string());
+        assert!(
+            warning.message.contains("collides between struct"),
+            "{}",
+            warning.message
+        );
     }
 }
 
