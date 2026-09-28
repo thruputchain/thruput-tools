@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
 mod diagnostic;
+mod group;
 mod log;
 mod policy;
 pub(crate) mod progress;
@@ -31,6 +32,7 @@ pub struct Print {
     verbose_build: bool,
     compact_build: bool,
     diagnostics: std::sync::Arc<std::sync::Mutex<Vec<diagnostic::Diagnostic>>>,
+    group: Option<std::sync::Arc<std::sync::Mutex<group::Content>>>,
 }
 
 impl Print {
@@ -44,6 +46,7 @@ impl Print {
             verbose_build: false,
             compact_build: false,
             diagnostics: std::sync::Arc::default(),
+            group: None,
         }
     }
 
@@ -58,6 +61,7 @@ impl Print {
             verbose_build: false,
             compact_build: false,
             diagnostics: std::sync::Arc::default(),
+            group: None,
         }
     }
 
@@ -237,6 +241,9 @@ impl Print {
     /// Informational status message (suppressed by --quiet).
     pub fn status(&self, msg: impl std::fmt::Display) {
         if !self.quiet && !self.json && !self.compact_build {
+            if self.group_detail("", &msg.to_string()) {
+                return;
+            }
             self.emit_human(&msg.to_string());
         }
     }
@@ -272,6 +279,9 @@ impl Print {
         if self.quiet || self.json {
             return;
         }
+        if self.group_detail("", &msg.to_string()) {
+            return;
+        }
         let mut report = report::Report::new(self.output_policy());
         report.message(outcome, &msg.to_string(), None, None);
         self.write_report(report);
@@ -280,6 +290,9 @@ impl Print {
     /// Label/value detail line for human output.
     pub fn detail(&self, label: &str, value: impl std::fmt::Display) {
         if self.quiet || self.json {
+            return;
+        }
+        if self.group_detail(label, &value.to_string()) {
             return;
         }
         let mut output = report::Report::new(self.output_policy());
@@ -458,6 +471,14 @@ impl Print {
     /// command result envelope instead).
     pub fn warn(&self, msg: impl std::fmt::Display) {
         if !self.json {
+            if let Some(group) = &self.group {
+                group
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .warnings
+                    .push(msg.to_string());
+                return;
+            }
             if let Some(output) = &self.task {
                 output.warn(msg.to_string());
                 return;

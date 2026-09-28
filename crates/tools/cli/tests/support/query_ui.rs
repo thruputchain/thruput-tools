@@ -108,6 +108,57 @@ const VIEW: &[&str] = &["view", "counter", "0x0102030405060708"];
 const SLOW: Duration = Duration::from_millis(500);
 
 #[test]
+fn inspection_commands_render_complete_empty_and_pending_results() {
+    let hash = address();
+    for (args, result, method, title) in [
+        (
+            vec!["storage", "counter", &hash],
+            json!({"item":null,"blockHeight":12}),
+            "groundhog_getStorageAt",
+            "Storage",
+        ),
+        (
+            vec!["tx", "show", &hash],
+            json!({"status":"pending"}),
+            "groundhog_getTransactionStatus",
+            "Transaction",
+        ),
+        (
+            vec!["tx", "list"],
+            json!({"refs":[],"cursor":"0xaabb","latestBlock":12,"oldestBlock":0}),
+            "groundhog_getTransactionsByAddress",
+            "Transaction history",
+        ),
+        (
+            vec!["events", "list", "counter"],
+            json!({"events":[],"cursor":"0x","latestBlock":12,"oldestBlock":0}),
+            "groundhog_getEvents",
+            "Events",
+        ),
+        (
+            vec!["token", "transfers", "counter"],
+            json!({"events":[],"cursor":"0x","latestBlock":12,"oldestBlock":0}),
+            "groundhog_getEvents",
+            "Token transfers",
+        ),
+    ] {
+        let query = Query::new(json!({"result": result}), SLOW);
+        let mut pty = Pty::spawn(query.command(&args));
+        assert!(pty.finish().success(), "{}", pty.history());
+        let history = pty.history();
+        assert!(
+            history.contains(title) && history.contains('╭'),
+            "{history}"
+        );
+        if args == ["tx", "list"] {
+            assert!(history.find(title).unwrap() < history.find("root invocations only").unwrap());
+            assert!(history.contains("0xaabb"));
+        }
+        query.finish(method);
+    }
+}
+
+#[test]
 fn balance_progress_finishes_before_full_precision_result_and_survives_resize() {
     for raw in ["0", "340282366920938463463374607431768211455"] {
         let query = Query::new(balance(raw), SLOW);

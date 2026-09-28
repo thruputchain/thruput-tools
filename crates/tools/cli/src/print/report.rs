@@ -94,7 +94,9 @@ impl Report {
         }
         self.edge(&title, width, true, title_style);
         for (label, value) in &items {
-            if value_budget >= 18 {
+            if label.is_empty() {
+                self.body(&paragraph(value.as_str()), width, 0);
+            } else if value_budget >= 18 {
                 let label = paragraph(safe_line(&format!("{label}:"), self.renderer.theme.label()));
                 let value = paragraph(value.as_str());
                 self.field(&label, &value, label_width + 2, width);
@@ -128,7 +130,9 @@ impl Report {
             .text(Text::from(safe_line(title, title_style)), 0);
         self.renderer.lines.push(String::new());
         for (label, value) in items {
-            if self.renderer.policy.width.is_some() {
+            if label.is_empty() {
+                self.renderer.text(Text::from(value.clone()), 0);
+            } else if self.renderer.policy.width.is_some() {
                 self.renderer.text(Text::from(format!("{label}:")), 0);
                 self.renderer.text(Text::from(value.clone()), 2);
             } else {

@@ -1,0 +1,31 @@
+# CLI UI coverage — GH-388
+
+Implementation and verification record for draft PR #443. The command matrix in
+`../specs/2026-09-21-cli-tui-mvp.md` defines the scope. JSON, exit codes, confirmation
+rules, and raw payloads remain command contracts.
+
+## Family review
+
+| Issue | Commands | Implementation | Verification |
+| --- | --- | --- | --- |
+| GH-389 | status, shared components | Implemented; user reviewed | Component and CLI tests |
+| GH-390 | build, shared progress | Implemented; user reviewed | Progress PTY and build tests |
+| GH-391 | queries, history, listings | Shared query cards, grouped history, stdout toolchain table; raw `which` path retained | Workspace tests passed; RPC PTYs cover absent storage, pending transactions, sparse pages, empty events/transfers; final matrix audit pending |
+| GH-416 | config/key/wallet management | Pending | Pending |
+| GH-417 | toolchain actions, archives, codegen | Pending | Pending |
+| GH-396 | new, init | Pending | Pending |
+| GH-393 | deploy, call, transfer, airdrop, wallet create | Pending | Pending |
+| GH-392 | test: single/workspace/watch/integration | Pending | Pending |
+| GH-395 | node, docs | Pending | Pending |
+| GH-394 | recursive command/mode audit, raw/framework output | Pending | Pending |
+
+## Review rules
+
+- Use only isolated fixtures and local RPC servers for mutation tests.
+- Cover normal, empty, invalid, operational error, and applicable partial/cancelled
+  outcomes. Review rendered terminal content, not only process exit codes.
+- Exercise 24/40/60/80/120-column layouts, no color, ASCII, quiet, JSON, no UI,
+  and redirected streams through shared component and command tests.
+- Keep secret exports, generated source, completion scripts, and executable paths
+  raw. Services and child-terminal passthrough have explicit lifecycle boundaries.
+- Record unavailable platform checks honestly; Linux execution is not macOS proof.

@@ -76,7 +76,9 @@ pub fn transfers(
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let task = crate::print::progress::Task::start(print, "Reading token transfers", true);
     let page = rt.block_on(fetch_event_page(&rpc_url, query))?;
+    let _ = task.finish();
     let report = TokenTransfersReport {
         schema_version: TOKEN_TRANSFERS_JSON_SCHEMA_VERSION,
         profile: profile.name,
@@ -95,7 +97,11 @@ pub fn transfers(
     };
 
     if !print.is_json() {
-        print_transfers(&report, continuation_requested, print);
+        print.group(
+            crate::print::Outcome::Information,
+            "Token transfers",
+            |print| print_transfers(&report, continuation_requested, print),
+        );
     }
     print.json(&CommandResult::new(cmd, report))
 }
