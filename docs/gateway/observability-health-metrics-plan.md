@@ -798,7 +798,7 @@ Security:
 
 ## Release Plan
 
-Update `../release/`:
+Update the deployment configuration (hosted release/ops repository):
 
 - Add the observability listener to `hog-gateway.env`.
 - Add the observability listener to Docker/supervisor gateway commands.

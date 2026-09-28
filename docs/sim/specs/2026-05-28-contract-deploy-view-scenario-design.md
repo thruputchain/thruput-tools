@@ -2,7 +2,6 @@
 
 **Date:** 2026-05-28
 **Status:** Draft for implementation.
-**Owner of implementation:** Codex.
 
 ## Summary
 

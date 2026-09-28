@@ -30,15 +30,11 @@ changes, option B requires hogd changes.
 The public method is in the OpenRPC surface, but the gateway handler still
 returns `not_implemented` until hogd/chuckd exposes a supported query backend.
 
-### ~~3. Byte format for JSON wire protocol~~ — RESOLVED
-
-See "Resolved" section below.
-
-### 4. Notify over x23 for Phase 2
+### 3. Notify over x23 for Phase 2
 
 For Phase 2 subscriptions, does exposing the `Notify` interface over
 x23 RPC make sense, or should the gateway connect to a dedicated event
-stream? [Petar, Geoff]
+stream?
 
 ## Resolved (from code review, 2026-03-11)
 

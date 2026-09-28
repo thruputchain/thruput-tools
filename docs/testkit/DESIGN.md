@@ -183,7 +183,7 @@ as ordinary async Rust — an `async fn` handed an agent context — and may:
 Agents draw their identity and funds from **bootstrap dev accounts** derived
 from the runtime manifest (the same scheme `hogsim` and `groundhog-bench` use).
 Each agent is assigned a bootstrap account (and a nonce namespace; see
-[Substrate reuse](#substrate-reuse)) at scenario start.
+[Substrate reuse](#component-reuse)) at scenario start.
 
 > **Note — future funding.** The planned devnet would let agents use freshly
 > generated keys with funds deposited from a faucet into the associated

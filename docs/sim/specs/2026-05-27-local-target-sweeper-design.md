@@ -2,7 +2,6 @@
 
 **Date:** 2026-05-27
 **Status:** Implemented.
-**Owner of implementation:** Codex.
 
 This is a handoff design doc. It is self-contained: an implementer who has not
 seen the planning conversation should be able to build from it.

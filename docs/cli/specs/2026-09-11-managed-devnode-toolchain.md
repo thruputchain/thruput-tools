@@ -1,8 +1,8 @@
 # Managed devnode toolchain: implementation and qualification
 
-GH-232 continues on `mm/gh-232-toolchain`, rebased onto `6d38333` (RPC 0.17.0).
-The August implementation is preserved on
-`gh-232-managed-devnode-toolchain-port` at `572be4f`.
+Status: implemented. `groundhog toolchain` and the embedded catalog in
+`crates/tools/toolchain/catalog/hog-devnode.json` are the shipped shape; this
+note records the contract and the qualification evidence behind the catalog.
 
 ## Contract
 
@@ -70,15 +70,13 @@ whose protocol token (`hogp/d2872e9900ce157`) matches the groundhog-xdr 0.39.0
 crates this workspace builds against; rc.7 advertised `hogp/63c9284d8d5727e`
 and failed the supervisor's handshake. The CLI uses that exact component
 version, not the platform version.
-Its manifest was published by packaging run `36010846127` at authorization
-commit `6e5679d223b6db746b8b86980a3201353f61f5d9` (workflow artifact
-`public-hog-devnode-v0.1.28-rc.3`, artifact `10812866713`). The public HTTPS
-manifest has SHA-256
+Its manifest was published through the packaging repository's reviewed
+public-devnode publication workflow. The public HTTPS manifest has SHA-256
 `8ea048e801e9d9aaacdeadee4add403d9a85865f2c0fe6294602346e55bdf6bb`.
 Both Linux archive digests equal the authenticated hogd `v0.1.28-rc.3` release
 asset digests, and the macOS entry names the authenticated release asset
 digest as its source, with a `SUCCEEDED` stapled, notarized Xcode Cloud
-build signed by the same Team ID as rc.7.
+build signed by the same Apple developer team as rc.7.
 
 The catalog copies each target's archive, objectKey, size, sha256, layoutVersion,
 files, and compatibility fields, plus source repository/ref, into catalog

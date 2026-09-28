@@ -1,6 +1,6 @@
 # WASM Removal Design
 
-Status: active
+Status: shipped (all slices landed); paths below are historical
 
 Owner: CLI / dev tooling
 

@@ -77,7 +77,8 @@ grep '^groundhog_gateway_rpc_connections_limit' /tmp/hog-gateway.metrics
 
 Expected:
 
-- `groundhog_gateway_build_info` includes `wire_format_version="2.1.0"`.
+- `groundhog_gateway_build_info` includes `wire_format_version` equal to
+  `WIRE_FORMAT_VERSION` in `crates/json-rpc/json-rpc-api/src/lib.rs`.
 - Exactly one `groundhog_gateway_health_status{status=...}` series has value `1`.
 - Backend labels are bounded to `scheduler`, `indexer`, `db_gateway`, and
   `view_gateway`.
@@ -100,8 +101,8 @@ grep 'groundhog_gateway_rpc_request_duration_seconds_count{method="groundhog_ver
 
 Expected:
 
-- `groundhog_version` succeeds and returns `wireFormat`/`wire_format` matching
-  `2.1.0` depending on the client view.
+- `groundhog_version` succeeds and returns `wireFormat` equal to the same
+  `WIRE_FORMAT_VERSION`.
 - RPC counter and duration histogram series are present with bounded method and
   outcome labels.
 
@@ -164,7 +165,7 @@ Expected:
 - jsonrpsee rejects batches over 1000 before gateway RPC middleware sees them.
 - Current jsonrpsee behavior is HTTP 200 with a JSON-RPC error body.
 - There is intentionally no v1 `rpc_batch_rejected_total`; this blind spot is
-  tracked in Linear `GH-155`.
+  a known follow-up.
 
 ## Domain Metrics
 
@@ -194,7 +195,7 @@ For shared devnet/nightly deployments with the ops changes applied:
 
 ```sh
 curl -fsS "http://<prometheus-host>:9090/api/v1/targets?state=active" \
-  | jq '.data.activeTargets[] | select(.labels.job == "gh-devnet-validator-gateway" or .labels.job == "gh-devnet-nightly-gateway") | {health: .health, instance: .labels.instance, lastError: .lastError}'
+  | jq '.data.activeTargets[] | select(.labels.job == "<gateway-job-name>") | {health: .health, instance: .labels.instance, lastError: .lastError}'
 ```
 
 Expected:

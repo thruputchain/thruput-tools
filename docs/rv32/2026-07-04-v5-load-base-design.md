@@ -1,9 +1,8 @@
 # RV32 v5 Artifact Cut — initial-memory load offset (`initial_memory_start`)
 
 Scope: `crates/rv32/artifact` and `crates/rv32/lower` in this repo. The hogd
-C++ loader change is specified in hogd's
-`docs/superpowers/specs/2026-07-04-rv32-artifact-v5-initial-memory-start-design.md`
-(same date, same cut) — field names, fold names, and constants below are
+C++ loader change is specified in hogd's own RV32 artifact v5
+`initial_memory_start` design note (same date, same cut) — field names, fold names, and constants below are
 aligned with that spec and must stay lockstep. Motivated by the SDK's move to
 a stack-first guest layout (stack below the data sections, heap above them
 growing up), which would otherwise put a stack-sized leading-zero shadow in

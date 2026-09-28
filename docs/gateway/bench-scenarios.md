@@ -419,8 +419,8 @@ runs do not establish cross-host, cold-history or mixed-traffic capacity.
 Status reads also exercise a separate scheduler lookup pool. Its admission
 limit was frequently exceeded during these tests; committed answers still
 succeeded through the supported indexer fallback. Larger indexer pools do not
-fix that scheduler pressure. [GH-377](https://linear.app/grndhg/issue/GH-377)
-tracks pending/unknown workloads, admission behavior and warning volume.
+fix that scheduler pressure. Pending/unknown workloads, admission behavior,
+and warning volume are tracked as follow-up work.
 
 ### Server observations
 

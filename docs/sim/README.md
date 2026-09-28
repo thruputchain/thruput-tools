@@ -144,8 +144,8 @@ newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.
 It only overrides the intro token; incompatible XDR shapes still fail through
 the generated client.
 
-The `local` provider's dev-account path is interim; faucet-based actor funding
-is expected to replace it for longer-lived devnet targets.
+The `local` provider funds actors from the runtime manifest's dev accounts;
+faucet-based actor funding is the path for longer-lived devnet targets.
 
 Phase 1 validates the scenario and runtime manifest, derives bootstrap account
 signers from the runtime manifest, writes the result directory skeleton, and
@@ -262,7 +262,7 @@ network hash with the supplied runtime manifest and requires a successful
 `groundhog_chainTip` response. It does not connect to the manifest's private
 scheduler endpoint. The manifest protocol must match hogsim's compiled protocol;
 this is a local client compatibility check, not verification of the server's
-protocol. RC2 exposes neither the executed protocol nor a reset-specific genesis
+protocol. The current `hog-devnode` release exposes neither the executed protocol nor a reset-specific genesis
 identity through these public responses (`networkHash` identifies the network
 name used in signatures). The runtime manifest remains required for bootstrap
 accounts and setup in this version.

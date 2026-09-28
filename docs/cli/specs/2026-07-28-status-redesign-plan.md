@@ -1,6 +1,8 @@
 # Groundhog Status Redesign Plan
 **Date:** 2026-07-28
-**Status:** Ready to execute
+**Status:** Superseded. `groundhog status` shipped as JSON schema version 2 and
+still probes the Rust toolchain and devnode; `crates/tools/cli/README.md`
+documents the current behavior. Kept for the design rationale only.
 **Workstream:** Config management
 **Depends on:** Persisted profile read model and provenance from config-management Slice 3
 ## Goal

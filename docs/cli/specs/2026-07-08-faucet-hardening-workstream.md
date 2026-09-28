@@ -67,7 +67,7 @@ return final or pending result
 
 `/v1/airdrop` remains for funding existing addresses, but wallet creation should no longer depend on public `/v1/airdrop` as a sub-step.
 
-This directly addresses Mark's GH-183 scenario: if the client times out after prefund, retrying the same wallet-create request must reuse the same attempt and return or continue the same result instead of generating a fresh deploy nonce and stranding funds at the old address.
+This directly addresses the GH-183 client-timeout scenario: if the client times out after prefund, retrying the same wallet-create request must reuse the same attempt and return or continue the same result instead of generating a fresh deploy nonce and stranding funds at the old address.
 ## Policy State Model
 Use in-memory policy state for private preview, but hide it behind a storage interface so a future database-backed implementation can replace it without rewriting handler logic. The private-preview deployment can assume one faucet instance for now.
 

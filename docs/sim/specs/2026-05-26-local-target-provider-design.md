@@ -2,7 +2,6 @@
 
 **Date:** 2026-05-26
 **Status:** Approved design, ready for implementation planning.
-**Owner of implementation:** TBD (will be driven in a separate session).
 
 This is a handoff design doc. It is self-contained: an implementer who has
 not seen the brainstorming conversation should be able to build from it.

@@ -28,8 +28,8 @@ and validates that signing-domain identity against the descriptor.
 - [`../../gateway/runtime-manifest.md`](../../gateway/runtime-manifest.md) —
   the private runtime manifest contract; the public descriptor is a distinct
   type covering only its non-secret subset (see §2), not a projection of it.
-- `ops/docs/hosted-devnet-bootstrap-faucet.md` — the prior ops-side bootstrap
-  and faucet design notes this supersedes for the CLI/service shape.
+- The prior ops-side hosted-devnet bootstrap and faucet design notes (internal
+  ops repository), which this supersedes for the CLI/service shape.
 
 ## Goal
 

@@ -4,8 +4,6 @@ Execution roadmap for the Groundhog CLI as of 2026-07-30.
 
 Historical competitive-analysis notes live under `docs/archive/cli/`.
 This file is the working plan we should actually execute against.
-`TODO.md` is a lightweight session tracker only. If `TODO.md` and this
-file ever disagree, this file wins.
 
 ## Product Goal
 
@@ -92,7 +90,7 @@ Implementation status:
 - `groundhog test --json` now emits a stable machine-readable report for RV32
   and integration modes, including explicit `mode` and integration-node
   metadata for `groundhog test --integration --json`.
-- The legacy native-exec local-node backend (`crates/dev-node`) was
+- The legacy native-exec local-node backend (the former `crates/dev-node`) was
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
   loop. The durable backend is a Rust supervisor
   (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
@@ -114,8 +112,6 @@ Maintenance rules:
 - Update this section when work lands, scope changes, or sequencing
   changes.
 - Keep checklist items concrete and implementation-oriented.
-- Use `TODO.md` only for the active working batch, not for long-term
-  backlog management.
 - If a task matters across sessions, it belongs here.
 
 ### Current Surface
@@ -331,8 +327,6 @@ Goal: make the current CLI trustworthy and easier to adopt.
 3. **Planning/docs cleanup**
    - Keep historical benchmark/reference notes under `docs/archive/`.
    - Keep this file short and current.
-   - Keep `TODO.md` as a lightweight working tracker that points back to
-     this file instead of duplicating it.
 
 ### Exit Criteria
 
@@ -564,12 +558,13 @@ artifacts exclusively:
   metadata, and the testkit registry accepts RV32 artifacts only.
 
 Defaulting to RV32 also means older `hog-devnode` binaries that cannot execute
-`kRv32` will fail at runtime.  Because there are no external CLI users yet,
-prefer pinning/documenting the minimum `hog-devnode` protocol/runtime version
+`kRv32` will fail at runtime. Prefer pinning/documenting the minimum `hog-devnode` protocol/runtime version
 over adding a compatibility capability probe unless a real multi-version need
 appears.
 
-Current validated runtime reference: `hog-devnode 0.1.12`. The local-DX smoke
+The managed-toolchain default is the `defaultVersion` in
+`crates/tools/toolchain/catalog/hog-devnode.json` (`0.1.28-rc.3` at the time
+of writing); older validation ran against `hog-devnode 0.1.12`. The local-DX smoke
 validates current RV32 execution, prefund-first wallet creation, two
 manifest-backed dev wallets, balance reads, receipt-confirmed native HOG
 transfers, transaction inspection and bounded history pagination, saved-wallet

@@ -466,19 +466,28 @@ encoding so clearly-bogus inputs fail at the JSON-RPC boundary:
 
 ```
 groundhog-rpc/                          workspace
-├── .cargo/config.toml                  private registry config
+├── .cargo/config.toml                  registry config
 ├── Cargo.toml                          workspace root
 ├── crates/
-│   └── json-rpc/
-│       ├── json-rpc-types/         shared RPC types
-│       ├── json-rpc-api/               jsonrpsee trait definition
-│       ├── json-rpc-server/            shared server implementation
-│       ├── json-rpc-gateway/           standalone JSON-RPC server binary
-│       ├── json-rpc-client/            typed JSON-RPC client library
-│       ├── open-rpc/                   OpenRPC document generator
-│       ├── open-rpc-macros/            OpenRPC proc macro
-│       └── open-rpc-spec/              canonical generated spec artifact
+│   ├── json-rpc/
+│   │   ├── json-rpc-types/             shared RPC types
+│   │   ├── json-rpc-api/               jsonrpsee trait definition
+│   │   ├── json-rpc-server/            shared server implementation
+│   │   ├── json-rpc-gateway/           standalone JSON-RPC server binary
+│   │   ├── json-rpc-client/            typed JSON-RPC client library
+│   │   ├── open-rpc/                   OpenRPC document generator
+│   │   ├── open-rpc-macros/            OpenRPC proc macro
+│   │   └── open-rpc-spec/              canonical generated spec artifact
+│   ├── x23/                            hogd transport and backend adapters
+│   ├── tools/                          groundhog CLI, signing, toolchain, ...
+│   ├── dev/                            node-supervisor, bench, sim, testkit
+│   ├── rv32/                           RV32 artifact format and lowerer
+│   ├── client/                         embeddable invocation client
+│   └── faucet/                         hosted faucet service
 ```
+
+The full crate list lives in `Cargo.toml` `[workspace] members` and the
+README's crate table.
 
 ### Dependency Flow
 
@@ -525,36 +534,19 @@ Resolved: the `#[rpc(client, server)]` trait lives in
 `GroundhogApiClient` for `json-rpc-client`, keeping one source of truth for the
 public JSON-RPC method surface.
 
-### Private Registry Dependencies
+### Registry Dependencies
 
-```toml
-# .cargo/config.toml
-[registries.groundhog]
-index = "..."  # private registry URL
-
-# Cargo.toml (workspace root)
-[workspace.dependencies]
-groundhog-xdr = { version = "0.3.5", registry = "groundhog" }
-xdrs = { version = "0.5", registry = "groundhog" }
-rpc_driver = { version = "0.3", registry = "groundhog" }
-jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
-axum = "0.8"
-tokio = { version = "1", features = ["full"] }
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-clap = { version = "4", features = ["derive"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-prometheus = "0.13"
-```
+Groundhog crates (`groundhog-xdr`, `xdrs`, `rpc_driver`, and friends) come from
+the `groundhog` registry configured in `.cargo/config.toml`; public crates such
+as `jsonrpsee`, `axum`, `tokio`, and `prometheus` come from crates.io. The
+workspace `Cargo.toml` is the source of truth for every version pin; this
+document does not repeat them.
 
 ---
 
 ## Phasing
 
-### Phase 1: Submit + Query (Target: private testnet)
+### Phase 1: Submit + Query
 
 The current public surface is generated from `crates/json-rpc/json-rpc-api`.
 Reads go through x23-backed gateway adapters where the corresponding hogd
@@ -597,7 +589,7 @@ economic spam controls are later-phase concerns.
 
 - `json-rpc-client` crate auto-generated from `#[rpc(client)]` trait
 - SDK wraps it as `GroundhogClient`
-- CLI uses it for `groundhog tx submit`, `groundhog tx status`, etc.
+- CLI uses it for `groundhog deploy`, `groundhog call`, `groundhog tx show`, etc.
 
 ### Phase 4: Production Hardening
 
