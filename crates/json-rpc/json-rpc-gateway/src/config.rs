@@ -56,12 +56,15 @@ impl FromStr for SchedulerLookupPoolSize {
     }
 }
 
-/// A scheduler lookup connection count outside the supported resource bound.
+/// A scheduler lookup execution permit count outside the supported resource bound.
 #[derive(Debug, thiserror::Error)]
 #[error("scheduler lookup pool size must be in 1..=68")]
 pub struct InvalidSchedulerLookupPoolSize;
 
-/// Connections per x23 data pool (1..=64, default 4).
+/// Most connections a single x23 data pool may open.
+pub(crate) const X23_MULTIPLEX_MAX_CONNECTIONS: usize = 64;
+
+/// Connections per x23 data pool (1..=[`X23_MULTIPLEX_MAX_CONNECTIONS`], default 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct X23MultiplexConnections(std::num::NonZeroUsize);
@@ -77,7 +80,7 @@ impl Default for X23MultiplexConnections {
     fn default() -> Self {
         Self(
             std::num::NonZeroUsize::new(4)
-                .expect("bug: default x23 multiplex connections is nonzero"),
+                .expect("bug: default x23 multiplex connection count is nonzero"),
         )
     }
 }
@@ -87,7 +90,7 @@ impl TryFrom<usize> for X23MultiplexConnections {
 
     fn try_from(value: usize) -> Result<Self, Self::Error> {
         match std::num::NonZeroUsize::new(value) {
-            Some(value) if value.get() <= 64 => Ok(Self(value)),
+            Some(value) if value.get() <= X23_MULTIPLEX_MAX_CONNECTIONS => Ok(Self(value)),
             _ => Err(InvalidX23MultiplexConnections),
         }
     }
