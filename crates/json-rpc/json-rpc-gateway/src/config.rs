@@ -10,55 +10,10 @@ use groundhog_json_rpc_types::{
     },
 };
 
-/// Indexer data connections (1..=256, default 16).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(try_from = "usize")]
-pub struct IndexerPoolSize(std::num::NonZeroUsize);
-
-impl IndexerPoolSize {
-    /// Return the validated connection count.
-    pub const fn get(self) -> usize {
-        self.0.get()
-    }
-}
-
-impl Default for IndexerPoolSize {
-    fn default() -> Self {
-        Self(std::num::NonZeroUsize::new(16).expect("bug: default indexer pool size is nonzero"))
-    }
-}
-
-impl TryFrom<usize> for IndexerPoolSize {
-    type Error = InvalidIndexerPoolSize;
-
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        match std::num::NonZeroUsize::new(value) {
-            Some(value) if value.get() <= 256 => Ok(Self(value)),
-            _ => Err(InvalidIndexerPoolSize),
-        }
-    }
-}
-
-impl FromStr for IndexerPoolSize {
-    type Err = InvalidIndexerPoolSize;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value
-            .parse::<usize>()
-            .map_err(|_| InvalidIndexerPoolSize)?
-            .try_into()
-    }
-}
-
-/// An indexer connection count outside the supported resource bound.
-#[derive(Debug, thiserror::Error)]
-#[error("indexer pool size must be in 1..=256")]
-pub struct InvalidIndexerPoolSize;
-
 // Total lookup admission is independent of the configurable execution width.
 pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
 
-/// Scheduler lookup connections (1..=68, default 16).
+/// Scheduler lookup execution permits (1..=68, default 16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "usize")]
 pub struct SchedulerLookupPoolSize(std::num::NonZeroUsize);
@@ -101,10 +56,61 @@ impl FromStr for SchedulerLookupPoolSize {
     }
 }
 
-/// A scheduler lookup connection count outside the supported resource bound.
+/// A scheduler lookup execution permit count outside the supported resource bound.
 #[derive(Debug, thiserror::Error)]
 #[error("scheduler lookup pool size must be in 1..=68")]
 pub struct InvalidSchedulerLookupPoolSize;
+
+/// Most connections a single x23 data pool may open.
+pub(crate) const X23_MULTIPLEX_MAX_CONNECTIONS: usize = 64;
+
+/// Connections per x23 data pool (1..=[`X23_MULTIPLEX_MAX_CONNECTIONS`], default 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "usize")]
+pub struct X23MultiplexConnections(std::num::NonZeroUsize);
+
+impl X23MultiplexConnections {
+    /// Return the validated connection count.
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for X23MultiplexConnections {
+    fn default() -> Self {
+        Self(
+            std::num::NonZeroUsize::new(4)
+                .expect("bug: default x23 multiplex connection count is nonzero"),
+        )
+    }
+}
+
+impl TryFrom<usize> for X23MultiplexConnections {
+    type Error = InvalidX23MultiplexConnections;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match std::num::NonZeroUsize::new(value) {
+            Some(value) if value.get() <= X23_MULTIPLEX_MAX_CONNECTIONS => Ok(Self(value)),
+            _ => Err(InvalidX23MultiplexConnections),
+        }
+    }
+}
+
+impl FromStr for X23MultiplexConnections {
+    type Err = InvalidX23MultiplexConnections;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value
+            .parse::<usize>()
+            .map_err(|_| InvalidX23MultiplexConnections)?
+            .try_into()
+    }
+}
+
+/// A multiplexed connection count outside the supported resource bound.
+#[derive(Debug, thiserror::Error)]
+#[error("x23 multiplex connections must be in 1..=64")]
+pub struct InvalidX23MultiplexConnections;
 
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -198,18 +204,6 @@ pub struct AdaptiveBatchConfig {
     /// Bounded depth of the per-shard ingress channel. When full,
     /// new requests fail immediately with `Overloaded`.
     pub ingress_queue_depth: usize,
-}
-
-impl AdaptiveBatchConfig {
-    /// Maximum number of backend RPCs this batcher can have in flight
-    /// at once: `shards × max_inflight_batches`.  Use this to size
-    /// transport-layer connection pools so that the batcher's own
-    /// `Overloaded` is the saturation signal, not transport queuing.
-    pub fn max_concurrent_rpcs(&self) -> usize {
-        self.shards
-            .max(1)
-            .saturating_mul(self.max_inflight_batches.max(1) as usize)
-    }
 }
 
 impl Default for AdaptiveBatchConfig {
@@ -324,15 +318,13 @@ pub struct GatewayConfig {
     /// indexer return `BackendUnavailable`.
     pub indexer_address: Option<String>,
 
-    /// Number of serial x23 data connections to the indexer (1..=256, default 16).
-    ///
-    /// Applies at startup and reconnect. The separate health connection is
-    /// excluded; each data connection handles one ordinary RPC at a time.
-    pub indexer_pool_size: IndexerPoolSize,
-
-    /// Dedicated scheduler lookup connections and execution permits (1..=68, default 16).
+    /// Dedicated scheduler lookup execution permits (1..=68, default 16).
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
+
+    /// Connections per x23 data pool (1..=64, default 4); see "x23 data
+    /// pools" in `docs/gateway/system-design.md`.
+    pub x23_multiplex_connections: X23MultiplexConnections,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
@@ -408,8 +400,8 @@ impl Default for GatewayConfig {
             shutdown_grace_ms: 10_000,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),
-            indexer_pool_size: IndexerPoolSize::default(),
             scheduler_lookup_pool_size: SchedulerLookupPoolSize::default(),
+            x23_multiplex_connections: X23MultiplexConnections::default(),
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
