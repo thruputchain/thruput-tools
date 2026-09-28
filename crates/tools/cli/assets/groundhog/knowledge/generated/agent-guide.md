@@ -7,7 +7,7 @@ description: >
   contains Groundhog configuration, SDK dependencies, or generated artifacts.
 ---
 
-<!-- groundhog-cli-version: 0.19.0-pre.1 -->
+<!-- groundhog-cli-version: 0.19.0-pre.2 -->
 
 # Groundhog
 
