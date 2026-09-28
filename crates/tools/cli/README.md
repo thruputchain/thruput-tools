@@ -6,8 +6,8 @@ deploy, and test workflow into a single binary.
 ## Install
 
 ```bash
-cargo install --path crates/tools/cli
-cargo install --path crates/rv32/lower         # optional, for standalone `rv32-lower`
+cargo install --path crates/tools/cli --locked
+cargo install --path crates/rv32/lower --locked   # optional, for standalone `rv32-lower`
 ```
 
 For local development without installing:
@@ -40,8 +40,9 @@ drives `groundhog-bench` against the CLI node, starts
 against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline` or
 `BENCH_SCENARIO=submit-ramp` for repeatable heavier local runs.
 
-Requires the nightly Rust toolchain (pinned via `rust-toolchain.toml`
-in generated projects).
+The CLI itself builds on stable Rust 1.96 or newer. Generated contract
+projects pin their own nightly through `rust-toolchain.toml`, which rustup
+installs on first use.
 
 ## Quick Start
 
@@ -268,9 +269,9 @@ same profile, toolchain, and target directory. Run `groundhog build -p
 
 ### `groundhog test`
 
-Run contract tests against the test executor. During early access, follow the
-invite instructions to authenticate Cargo with the private Groundhog registry
-before building generated projects. The SDK downloads checksum-verified
+Run contract tests against the test executor. Building generated projects
+resolves the SDK from the Groundhog Cargo registry, so configure a Cargo
+credential provider first (see the repository README). The SDK downloads checksum-verified
 mock-executor FFI artifacts from public storage without download credentials.
 Tests target the host platform so they run natively.
 
@@ -342,6 +343,7 @@ Manage Ed25519 signing keys. Keys are stored in
 
 ```bash
 groundhog keys generate [name]   # generate a new keypair
+groundhog keys import <name>     # import a seed from hidden input or piped stdin
 groundhog keys ls                # list stored keys
 groundhog keys export <name>     # print a 32-byte private key for client use
 groundhog keys use <name>        # set the default signing key
@@ -814,6 +816,9 @@ can also use the active local node endpoint and runtime artifacts written by
 |------|-------------|
 | `-q`, `--quiet` | Suppress status messages |
 | `--json` | Emit structured JSON output |
+| `--non-interactive` | Disable prompts and terminal UI while retaining ordinary output |
+| `--show-cargo-commands` | Print each cargo command to stderr before running it |
+| `--offline` | Forbid managed toolchain downloads; use locally available binaries |
 
 `--profile` selects runtime configuration on commands such as `build`, `test`,
 `deploy`, `call`, `storage`, and `status`. On `config set` and `config unset`,

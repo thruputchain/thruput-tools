@@ -22,7 +22,13 @@ The CLI needs Rust 1.96 or newer (`rustup update stable`). Generated contract
 projects pin their own nightly through `rust-toolchain.toml`, which rustup
 installs on first use.
 
-From the private Groundhog registry:
+Prebuilt binaries ship in the Groundhog client bundle, which pairs
+`groundhog` with a matching `hog-devnode`; see
+[Getting Started](https://docs.groundhog.dev/start/getting-started/) for the
+current bundle and platform notes. Per-app archives for each tagged release
+are listed under [Releases](#releases) below.
+
+From the Groundhog Cargo registry:
 
 ```bash
 export CARGO_REGISTRIES_GROUNDHOG_INDEX="sparse+https://crates.thruput.network/api/v1/crates/"
@@ -40,10 +46,10 @@ groundhog --version
 Cargo installs the binary under `~/.cargo/bin` by default. `--force` replaces
 an older checkout build if one is already installed.
 
-During early access, installing from this checkout and building generated
-projects both require access to the private Groundhog Cargo registry. Follow
-the invite instructions to authenticate Cargo first. This constraint will
-relax when the SDK ships publicly.
+Installing from this checkout and building generated projects both resolve
+Groundhog crates from that registry, and it requires a Cargo credential
+provider. [Getting Started](https://docs.groundhog.dev/start/getting-started/#configure-cargo-access)
+covers the registry setup; the CLI itself never manages registry credentials.
 
 ### Hosted Devnet
 
@@ -181,6 +187,28 @@ local load shapes, and
 [`docs/gateway/examples/runtime-manifest.hogd-dev.example.json`](docs/gateway/examples/runtime-manifest.hogd-dev.example.json)
 for the v2 JSON shape.
 
+### Local Documentation
+
+```sh
+groundhog docs                 # Serve bundled docs at http://127.0.0.1:4321
+groundhog docs --port 8080     # Choose a port (0 selects an available one)
+groundhog docs --dir /path/to/developers-site/dist/docs-snapshot
+```
+
+The selected developer-site snapshot is embedded in the CLI. On first use it is
+verified and extracted under `${XDG_CACHE_HOME:-$HOME/.cache}/groundhog/docs/`,
+keyed by its archive SHA-256. Later runs verify and reuse those files. Damaged or
+partial cache entries are rebuilt from the bundled bytes; no network request or
+administrator access is needed. Clearing the docs cache is safe while servers
+are stopped; the next invocation recreates it.
+
+`--dir` serves a trusted local build directly and bypasses the bundled cache.
+Keep such a directory unchanged while serving. Open the printed loopback URL;
+Ctrl-C or SIGTERM stops the foreground server. `--json` reports readiness,
+resolved path, source identity, and guide/CLI version matching. No node, wallet,
+or project setup is required. External API references and network services still
+need access; page version notes remain authoritative for their examples.
+
 ### Releases
 
 One normal human entrypoint: run the **Release package** GitHub Actions workflow.
@@ -199,13 +227,20 @@ Release assets:
 ```text
 <linux-app>-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 <linux-app>-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz
+hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu-znver5.tar.gz
 groundhog-vX.Y.Z-aarch64-apple-darwin.tar.gz
+agent-guide.md
 SHA256SUMS
 ```
 
 Linux apps are `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, and
 `groundhog-faucet`. Each archive contains one app binary plus `README.md` and
-`LICENSE`. `hog-gateway`, `hogsim`, and `groundhog-faucet` are binary release
+`LICENSE`; the `groundhog` archives also carry `agent-guide.md`, the rendered
+`groundhog --skill` output, which is published standalone as well. The
+`znver5` gateway archive is compiled with `target-cpu=znver5` for qualified
+AMD Zen 5 servers (for example EC2 C8a/M8a); select it explicitly and
+validate it on a Zen 5 host before deployment. Every other artifact keeps the
+portable CPU target. `hog-gateway`, `hogsim`, and `groundhog-faucet` are binary release
 artifacts only; `groundhog-rv32-lower` is also a published crate/library. macOS
 releases currently target Apple Silicon and include only the `groundhog` CLI,
 which links the RV32 lowerer in-process. The macOS binary is ad-hoc signed but
@@ -326,6 +361,8 @@ Workspace crates are grouped by boundary:
 | Group | Crate | Description |
 |-------|-------|-------------|
 | Shared | [`build-info`](crates/build-info/) | Crate and packaging-platform version metadata |
+| Shared | [`bundle-identity`](crates/bundle-identity/) | Runtime validation of the installed bundle manifest |
+| Shared | [`client`](crates/client/) | Embeddable contract invocation client with supplied-spec codecs |
 | JSON-RPC | [`json-rpc-types`](crates/json-rpc/json-rpc-types/) | Shared JSON-RPC types, including the error catalog |
 | JSON-RPC | [`json-rpc-api`](crates/json-rpc/json-rpc-api/) | Shared jsonrpsee trait definitions |
 | JSON-RPC | [`json-rpc-server`](crates/json-rpc/json-rpc-server/) | Shared server-side JSON-RPC implementation and validation |
@@ -335,9 +372,13 @@ Workspace crates are grouped by boundary:
 | JSON-RPC | [`open-rpc-macros`](crates/json-rpc/open-rpc-macros/) | `#[open_rpc]` proc macro emitting OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
 | JSON-RPC | [`open-rpc-spec`](crates/json-rpc/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
 | x23 | [`x23-transport`](crates/x23/x23-transport/) | Shared x23 connection-pool helpers used by gateway and node-supervisor |
+| x23 | [`hogd-backend`](crates/x23/hogd-backend/) | Shared hogd backend adapters and XDR-to-JSON-RPC mapping |
 | Tools | [`cli`](crates/tools/cli/) | `groundhog` CLI for the contract dev workflow |
 | Tools | [`cli-macros`](crates/tools/cli-macros/) | `ErrorMeta` derive generating each CLI error's code, hint, and JSON details from per-variant attributes |
 | Tools | [`signing`](crates/tools/signing/) | Off-chain transaction signing and construction |
+| Tools | [`toolchain`](crates/tools/toolchain/) | Verified `hog-devnode` catalog and managed installation |
+| Tools | [`tx-validation`](crates/tools/tx-validation/) | Off-chain mirror of the bounds hogd checks before executing a transaction |
+| Tools | [`agent-knowledge`](crates/tools/agent-knowledge/) | Deterministic assembler for the embedded `groundhog --skill` guide (not published) |
 | RV32 | [`artifact`](crates/rv32/artifact/) | Canonical RV32 artifact format and validation |
 | RV32 | [`lower`](crates/rv32/lower/) | ELF-to-RV32 artifact lowerer and `rv32-lower` binary |
 | Service | [`faucet`](crates/faucet/) | Hosted network descriptor, airdrop, and wallet-creation service |
@@ -345,6 +386,7 @@ Workspace crates are grouped by boundary:
 | Dev | [`e2e-tests`](crates/dev/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | Dev | [`bench`](crates/dev/bench/) | Benchmark harnesses |
 | Dev | [`sim`](crates/dev/sim/) | `hogsim` stateful simulation and soak-test harness |
+| Dev | [`testkit`](crates/dev/testkit/) | Multi-agent integration-test harness for contract applications |
 
 ### Local Dev Setup
 
@@ -380,9 +422,28 @@ cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.js
 See [`docs/sim/README.md`](docs/sim/README.md) for the current simulation
 scope and result-artifact contract.
 
-Generated projects require Cargo registry access while the SDK lives in the
-private registry. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md)
+Generated projects resolve the SDK from the Groundhog Cargo registry, so
+building them needs registry credentials configured. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md)
 for the full CLI reference.
+
+### Updating the Bundled Documentation
+
+1. In `developers-site`, build the selected clean commit with
+   `pnpm package:snapshot`, or download `docs-snapshot-<commit>` from its successful
+   CI run. It contains `snapshot.tar.gz` and `snapshot-lock.json`.
+2. Run `python3 scripts/import-docs-snapshot.py /path/to/artifact` here. This
+   validates the archive's checksum, size, clean source identity and contents,
+   then copies both files into `crates/tools/cli/assets/docs/`.
+3. Review the source revision, documentation/version notes, and archive pin;
+   commit both files with the CLI change. Never select the latest docs implicitly.
+4. Run the snapshot checks and CLI tests. Normal CLI packaging embeds those exact
+   bytes, so consumers need no build-time docs checkout or separate access token.
+
+`python3 scripts/import-docs-snapshot.py` without an argument verifies the current
+pin. The Rust bundle test checks the same pin/content contract and cache recovery.
+The full documentation set can evolve independently of CLI releases; changing
+what a CLI ships is an explicit selection. A guide version in the manifest does
+not assert that every SDK example or deployed Devnet matches that version.
 
 ### Conventions
 
@@ -438,53 +499,3 @@ for the full chain-level architecture and open questions.
 ## License
 
 Apache-2.0
-
-## Local documentation
-
-```sh
-groundhog docs                 # Serve bundled docs at http://127.0.0.1:4321
-groundhog docs --port 8080     # Choose a port (0 selects an available one)
-groundhog docs --dir /path/to/developers-site/dist/docs-snapshot
-```
-
-The selected developer-site snapshot is embedded in the CLI. On first use it is
-verified and extracted under `${XDG_CACHE_HOME:-$HOME/.cache}/groundhog/docs/`,
-keyed by its archive SHA-256. Later runs verify and reuse those files. Damaged or
-partial cache entries are rebuilt from the bundled bytes; no network request or
-administrator access is needed. Clearing the docs cache is safe while servers
-are stopped; the next invocation recreates it.
-
-`--dir` serves a trusted local build directly and bypasses the bundled cache.
-Keep such a directory unchanged while serving. Open the printed loopback URL;
-Ctrl-C or SIGTERM stops the foreground server. `--json` reports readiness,
-resolved path, source identity, and guide/CLI version matching. No node, wallet,
-or project setup is required. External API references and network services still
-need access; page version notes remain authoritative for their examples.
-
-### Updating the bundled documentation
-
-1. In `developers-site`, build the selected clean commit with
-   `pnpm package:snapshot`, or download `docs-snapshot-<commit>` from its successful
-   CI run. It contains `snapshot.tar.gz` and `snapshot-lock.json`.
-2. Run `python3 scripts/import-docs-snapshot.py /path/to/artifact` here. This
-   validates the archive's checksum, size, clean source identity and contents,
-   then copies both files into `crates/tools/cli/assets/docs/`.
-3. Review the source revision, documentation/version notes, and archive pin;
-   commit both files with the CLI change. Never select the latest docs implicitly.
-4. Run the snapshot checks and CLI tests. Normal CLI packaging embeds those exact
-   bytes, so consumers need no build-time docs checkout or separate access token.
-
-`python3 scripts/import-docs-snapshot.py` without an argument verifies the current
-pin. The Rust bundle test checks the same pin/content contract and cache recovery.
-The full documentation set can evolve independently of CLI releases; changing
-what a CLI ships is an explicit selection. A guide version in the manifest does
-not assert that every SDK example or deployed Devnet matches that version.
-
-## AMD server gateway artifact
-
-Linux releases additionally publish
-`hog-gateway-v<VERSION>-x86_64-unknown-linux-gnu-znver5.tar.gz`, covered by the
-release `SHA256SUMS`. This gateway is compiled with `target-cpu=znver5` for
-qualified AMD Zen 5 servers (for example EC2 C8a/M8a). Packaging must select it
-explicitly and validate it on a Zen 5 host before deployment. Portable gateway,
-CLI, faucet, simulator, and macOS artifacts keep their existing CPU targets.

@@ -10,6 +10,9 @@ gateway is the primary public admission-control boundary.
 
 ## Crates
 
+The crates this binary is built from. The full `crates/json-rpc/` list is in
+the repository README.
+
 | Crate | Description |
 |-------|-------------|
 | `json-rpc-types` | Shared RPC types (receipts, status, block info, events, errors) |
@@ -24,8 +27,8 @@ groundhog_getTransactionReceipt(hash)          → Option<TransactionReceipt>
 groundhog_getTransactionStatus(hash)           → TransactionStatus
 groundhog_chainTip()                           → ChainTip
 groundhog_chainConfig()                        → NetworkConfigParams
-groundhog_getBlockByNumber(height)             → Option<BlockInfo>
-groundhog_pendingTransactionCount()            → u64
+groundhog_getBlockByNumber(height)             → Option<BlockInfo>   (declared; returns NotImplemented)
+groundhog_pendingTransactionCount()            → u64                 (declared; returns NotImplemented)
 groundhog_getEvents(EventQuery)                → EventPage
 groundhog_getTransactionsByAddress(query)      → TransactionRefPage
 groundhog_getStorageAt(address, key)            → StorageItemRead
@@ -35,6 +38,10 @@ groundhog_networkInfo()                         → NetworkInfo
 groundhog_version()                             → VersionInfo
 groundhog_requestAirdrop(request)               → AirdropAttemptResponse (optional)
 ```
+
+`getBlockByNumber` and `pendingTransactionCount` are part of the OpenRPC
+surface but have no backend yet; the gateway answers both with
+`NotImplemented`. See `docs/gateway/open-questions.md`.
 
 Standalone deployments must configure immutable identity with `network_hash`
 or the equivalent `--network-hash` flag. Runtime-manifest mode derives it from
@@ -98,13 +105,13 @@ BENCH_SCENARIO=gateway-baseline GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
-See [`docs/gateway/bench-scenarios.md`](../../docs/gateway/bench-scenarios.md)
+See [`docs/gateway/bench-scenarios.md`](../../../docs/gateway/bench-scenarios.md)
 for available scenarios and defaults.
 
 ## Documentation
 
-- [System Design](../../docs/gateway/system-design.md) — architecture, data flows, open questions
+- [System Design](../../../docs/gateway/system-design.md) — architecture, data flows, open questions
 - [OpenRPC Snapshot](../open-rpc-spec/snapshots/groundhog-spec.json) — generated RPC-surface reference
-- [Runtime Manifest Quickstart](../../docs/gateway/runtime-manifest.md) — local CLI/gateway/bench handoff
-- [Transaction Ingress and Proposer-Local Races](../../docs/gateway/tx-ingress-and-proposer-race.md) — code-verified threat model framing
-- [Roadmap](../../docs/gateway/roadmap.md) — v1 testnet scope and later ingress evolution
+- [Runtime Manifest Quickstart](../../../docs/gateway/runtime-manifest.md) — local CLI/gateway/bench handoff
+- [Transaction Ingress and Proposer-Local Races](../../../docs/gateway/tx-ingress-and-proposer-race.md) — code-verified threat model framing
+- [Roadmap](../../../docs/gateway/roadmap.md) — v1 testnet scope and later ingress evolution
