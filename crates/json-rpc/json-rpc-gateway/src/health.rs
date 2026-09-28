@@ -17,7 +17,7 @@ use crate::{
         BackendClient, DB_GATEWAY_NAMES, GatewayContext, INDEXER_NAMES, OptionalBackendNames,
         QuarantinedScheduler, VIEW_GATEWAY_NAMES, clear_scheduler_if_current,
         connect_optional_db_gateway, connect_optional_indexer, connect_optional_scheduler,
-        connect_optional_view_gateway, db_gateway_pool_size, scheduler_pool_size,
+        connect_optional_view_gateway,
     },
     handlers::SCHEDULER,
     metrics::{BackendReconnectOutcome, BackendRequestOutcome},
@@ -533,10 +533,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
             let result = tokio::time::timeout(
                 reconnect_timeout,
                 connect_optional_scheduler(
-                    ctx.config.x23_data_pool(),
+                    ctx.config.x23_multiplex_connections,
                     &ctx.config.scheduler_address,
-                    scheduler_pool_size(&ctx.config),
-                    ctx.config.scheduler_lookup_pool_size.get(),
                     ctx.protocol,
                     Some(&ctx.metrics),
                 ),
@@ -592,9 +590,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         let ctx = ctx.clone();
         spawn_once(&mut attempts.indexer, move || async move {
             let connect = connect_optional_indexer(
-                ctx.config.x23_data_pool(),
+                ctx.config.x23_multiplex_connections,
                 ctx.config.indexer_address.as_deref(),
-                ctx.config.indexer_pool_size.get(),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
@@ -607,9 +604,8 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         let ctx = ctx.clone();
         spawn_once(&mut attempts.db_gateway, move || async move {
             let connect = connect_optional_db_gateway(
-                ctx.config.x23_data_pool(),
+                ctx.config.x23_multiplex_connections,
                 ctx.config.db_gateway_address.as_deref(),
-                db_gateway_pool_size(&ctx.config),
                 Some(ctx.protocol),
                 reconnect_timeout,
                 Some(&ctx.metrics),
@@ -623,7 +619,7 @@ async fn maintain_reconnects(ctx: &Arc<GatewayContext>, attempts: &mut Reconnect
         let ctx = ctx.clone();
         spawn_once(&mut attempts.view_gateway, move || async move {
             let connect = connect_optional_view_gateway(
-                ctx.config.x23_data_pool(),
+                ctx.config.x23_multiplex_connections,
                 ctx.config.view_gateway_address.as_deref(),
                 Some(ctx.protocol),
                 reconnect_timeout,
@@ -1540,7 +1536,7 @@ mod tests {
 
     use crate::{
         backend::GatewayBackend,
-        config::X23DataPool,
+        config::X23MultiplexConnections,
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
         tip_coalescer::{SchedulerTipSink, TipSink},
@@ -2710,10 +2706,8 @@ mod tests {
         let (scheduler_addr, _scheduler_server, _) =
             start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
         let scheduler = connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &scheduler_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         )
@@ -2825,10 +2819,8 @@ mod tests {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
         let client = connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &scheduler_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         )
@@ -2860,10 +2852,8 @@ mod tests {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
         let old_client = connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &scheduler_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         )
@@ -2871,10 +2861,8 @@ mod tests {
         .expect("old scheduler connection should succeed")
         .expect("old scheduler should be connected");
         let new_client = connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &scheduler_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         )
@@ -3180,10 +3168,8 @@ mod tests {
             ..GatewayConfig::default()
         });
         let client = connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &scheduler_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         )
@@ -3223,10 +3209,8 @@ mod tests {
         });
         let metrics = GatewayMetrics::for_tests();
         let client = connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &scheduler_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         )
@@ -3279,9 +3263,8 @@ mod tests {
             start_saturated_view_gateway().await;
         let startup_timeout = Duration::from_secs(1);
         let indexer = connect_optional_indexer(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             Some(&indexer_addr.to_string()),
-            32,
             None,
             startup_timeout,
             None,
@@ -3290,9 +3273,8 @@ mod tests {
         .expect("bug: indexer connection should succeed")
         .expect("bug: indexer should be connected");
         let db_gateway = connect_optional_db_gateway(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             Some(&db_gateway_addr.to_string()),
-            1,
             None,
             startup_timeout,
             None,
@@ -3301,7 +3283,7 @@ mod tests {
         .expect("bug: db_gateway connection should succeed")
         .expect("bug: db_gateway should be connected");
         let view_gateway = connect_optional_view_gateway(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             Some(&view_gateway_addr.to_string()),
             None,
             startup_timeout,
@@ -3312,7 +3294,6 @@ mod tests {
         .expect("bug: view_gateway should be connected");
         let config = Arc::new(GatewayConfig {
             indexer_address: Some(indexer_addr.to_string()),
-            indexer_pool_size: 32.try_into().unwrap(),
             scheduler_address: "127.0.0.1:0".into(),
             db_gateway_address: Some(db_gateway_addr.to_string()),
             view_gateway_address: Some(view_gateway_addr.to_string()),

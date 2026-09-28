@@ -303,9 +303,9 @@ health connections, or the indexer pool.
 
 Indexer and scheduler lookup clients both use `rpc_driver::MultiplexPool`
 through `x23-transport`, with many calls in flight per connection over
-`x23_multiplex_connections` sockets, so the size settings above cap calls in
-flight rather than connections. They use separate pool instances; scheduler
-lookups additionally have gateway admission and execution semaphores.
+`x23_multiplex_connections` sockets. They use separate pool instances;
+scheduler lookups additionally have gateway admission and execution
+semaphores, which is where `scheduler_lookup_pool_size` applies.
 
 Compare 4, 8, and 16 execution permits with the same unknown-hash status
 workload and fixed client concurrency. Confirm metrics show
@@ -323,11 +323,11 @@ operation. Set the lookup pool to 4 to restore the previous execution width.
 
 ## Indexer connection pool comparison
 
-`hog-gateway --indexer-pool-size N` sets how many indexer calls execute at
-once. The range is **1..=256**, with a default of **16**, and can also be set as
-`indexer_pool_size = 16` at the top level of the gateway TOML config. The CLI
-value overrides TOML. Startup and reconnect use the same setting. A separate
-health connection is excluded from this cap. Scheduler pools are unchanged.
+The indexer no longer has a pool size of its own. Every x23 data pool is
+multiplexed over `x23_multiplex_connections` sockets with no cap on calls in
+flight. The runs below predate that change and swept the serial pool's
+`--indexer-pool-size`; the method still applies to a sweep of
+`--x23-multiplex-connections`.
 
 Build once and restart the gateway with each setting against the same backend:
 
@@ -337,7 +337,7 @@ cargo build --release -p groundhog-json-rpc-gateway
 target/release/hog-gateway \
   --runtime-manifest /path/to/runtime-manifest.json \
   --listen 127.0.0.1:8545 \
-  --indexer-pool-size 16
+  --x23-multiplex-connections 4
 ```
 
 The setting also works with the existing `--config` and explicit backend-address

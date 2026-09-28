@@ -357,7 +357,7 @@ mod tests {
 
     use super::*;
 
-    use crate::config::{GatewayConfig, X23DataPool};
+    use crate::config::{GatewayConfig, X23MultiplexConnections};
     use crate::context::{
         BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SCHEDULER_LOOKUP_MAX_OUTSTANDING,
         SchedulerClient, connect_optional_scheduler,
@@ -649,10 +649,8 @@ mod tests {
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
             Some(addr) => connect_optional_scheduler(
-                X23DataPool::default(),
+                X23MultiplexConnections::default(),
                 &addr.to_string(),
-                1,
-                4,
                 PROTOCOL_VERSION,
                 None,
             )
@@ -1139,10 +1137,8 @@ mod tests {
         ));
         poll_pending(lookup.as_mut());
         let replacement = watchdog(connect_optional_scheduler(
-            X23DataPool::default(),
+            X23MultiplexConnections::default(),
             &new_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         ))

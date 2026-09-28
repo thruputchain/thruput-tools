@@ -10,51 +10,6 @@ use groundhog_json_rpc_types::{
     },
 };
 
-/// Indexer calls in flight at once (1..=256, default 16).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(try_from = "usize")]
-pub struct IndexerPoolSize(std::num::NonZeroUsize);
-
-impl IndexerPoolSize {
-    /// Return the validated connection count.
-    pub const fn get(self) -> usize {
-        self.0.get()
-    }
-}
-
-impl Default for IndexerPoolSize {
-    fn default() -> Self {
-        Self(std::num::NonZeroUsize::new(16).expect("bug: default indexer pool size is nonzero"))
-    }
-}
-
-impl TryFrom<usize> for IndexerPoolSize {
-    type Error = InvalidIndexerPoolSize;
-
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        match std::num::NonZeroUsize::new(value) {
-            Some(value) if value.get() <= 256 => Ok(Self(value)),
-            _ => Err(InvalidIndexerPoolSize),
-        }
-    }
-}
-
-impl FromStr for IndexerPoolSize {
-    type Err = InvalidIndexerPoolSize;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value
-            .parse::<usize>()
-            .map_err(|_| InvalidIndexerPoolSize)?
-            .try_into()
-    }
-}
-
-/// An indexer connection count outside the supported resource bound.
-#[derive(Debug, thiserror::Error)]
-#[error("indexer pool size must be in 1..=256")]
-pub struct InvalidIndexerPoolSize;
-
 // Total lookup admission is independent of the configurable execution width.
 pub(crate) const SCHEDULER_LOOKUP_MAX_OUTSTANDING: usize = 68;
 
@@ -154,20 +109,6 @@ impl FromStr for X23MultiplexConnections {
 #[error("x23 multiplex connections must be in 1..=64")]
 pub struct InvalidX23MultiplexConnections;
 
-/// How every x23 data pool is shaped: the sockets it opens and how long a
-/// canceled call may stay outstanding before the pool is replaced.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct X23DataPool {
-    pub(crate) connections: X23MultiplexConnections,
-    pub(crate) stalled_call_timeout: Duration,
-}
-
-impl Default for X23DataPool {
-    fn default() -> Self {
-        GatewayConfig::default().x23_data_pool()
-    }
-}
-
 /// Backend names used by readiness policy.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -260,18 +201,6 @@ pub struct AdaptiveBatchConfig {
     /// Bounded depth of the per-shard ingress channel. When full,
     /// new requests fail immediately with `Overloaded`.
     pub ingress_queue_depth: usize,
-}
-
-impl AdaptiveBatchConfig {
-    /// Maximum number of backend RPCs this batcher can have in flight
-    /// at once: `shards × max_inflight_batches`.  Use this to size
-    /// transport-layer connection pools so that the batcher's own
-    /// `Overloaded` is the saturation signal, not transport queuing.
-    pub fn max_concurrent_rpcs(&self) -> usize {
-        self.shards
-            .max(1)
-            .saturating_mul(self.max_inflight_batches.max(1) as usize)
-    }
 }
 
 impl Default for AdaptiveBatchConfig {
@@ -386,19 +315,12 @@ pub struct GatewayConfig {
     /// indexer return `BackendUnavailable`.
     pub indexer_address: Option<String>,
 
-    /// Indexer calls in flight at once (1..=256, default 16).
-    ///
-    /// Applies at startup and reconnect. The separate health connection is
-    /// excluded; `x23_multiplex_connections` sets the sockets these calls share.
-    pub indexer_pool_size: IndexerPoolSize,
-
     /// Dedicated scheduler lookup execution permits (1..=68, default 16).
     /// Total lookup admission remains fixed at 68, including executing requests.
     pub scheduler_lookup_pool_size: SchedulerLookupPoolSize,
 
-    /// Connections per x23 data pool (1..=64, default 4). Every data pool is
-    /// multiplexed, so its size setting caps calls in flight rather than
-    /// sockets; see "x23 data pools" in `docs/gateway/system-design.md`.
+    /// Connections per x23 data pool (1..=64, default 4); see "x23 data
+    /// pools" in `docs/gateway/system-design.md`.
     pub x23_multiplex_connections: X23MultiplexConnections,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
@@ -475,7 +397,6 @@ impl Default for GatewayConfig {
             shutdown_grace_ms: 10_000,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),
-            indexer_pool_size: IndexerPoolSize::default(),
             scheduler_lookup_pool_size: SchedulerLookupPoolSize::default(),
             x23_multiplex_connections: X23MultiplexConnections::default(),
             db_gateway_address: None,
@@ -528,15 +449,6 @@ impl GatewayConfig {
         self.request_timeout()
             .saturating_sub(self.request_timeout_margin())
             .max(Duration::from_millis(1))
-    }
-
-    /// A canceled data call gets one more backend request timeout for its
-    /// late reply before its pool is treated as stalled and replaced.
-    pub(crate) fn x23_data_pool(&self) -> X23DataPool {
-        X23DataPool {
-            connections: self.x23_multiplex_connections,
-            stalled_call_timeout: self.backend_request_timeout(),
-        }
     }
 
     pub(crate) fn http_request_timeout(&self) -> Duration {

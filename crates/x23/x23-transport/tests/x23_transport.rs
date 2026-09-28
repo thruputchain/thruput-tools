@@ -160,7 +160,7 @@ fn hogd_large_message_limit_is_bounded() {
 // --- multiplexed pools -------------------------------------------------
 
 /// Echoes after a short hold and records the most calls it had in flight at
-/// once, so a test can see the transport's execution cap from the peer's side.
+/// once, so a test can see multiplexing from the peer's side.
 struct HoldingEcho {
     in_flight: AtomicUsize,
     peak: AtomicUsize,
@@ -212,14 +212,6 @@ async fn start_holding_echo_server() -> (std::net::SocketAddr, Arc<HoldingEcho>)
     (addr, handler)
 }
 
-/// A multiplexed kind whose stall timeout never fires within a test.
-fn multiplex(max_in_flight: usize) -> PoolKind {
-    PoolKind::Multiplex {
-        max_in_flight,
-        stalled_call_timeout: std::time::Duration::from_mins(10),
-    }
-}
-
 async fn echo_calls(sender: &Arc<dyn RpcSender>, calls: usize) {
     let mut pending = Vec::new();
     for i in 0..calls {
@@ -245,7 +237,7 @@ async fn multiplex_pool_carries_more_calls_than_connections() {
     let sender = connect_pool(
         "multiplex",
         &addr.to_string(),
-        multiplex(16),
+        PoolKind::Multiplex,
         2,
         ConnectionConfig::default(),
         build_sender,
@@ -258,47 +250,6 @@ async fn multiplex_pool_carries_more_calls_than_connections() {
     // Two connections carried all sixteen at once: the peer saw more than
     // two in flight, which a serial pool of two could never produce.
     assert!(handler.peak.load(Ordering::SeqCst) > 2);
-}
-
-#[tokio::test]
-async fn multiplex_pool_caps_calls_in_flight_below_connection_count() {
-    let (addr, handler) = start_holding_echo_server().await;
-    let sender = connect_pool(
-        "capped",
-        &addr.to_string(),
-        multiplex(3),
-        4,
-        ConnectionConfig::default(),
-        build_sender,
-    )
-    .await
-    .expect("bug: capped pool should connect");
-
-    echo_calls(&sender, 12).await;
-
-    assert!(handler.peak.load(Ordering::SeqCst) <= 3);
-}
-
-#[tokio::test]
-async fn multiplex_pool_rejects_zero_execution_width() {
-    let (addr, _handler) = start_holding_echo_server().await;
-    let err = connect_pool(
-        "zero",
-        &addr.to_string(),
-        multiplex(0),
-        1,
-        ConnectionConfig::default(),
-        build_dummy,
-    )
-    .await
-    .expect_err("bug: a zero execution width should be a configuration error");
-    assert!(matches!(
-        err,
-        ConnectError::ConnectFailed {
-            source: RpcError::InvalidPoolConfiguration,
-            ..
-        }
-    ));
 }
 
 #[tokio::test]
@@ -317,7 +268,7 @@ async fn try_connect_pool_returns_none_on_unreachable() {
         try_connect_pool(
             "dummy",
             &addr,
-            multiplex(4),
+            PoolKind::Multiplex,
             2,
             ConnectionConfig::default(),
             build_dummy,
@@ -428,60 +379,12 @@ fn spawn_call(
 }
 
 #[tokio::test]
-async fn canceled_call_keeps_its_execution_slot_until_the_peer_answers() {
+async fn canceled_call_frees_its_place_while_the_peer_still_holds_it() {
     let (addr, handler) = start_gated_echo_server().await;
     let sender = connect_pool(
         "width-one",
         &addr.to_string(),
-        multiplex(1),
-        2,
-        ConnectionConfig::default(),
-        build_sender,
-    )
-    .await
-    .expect("bug: pool should connect");
-
-    // The first call reaches the peer, which holds it; its caller gives up.
-    let first = spawn_call(&sender);
-    wait_for_arrivals(&handler, 1).await;
-    first.abort();
-    assert!(first.await.unwrap_err().is_cancelled());
-
-    // The width is one and the peer is still executing the canceled call,
-    // so the next call waits at the transport rather than reaching the peer.
-    let second = spawn_call(&sender);
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    assert!(
-        !second.is_finished(),
-        "bug: a second call must not run beside the canceled one"
-    );
-    assert_eq!(handler.arrived.load(Ordering::SeqCst), 1);
-    second.abort();
-    assert!(second.await.unwrap_err().is_cancelled());
-
-    // The peer answers the canceled call: its slot is free, and the next
-    // call goes through.
-    handler.release.add_permits(1);
-    let third = spawn_call(&sender);
-    wait_for_arrivals(&handler, 2).await;
-    handler.release.add_permits(1);
-    third
-        .await
-        .expect("bug: call task should finish")
-        .expect("bug: call after the slot frees should succeed");
-}
-
-#[tokio::test]
-async fn stalled_canceled_call_replaces_the_pool() {
-    let (addr, handler) = start_gated_echo_server().await;
-    let stall = std::time::Duration::from_millis(300);
-    let sender = connect_pool(
-        "stalling",
-        &addr.to_string(),
-        PoolKind::Multiplex {
-            max_in_flight: 1,
-            stalled_call_timeout: stall,
-        },
+        PoolKind::Multiplex,
         1,
         ConnectionConfig::default(),
         build_sender,
@@ -489,46 +392,19 @@ async fn stalled_canceled_call_replaces_the_pool() {
     .await
     .expect("bug: pool should connect");
 
-    // The peer never answers the first call, and its caller gives up.
+    // The peer holds the first call; its caller gives up.
     let first = spawn_call(&sender);
     wait_for_arrivals(&handler, 1).await;
-    let canceled_at = std::time::Instant::now();
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
 
-    // The stalled call holds the only slot until its stall timeout. A call
-    // that takes the slot while the pool is being replaced fails fast; the
-    // first one after the replacement reaches the peer on a fresh connection
-    // while the peer still holds the canceled call.
-    let mut reached = None;
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            let call = spawn_call(&sender);
-            loop {
-                if handler.arrived.load(Ordering::SeqCst) >= 2 {
-                    reached = Some(call);
-                    return;
-                }
-                if call.is_finished() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-            call.await
-                .expect("bug: call task should finish")
-                .expect_err("bug: no call can succeed while the peer holds every call");
-        }
-    })
-    .await
-    .expect("bug: a call should reach the peer once the pool is replaced");
-    let reached = reached.expect("bug: the loop returns only with a call at the peer");
-    assert!(
-        canceled_at.elapsed() >= stall,
-        "bug: a call ran before the canceled call was written off"
-    );
+    // The next call takes the freed place and reaches the peer on the same
+    // connection, beside the call the peer is still holding.
+    let second = spawn_call(&sender);
+    wait_for_arrivals(&handler, 2).await;
     handler.release.add_permits(2);
-    reached
+    second
         .await
         .expect("bug: call task should finish")
-        .expect("bug: call on the replacement pool should succeed");
+        .expect("bug: call after a canceled one should succeed");
 }

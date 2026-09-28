@@ -425,35 +425,25 @@ into `Unknown`.
 
 Every x23 data pool is an `rpc_driver::MultiplexPool` built through
 `x23-transport`: many calls in flight per connection, each routed to the
-connection with the fewest outstanding. A pool's size setting
-(`indexer_pool_size`, `scheduler_lookup_pool_size`, and the batcher-derived
-scheduler and `DbGateway` widths) is its execution width, enforced in the
-transport as a cap on calls in flight, and every data pool opens
+connection with the fewest outstanding. Every data pool opens
 `x23_multiplex_connections` (`--x23-multiplex-connections`, default 4)
-sockets. Roughly one connection per worker the backend serves with is the
-useful range; each connection's read loop is one task, so more sockets do not
-add throughput.
+sockets, and the transport imposes no cap of its own on calls in flight: the
+batchers' in-flight caps and the 68-call lookup admission bound with its
+`scheduler_lookup_pool_size` execution permits shape load, and inbound
+request concurrency bounds the rest. Roughly one connection per worker the
+backend serves with is the useful range; each connection's read loop is one
+task, so more sockets do not add throughput.
 
-Admission is unchanged: lookups stay under the 68-call bound with
-`scheduler_lookup_pool_size` execution permits, and the batchers keep their
-in-flight caps. Health probes use one serial `FixedSerialPool` connection,
-which a canceled probe poisons.
-
-A canceled data call keeps its share of the execution width until its
-connection delivers the late reply, which is discarded, or fails. The width
-therefore counts every call the backend may still be executing, and a caller
-that times out and retries cannot push more calls onto the backend than the
-width allows. A canceled call still outstanding one backend request timeout
-after its cancellation means its connection is not delivering: the transport
-shuts that pool down, failing the calls on it, and reconnects with backoff,
-as the serial pool replaced a canceled call's connection. Calls made while
-the replacement is being opened fail fast. This recovery is in the
-transport, so it covers the indexer, `DbGateway`, and `ViewGateway` pools,
-whose timeouts do not otherwise touch their pools. A submit timeout still
-invalidates the scheduler generation, which drops all of that generation's
-pools, and the health loop rebuilds them behind the readiness grace. A
-lookup timeout aborts only that lookup's worker and leaves the generation
-alone.
+Health probes use one serial `FixedSerialPool` connection, which a canceled
+probe poisons. A canceled data call frees its place at once; its request may
+still run at the backend, whose late reply is discarded, and the connection
+stays in service. A connection refuses new calls once it holds
+`MULTIPLEX_OUTPUT_BACKLOG_BYTES` (128 MiB) unsent, so a backend that stops
+draining its socket costs bounded memory and fails calls fast rather than
+queuing them. A submit timeout invalidates the scheduler generation, which
+drops all of that generation's pools, and the health loop rebuilds them
+behind the readiness grace. A lookup timeout aborts only that lookup's worker
+and leaves the generation alone.
 
 ---
 
