@@ -732,6 +732,26 @@ where
         .await
     }
 
+    #[tracing::instrument(skip_all, fields(calls = request.calls.len()))]
+    async fn view_batch(
+        &self,
+        request: groundhog_json_rpc_types::view::ViewBatchRequest,
+    ) -> RpcResult<groundhog_json_rpc_types::view::ViewBatchResponse> {
+        let context = self
+            .request_context()
+            .capped_from_start(std::time::Duration::from_millis(u64::from(
+                groundhog_view::kMaxViewBatchBudgetMillis,
+            )));
+        self.within_request_deadline(context, async {
+            validate_view_batch(&request, &self.config)?;
+            Ok(self
+                .view
+                .view_batch(context, request, self.config.view_gas_limit)
+                .await?)
+        })
+        .await
+    }
+
     #[tracing::instrument(skip_all)]
     async fn version(&self) -> RpcResult<VersionInfo> {
         let context = self.request_context();
@@ -764,6 +784,81 @@ fn view_gas_limit(requested: Option<u64>, ceiling: u64) -> Result<u64, RpcServer
             "view gasLimit {gas_limit} exceeds maximum {ceiling}"
         ))),
         Some(gas_limit) => Ok(gas_limit),
+    }
+}
+
+fn validate_view_batch(
+    request: &groundhog_json_rpc_types::view::ViewBatchRequest,
+    config: &RpcServerConfig,
+) -> Result<(), RpcServerError> {
+    use groundhog_view::{kMaxViewBatchCalldataBytes, kMaxViewBatchCalls, kMaxViewBatchGas};
+    let invalid = |message: &str| RpcServerError::InvalidParam(message.into());
+    if request.calls.is_empty() || request.calls.len() > kMaxViewBatchCalls as usize {
+        return Err(invalid("viewBatch must contain between 1 and 16 calls"));
+    }
+    if request
+        .min_height
+        .as_ref()
+        .is_some_and(|height| **height < 0)
+    {
+        return Err(invalid("minHeight must be non-negative"));
+    }
+    let mut remaining_gas = kMaxViewBatchGas;
+    let mut remaining = kMaxViewBatchCalldataBytes as usize;
+    for call in &request.calls {
+        let gas = view_gas_limit(call.gas_limit, config.view_gas_limit)?;
+        if gas > remaining_gas {
+            return Err(invalid("viewBatch exceeds the aggregate gas limit"));
+        }
+        remaining_gas -= gas;
+        if call.entrypoint.0.len() != 8 {
+            return Err(invalid("view entrypoint must be exactly 8 bytes"));
+        }
+        let size = call.calldata.0.len();
+        if size > config.max_view_calldata_bytes || size > remaining {
+            return Err(invalid("viewBatch exceeds the calldata limit"));
+        }
+        remaining -= size;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod view_batch_validation_tests {
+    use super::*;
+    use groundhog_json_rpc_types::{hex::HexBytes, view::ViewBatchRequest};
+
+    #[test]
+    fn validates_call_count_calldata_gas_and_height_bounds() {
+        let call = ViewRequest {
+            contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
+            entrypoint: HexBytes(vec![0; 8]),
+            calldata: HexBytes(vec![0; 4096]),
+            caller: None,
+            gas_limit: None,
+        };
+        let config = RpcServerConfig::default();
+        let mut request = ViewBatchRequest {
+            calls: vec![call.clone(); 16],
+            min_height: Some(0.into()),
+        };
+        assert!(validate_view_batch(&request, &config).is_ok());
+        request.calls[0].calldata.0.push(0);
+        assert!(validate_view_batch(&request, &config).is_err());
+        request.calls[0] = call.clone();
+        request.calls.push(call.clone());
+        assert!(validate_view_batch(&request, &config).is_err());
+        request.calls = vec![call];
+        request.min_height = Some((-1).into());
+        assert!(validate_view_batch(&request, &config).is_err());
+        request.min_height = None;
+        let excessive_gas = RpcServerConfig {
+            view_gas_limit: 160_000_001,
+            ..config
+        };
+        assert!(validate_view_batch(&request, &excessive_gas).is_err());
+        request.calls.clear();
+        assert!(validate_view_batch(&request, &RpcServerConfig::default()).is_err());
     }
 }
 

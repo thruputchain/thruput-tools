@@ -16,6 +16,7 @@ description = "Reusable JSON-RPC server layer for Groundhog"
 workspace = true
 
 [dependencies]
+groundhog_view = { workspace = true }
 groundhog-build-info = { workspace = true }
 groundhog-bundle-identity = { workspace = true }
 groundhog-json-rpc-api = { workspace = true }

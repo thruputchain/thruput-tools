@@ -25,14 +25,14 @@ use groundhog_json_rpc_types::{
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
-    view::{ViewRequest, ViewResponse},
+    view::{ViewBatchRequest, ViewBatchResponse, ViewRequest, ViewResponse},
 };
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "11.0.1";
+pub const WIRE_FORMAT_VERSION: &str = "11.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -174,6 +174,16 @@ pub trait GroundhogApi {
     /// rejected as an invalid parameter.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
+
+    /// Simulate up to 16 independent calls against one committed snapshot.
+    /// Results preserve input order and include return, abort, or fault with events.
+    /// Calls do not observe each other's writes. Abandoned snapshots retry the whole
+    /// group, up to three attempts. There is no partial success or automatic chunking.
+    /// Aggregate limits: 64 KiB calldata, 160M gas per attempt, 1 MiB XDR result
+    /// including events. The response deadline is at most 30 seconds; running backend
+    /// work may outlive it. The returned height is committed H, with execution context H+1.
+    #[method(name = "viewBatch")]
+    async fn view_batch(&self, request: ViewBatchRequest) -> RpcResult<ViewBatchResponse>;
 
     /// Version dimensions for this JSON-RPC server.
     #[method(name = "version")]

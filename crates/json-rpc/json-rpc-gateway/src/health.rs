@@ -1645,6 +1645,12 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for SaturatedViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this health test")
+        }
         async fn viewgateway_intro(
             &self,
             _protocol: Protocol,
@@ -1982,6 +1988,12 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for LifecycleViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            panic!("batch is not used by this health test")
+        }
         async fn viewgateway_intro(
             &self,
             _protocol: Protocol,

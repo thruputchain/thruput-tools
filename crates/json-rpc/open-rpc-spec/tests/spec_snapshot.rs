@@ -396,11 +396,14 @@ fn assert_error_data_schemas_are_wired(errors: &serde_json::Map<String, serde_js
             .values()
             .filter(|error| !matches!(
                 error["x-name"].as_str(),
-                Some("TxInvalid" | "LocalFundingUnresolved")
+                Some("TxInvalid" | "LocalFundingUnresolved" | "ViewHeightUnavailable")
             ))
             .all(|error| error["x-data-schema"].is_null()),
-        "only transaction validation and unresolved funding document structured data"
+        "only transaction validation, unresolved funding, and view height errors document structured data"
     );
+    let height_data = &errors["ViewHeightUnavailable"]["x-data-schema"];
+    assert!(height_data["properties"]["requested"].is_object());
+    assert!(height_data["properties"]["observed"].is_object());
 }
 
 fn snapshot_path() -> PathBuf {

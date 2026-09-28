@@ -27,6 +27,9 @@ pub mod codes {
     /// Block height out of range (negative, or beyond current tip).
     pub const BLOCK_NOT_FOUND: i32 = -32010;
 
+    /// The committed snapshot remains below the requested minimum height.
+    pub const VIEW_HEIGHT_UNAVAILABLE: i32 = -32011;
+
     /// Backend (hogd indexer or scheduler) unavailable.
     pub const BACKEND_UNAVAILABLE: i32 = -32050;
 
@@ -51,6 +54,7 @@ pub mod codes {
         TX_NOT_FOUND,
         LOCAL_FUNDING_UNRESOLVED,
         BLOCK_NOT_FOUND,
+        VIEW_HEIGHT_UNAVAILABLE,
         BACKEND_UNAVAILABLE,
         BACKEND_TIMEOUT,
         NOT_IMPLEMENTED,
@@ -78,6 +82,12 @@ pub const ERROR_INFOS: &[RpcErrorInfo] = &[
         code: codes::LOCAL_FUNDING_UNRESOLVED,
         message: "Local funding unresolved",
         description: "Local funding retained a signed transaction but could not resolve its outcome. Data contains its transaction hash and exact signed bytes, not proof of admission or execution. Reconcile that hash and retry the original request; do not create a replacement transfer.",
+    },
+    RpcErrorInfo {
+        name: "ViewHeightUnavailable",
+        code: codes::VIEW_HEIGHT_UNAVAILABLE,
+        message: "View height unavailable",
+        description: "The committed snapshot remains below minHeight after one refresh. Data contains requested and observed heights. No future block is awaited.",
     },
     RpcErrorInfo {
         name: "InvalidParams",

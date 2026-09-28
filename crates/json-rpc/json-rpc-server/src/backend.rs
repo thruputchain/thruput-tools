@@ -294,6 +294,16 @@ pub trait ReadPlane: Send + Sync + 'static {
 /// Backend plane for sandboxed contract simulation.
 #[async_trait]
 pub trait ViewPlane: Send + Sync + 'static {
+    /// Execute independent calls on one retained committed snapshot.
+    async fn view_batch(
+        &self,
+        _context: RpcRequestContext,
+        _request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        _gas_limit: u64,
+    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        Err(RpcServerError::NotImplemented("viewBatch".into()))
+    }
+
     /// Execute a sandboxed contract simulation.
     ///
     /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`

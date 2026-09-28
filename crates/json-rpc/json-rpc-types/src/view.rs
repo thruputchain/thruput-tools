@@ -5,6 +5,53 @@ use crate::events::EmittedEvent;
 use crate::hex::HexBytes;
 use crate::{BlockHeight, ContractAddress};
 
+/// Independent simulations against one committed snapshot, in request order.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewBatchRequest {
+    /// Between 1 and 16 calls, with at most 64 KiB of aggregate calldata.
+    pub calls: Vec<ViewRequest>,
+    /// Minimum committed height. Refreshes once if behind; does not wait for a future block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
+    pub min_height: Option<BlockHeight>,
+}
+
+/// Ordered simulation results from a single committed snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewBatchResponse {
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub height: BlockHeight,
+    pub results: Vec<ViewCallResult>,
+}
+
+/// One independent simulation's output and events; writes never reach another call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewCallResult {
+    pub output: RootInvocationOutput,
+    pub events: Vec<EmittedEvent>,
+    /// Gas consumed by this independent simulation.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
+    pub gas_used: u64,
+}
+
+/// Requested minimum height and the committed height observed after one refresh.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewHeightUnavailable {
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub requested: BlockHeight,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+    pub observed: BlockHeight,
+}
+
 /// Request for sandboxed contract simulation against the latest committed state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

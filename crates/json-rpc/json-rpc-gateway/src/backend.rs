@@ -211,6 +211,16 @@ impl ReadPlane for GatewayBackend {
 #[async_trait]
 impl ViewPlane for GatewayBackend {
     #[tracing::instrument(skip_all)]
+    async fn view_batch(
+        &self,
+        context: RpcRequestContext,
+        request: groundhog_json_rpc_types::view::ViewBatchRequest,
+        gas_limit: u64,
+    ) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+        handlers::view::view_batch(&self.ctx, context, request, gas_limit).await
+    }
+
+    #[tracing::instrument(skip_all)]
     async fn view(
         &self,
         context: RpcRequestContext,

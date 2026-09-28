@@ -16,6 +16,53 @@ use crate::{
 
 use super::{VIEW_GATEWAY, backend_deadline, timed_backend_call};
 
+/// Execute one shared-snapshot batch with a strict public response deadline.
+#[tracing::instrument(skip_all)]
+pub async fn view_batch(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    request: groundhog_json_rpc_types::view::ViewBatchRequest,
+    gas_limit: u64,
+) -> Result<groundhog_json_rpc_types::view::ViewBatchResponse, RpcServerError> {
+    let context = context.capped_from_start(Duration::from_millis(u64::from(
+        groundhog_view::kMaxViewBatchBudgetMillis,
+    )));
+    let timeout =
+        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
+    let deadline = backend_deadline(context, timeout)?;
+    let client = ctx.view_gateway.read().await.clone().ok_or_else(|| {
+        if ctx.config.view_gateway_address.is_some() {
+            RpcServerError::BackendUnavailable("view_gateway not connected".into())
+        } else {
+            RpcServerError::NotImplemented("viewBatch".into())
+        }
+    })?;
+    let query = shared_view::view_batch_query(
+        request,
+        gas_limit,
+        deadline.saturating_duration_since(Instant::now()),
+    )?;
+    let result = timed_backend_call(
+        &ctx.metrics,
+        HealthBackend::ViewGateway,
+        "viewgateway_view_batch",
+        VIEW_GATEWAY,
+        deadline,
+        client.viewgateway_view_batch(&query),
+        |result| {
+            matches!(
+                result,
+                groundhog_view::ViewGatewayBatchResult::ViewGatewayBatchOk { .. }
+            )
+        },
+    )
+    .await;
+    if matches!(result, Err(RpcServerError::BackendTimeout)) {
+        ctx.metrics.observe_view_timeout();
+    }
+    shared_view::view_batch_response(VIEW_GATEWAY, &query, result?)
+}
+
 /// Execute a sandboxed contract simulation through hogd `ViewGateway`.
 #[tracing::instrument(
     skip_all,
@@ -123,6 +170,13 @@ mod tests {
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for FakeViewGateway {
+        async fn viewgateway_view_batch(
+            &self,
+            _: groundhog_view::ViewGatewayBatchQuery,
+        ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok(groundhog_view::ViewGatewayBatchResult::Default { outcome: 6 })
+        }
         async fn viewgateway_intro(
             &self,
             _arg0: Protocol,
