@@ -108,6 +108,35 @@ const VIEW: &[&str] = &["view", "counter", "0x0102030405060708"];
 const SLOW: Duration = Duration::from_millis(500);
 
 #[test]
+fn init_declines_preserve_scrollback_and_show_partial_setup() {
+    let root = TempDir::new().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command
+        .arg("init")
+        .current_dir(root.path())
+        .env("XDG_CONFIG_HOME", root.path().join("config"))
+        .env("XDG_CACHE_HOME", root.path().join("cache"))
+        .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
+        .env_remove("GROUNDHOG_PROFILE")
+        .env_remove("NO_COLOR");
+    let mut pty = Pty::spawn(command);
+    pty.until(|pty| {
+        String::from_utf8_lossy(&pty.raw).contains("Generate a local signing key now?")
+    });
+    pty.master.write_all(b"n\n").unwrap();
+    pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Create a starter project?"));
+    pty.master.write_all(b"n\n").unwrap();
+    assert!(pty.finish().success());
+    let history = pty.history();
+    assert!(history.contains("PREEXISTING-SHELL-LINE"));
+    assert!(
+        history.contains("skipped") && history.contains("Partially completed"),
+        "{history}"
+    );
+}
+
+#[test]
 fn inspection_commands_render_complete_empty_and_pending_results() {
     let hash = address();
     for (args, result, method, title) in [

@@ -38,19 +38,26 @@ pub fn run_in(
         }
         Err(e) => return Err(e.into()),
     }
-    let task = print.start_task(format_args!("Creating project `{name}`"));
+    let task = crate::print::progress::Task::start(print, "Creating project", true);
+    task.print()
+        .phase(format_args!("Creating project `{name}`"));
     crate::scaffold::generate(dir, name, template)?;
-    task.success(format_args!("Created project `{name}`"));
+    let _ = task.finish();
+    if !print.has_human_ui() {
+        print.success(format_args!("Created project `{name}`"));
+    }
 
     let warnings = scaffold_warnings();
-    for warning in &warnings {
-        print.warn(format_args!("{}: {}", warning.code, warning.message));
-        if let Some(hint) = warning.hint.as_deref() {
-            print.status(format_args!("  hint: {hint}"));
+    if !print.has_human_ui() {
+        for warning in &warnings {
+            print.warn(format_args!("{}: {}", warning.code, warning.message));
+            if let Some(hint) = warning.hint.as_deref() {
+                print.status(format_args!("  hint: {hint}"));
+            }
         }
     }
 
-    render_project_ready(dir, name, template, print);
+    render_project_ready(dir, name, template, &warnings, print);
     print.json(&crate::result::CommandResult::with_warnings(
         cmd,
         warnings,
@@ -92,7 +99,13 @@ fn scaffold_warnings() -> Vec<Finding> {
     }]
 }
 
-fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
+fn render_project_ready(
+    dir: &Path,
+    name: &str,
+    template: &str,
+    warnings: &[Finding],
+    print: &Print,
+) {
     if print.is_quiet() || print.is_json() {
         return;
     }
@@ -108,7 +121,11 @@ fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
     ];
 
     print.status("");
-    print.summary_card("Project Ready", &items);
+    if print.has_human_ui() {
+        print.summary_report("Project Ready", &items, warnings.iter());
+    } else {
+        print.summary_card("Project Ready", &items);
+    }
 
     let next_steps = vec![
         format!("cd {}", render_shell_arg(&dir.to_string_lossy())),

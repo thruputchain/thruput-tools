@@ -247,6 +247,28 @@ fn archive_codegen_and_toolchain_actions_keep_complete_results_and_raw_source() 
     assert_eq!(raw.stdout, fs::read(root.join("contract.ts")).unwrap());
 }
 
+#[test]
+fn scaffolds_and_ready_init_use_shared_cards() {
+    let fixture = Fixture::new();
+    fixture.populate();
+    for args in [
+        vec!["new", "counter-example"],
+        vec!["new", "stub-example", "--template", "stub"],
+        vec!["init"],
+    ] {
+        let output = terminal_capture(fixture.command(&args), 40, true);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(text.contains('╭'));
+        assert!(!text.contains("\x1b[2J"));
+        assert!(output.stdout.is_empty());
+    }
+}
+
 fn visible(output: &Output, columns: u16) -> String {
     assert!(
         output.status.success(),

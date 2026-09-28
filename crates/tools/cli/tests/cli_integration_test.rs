@@ -2772,9 +2772,13 @@ fn init_boxes_respect_stderr_terminal_width() {
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(output.contains("Groundhog Ready"));
-        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Setup"), columns >= 58);
         let plain = strip_terminal_styles(&output);
-        assert_eq!(plain.contains("╭─ Groundhog Ready"), columns > 0);
+        assert_eq!(plain.contains("╭─ Groundhog Setup"), columns > 0);
+        assert_eq!(plain.contains("╭─ ✓ Ready: Groundhog Ready"), columns > 0);
+        assert!(
+            !output.contains("\x1b[2J"),
+            "setup must preserve scrollback"
+        );
         if columns > 0 {
             use unicode_width::UnicodeWidthStr;
             for line in plain

@@ -12,13 +12,6 @@ use crate::{CliError, Print};
 const INIT_STEPS: usize = 4;
 const DEFAULT_LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const CYAN: &str = "\x1b[36m";
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
-
 /// Run the interactive first-run wizard.
 pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     if print.is_json() {
@@ -216,13 +209,6 @@ enum InitStep {
 }
 
 impl InitStep {
-    const ALL: [Self; INIT_STEPS] = [
-        Self::Environment,
-        Self::Profiles,
-        Self::SigningKey,
-        Self::Project,
-    ];
-
     const fn index(self) -> usize {
         match self {
             Self::Environment => 0,
@@ -263,7 +249,6 @@ impl StepState {
 
 struct InitUi<'a> {
     print: &'a Print,
-    tty: bool,
     steps: [StepState; INIT_STEPS],
 }
 
@@ -271,7 +256,6 @@ impl<'a> InitUi<'a> {
     fn new(print: &'a Print) -> Self {
         Self {
             print,
-            tty: print.is_human_tty(),
             steps: [StepState::Pending; INIT_STEPS],
         }
     }
@@ -281,20 +265,13 @@ impl<'a> InitUi<'a> {
             return;
         }
 
-        if self.tty {
-            self.clear_screen();
-            self.render_tty_header(
-                "Groundhog Setup",
-                "Set up your local development environment.",
-            );
-            self.render_tty_progress();
-            eprintln!();
-        } else {
-            self.print.status("Groundhog Setup");
-            self.print
-                .status("Set up your local development environment.");
-            self.print.status("");
-        }
+        self.print.summary_card(
+            "Groundhog Setup",
+            &[(
+                "Purpose".into(),
+                "Set up your local development environment.".into(),
+            )],
+        );
     }
 
     fn begin_step(&mut self, step: InitStep) {
@@ -304,42 +281,28 @@ impl<'a> InitUi<'a> {
             return;
         }
 
-        if self.tty {
-            self.clear_screen();
-            self.render_tty_header(
-                "Groundhog Setup",
-                "Set up your local development environment.",
-            );
-            self.render_tty_progress();
-            eprintln!();
-        } else {
-            self.print.status(format_args!(
-                "[{}/{}] {}",
-                step.index() + 1,
-                INIT_STEPS,
-                step.label()
-            ));
-        }
+        self.print.status(format_args!(
+            "[{}/{}] {}",
+            step.index() + 1,
+            INIT_STEPS,
+            step.label()
+        ));
     }
 
     fn finish_step(&mut self, step: InitStep, state: StepState) {
         self.steps[step.index()] = state;
+        if state == StepState::Skipped {
+            self.print
+                .note(format_args!("{}: {}", step.label(), state.label()));
+        }
     }
 
     fn success(&self, msg: impl std::fmt::Display) {
-        if self.tty {
-            eprintln!("{GREEN}✓{RESET} {msg}");
-        } else {
-            self.print.status(format_args!("[ok] {msg}"));
-        }
+        self.print.success(msg);
     }
 
     fn note(&self, msg: impl std::fmt::Display) {
-        if self.tty {
-            eprintln!("{YELLOW}•{RESET} {msg}");
-        } else {
-            self.print.status(format_args!("- {msg}"));
-        }
+        self.print.note(msg);
     }
 
     fn completion_review(
@@ -352,84 +315,36 @@ impl<'a> InitUi<'a> {
             return;
         }
 
-        if self.tty {
-            self.clear_screen();
-            self.print.summary_card(title, items);
-        } else {
-            self.print.status("");
-            self.print.status(title);
-            self.print.status("");
-            for (label, value) in items {
-                self.print.status(format_args!("{label}: {value}"));
-            }
-        }
-
-        self.print.status("");
-        self.print.status("Next:");
+        self.print.outcome_card(
+            if self.steps.contains(&StepState::Skipped) {
+                crate::print::Outcome::Partial
+            } else {
+                crate::print::Outcome::Ready
+            },
+            title,
+            items,
+        );
+        let mut commands = Vec::new();
         match next_steps {
-            NextSteps::Status => self.print.status("  groundhog status"),
+            NextSteps::Status => commands.push("groundhog status".into()),
             NextSteps::NewProject => {
-                self.print.status("  groundhog new my-contract");
-                self.print.status("  cd my-contract");
-                self.print.status("  groundhog build");
+                commands.extend([
+                    "groundhog new my-contract".into(),
+                    "cd my-contract".into(),
+                    "groundhog build".into(),
+                ]);
             }
             NextSteps::BuildProject(project) => {
                 if project.needs_cd {
-                    self.print.status(format_args!(
-                        "  cd {}",
+                    commands.push(format!(
+                        "cd {}",
                         crate::terminal::render_shell_arg(&project.name),
                     ));
                 }
-                self.print.status("  groundhog build");
+                commands.push("groundhog build".into());
             }
         }
-    }
-
-    fn clear_screen(&self) {
-        if self.tty {
-            eprint!("\x1b[2J\x1b[H");
-        }
-    }
-
-    fn render_tty_header(&self, title: &str, subtitle: &str) {
-        let inner_width: usize = 56;
-        if crate::terminal::stderr_width().is_none_or(|width| width < inner_width + 2) {
-            self.print.status(format_args!("{title}\n{subtitle}\n"));
-            return;
-        }
-        let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
-        let fill = Self::line_fill('─', top_fill);
-        eprintln!("{CYAN}╭─ {BOLD}{title}{RESET}{CYAN}{fill}╮{RESET}");
-        eprintln!("{CYAN}│{RESET} {subtitle:<54} {CYAN}│{RESET}");
-        eprintln!("{CYAN}╰{}╯{RESET}", Self::line_fill('─', inner_width));
-        eprintln!();
-    }
-
-    fn render_tty_progress(&self) {
-        eprintln!("{BOLD}Progress{RESET}");
-        for step in InitStep::ALL {
-            let state = self.steps[step.index()];
-            let marker = match state {
-                StepState::Pending => format!("{DIM}○{RESET}"),
-                StepState::Current => format!("{CYAN}●{RESET}"),
-                StepState::Done => format!("{GREEN}✓{RESET}"),
-                StepState::Skipped => format!("{YELLOW}–{RESET}"),
-            };
-            let raw_label = step.label();
-            let label = match state {
-                StepState::Pending => format!("{DIM}{raw_label}{RESET}"),
-                StepState::Current => format!("{CYAN}{raw_label}{RESET}"),
-                StepState::Done => format!("{GREEN}{raw_label}{RESET}"),
-                StepState::Skipped => format!("{YELLOW}{raw_label}{RESET}"),
-            };
-            let padding = Self::line_fill(' ', 16usize.saturating_sub(raw_label.chars().count()));
-            let state_label = state.label();
-            eprintln!("  {marker} {label}{padding} {DIM}{state_label}{RESET}");
-        }
-    }
-
-    fn line_fill(ch: char, len: usize) -> String {
-        std::iter::repeat_n(ch, len).collect()
+        self.print.next_steps(&commands);
     }
 }
 

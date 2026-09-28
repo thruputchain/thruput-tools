@@ -13,7 +13,7 @@ rules, and raw payloads remain command contracts.
 | GH-391 | queries, history, listings | Shared query cards, grouped history, stdout toolchain table; raw `which` path retained | Workspace tests passed; RPC PTYs cover absent storage, pending transactions, sparse pages, empty events/transfers; final matrix audit pending |
 | GH-416 | config/key/wallet management | Shared mutation/no-change/cancelled results; raw key export retained | Workspace suite and management PTY scenarios passed; existing authorization/secret tests retained |
 | GH-417 | toolchain actions, archives, codegen | Shared acquisition/archive progress and action results; raw codegen/which output retained | Workspace suite and archive round-trip/codegen/raw-source/clean-no-op PTYs passed |
-| GH-396 | new, init | Pending | Pending |
+| GH-396 | new, init | Shared setup cards, outcomes, next steps; removed fixed ANSI boxes and screen clearing | Workspace suite, counter/stub/ready-init PTYs and declined-step scrollback test passed |
 | GH-393 | deploy, call, transfer, airdrop, wallet create | Pending | Pending |
 | GH-392 | test: single/workspace/watch/integration | Pending | Pending |
 | GH-395 | node, docs | Pending | Pending |
