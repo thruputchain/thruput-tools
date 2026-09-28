@@ -13,9 +13,6 @@ mod report;
 mod theme;
 pub use theme::Outcome;
 
-const RESET: &str = "\x1b[0m";
-const CYAN: &str = "\x1b[36m";
-
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
 #[derive(Debug, Clone)]
@@ -213,11 +210,6 @@ impl Print {
 
     fn output_allows_prompt(&self) -> bool {
         !self.quiet && !self.json
-    }
-
-    /// Returns whether styled interactive output is appropriate.
-    pub fn is_human_tty(&self) -> bool {
-        self.output_policy().color
     }
 
     /// Whether stderr supports the shared human layout, including monochrome terminals.
@@ -449,23 +441,6 @@ impl Print {
         self.write_report(output);
     }
 
-    /// Start a short human task line that can be replaced by success in TTY mode.
-    pub fn start_task(&self, msg: impl std::fmt::Display) -> TaskLine<'_> {
-        let tty = self.is_human_tty();
-        if tty {
-            eprint!("{CYAN}…{RESET} {msg}");
-            let _ = io::stderr().flush();
-        } else {
-            self.status(msg);
-        }
-
-        TaskLine {
-            print: self,
-            tty,
-            active: tty,
-        }
-    }
-
     /// Warning — always printed in human mode. No-op in
     /// JSON mode (commands must collect warnings into the
     /// command result envelope instead).
@@ -612,43 +587,6 @@ fn wizard_answer(answer: &str, default_yes: bool, received_input: bool) -> bool 
         return default_yes;
     }
     matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes")
-}
-
-/// A short-lived task line started by [`Print::start_task`].
-pub struct TaskLine<'a> {
-    print: &'a Print,
-    tty: bool,
-    active: bool,
-}
-
-impl TaskLine<'_> {
-    /// Clear the loading line in TTY mode without printing a replacement.
-    pub fn clear(mut self) {
-        if self.tty {
-            eprint!("\r\x1b[2K");
-            let _ = io::stderr().flush();
-        }
-        self.active = false;
-    }
-
-    /// Replace the loading line with a styled success message in TTY mode.
-    pub fn success(mut self, msg: impl std::fmt::Display) {
-        if self.tty {
-            eprint!("\r\x1b[2K");
-            let _ = io::stderr().flush();
-        }
-        self.active = false;
-        self.print.success(msg);
-    }
-}
-
-impl Drop for TaskLine<'_> {
-    fn drop(&mut self) {
-        if self.active && self.tty {
-            eprint!("\r\x1b[2K");
-            let _ = io::stderr().flush();
-        }
-    }
 }
 
 /// Render a subprocess invocation as a single inspectable line.

@@ -21,6 +21,9 @@ use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
 mod support;
+#[cfg(unix)]
+#[path = "support/ui_audit.rs"]
+mod ui_audit;
 
 static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

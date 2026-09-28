@@ -110,17 +110,23 @@ pub fn run(
         print,
     )?;
     if !dry_run {
-        print.detail("artifact", plan.artifact.path.display());
-        if let Some(package) = package {
-            print.detail("package", package);
-        }
-        print.detail(
-            "wallet",
-            plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
+        print.group(
+            crate::print::Outcome::Information,
+            "Review deployment",
+            |print| {
+                print.detail("artifact", plan.artifact.path.display());
+                if let Some(package) = package {
+                    print.detail("package", package);
+                }
+                print.detail(
+                    "wallet",
+                    plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
+                );
+                print.detail("profile", &plan.profile_name);
+            },
         );
-        print.detail("profile", &plan.profile_name);
         if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
-            print.note("Cancelled");
+            print.cancelled();
             return Ok(());
         }
     }
@@ -129,16 +135,19 @@ pub fn run(
         return print_dry_run(&prepared, cmd, print);
     }
 
-    let task = print.start_task(format_args!(
+    crate::tx_utils::print_prepared_transaction(&prepared.tx_hex, print);
+    let task = crate::print::progress::Task::start(print, "Submitting deployment", true);
+    task.print().phase(format_args!(
         "Deploying {} artifact",
         prepared.artifact.kind.as_str()
     ));
 
     let submitted = submit_prepared_deploy_and_resolve(&prepared)?;
-    task.clear();
     let tx_hash = submitted.tx_hash;
     let receipt = submitted.receipt;
-    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
+    let transaction_detail =
+        fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, task.print());
+    let warnings = task.finish();
     let contract_addr_hex = submitted.contract_address;
     let address_source = submitted.address_source;
 
@@ -147,34 +156,53 @@ pub fn run(
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
     let insufficient_funding = is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref());
-    match &receipt.status {
-        groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
-            let contract_addr_hex = contract_addr_hex
-                .as_deref()
-                .expect("bug: successful deploy must resolve a contract address");
-            print.success("Deployed contract");
-            print.detail("address", contract_addr_hex);
-            if matches!(address_source, Some(DeployAddressSource::Derived)) {
-                print.warn(
-                    "receipt omitted deploy return_data; address was derived locally from \
+    print.group(
+        if matches!(
+            receipt.status,
+            groundhog_json_rpc_types::receipt::ExecStatus::Ok
+        ) {
+            crate::print::Outcome::Success
+        } else {
+            crate::print::Outcome::Error
+        },
+        "Deployment",
+        |print| {
+            match &receipt.status {
+                groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
+                    let contract_addr_hex = contract_addr_hex
+                        .as_deref()
+                        .expect("bug: successful deploy must resolve a contract address");
+                    print.success("Deployed contract");
+                    print.detail("address", contract_addr_hex);
+                    if matches!(address_source, Some(DeployAddressSource::Derived)) {
+                        print.warn(
+                            "receipt omitted deploy return_data; address was derived locally from \
                      deployer, nonce, and contract hash",
-                );
+                        );
+                    }
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print.detail("gas used", receipt.gas_used);
+                }
+                other => {
+                    if insufficient_funding {
+                        print_insufficient_deploy_funding(&prepared, print);
+                    } else {
+                        print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+                    }
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
+                }
             }
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print.detail("gas used", receipt.gas_used);
-        }
-        other => {
-            if insufficient_funding {
-                print_insufficient_deploy_funding(&prepared, print);
-            } else {
-                print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+            for warning in &warnings {
+                print.warn(warning);
             }
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
-        }
-    }
+            if let Some(detail) = transaction_detail.as_ref() {
+                print_transaction_detail(detail, print);
+            }
+        },
+    );
 
     // Save contract alias
     let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
@@ -234,10 +262,6 @@ pub fn run(
                 ),
             }
         }
-    }
-
-    if let Some(detail) = transaction_detail.as_ref() {
-        print_transaction_detail(detail, print);
     }
 
     let command_error =
@@ -365,18 +389,20 @@ fn print_dry_run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
-        prepared.artifact.kind.as_str(),
-        prepared.artifact_bytes_len,
-        prepared.rpc_url
-    ));
-    print.status(format_args!(
-        "  predicted address: {}",
-        prepared.predicted_address
-    ));
-    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
-    print.status("  submitted: no (--dry-run)");
+    print.group(crate::print::Outcome::DryRun, "Deployment", |print| {
+        print.status(format_args!(
+            "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
+            prepared.artifact.kind.as_str(),
+            prepared.artifact_bytes_len,
+            prepared.rpc_url
+        ));
+        print.status(format_args!(
+            "  predicted address: {}",
+            prepared.predicted_address
+        ));
+        print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+        print.status("  submitted: no (--dry-run)");
+    });
 
     print.json(&CommandResult::new(
         cmd,

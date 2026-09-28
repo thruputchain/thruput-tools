@@ -226,9 +226,13 @@ pub fn create(
 
     let plan = prepare_wallet_create_plan(&cwd, inputs, prefund)?;
     if !dry_run {
-        print_wallet_create_plan(&plan, print);
+        print.group(
+            crate::print::Outcome::Information,
+            "Review wallet creation",
+            |print| print_wallet_create_plan(&plan, print),
+        );
         if !print.confirm(force, "create a wallet", "Create this wallet?")? {
-            print.note("Cancelled");
+            print.cancelled();
             return Ok(());
         }
     }
@@ -256,13 +260,15 @@ fn create_local_wallet(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    crate::tx_utils::print_prepared_transaction(&prepared.prefund_tx_hex, print);
+    let task = crate::print::progress::Task::start(print, "Prefunding wallet", true);
     if prepared.wallet_name == prepared.key_name {
-        print.status(format_args!(
+        task.print().phase(format_args!(
             "Creating wallet for key '{}'...",
             prepared.key_name
         ));
     } else {
-        print.status(format_args!(
+        task.print().phase(format_args!(
             "Creating wallet '{}' for key '{}'...",
             prepared.wallet_name, prepared.key_name
         ));
@@ -272,20 +278,41 @@ fn create_local_wallet(
         submit_and_poll_blocking(&prepared.rpc_url, &prepared.prefund_tx_hex)?;
     let prefund_tx_hash = format_tx_hash(&prefund_tx_hash);
     ensure_tx_success("wallet create prefund", &prefund_receipt, &prefund_tx_hash)?;
+    let _ = task.finish();
+    print.detail("Prefund committed", &prefund_tx_hash);
+    crate::tx_utils::print_prepared_transaction(&prepared.create_tx_hex, print);
+    let task = crate::print::progress::Task::start(print, "Creating wallet", true);
 
-    let (create_tx_hash, create_receipt) =
-        submit_and_poll_blocking(&prepared.rpc_url, &prepared.create_tx_hex)?;
+    let creation = submit_and_poll_blocking(&prepared.rpc_url, &prepared.create_tx_hex);
+    let _ = task.finish();
+    let partial = |_: &CliError| {
+        print.outcome_card(
+            crate::print::Outcome::Partial,
+            "Wallet creation incomplete",
+            &[
+                ("Wallet".into(), prepared.wallet_address.clone()),
+                ("Prefund committed".into(), prefund_tx_hash.clone()),
+                (
+                    "Creation".into(),
+                    "Not confirmed successful; inspect the creation transaction before retrying"
+                        .into(),
+                ),
+            ],
+        );
+    };
+    let (create_tx_hash, create_receipt) = creation.inspect_err(partial)?;
     let create_tx_hash = format_tx_hash(&create_tx_hash);
-    ensure_tx_success("wallet create", &create_receipt, &create_tx_hash)?;
+    ensure_tx_success("wallet create", &create_receipt, &create_tx_hash).inspect_err(partial)?;
+    print.detail("Wallet creation committed", &create_tx_hash);
 
     let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| cwd.to_path_buf());
-    let make_default = should_initialize_default_wallet(
-        &project_root,
-        &prepared.profile_name,
-        &prepared.key_name,
-    )?;
+    let make_default =
+        should_initialize_default_wallet(&project_root, &prepared.profile_name, &prepared.key_name)
+            .inspect_err(|_| {
+                print_wallet_binding_failure(&prepared.wallet_address, &create_tx_hash, print);
+            })?;
     save_profile_wallet_address_with_default(
         &project_root,
         Some(&prepared.profile_name),
@@ -293,13 +320,18 @@ fn create_local_wallet(
         &prepared.wallet_address,
         &prepared.owner_public_key,
         make_default,
-    )?;
+    )
+    .inspect_err(|_| {
+        print_wallet_binding_failure(&prepared.wallet_address, &create_tx_hash, print);
+    })?;
 
-    print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+    print.group(crate::print::Outcome::Success, "Wallet created", |print| {
+        print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+        print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
+        print.status(format_args!("Txn: {create_tx_hash}"));
+    });
     let balance =
         observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
-    print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
-    print.status(format_args!("Txn: {create_tx_hash}"));
     print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
 
     let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
@@ -355,6 +387,7 @@ fn create_remote_wallet(
         .parse::<u128>()
         .map_or_else(|_| prepared.prefund_raw_amount.clone(), hog::format_amount);
     print.status(format_args!("Faucet wallet prefund: {prefund} HOG"));
+    let task = crate::print::progress::Task::start(print, "Creating remote wallet", true);
     let create: CreateWalletResponse = post_json(
         &client,
         &format!("{}/v1/create-wallet", prepared.faucet_url),
@@ -369,15 +402,18 @@ fn create_remote_wallet(
     )?;
     let (prefund_tx_hash, create_tx_hash, create_height) =
         validate_remote_wallet_create_response(prepared, &create)?;
+    let _ = task.finish();
+    print.detail("Prefund committed", &prefund_tx_hash);
+    print.detail("Wallet creation committed", &create_tx_hash);
 
     let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| cwd.to_path_buf());
-    let make_default = should_initialize_default_wallet(
-        &project_root,
-        &prepared.profile_name,
-        &prepared.key_name,
-    )?;
+    let make_default =
+        should_initialize_default_wallet(&project_root, &prepared.profile_name, &prepared.key_name)
+            .inspect_err(|_| {
+                print_wallet_binding_failure(&prepared.wallet_address, &create_tx_hash, print);
+            })?;
     save_profile_wallet_address_with_default(
         &project_root,
         Some(&prepared.profile_name),
@@ -385,13 +421,18 @@ fn create_remote_wallet(
         &prepared.wallet_address,
         &prepared.owner_public_key,
         make_default,
-    )?;
+    )
+    .inspect_err(|_| {
+        print_wallet_binding_failure(&prepared.wallet_address, &create_tx_hash, print);
+    })?;
     remove_remote_wallet_create_attempt(prepared)?;
-    print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+    print.group(crate::print::Outcome::Success, "Wallet created", |print| {
+        print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+        print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
+        print.status(format_args!("Txn: {create_tx_hash}"));
+    });
     let balance =
         observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
-    print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
-    print.status(format_args!("Txn: {create_tx_hash}"));
     print_wallet_funding_next_step(&prepared.wallet_name, &prepared.profile_name, print);
 
     print.json(&CommandResult::new(
@@ -416,6 +457,17 @@ fn create_remote_wallet(
     ))?;
 
     Ok(())
+}
+
+fn print_wallet_binding_failure(address: &str, tx_hash: &str, print: &Print) {
+    print.outcome_card(
+        crate::print::Outcome::Partial,
+        "Wallet created; local binding not saved",
+        &[
+            ("Wallet".into(), address.into()),
+            ("Transaction".into(), tx_hash.into()),
+        ],
+    );
 }
 
 fn print_wallet_create_plan(plan: &WalletCreatePlan, print: &Print) {
@@ -789,21 +841,23 @@ fn print_dry_run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Prepared dry-run wallet create `{}` for key `{}` on {}.",
-        prepared.wallet_name, prepared.key_name, prepared.rpc_url
-    ));
-    print.status(format_args!("  wallet: {}", prepared.wallet_address));
-    print.status(format_args!(
-        "  faucet: {} ({})",
-        prepared.faucet_key_name, prepared.faucet_role
-    ));
-    print.status(format_args!("  owner: {}", prepared.owner_public_key));
-    print.status(format_args!(
-        "  prefund raw amount: {}",
-        prepared.prefund_raw_amount
-    ));
-    print.status("  submitted: no (--dry-run)");
+    print.group(crate::print::Outcome::DryRun, "Wallet creation", |print| {
+        print.status(format_args!(
+            "Prepared dry-run wallet create `{}` for key `{}` on {}.",
+            prepared.wallet_name, prepared.key_name, prepared.rpc_url
+        ));
+        print.status(format_args!("  wallet: {}", prepared.wallet_address));
+        print.status(format_args!(
+            "  faucet: {} ({})",
+            prepared.faucet_key_name, prepared.faucet_role
+        ));
+        print.status(format_args!("  owner: {}", prepared.owner_public_key));
+        print.status(format_args!(
+            "  prefund raw amount: {}",
+            prepared.prefund_raw_amount
+        ));
+        print.status("  submitted: no (--dry-run)");
+    });
 
     print.json(&CommandResult::new(
         cmd,
@@ -833,13 +887,19 @@ fn print_remote_dry_run_plan(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Prepared dry-run remote wallet create `{}` for key `{}`.",
-        prepared.wallet_name, prepared.key_name
-    ));
-    print.status(format_args!("  faucet: {}", prepared.faucet_url));
-    print.status("  wallet address: resolved during submission");
-    print.status("  submitted: no (--dry-run)");
+    print.group(
+        crate::print::Outcome::DryRun,
+        "Remote wallet creation",
+        |print| {
+            print.status(format_args!(
+                "Prepared dry-run remote wallet create `{}` for key `{}`.",
+                prepared.wallet_name, prepared.key_name
+            ));
+            print.status(format_args!("  faucet: {}", prepared.faucet_url));
+            print.status("  wallet address: resolved during submission");
+            print.status("  submitted: no (--dry-run)");
+        },
+    );
 
     print.json(&CommandResult::new(
         cmd,
