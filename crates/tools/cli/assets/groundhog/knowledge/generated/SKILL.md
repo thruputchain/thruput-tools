@@ -140,17 +140,7 @@ generated manifest.
 
 This CLI uses SDK 0.40.0, standard interfaces 0.1.40, protocol-rs 0.42.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
-migrating an existing Rust project. SDK 0.38.0 moves to protocol-rs 0.39.0,
-which names a spec type by a four-part id -- crate, major version, module
-path and declared name -- rather than one joined string, so two types
-sharing a name in different crates or modules are no longer ambiguous.
-SDK 0.37.0 moves to protocol-rs 0.38.0, which commits each transaction's
-gas consumption in its event log; `getTransactionReceipt` reports it as
-`gasUsed`. SDK 0.36.0 removes the
-implicit `Clone` derive from contract exceptions and encodes supported scalar
-event topics directly as padded 32-byte big-endian values. Rebuild contracts
-and regenerate TypeScript bindings together to adopt that topic encoding; event
-signatures alone do not distinguish it from the previous hashed representation.
+migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or
@@ -246,14 +236,10 @@ only the digest, not the original value; generated comments describe their
 filtering restriction. Regenerate bindings together with the reviewed client
 runtime before adopting the new descriptors.
 
-With the scalar-topic encoding in SDK 0.36.0, `u32`, `u64`, `u128`,
-`i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are directly decoded and
-filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
-extension, not compact XDR scalar encodings. Strings and byte slices remain
-hash-only. Rebuild contracts and regenerate their bindings together when adopting
-this encoding; an older artifact's event bytes are not changed by regeneration.
-The workspace SDK dependencies and newly scaffolded contracts are pinned to
-SDK 0.36.0 so they emit the representation these bindings describe.
+`u32`, `u64`, `u128`, `i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are
+directly decoded and filterable. Integer topics are fixed 32-byte big-endian
+values with zero/sign extension, not compact XDR scalar encodings. Strings and
+byte slices remain hash-only.
 
 ## TypeScript Application Path
 
