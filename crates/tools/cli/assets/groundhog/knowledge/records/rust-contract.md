@@ -41,9 +41,15 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.39.1, standard interfaces 0.1.38, protocol-rs 0.41.0,
+This CLI uses SDK 0.40.0, standard interfaces 0.1.40, protocol-rs 0.42.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
-migrating an existing Rust project. SDK 0.39.1 moves to protocol-rs 0.41.0
+migrating an existing Rust project. SDK 0.40.0 moves to protocol-rs 0.42.0,
+where `InvokeFlagSet` and `StorageDeltaFlagSet` are `u32` but `InvokeFlag` and
+`StorageDeltaFlags` values stay `i32`: convert with `cast_unsigned()` when
+filling flags by hand, as in `InvokeFlag::ReadOnly.0.cast_unsigned()`. SDK
+0.39.2 renames `ERC20Permit::permit` to `increase_allowance_signed`, adds an
+`amount` argument to `transfer_from_signed` and adds `clear_allowance_signed`;
+rebuild its implementers and callers together. SDK 0.39.1 moves to protocol-rs 0.41.0
 and needs no contract changes. SDK 0.39.0 moves to protocol-rs 0.40.0, where
 storage writes no longer carry flags: a write through an exclusive handle
 (`set_exclusive`, `delete_exclusive`, `at_mut_exclusive`) takes a lock that
