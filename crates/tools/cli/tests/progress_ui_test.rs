@@ -86,6 +86,9 @@ if [ "$1" = test ]; then
   printf 'running 1 test\ntest tests::passes ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n'
   exit 0
 fi
+# The CLI is this PTY session leader. Its SIGINT exit can send SIGHUP before
+# the shell runs its INT trap; ignore that independent signal in the fixture.
+trap '' HUP
 trap 'printf stopped > cargo-stopped; exit 130' INT
 printf '%s' "$$" > cargo.pid
 printf '%s' "$*" > cargo.args

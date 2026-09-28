@@ -28,7 +28,8 @@ application work. Prefer the active local profile and runtime information
 reported by `groundhog status --json` and `groundhog node --json`. Do not copy
 deterministic local-development keys into production configuration.
 
-`groundhog status` and shared result cards use responsive terminal rendering.
+Human command results use shared responsive cards, tables, diagnostics, and prompts.
+Error, warning, and success colors use explicit RGB values; `NO_COLOR` disables color.
 Use `--no-ui` for plain human output without boxes or terminal controls. It keeps
 existing confirmation rules; use `--json` for machine-readable command results.
 
@@ -60,6 +61,28 @@ and notes; identical diagnostics from the same package appear once. Use
 stopped job switches progress to append-only output to preserve scrollback.
 Redirected streams, `--no-ui`, and explicit Cargo output-format/color settings
 keep live append-only logs. `--json` retains its machine-readable output contract.
+
+Default foreground `groundhog test` runs show compact progress and a final test
+summary. Failed test output remains available below the result. Use `--show-output`
+for full output, including passing tests. No-capture, harness passthrough, and
+integration-node modes keep append-only child output. Watch keeps one result per
+iteration and its existing JSONL behavior; workspace runs retain package order,
+skipped packages, and partial results.
+
+Transaction and funding commands show existing reviews before confirmation, then
+results that distinguish dry runs, committed execution, rejection, partial work,
+and unconfirmed outcomes. Prepared transaction hashes remain visible before waits.
+Do not treat a prepared hash as proof of submission or retry uncertain transactions
+without inspecting their status.
+
+`node` and `docs` show a Ready report while their servers remain running. Node
+startup and background logs are append-only so supervisor output cannot overwrite
+an animated region. Default node logs retain warnings and errors; `--verbose`
+enables informational diagnostics, and `RUST_LOG` supplies an explicit filter.
+`init` keeps completed setup steps in scrollback and uses the existing line prompts.
+
+Key exports, generated TypeScript without an output file, completion scripts,
+toolchain executable paths, and help/version/skill payloads remain unframed.
 
 Typical CLI discovery:
 

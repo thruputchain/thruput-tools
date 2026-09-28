@@ -403,6 +403,10 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `print.relay_output()`. Finish the task before prompts or final reports;
   `print.outcome_report()` places collected warnings below the result card.
   Keep raw data/interactive child modes on the append-only path.
+- `print.group(outcome, title, render)` groups presentation-only detail/status
+  calls into a terminal card and moves warnings below it. Never put operations or
+  prompts in its callback. Plain, quiet, and JSON calls retain their existing rules.
+  See `docs/cli/ui-coverage.md` for the command audit and deliberate I/O boundaries.
 - When a command's `data` payload is intended to be a stable
   machine-readable contract, include a command-specific
   `schemaVersion` field inside `data` from v1 onward. Do not version

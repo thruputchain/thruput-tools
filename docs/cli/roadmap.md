@@ -109,7 +109,7 @@ Implementation status:
 
 This is the canonical task tracker for the repo.
 
-### Command UI system MVP (GH-388; scope revised 2026-09-23)
+### Command UI system MVP (GH-388; implementation review 2026-09-28)
 
 Keep individual commands and migrate their human output to shared responsive
 Ratatui/Crossterm components: progress/spinners, green result cards, outcome symbols,
@@ -117,22 +117,24 @@ warnings, errors, prompts, and tables. Every command and distinct output mode ne
 a verified shared path or an explicit raw/framework exception. Preserve machine
 contracts and command semantics.
 
-The shared static Ratatui/Crossterm components use status as their reference.
-Build is the next reference for live rendering, followed by command-family migrations.
+The shared static and live references and command-family migrations are implemented
+in draft PR #443. These checkboxes describe branch implementation, not a shipped release.
+See the [verification record](ui-coverage.md) for command coverage and platform checks.
 See the [active specification](../specs/2026-09-21-cli-tui-mvp.md) for the component
 contract, 43-command coverage matrix, compatibility rules, and review checkpoints.
 
-- [ ] GH-389: Build the component/theme/mode foundation and migrate status as its
+- [x] GH-389: Build the component/theme/mode foundation and migrate status as its
   reference. Demonstrate consistent success/error/warning output before live work.
-- [ ] GH-390: Build the shared inline runtime and migrate build; review live output
+- [x] GH-390: Build the shared inline runtime and migrate build; review live output
   and cleanup before command-family rollout.
-- [ ] GH-391: Migrate all read/query/list/table outputs and their raw-data exceptions.
-- [ ] GH-392: Migrate all test modes and variants, including watch/workspace/integration.
-- [ ] GH-393: Migrate deploy/call/transfer/airdrop/wallet-create outcomes and reviews.
-- [ ] GH-395: Migrate node/docs service startup, ready state, logs, and shutdown output.
-- [ ] GH-396: Migrate new/init and integrate existing setup prompts.
-- [ ] GH-416: Migrate profile/key/wallet management, including the key-export exception.
-- [ ] GH-417: Migrate toolchain actions, chain archives, and codegen output.
+- [x] GH-391: Migrate all read/query/list/table outputs and their raw-data exceptions.
+- [x] GH-392: Migrate all test modes and variants, including watch/workspace/integration.
+- [x] GH-393: Migrate deploy/call/transfer/airdrop/wallet-create outcomes and reviews.
+- [x] GH-395: Migrate node/docs service startup, ready state, logs, and shutdown output.
+- [x] GH-396: Migrate new/init and integrate existing setup prompts.
+- [x] GH-416: Migrate profile/key/wallet management, including the key-export exception.
+- [x] GH-417: Migrate toolchain actions, chain archives, and codegen output.
+- [x] GH-438: Close pre-dispatch diagnostic gaps found by the command audit.
 - [ ] GH-394: Complete the per-command/mode coverage record, renderer-bypass audit,
   regression checks, and release guidance.
 
