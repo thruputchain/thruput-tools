@@ -417,6 +417,35 @@ async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes
 }
 
 #[tokio::test]
+async fn event_filters_require_a_named_contract_for_all_shapes() {
+    for backend in all_shapes() {
+        let calls = backend.contract_events_calls.clone();
+        let svc = server(backend);
+        let mut empty = simple_query();
+        empty.filters.0.0.clear();
+        let mut no_contracts = simple_query();
+        no_contracts.filters.0.0[0].contract_addresses.0.0.clear();
+        let mut mixed = simple_query();
+        mixed.filters.0.0.push(no_contracts.filters.0.0[0].clone());
+        for query in [empty, no_contracts, mixed] {
+            let error = svc
+                .get_events(query)
+                .await
+                .expect_err("bug: empty event filters must be rejected");
+            assert_eq!(error.code(), codes::INVALID_PARAMS);
+        }
+        assert_eq!(*calls.lock().await, 0);
+        // No topic constraints is a valid wildcard within a named contract.
+        let page = svc
+            .get_events(simple_query())
+            .await
+            .expect("bug: a named contract with wildcard topics must be accepted");
+        assert!(page.events.is_empty());
+        assert_eq!(*calls.lock().await, 1);
+    }
+}
+
+#[tokio::test]
 async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
     for backend in all_shapes() {
         let calls = backend.contract_events_calls.clone();

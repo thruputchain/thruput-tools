@@ -2440,13 +2440,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .build(&url)
             .expect("bug: jsonrpsee http client builds");
 
-        // Build a minimal EventQuery (first page, no filters).
+        // Build a minimal EventQuery (first page, one named contract).
         // Serialization shapes:
         //   - `IterationOrder` serializes as "ascending" / "descending"
         //   - `BlockAnchor` serializes as a tagged object
         //   - `PaginationCursor` serializes as `0x`-prefixed hex; `0x` = empty
+        let contract = format!("0x{}", "01".repeat(32));
         let query = serde_json::json!({
-            "filters": [],
+            "filters": [{
+                "contractAddresses": [contract],
+                "topics": {"topic0": [], "topic1": [], "topic2": []},
+            }],
             "order": "ascending",
             "anchor": { "kind": "atBeginning" },
             "cursor": "0x",
@@ -2464,6 +2468,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .as_array()
             .expect("bug: events should be array");
         assert_eq!(events.len(), 2, "first event page should contain 2 events");
+        assert!(
+            events
+                .iter()
+                .all(|event| event["event"]["contractAddress"] == contract),
+            "events should come from the filtered contract"
+        );
         let cursor = page["cursor"].as_str().unwrap_or("");
         assert!(
             cursor.len() > 2,

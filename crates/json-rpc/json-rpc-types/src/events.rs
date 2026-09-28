@@ -57,6 +57,7 @@ impl JsonSchema for ContractAddressList {
         json_schema!({
             "type": "array",
             "items": items,
+            "minItems": 1,
             "maxItems": MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER,
             "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound."
         })
@@ -97,6 +98,7 @@ impl JsonSchema for EventFilterList {
         json_schema!({
             "type": "array",
             "items": items,
+            "minItems": 1,
             "maxItems": MAX_EVENT_FILTERS_PER_QUERY,
             "description": "Event filters accepted by a single event query. Mirrors the hogd-indexer per-query filter bound."
         })
@@ -223,6 +225,7 @@ pub struct EventFilter {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventQuery {
+    /// At least one filter is required. Empty lists are not all-contract scans.
     pub filters: EventFilterList,
     pub order: IterationOrder,
     pub anchor: BlockAnchor,
