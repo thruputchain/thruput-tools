@@ -563,7 +563,7 @@ over adding a compatibility capability probe unless a real multi-version need
 appears.
 
 The managed-toolchain default is the `defaultVersion` in
-`crates/tools/toolchain/catalog/hog-devnode.json` (`0.1.28-rc.3` at the time
+`crates/tools/toolchain/catalog/hog-devnode.json` (`0.1.29-rc.3` at the time
 of writing); older validation ran against `hog-devnode 0.1.12`. The local-DX smoke
 validates current RV32 execution, prefund-first wallet creation, two
 manifest-backed dev wallets, balance reads, receipt-confirmed native HOG
