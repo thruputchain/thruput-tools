@@ -80,6 +80,7 @@ tempfile = "3"
 
 [dev-dependencies]
 pretty_assertions = "1"
+groundhog-erc20-permit-if = { workspace = true }
 serial_test = { workspace = true }
 
 [build-dependencies]
