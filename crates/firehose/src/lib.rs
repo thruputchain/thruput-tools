@@ -28,6 +28,27 @@ pub enum Error {
     /// Connection setup failed.
     #[error(transparent)]
     Connect(#[from] groundhog_x23_transport::ConnectError),
+    /// Every resolved address failed during connection setup.
+    #[error("{}", format_connection_failures(.endpoint, .attempts))]
+    AllAddressesFailed {
+        endpoint: String,
+        attempts: Vec<groundhog_x23_transport::ConnectError>,
+    },
+}
+
+fn format_connection_failures(
+    endpoint: &str,
+    attempts: &[groundhog_x23_transport::ConnectError],
+) -> String {
+    let details = attempts
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "all {} resolved addresses failed for {endpoint}: {details}",
+        attempts.len()
+    )
 }
 
 fn encode<T: xdrs::WriteXDR>(value: &T) -> Result<Vec<u8>, Error> {

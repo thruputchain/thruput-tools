@@ -238,24 +238,36 @@ fn update_store_metrics(metrics: &Metrics, store: &Store) {
 }
 
 async fn sample_tip(endpoint: String, protocol: ProtocolCommit, metrics: Metrics) {
-    use groundhog_scheduler::{
-        rpc_types::ExpectedDBTip,
-        sched_gateway::{SchedGateway_SchedGateway1_Client, SchedGatewayIntroOutcome},
-    };
+    sample_tip_with(protocol, metrics, |deadline| {
+        client::connect_endpoint(&endpoint, deadline, |addr| async move {
+            groundhog_x23_transport::connect(
+                "scheduler_tip",
+                &addr.to_string(),
+                1,
+                groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client::new,
+            )
+            .await
+        })
+    })
+    .await;
+}
+
+async fn sample_tip_with<F, Fut>(protocol: ProtocolCommit, metrics: Metrics, mut connect: F)
+where
+    F: FnMut(tokio::time::Instant) -> Fut,
+    Fut: std::future::Future<
+            Output = Result<
+                groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client,
+                Error,
+            >,
+        >,
+{
+    use groundhog_scheduler::{rpc_types::ExpectedDBTip, sched_gateway::SchedGatewayIntroOutcome};
     loop {
         let result: Result<(), Error> = async {
-            let client = tokio::time::timeout(Duration::from_secs(3), async {
-                let addr = tokio::net::lookup_host(&endpoint)
-                    .await?
-                    .next()
-                    .ok_or_else(|| Error::Invalid("tip address resolved empty".into()))?;
-                let client = groundhog_x23_transport::connect(
-                    "scheduler_tip",
-                    &addr.to_string(),
-                    1,
-                    SchedGateway_SchedGateway1_Client::new,
-                )
-                .await?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            let client = tokio::time::timeout_at(deadline, async {
+                let client = connect(deadline).await?;
                 if client.schedgateway_intro(&protocol).await?
                     != SchedGatewayIntroOutcome::SchedGatewayIntroSuccess
                 {
@@ -466,6 +478,85 @@ mod tests {
         path::Path,
         sync::{Arc, Mutex},
     };
+
+    struct TipServer {
+        sampled: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl RpcHandler for TipServer {
+        fn prog_vers(&self) -> ProgVers {
+            ProgVers::new(0x7ee7_aaaa, 1)
+        }
+
+        async fn dispatch(&self, procedure: u32, data: &[u8]) -> Result<Vec<u8>, RpcError> {
+            match procedure {
+                0 => {
+                    let protocol: ProtocolCommit = xdrs::txs::decode(data).unwrap();
+                    assert_eq!(protocol, PROTOCOL_VERSION);
+                    Ok(xdrs::txs::encode(
+                        &groundhog_scheduler::SchedGatewayIntroOutcome::SchedGatewayIntroSuccess,
+                    )
+                    .unwrap())
+                }
+                2 => {
+                    self.sampled.notify_one();
+                    Ok(
+                        xdrs::txs::encode(&groundhog_scheduler::ExpectedDBTip::Default {
+                            error: 1,
+                        })
+                        .unwrap(),
+                    )
+                }
+                _ => panic!("unexpected scheduler procedure {procedure}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tip_sampler_reaches_later_address_when_first_connection_hangs() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let live = listener.local_addr().unwrap();
+        let hung = "127.0.0.1:1".parse().unwrap();
+        let sampled = Arc::new(tokio::sync::Notify::new());
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(TipServer {
+            sampled: sampled.clone(),
+        }));
+        let server = RpcServer::new(listener, services).start().await;
+        let attempted = Arc::new(Mutex::new(Vec::new()));
+        let start = tokio::time::Instant::now();
+        let run = sample_tip_with(PROTOCOL_VERSION, Metrics::new().unwrap(), |deadline| {
+            let attempted = attempted.clone();
+            client::connect_addresses("test.invalid:1234", [hung, live], deadline, move |addr| {
+                attempted.lock().unwrap().push(addr);
+                async move {
+                    if addr == hung {
+                        // Deterministically model a SYN that never connects or refuses.
+                        std::future::pending().await
+                    } else {
+                        groundhog_x23_transport::connect(
+                            "scheduler_tip",
+                            &addr.to_string(),
+                            1,
+                            groundhog_scheduler::SchedGateway_SchedGateway1_Client::new,
+                        )
+                        .await
+                    }
+                }
+            })
+        });
+        tokio::pin!(run);
+        tokio::select! {
+            () = &mut run => panic!("tip sampler unexpectedly stopped"),
+            result = tokio::time::timeout(Duration::from_secs(3), sampled.notified()) => {
+                result.unwrap();
+            }
+        }
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert_eq!(*attempted.lock().unwrap(), [hung, live]);
+        server.abort();
+    }
 
     /// Every bound comes from the real CLI defaults, as a deployment would get them.
     fn config(event_endpoint: &str, store: &Path) -> Config {
