@@ -148,7 +148,7 @@ toml = "0.8"
 unicode-width = "0.2"
 
 # --- Crypto ---
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["asm"] }
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 zeroize = "1"
