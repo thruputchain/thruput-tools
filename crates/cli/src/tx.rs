@@ -47,19 +47,23 @@ pub fn show(
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let task = crate::print::progress::Task::start(print, "Reading transaction", true);
     let (status, receipt) = rt.block_on(fetch_transaction(&rpc_url, tx_hash))?;
+    let _ = task.finish();
     let decoded_abort = receipt
         .as_ref()
         .and_then(|receipt| crate::tx_utils::decode_receipt_abort(receipt, None));
 
     if !print.is_json() && !print.is_quiet() {
-        print_show(
-            &tx_hash,
-            &status,
-            receipt.as_ref(),
-            decoded_abort.as_ref(),
-            print,
-        );
+        print.group(crate::print::Outcome::Information, "Transaction", |print| {
+            print_show(
+                &tx_hash,
+                &status,
+                receipt.as_ref(),
+                decoded_abort.as_ref(),
+                print,
+            );
+        });
     }
     print.json(&CommandResult::new(
         cmd,
@@ -107,10 +111,16 @@ pub fn list(
     };
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let task = crate::print::progress::Task::start(print, "Reading transaction history", true);
     let page = rt.block_on(fetch_transaction_page(&rpc_url, query))?;
+    let _ = task.finish();
 
     if !print.is_json() {
-        print_list(&target_input, &address_hex, &page, print);
+        print.group(
+            crate::print::Outcome::Information,
+            "Transaction history",
+            |print| print_list(&target_input, &address_hex, &page, print),
+        );
     }
     print.json(&CommandResult::with_warnings(
         cmd,

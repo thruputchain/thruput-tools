@@ -98,7 +98,7 @@ pub fn dump(
             format_args!("Overwrite existing chain dump `{}`?", output.display()),
         )?
     {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
     // Prompt without excluding the node, then lock and revalidate every value
@@ -113,7 +113,9 @@ pub fn dump(
         .map_err(|error| archive_io(format!("create '{}': {error}", output_parent.display())))?;
     ensure_outside_data_dir(&data_dir, &output)?;
 
-    let task = print.start_task(format!("Dumping chain state from {}", data_dir.display()));
+    let task = crate::print::progress::Task::start(print, "Creating chain archive", true);
+    task.print()
+        .phase(format!("Dumping chain state from {}", data_dir.display()));
     // Build and fsync beside the destination, then rename into place. This
     // avoids exposing a partial archive and keeps the rename on one filesystem.
     let mut temp = tempfile::Builder::new()
@@ -152,7 +154,7 @@ pub fn dump(
     sync_directory(output_parent)?;
     let archive_bytes = fs::metadata(&output)?.len();
     let archive_sha256 = hash_file(&output)?;
-    task.success("Chain dump complete");
+    let _ = task.finish();
 
     let report = ChainDumpReport {
         schema_version: REPORT_SCHEMA_VERSION,
@@ -166,10 +168,19 @@ pub fn dump(
     if print.is_json() {
         print.json(&CommandResult::new(command, &report))?;
     } else {
-        print.detail("Archive", report.archive_path.display());
-        print.detail("Files", report.file_count);
-        print.detail("Uncompressed bytes", &report.uncompressed_bytes);
-        print.detail("SHA-256", &report.archive_sha256);
+        print.group(
+            crate::print::Outcome::Success,
+            "Chain dump complete",
+            |print| {
+                if !print.has_human_ui() {
+                    print.success("Chain dump complete");
+                }
+                print.detail("Archive", report.archive_path.display());
+                print.detail("Files", report.file_count);
+                print.detail("Uncompressed bytes", &report.uncompressed_bytes);
+                print.detail("SHA-256", &report.archive_sha256);
+            },
+        );
     }
     Ok(())
 }
@@ -238,7 +249,7 @@ pub fn restore(
     ensure_outside_data_dir(&data_dir, &input)?;
     let populated = data_dir_is_populated(&data_dir)?;
     if populated && !confirm_restore_replacement(&data_dir, force, print)? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
     // Do not exclude the node while waiting for consent. Once confirmed, lock
@@ -266,7 +277,9 @@ pub fn restore(
     }
     let new_lock = DataDirLock::acquire(staging.path())?;
 
-    let task = print.start_task(format!("Restoring chain state into {}", data_dir.display()));
+    let task = crate::print::progress::Task::start(print, "Restoring chain archive", true);
+    task.print()
+        .phase(format!("Restoring chain state into {}", data_dir.display()));
     let archive = File::open(&input)?;
     let mut deserializer = serde_json::Deserializer::from_reader(BufReader::new(archive));
     let stats = ArchiveSeed {
@@ -317,11 +330,10 @@ pub fn restore(
                 "restored state is active, but old state could not be removed from '{}': {error}",
                 backup.display()
             );
-            print.warn(&warning);
             Some(warning)
         }
     };
-    task.success("Chain restore complete");
+    let _ = task.finish();
 
     let report = ChainRestoreReport {
         schema_version: REPORT_SCHEMA_VERSION,
@@ -334,11 +346,27 @@ pub fn restore(
     if print.is_json() {
         print.json(&CommandResult::new(command, &report))?;
     } else {
-        print.detail("Data directory", report.data_dir.display());
-        print.detail("Files", report.file_count);
-        print.detail("Restored bytes", &report.uncompressed_bytes);
+        print_restore_report(&report, print);
     }
     Ok(())
+}
+
+fn print_restore_report(report: &ChainRestoreReport, print: &Print) {
+    print.group(
+        crate::print::Outcome::Success,
+        "Chain restore complete",
+        |print| {
+            if !print.has_human_ui() {
+                print.success("Chain restore complete");
+            }
+            print.detail("Data directory", report.data_dir.display());
+            print.detail("Files", report.file_count);
+            print.detail("Restored bytes", &report.uncompressed_bytes);
+            if let Some(warning) = &report.cleanup_warning {
+                print.warn(warning);
+            }
+        },
+    );
 }
 
 fn confirm_restore_replacement(

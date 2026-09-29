@@ -69,7 +69,9 @@ pub fn generate(
         return Err(CliError::KeyExists(name.to_string()));
     }
 
-    let task = print.start_task(format_args!("Generating key `{name}`"));
+    if !print.has_human_ui() {
+        print.status(format_args!("Generating key `{name}`"));
+    }
     let mut secret = [0u8; 32];
     getrandom(&mut secret).map_err(|e| CliError::Other(e.to_string()))?;
     let signing_key = LocalSigner::from_secret_key(secret);
@@ -85,15 +87,17 @@ pub fn generate(
     };
     info.is_default = became_default;
 
-    task.success(format_args!("Generated key `{name}`"));
-    print.detail("public key", &info.public_key_strkey);
-    print.detail("account address", &info.address);
-    if fund {
-        print.note("Faucet funding is not implemented yet; generated key only");
-    }
-    if became_default {
-        print.note(format_args!("Default key is now `{name}`"));
-    }
+    print.group(crate::print::Outcome::Success, "Key generated", |print| {
+        print.success(format_args!("Generated key `{name}`"));
+        print.detail("public key", &info.public_key_strkey);
+        print.detail("account address", &info.address);
+        if fund {
+            print.note("Faucet funding is not implemented yet; generated key only");
+        }
+        if became_default {
+            print.note(format_args!("Default key is now `{name}`"));
+        }
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -134,15 +138,41 @@ pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
     let signer = LocalSigner::from_secret_key(*seed);
     let info = write_key(name, &signer)?;
     let (is_default, warnings) = import_default_selection(name);
-    for warning in &warnings {
-        print.warn(&warning.message);
-        if let Some(hint) = &warning.hint {
-            print.note(hint);
+    if print.has_human_ui() {
+        print.outcome_findings(
+            if warnings.is_empty() {
+                crate::print::Outcome::Success
+            } else {
+                crate::print::Outcome::Partial
+            },
+            "Key imported",
+            &[
+                ("Name".into(), name.into()),
+                ("Public key".into(), info.public_key_strkey.clone()),
+                ("Account address".into(), info.address.clone()),
+                (
+                    "Default".into(),
+                    match is_default {
+                        Some(true) => "Selected",
+                        Some(false) => "Not selected",
+                        None => "Unconfirmed",
+                    }
+                    .into(),
+                ),
+            ],
+            &warnings,
+        );
+    } else {
+        for warning in &warnings {
+            print.warn(&warning.message);
+            if let Some(hint) = &warning.hint {
+                print.note(hint);
+            }
         }
+        print.success(format_args!("Imported key `{name}`"));
+        print.detail("public key", &info.public_key_strkey);
+        print.detail("account address", &info.address);
     }
-    print.success(format_args!("Imported key `{name}`"));
-    print.detail("public key", &info.public_key_strkey);
-    print.detail("account address", &info.address);
     let report = KeysImportReport {
         schema_version: KEYS_IMPORT_JSON_SCHEMA_VERSION,
         key: ImportedKey {
@@ -195,20 +225,33 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
         return Ok(());
     }
 
-    if keys.is_empty() {
-        println!("No keys stored.");
-        return Ok(());
-    }
-
-    for key in keys {
-        let marker = if key.is_default { "*" } else { " " };
-        println!(
-            "{marker} {} public-key={} account-address={}",
-            key.name, key.public_key_strkey, key.address
-        );
-    }
-
-    Ok(())
+    let rows: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            vec![
+                if key.is_default {
+                    format!("{} (default)", key.name)
+                } else {
+                    key.name.clone()
+                },
+                key.address.clone(),
+                key.public_key_strkey.clone(),
+            ]
+        })
+        .collect();
+    print.data_table(
+        "Keys",
+        &["Name".into(), "Account address".into(), "Public key".into()],
+        &rows,
+        "No keys stored.",
+        keys.iter().map(|key| {
+            let marker = if key.is_default { "*" } else { " " };
+            format!(
+                "{marker} {} public-key={} account-address={}",
+                key.name, key.public_key_strkey, key.address
+            )
+        }),
+    )
 }
 
 /// Export a stored private key after interactive confirmation or `force` authorization.
@@ -252,7 +295,7 @@ pub fn export_with_format(
         "export a private signing key",
         format_args!("Export private key `{name}` to standard output? Treat it as a secret."),
     )? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
 
@@ -299,7 +342,13 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
         ..info
     };
 
-    print.success(format_args!("Default key set to `{name}`"));
+    print.group(
+        crate::print::Outcome::Success,
+        "Default key selected",
+        |print| {
+            print.success(format_args!("Default key set to `{name}`"));
+        },
+    );
     print.json(&CommandResult::new(cmd, json!({ "key": info })))?;
     Ok(())
 }
@@ -317,7 +366,7 @@ pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         "remove a stored signing key",
         format_args!("Remove key `{name}`? This cannot be undone."),
     )? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
 
@@ -328,10 +377,12 @@ pub fn remove(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         crate::config::clear_default_key()?;
     }
 
-    print.success(format_args!("Removed key `{name}`"));
-    if cleared_default {
-        print.note("Default key selection cleared");
-    }
+    print.group(crate::print::Outcome::Success, "Key removed", |print| {
+        print.success(format_args!("Removed key `{name}`"));
+        if cleared_default {
+            print.note("Default key selection cleared");
+        }
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({

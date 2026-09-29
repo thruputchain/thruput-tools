@@ -422,7 +422,11 @@ fn handle_integration_outcome<T>(
                 },
                 &error,
             );
-            print.warn(&warning.message);
+            if print.has_human_ui() {
+                print.defer_warning(warning.message.clone());
+            } else {
+                print.warn(&warning.message);
+            }
             finish_integration_run(&run, cmd, print, vec![warning])
         }
         (Err(error), Ok(_)) => Err(error),
@@ -613,6 +617,7 @@ fn finish_integration_run(
     print: &Print,
     warnings: Vec<crate::checks::Finding>,
 ) -> Result<(), CliError> {
+    print_test_summary(&run.report, print);
     let warnings: Vec<_> = run.warnings.iter().cloned().chain(warnings).collect();
     if let Some(code) = run.failed_code {
         if print.is_json() {
@@ -771,6 +776,7 @@ fn finish_package_run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    print_test_summary(&outcome.report, print);
     if let Some(code) = outcome.failed_code {
         if print.is_json() {
             print.json(&CommandResult::failure_with_warnings(
@@ -852,11 +858,16 @@ fn run_workspace_once(
             Some((package, _)) => format!("{package} errored before its tests ran"),
             None => "--fail-fast".to_string(),
         };
-        print.warn(format_args!(
+        let warning = format!(
             "{cause}: skipped {} remaining package(s): {}",
             skipped.len(),
             skipped.join(", ")
-        ));
+        );
+        if print.has_human_ui() {
+            print.defer_warning(warning);
+        } else {
+            print.warn(warning);
+        }
     }
 
     let report = WorkspaceTestReport {
@@ -957,7 +968,52 @@ fn print_workspace_summary(report: &WorkspaceTestReport, print: &Print) {
             describe_summary(&report.summary)
         ),
     ));
-    print.summary_card("Workspace tests", &items);
+    print.outcome_card(
+        if report.success {
+            crate::print::Outcome::Success
+        } else if report.skipped.is_empty() {
+            crate::print::Outcome::Error
+        } else {
+            crate::print::Outcome::Partial
+        },
+        "Workspace tests",
+        &items,
+    );
+}
+
+fn print_test_summary(report: &TestReport, print: &Print) {
+    if !print.has_human_ui() {
+        return;
+    }
+    let mut fields = vec![
+        ("Package".into(), report.package.clone()),
+        ("Result".into(), describe_summary(&report.summary)),
+        (
+            "Artifact".into(),
+            report.artifact.path.display().to_string(),
+        ),
+    ];
+    if report.rerun.enabled {
+        fields.push((
+            "Rerun".into(),
+            format!("{} selected tests", report.rerun.executed_tests.len()),
+        ));
+    }
+    if let Some(integration) = &report.integration {
+        fields.push(("RPC URL".into(), integration.rpc_url.clone()));
+        fields.push(("Contract".into(), integration.contract_address.clone()));
+    }
+    print.outcome_card(
+        if !report.success {
+            crate::print::Outcome::Error
+        } else if report.summary.total == 0 {
+            crate::print::Outcome::Empty
+        } else {
+            crate::print::Outcome::Success
+        },
+        "Tests",
+        &fields,
+    );
 }
 
 fn describe_summary(summary: &TestSummary) -> String {
@@ -982,7 +1038,22 @@ fn run_package_once(
     print: &Print,
 ) -> Result<TestOutcome, CliError> {
     // Build the contract artifact (validates project root, checks for cargo on PATH, etc.).
-    let build = build_local_test_artifact(package, artifacts, explicit_profile, print)?;
+    let compact_build = !options.harness.show_output
+        && !options.harness.no_capture
+        && cargo_args.is_empty()
+        && std::env::var_os("CARGO_TERM_COLOR").is_none();
+    let build_print = print.clone().with_compact_build(compact_build);
+    let build_task =
+        crate::print::progress::Task::start(&build_print, "Building test artifact", compact_build);
+    let build =
+        build_local_test_artifact(package, artifacts, explicit_profile, build_task.print())?;
+    for warning in build_task.finish() {
+        if print.has_human_ui() {
+            print.defer_warning(warning);
+        } else {
+            print.warn(warning);
+        }
+    }
 
     let root = build.project_root.clone();
     let profile = build.profile.clone();
@@ -1374,7 +1445,23 @@ fn run_test_commands(
             cargo_cmd.arg(arg);
         }
 
-        outputs.push(run_test_command(&mut cargo_cmd, context.print, *filter)?);
+        // Integration supervisors and explicit child-output modes keep append-only
+        // I/O. Only an exclusive foreground viewport can collect test output.
+        let animate = context.test_target == RV32_TEST_TARGET
+            && context.cargo_args.is_empty()
+            && !options.harness.show_output
+            && !options.harness.no_capture;
+        let task = crate::print::progress::Task::start(context.print, "Running tests", animate);
+        let compact = task.print().is_live();
+        let output = run_test_command(&mut cargo_cmd, context.print, *filter, compact)?;
+        let _ = task.finish();
+        if compact {
+            context.print.collect_build_log(&output.stderr);
+            if !output.success {
+                context.print.collect_build_output(&output.stdout);
+            }
+        }
+        outputs.push(output);
         if should_stop_rerun(options, &outputs) {
             break;
         }
@@ -1736,6 +1823,7 @@ fn run_test_command(
     cargo_cmd: &mut Command,
     print: &Print,
     filter: SelectedFilter<'_>,
+    compact: bool,
 ) -> Result<TestRunOutput, CliError> {
     if print.is_non_interactive() {
         crate::keep_cargo_color(cargo_cmd, print);
@@ -1753,8 +1841,8 @@ fn run_test_command(
         .stderr
         .take()
         .expect("bug: piped stderr should be available");
-    let capture_stdout = capture_stream(stdout, OutputStream::Stdout, !print.is_json());
-    let capture_stderr = capture_stream(stderr, OutputStream::Stderr, !print.is_json());
+    let capture_stdout = capture_stream(stdout, OutputStream::Stdout, !print.is_json() && !compact);
+    let capture_stderr = capture_stream(stderr, OutputStream::Stderr, !print.is_json() && !compact);
     let status = child.wait()?;
     let stdout = join_capture(capture_stdout)?;
     let stderr = join_capture(capture_stderr)?;
@@ -1986,6 +2074,7 @@ mod tests {
                 name: None,
                 exact: false,
             },
+            false,
         )
         .unwrap();
         assert!(output.success, "{output:?}");

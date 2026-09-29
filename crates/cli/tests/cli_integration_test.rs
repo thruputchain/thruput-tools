@@ -21,6 +21,9 @@ use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
 mod support;
+#[cfg(unix)]
+#[path = "support/ui_audit.rs"]
+mod ui_audit;
 
 static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -369,17 +372,36 @@ fn spawn_with_terminal(command: Command) -> (std::process::Child, File) {
 
 #[cfg(unix)]
 fn spawn_with_terminal_width(command: Command, columns: u16) -> (std::process::Child, File) {
-    spawn_with_terminal_outputs(command, columns, false)
+    spawn_with_terminal_size(command, columns, 24)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_size(
+    command: Command,
+    columns: u16,
+    rows: u16,
+) -> (std::process::Child, File) {
+    spawn_with_terminal_io(command, columns, rows, false)
 }
 
 #[cfg(unix)]
 fn spawn_with_terminal_outputs(
-    mut command: Command,
+    command: Command,
     columns: u16,
     terminal_stdout: bool,
 ) -> (std::process::Child, File) {
+    spawn_with_terminal_io(command, columns, 24, terminal_stdout)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_io(
+    mut command: Command,
+    columns: u16,
+    rows: u16,
+    terminal_stdout: bool,
+) -> (std::process::Child, File) {
     let mut size = libc::winsize {
-        ws_row: 24,
+        ws_row: rows,
         ws_col: columns,
         ws_xpixel: 0,
         ws_ypixel: 0,
@@ -431,6 +453,29 @@ fn read_terminal_output(mut terminal: File) -> String {
         Err(error) => panic!("failed to read pseudo-terminal output: {error}"),
     }
     String::from_utf8(output).expect("bug: CLI terminal output should be UTF-8")
+}
+
+#[cfg(unix)]
+fn strip_terminal_styles(output: &str) -> String {
+    let mut chars = output.chars();
+    let mut plain = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            let mut escape = String::from(ch);
+            for ch in chars.by_ref() {
+                escape.push(ch);
+                if ch.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            if !escape.ends_with('m') {
+                plain.push_str(&escape);
+            }
+        } else if ch != '\r' {
+            plain.push(ch);
+        }
+    }
+    plain
 }
 
 #[cfg(unix)]
@@ -3108,7 +3153,7 @@ fn init_boxes_respect_stderr_terminal_width() {
         .output()
         .unwrap();
     assert!(setup.status.success(), "{setup:?}");
-    for columns in [0, 40, 80, 120] {
+    for columns in [0, 24, 40, 60, 80, 120] {
         let mut command = groundhog();
         command
             .arg("init")
@@ -3122,11 +3167,33 @@ fn init_boxes_respect_stderr_terminal_width() {
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(output.contains("Groundhog Ready"));
-        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Setup"), columns >= 58);
-        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Ready"), columns >= 100);
-        if columns < 100 {
-            assert!(output.contains(config.to_str().unwrap()));
+        let plain = strip_terminal_styles(&output);
+        assert_eq!(plain.contains("╭─ Groundhog Setup"), columns > 0);
+        assert_eq!(plain.contains("╭─ ✓ Ready: Groundhog Ready"), columns >= 29);
+        assert!(
+            !output.contains("\x1b[2J"),
+            "setup must preserve scrollback"
+        );
+        if columns > 0 {
+            use unicode_width::UnicodeWidthStr;
+            for line in plain
+                .lines()
+                .filter(|line| line.starts_with(['╭', '│', '╰']))
+            {
+                assert!(
+                    UnicodeWidthStr::width(line) <= usize::from(columns),
+                    "{line}"
+                );
+            }
         }
+        let values = plain
+            .lines()
+            .map(|line| line.trim_start_matches('│').trim_end_matches('│').trim())
+            .collect::<String>();
+        assert!(
+            values.contains(config.to_str().unwrap()),
+            "complete path missing: {plain}"
+        );
     }
 }
 
@@ -3411,6 +3478,7 @@ fn status_human_output_shows_sections() {
     // Will exit 1 (warnings), but stderr should have
     // human-readable section content.
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Status"));
     assert!(stderr.contains("Cargo: installed"));
@@ -3423,6 +3491,206 @@ fn status_human_output_shows_sections() {
     assert!(stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
     assert!(!stderr.contains("Mock Executor Auth"));
+}
+
+#[cfg(unix)]
+#[test]
+fn status_terminal_report_wraps_complete_values_with_and_without_color() {
+    use unicode_width::UnicodeWidthStr;
+
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("長い-project-directory-".repeat(5));
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\nrpc_url = \"http://127.0.0.1:9545\"\n",
+    ).unwrap();
+    let mut expected_exit = None;
+    for columns in [24, 40, 60, 80, 120] {
+        for no_color in [false, true] {
+            let mut command = groundhog();
+            command
+                .arg("status")
+                .current_dir(&project)
+                .env("CARGO_HOME", tmp.path().join("cargo-home"))
+                .env("TERM", "xterm")
+                .env("LC_ALL", "C.UTF-8")
+                .env_remove("NO_COLOR");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            let (child, terminal) = spawn_with_terminal_width(command, columns);
+            let reader = terminal_output_reader(&terminal);
+            let exit = wait_child(child, Duration::from_secs(10));
+            assert_eq!(*expected_exit.get_or_insert(exit.code()), exit.code());
+            drop(terminal);
+            let output = reader.join().unwrap();
+            assert_eq!(output.contains('\x1b'), !no_color);
+            let plain = strip_terminal_styles(&output);
+            assert!(!plain.contains('\x1b'), "only style escapes are allowed");
+            assert!(plain.starts_with("╭─ Groundhog Status"));
+            let card = plain
+                .lines()
+                .take_while(|line| !line.starts_with('╰'))
+                .collect::<Vec<_>>();
+            let card_width = UnicodeWidthStr::width(card[0]);
+            assert!(
+                card.iter()
+                    .all(|line| UnicodeWidthStr::width(*line) == card_width),
+                "misaligned borders: {plain}"
+            );
+            assert!(
+                plain
+                    .lines()
+                    .all(|line| UnicodeWidthStr::width(line) <= usize::from(columns).min(100)),
+                "{columns} columns: {plain}"
+            );
+            for label in ["Groundhog Status", "Cargo:", "Keys:", "Project:"] {
+                assert!(plain.contains(label), "{plain}");
+            }
+            let joined = plain
+                .lines()
+                .map(|line| line.trim_start_matches('│').trim_end_matches('│').trim())
+                .collect::<String>();
+            assert!(
+                joined.contains(project.join("groundhog.toml").to_str().unwrap()),
+                "full path missing: {plain}"
+            );
+            assert!(joined.contains("http://127.0.0.1:9545"));
+        }
+    }
+}
+
+#[test]
+fn status_dumb_terminal_keeps_plain_report_and_exit_code() {
+    let tmp = TempDir::new().unwrap();
+    let run = |json: bool| {
+        let mut command = groundhog();
+        command
+            .arg("status")
+            .current_dir(tmp.path())
+            .env("CARGO_HOME", tmp.path().join("cargo-home"))
+            .env("TERM", "dumb");
+        if json {
+            command.arg("--json");
+        }
+        command.output().unwrap()
+    };
+    let plain = run(false);
+    let json = run(true);
+    assert_eq!(plain.status.code(), json.status.code());
+    assert!(plain.stdout.is_empty());
+    assert!(json.stderr.is_empty());
+    assert!(!plain.stderr.contains(&0x1b));
+    assert!(String::from_utf8_lossy(&plain.stderr).contains("Cargo: installed"));
+    let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(payload["data"]["schemaVersion"], 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn status_no_ui_and_ascii_modes_keep_terminal_output_complete() {
+    let tmp = TempDir::new().unwrap();
+    for (no_ui, locale) in [(true, "C.UTF-8"), (false, "C")] {
+        let mut command = groundhog();
+        command
+            .arg("status")
+            .current_dir(tmp.path())
+            .env("CARGO_HOME", tmp.path().join("cargo-home"))
+            .env("TERM", "xterm")
+            .env("LC_ALL", locale)
+            .env("NO_COLOR", "1");
+        if no_ui {
+            command.arg("--no-ui");
+        }
+        let (child, terminal) = spawn_with_terminal_size(command, 40, 4);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(10));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert!(!status.success());
+        assert!(!output.contains('\x1b'));
+        assert!(!output.contains('╭'));
+        assert_eq!(output.starts_with("+- Groundhog Status"), !no_ui);
+        assert!(
+            output.lines().count() > 4,
+            "must append the entire report, not clip to terminal height"
+        );
+        assert!(output.contains("Contracts:"));
+        assert!(output.contains(if no_ui { "warning:" } else { "Warning" }));
+    }
+}
+
+#[test]
+fn no_ui_preserves_status_json_quiet_and_raw_data() {
+    let tmp = TempDir::new().unwrap();
+    let run = |no_ui, json| {
+        let mut command = groundhog();
+        command
+            .arg("status")
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .env("CARGO_HOME", tmp.path().join("cargo-home"));
+        if no_ui {
+            command.arg("--no-ui");
+        }
+        if json {
+            command.arg("--json");
+        } else {
+            command.arg("--quiet");
+        }
+        command.output().unwrap()
+    };
+    let normal = run(false, true);
+    let plain = run(true, true);
+    assert_eq!(normal.status.code(), plain.status.code());
+    assert_eq!(normal.stdout, plain.stdout);
+    assert!(plain.stderr.is_empty());
+    let quiet = run(true, false);
+    assert!(quiet.stdout.is_empty() && quiet.stderr.is_empty());
+    assert_eq!(quiet.status.code(), normal.status.code());
+    let raw = groundhog().args(["completion", "bash"]).output().unwrap();
+    let plain = groundhog()
+        .args(["--no-ui", "completion", "bash"])
+        .output()
+        .unwrap();
+    assert_eq!(raw.stdout, plain.stdout);
+    assert!(plain.stderr.is_empty());
+}
+
+#[test]
+fn no_ui_does_not_authorize_protected_commands() {
+    let tmp = TempDir::new().unwrap();
+    let generated = groundhog()
+        .args(["keys", "generate", "demo", "--quiet"])
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let output = groundhog()
+        .args(["--no-ui", "--json", "keys", "rm", "demo"])
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "confirmation_required");
+}
+
+#[test]
+fn no_ui_disables_parser_styling_even_with_forced_color() {
+    for args in [
+        vec!["--no-ui", "--help"],
+        vec!["--no-ui", "status", "--unknown-option"],
+    ] {
+        let output = groundhog()
+            .args(args)
+            .env("CLICOLOR_FORCE", "1")
+            .output()
+            .unwrap();
+        assert!(!output.stdout.contains(&0x1b));
+        assert!(!output.stderr.contains(&0x1b));
+    }
 }
 
 #[test]

@@ -39,12 +39,39 @@ pub fn run(
     let address_hex = format_contract_address(&address);
     let address = ContractAddress::from(address);
 
+    let task = crate::print::progress::Task::start(print, "Fetching balance", true);
     let balance = fetch_balance_blocking(&rpc_url, address)?;
     let raw_balance = parse_raw_balance(&balance.raw_balance)?;
     let balance_hog = hog::format_amount(raw_balance);
 
-    print.status(format_args!("Balance: {balance_hog} HOG"));
-    print.status(format_args!("Address: {address_hex}"));
+    let warnings = task.finish();
+    if print.has_human_ui() {
+        let mut fields = vec![
+            ("Balance".into(), format!("{balance_hog} HOG")),
+            ("Raw balance".into(), balance.raw_balance.clone()),
+        ];
+        if target != address_hex {
+            fields.push(("Target".into(), target.clone()));
+        }
+        fields.extend([
+            ("Address".into(), address_hex.clone()),
+            ("Height".into(), balance.height.to_string()),
+            ("Profile".into(), resolved_profile.name.clone()),
+            ("RPC URL".into(), rpc_url.clone()),
+        ]);
+        print.outcome_report(
+            crate::print::Outcome::Success,
+            "Balance",
+            &fields,
+            &warnings,
+        );
+    } else {
+        print.status(format_args!("Balance: {balance_hog} HOG"));
+        print.status(format_args!("Address: {address_hex}"));
+        for warning in warnings {
+            print.warn(warning);
+        }
+    }
     print.json(&CommandResult::new(
         cmd,
         json!({

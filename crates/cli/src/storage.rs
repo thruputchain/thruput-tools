@@ -36,13 +36,37 @@ pub fn run(
     let key_hex = prefixed_hex(&key);
     let address_hex = prefixed_hex(address.0);
 
-    let task = print.start_task("Reading storage");
+    let task = crate::print::progress::Task::start(print, "Reading storage", true);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let read = rt.block_on(fetch_storage_at(rpc_url, address, key))?;
 
-    task.success("Storage read complete");
-    print_storage_read(&address_hex, &key_hex, &read, print)?;
+    let _ = task.finish();
+    if print.has_human_ui() {
+        let item = read
+            .item
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| CliError::Other(format!("failed to render storage item: {error}")))?;
+        print.outcome_card(
+            if item.is_some() {
+                crate::print::Outcome::Success
+            } else {
+                crate::print::Outcome::Empty
+            },
+            "Storage",
+            &[
+                ("Address".into(), address_hex.clone()),
+                ("Key".into(), key_hex.clone()),
+                ("Height".into(), read.block_height.to_string()),
+                ("Item".into(), item.unwrap_or_else(|| "Absent".into())),
+            ],
+        );
+    } else {
+        print.success("Storage read complete");
+        print_storage_read(&address_hex, &key_hex, &read, print)?;
+    }
     print.json(&CommandResult::new(
         cmd,
         json!({

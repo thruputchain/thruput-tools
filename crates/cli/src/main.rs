@@ -31,6 +31,9 @@ struct GlobalArgs {
     /// Emit structured JSON output
     #[arg(long, global = true)]
     json: bool,
+    /// Use plain human output without boxes, animation, or terminal controls
+    #[arg(long, global = true)]
+    no_ui: bool,
     /// Print each cargo command to stderr before running it
     #[arg(long, global = true)]
     show_cargo_commands: bool,
@@ -395,6 +398,9 @@ impl StatusArgs {
 
 #[derive(Args)]
 struct BuildArgs {
+    /// Show Cargo logs live instead of collecting diagnostics below the result
+    #[arg(short, long)]
+    verbose: bool,
     /// Package to build (required in workspaces)
     #[arg(short, long)]
     package: Option<String>,
@@ -427,7 +433,7 @@ impl BuildArgs {
             &self.cargo_args,
             &self.artifacts.options(&cwd),
             self.profile.as_deref(),
-            &ctx.print,
+            &ctx.print.clone().with_verbose_build(self.verbose),
         )
     }
 }
@@ -1746,6 +1752,7 @@ const SKILL_ARG_ID: &str = "skill";
 
 fn cli_command(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> clap::Command {
     Cli::command()
+        .styles(Print::command_styles())
         .version(bundle_identity.to_string())
         .subcommand_required(false)
         .arg(
@@ -1763,13 +1770,26 @@ enum ParsedCli {
 }
 
 fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> ParsedCli {
-    let matches = match cli_command(bundle_identity).try_get_matches() {
+    // Clap can print help/errors before Print exists. Honor the global plain-output
+    // switch here too, but do not inspect arguments forwarded after `--`.
+    let no_ui = std::env::args_os()
+        .skip(1)
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--no-ui" || arg == "--non-interactive");
+    let command = cli_command(bundle_identity).color(if no_ui {
+        clap::ColorChoice::Never
+    } else {
+        clap::ColorChoice::Auto
+    });
+    let matches = match command.try_get_matches() {
         Ok(matches) => matches,
         Err(error) => {
             if error.kind() == clap::error::ErrorKind::DisplayVersion
                 && let Some(reason) = bundle_identity.terminal_safe_mismatch_reason()
             {
-                eprintln!("warning: bundle manifest mismatch: {reason}");
+                Print::new(false, false)
+                    .with_no_ui(no_ui)
+                    .warn(format_args!("bundle manifest mismatch: {reason}"));
             }
             error.exit()
         }
@@ -1804,6 +1824,7 @@ fn main() {
     };
     let ctx = Ctx {
         print: Print::new(cli.global.quiet, cli.global.json)
+            .with_no_ui(cli.global.no_ui)
             .with_non_interactive(cli.global.non_interactive)
             .with_command_trace(cli.global.show_cargo_commands),
         cmd_name: cli.command.command_name(),
@@ -1830,6 +1851,48 @@ fn main() {
 mod tests {
     use super::*;
     use groundhog_node_supervisor::ConfigParamName;
+
+    #[test]
+    fn command_matrix_covers_every_leaf_command() {
+        fn leaves(
+            command: &clap::Command,
+            prefix: &str,
+            output: &mut std::collections::BTreeSet<String>,
+        ) {
+            for child in command
+                .get_subcommands()
+                .filter(|child| child.get_name() != "help")
+            {
+                let name = format!("{prefix}{}", child.get_name());
+                if child.has_subcommands() {
+                    leaves(child, &format!("{name} "), output);
+                } else {
+                    output.insert(name);
+                }
+            }
+        }
+        let mut actual = std::collections::BTreeSet::new();
+        leaves(&Cli::command(), "", &mut actual);
+        let spec = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../docs/specs/2026-09-21-cli-tui-mvp.md"
+        ));
+        let expected = spec
+            .split_once("## 7.")
+            .unwrap()
+            .1
+            .split_once("### Flag")
+            .unwrap()
+            .0
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("| `")
+                    .and_then(|line| line.split_once('`'))
+                    .map(|(name, _)| name.to_owned())
+            })
+            .collect();
+        assert_eq!(actual, expected, "new commands need explicit UI coverage");
+    }
 
     #[test]
     fn config_get_flags_and_command_name_parse() {

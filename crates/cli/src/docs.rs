@@ -110,6 +110,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let task = crate::print::progress::Task::start(print, "Preparing documentation", true);
     let external_snapshot = dir.is_some();
     let bundled;
     let dir = if let Some(dir) = dir {
@@ -131,24 +132,27 @@ pub fn run(
             .await
             .map_err(|source| DocsError::Bind { port, source })?;
         let url = format!("http://{}/", listener.local_addr()?);
-        print.success(format_args!("Documentation ready at {url}"));
-        print.detail("snapshot", root.display());
-        print.detail("source", &snapshot.source_revision);
-        print.detail("agent guide CLI", &snapshot.agent_guide_cli_version);
+        let _ = task.finish();
         let guide_matches_cli = snapshot.agent_guide_cli_version == env!("CARGO_PKG_VERSION");
-        // The bundled snapshot is selected by the CLI release; a differing guide
-        // version is provenance, not an actionable warning for its users.
-        if external_snapshot && !guide_matches_cli {
-            print.warn(format_args!(
-                "guide targets CLI {}; installed CLI is {}",
-                snapshot.agent_guide_cli_version,
-                env!("CARGO_PKG_VERSION")
-            ));
-        }
-        print.status(
-            "Local preview; linked services and external API docs still need network access. \
+        print.group(crate::print::Outcome::Ready, "Documentation", |print| {
+            print.success(format_args!("Documentation ready at {url}"));
+            print.detail("snapshot", root.display());
+            print.detail("source", &snapshot.source_revision);
+            print.detail("agent guide CLI", &snapshot.agent_guide_cli_version);
+            // The bundled snapshot is selected by the CLI release; a differing guide
+            // version is provenance, not an actionable warning for its users.
+            if external_snapshot && !guide_matches_cli {
+                print.warn(format_args!(
+                    "guide targets CLI {}; installed CLI is {}",
+                    snapshot.agent_guide_cli_version,
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            print.status(
+                "Local preview; linked services and external API docs still need network access. \
              Ctrl-C to stop.",
-        );
+            );
+        });
         print.json(&CommandResult::new(
             cmd,
             DocsReport {
@@ -167,6 +171,11 @@ pub fn run(
             result = axum::serve(listener, app) => result?,
             result = stop => result?,
         }
+        print.group(
+            crate::print::Outcome::Success,
+            "Documentation server stopped",
+            |_| {},
+        );
         Ok(())
     })
 }

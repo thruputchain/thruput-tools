@@ -149,6 +149,21 @@ pub fn format_tx_hash(tx_hash: &TxHash) -> String {
         .to_string()
 }
 
+/// Keep the locally prepared hash in scrollback before a potentially interrupted wait.
+/// Presentation is best-effort and never changes submission or validation behavior.
+pub(crate) fn print_prepared_transaction(tx_hex: &str, print: &Print) {
+    if print.is_json() || print.is_quiet() {
+        return;
+    }
+    if let Ok(bytes) = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex))
+        && let Ok(signed) =
+            xdrs::txs::decode::<groundhog_xdr::transaction::SignedTransaction>(&bytes)
+        && let Ok(hash) = groundhog_signing::transaction_hash(&signed.tx)
+    {
+        print.detail("prepared transaction", format_tx_hash(&TxHash(hash.into())));
+    }
+}
+
 pub(crate) fn rpc_error_message(error: &ClientError) -> String {
     match error {
         ClientError::Call(object) => {
