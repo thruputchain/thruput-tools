@@ -30,12 +30,156 @@ fn config() -> Config {
         ws_listen: "127.0.0.1:0".parse().unwrap(),
         allow_remote: false,
         max_subscribers: 64,
+        max_subscriptions_per_connection: None,
         subscriber_queue: 2,
         subscriber_queue_bytes: 32 * 1024,
         max_record_bytes: 16 * 1024 * 1024,
         live_timeout_ms: 1000,
         catchup_timeout_ms: 1000,
         catchup_progress_ms: 30000,
+    }
+}
+
+fn cli_config(args: &[&str]) -> Config {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        subscriptions: Config,
+    }
+    Cli::parse_from(
+        ["test", "--ws-listen", "127.0.0.1:0"]
+            .into_iter()
+            .chain(args.iter().copied()),
+    )
+    .subscriptions
+}
+
+#[test]
+fn subscription_connection_defaults_overrides_and_zero_validation() {
+    for remote in [false, true] {
+        let mut args = vec!["--max-subscribers", "7"];
+        if remote {
+            args.push("--allow-remote");
+        }
+        assert_eq!(
+            cli_config(&args).subscription_limit_per_connection(),
+            if remote { 1 } else { 7 }
+        );
+        args.extend(["--max-subscriptions-per-connection", "3"]);
+        let config = cli_config(&args);
+        assert_eq!(config.subscription_limit_per_connection(), 3);
+        assert!(config.validate(config.ws_listen).is_ok());
+        *args.last_mut().unwrap() = "0";
+        let config = cli_config(&args);
+        assert!(config.validate(config.ws_listen).is_err());
+    }
+}
+
+fn assert_connection_limit(error: jsonrpsee::core::client::Error, limit: u32) {
+    let jsonrpsee::core::client::Error::Call(error) = error else {
+        panic!("expected typed JSON-RPC rejection, got {error:?}");
+    };
+    assert_eq!(error.code(), -32006);
+    assert_eq!(error.message(), "Too many subscriptions on the connection");
+    assert_eq!(
+        serde_json::from_str::<String>(error.data().unwrap().get()).unwrap(),
+        format!("Exceeded max limit of {limit}")
+    );
+}
+
+#[tokio::test]
+async fn public_profile_refuses_second_subscription_and_first_keeps_delivering() {
+    use groundhog_firehose::api::FirehoseApiClient;
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    let hub = Hub::new(
+        dir.path().to_owned(),
+        store.height(),
+        cli_config(&["--allow-remote"]),
+    );
+    store.subscribe_with(hub.clone());
+    let (address, server) = hub.serve().await.unwrap();
+    let client = connect(address).await;
+    let mut first = subscribe(&client, Cursor::Tip).await;
+    let current = fixture();
+    store.append(&current).unwrap();
+    block(&client, &mut first, 1).await;
+    assert_connection_limit(client.follow_blocks(Cursor::Tip).await.unwrap_err(), 1);
+    assert_eq!(hub.stats()["currentSubscribers"], 1);
+    // Another connection still has its own slot.
+    let other = connect(address).await;
+    let mut second = subscribe(&other, Cursor::Tip).await;
+    store.append(&next(&current)).unwrap();
+    block(&client, &mut first, 2).await;
+    block(&other, &mut second, 2).await;
+    server.stop().unwrap();
+    drop((first, second, client, other));
+    server.stopped().await;
+}
+
+#[tokio::test]
+async fn public_profile_concurrent_subscriptions_admit_exactly_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    let hub = Hub::new(
+        dir.path().to_owned(),
+        store.height(),
+        cli_config(&["--allow-remote"]),
+    );
+    store.subscribe_with(hub.clone());
+    let (address, server) = hub.serve().await.unwrap();
+    let client = connect(address).await;
+    let attempt = || {
+        client.subscribe::<Value, _>(
+            "firehose_subscribe",
+            rpc_params![Cursor::Tip],
+            "firehose_unsubscribe",
+        )
+    };
+    let (first, second) = tokio::join!(attempt(), attempt());
+    let (mut accepted, rejected) = match (first, second) {
+        (Ok(sub), Err(error)) | (Err(error), Ok(sub)) => (sub, error),
+        result => panic!("expected exactly one accepted subscription: {result:?}"),
+    };
+    assert_connection_limit(rejected, 1);
+    assert_eq!(hub.stats()["currentSubscribers"], 1);
+    let current = fixture();
+    store.append(&current).unwrap();
+    block(&client, &mut accepted, 1).await;
+    store.append(&next(&current)).unwrap();
+    block(&client, &mut accepted, 2).await;
+    server.stop().unwrap();
+    drop((accepted, client));
+    server.stopped().await;
+}
+
+#[tokio::test]
+async fn loopback_default_and_explicit_remote_override_allow_multiple_cursors() {
+    for args in [
+        vec![],
+        vec!["--allow-remote", "--max-subscriptions-per-connection", "3"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let current = fixture();
+        store.append(&current).unwrap();
+        let hub = Hub::new(dir.path().to_owned(), store.height(), cli_config(&args));
+        store.subscribe_with(hub.clone());
+        let (address, server) = hub.serve().await.unwrap();
+        let client = connect(address).await;
+        let mut tip = subscribe(&client, Cursor::Tip).await;
+        let mut backfill = subscribe(&client, Cursor::Height { height: 1 }).await;
+        let mut another = subscribe(&client, Cursor::Tip).await;
+        assert_eq!(hub.stats()["currentSubscribers"], 3);
+        block(&client, &mut backfill, 1).await;
+        store.append(&next(&current)).unwrap();
+        block(&client, &mut tip, 2).await;
+        block(&client, &mut backfill, 2).await;
+        block(&client, &mut another, 2).await;
+        server.stop().unwrap();
+        drop((tip, backfill, another, client));
+        server.stopped().await;
     }
 }
 

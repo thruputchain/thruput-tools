@@ -6,6 +6,21 @@ There is no authentication. `--allow-remote` is required if **either** listener
 binds outside loopback, and logs a startup warning. No gateway changes or
 additional event-service connections are involved.
 
+With `--allow-remote`, subscriptions per connection default to **1**, even when
+binding loopback behind a public proxy. Startup logs report:
+`--allow-remote defaults --max-subscriptions-per-connection to 1; set it explicitly to override`.
+Without `--allow-remote`, the default remains `--max-subscribers`, allowing
+independent tip and backfill cursors on one local connection. An explicit positive
+`--max-subscriptions-per-connection` overrides either default. Public reverse-proxy
+deployments must pass `--allow-remote` even if the backend listener is loopback.
+
+Exceeding this connection limit returns JSON-RPC error code **-32006**,
+`Too many subscriptions on the connection`, with data `"Exceeded max limit of 1"`
+(using the configured limit). Existing subscriptions and the connection stay open.
+Clients can unsubscribe an existing cursor before retrying. With the public
+default, an edge limit of two connections per IP permits at most two subscriptions
+per IP; the global subscriber cap still applies independently.
+
 The source of truth is `FirehoseApi` in this crate's `src/api.rs`, with
 generated `FirehoseApiClient` / `FirehoseApiServer`. Wire types are in
 `src/types.rs`. This experimental namespace is independent of
@@ -81,6 +96,7 @@ handle the generated `Notification::Closed` variant.
 | Flag | Default | Meaning |
 | --- | ---: | --- |
 | `--max-subscribers` | 64 | Global active subscription cap; also bounds connections |
+| `--max-subscriptions-per-connection` | 1 with `--allow-remote`, otherwise `--max-subscribers` | Active subscription cap on each WebSocket |
 | `--subscriber-queue` | 8 | Maximum queued live records per subscriber |
 | `--subscriber-queue-bytes` | 2097152 | Maximum raw bytes in each live queue (2 MiB) |
 | `--max-record-bytes` | 4194304 | Largest deliverable raw record (4 MiB) |
