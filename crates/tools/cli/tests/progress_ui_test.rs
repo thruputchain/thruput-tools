@@ -241,7 +241,7 @@ impl Pty {
     fn spawn(mut command: Command) -> Self {
         let mut master = -1;
         let mut slave = -1;
-        let size = libc::winsize {
+        let mut size = libc::winsize {
             ws_row: 12,
             ws_col: 80,
             ws_xpixel: 0,
@@ -254,8 +254,8 @@ impl Pty {
                     &raw mut master,
                     &raw mut slave,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &raw const size,
+                    std::ptr::null_mut(),
+                    &raw mut size,
                 )
             },
             0
@@ -281,7 +281,14 @@ impl Pty {
         // owns its session and controlling PTY, including its Cargo process group.
         unsafe {
             command.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                #[cfg(target_os = "macos")]
+                let request = libc::c_ulong::from(libc::TIOCSCTTY);
+                #[cfg(not(target_os = "macos"))]
+                let request = libc::TIOCSCTTY;
+                if libc::setsid() < 0
+                    || libc::ioctl(0, request, 0) < 0
+                    || libc::tcsetpgrp(0, libc::getpgrp()) < 0
+                {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())

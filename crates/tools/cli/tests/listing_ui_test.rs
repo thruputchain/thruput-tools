@@ -70,7 +70,7 @@ fn terminal_capture_with_input(
 ) -> Output {
     let mut master = -1;
     let mut slave = -1;
-    let size = libc::winsize {
+    let mut size = libc::winsize {
         ws_row: 100,
         ws_col: columns,
         ws_xpixel: 0,
@@ -83,8 +83,8 @@ fn terminal_capture_with_input(
                 &raw mut master,
                 &raw mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                &raw const size,
+                std::ptr::null_mut(),
+                &raw mut size,
             )
         },
         0
