@@ -1,16 +1,16 @@
 {
   "component": "hog-devnode",
   "schemaVersion": 1,
-  "defaultVersion": "0.1.29-rc.3",
+  "defaultVersion": "0.1.29-rc.4",
   "versions": {
-    "0.1.29-rc.3": {
+    "0.1.29-rc.4": {
       "source": {
-        "ref": "v0.1.29-rc.3",
+        "ref": "v0.1.29-rc.4",
         "repository": "groundhogchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
-          "archive": "hog-devnode_0.1.29-rc.3_aarch64-apple-darwin.tar.gz",
+          "archive": "hog-devnode_0.1.29-rc.4_aarch64-apple-darwin.tar.gz",
           "compatibility": {
             "minimumVersion": "26.0",
             "os": "macos"
@@ -70,12 +70,12 @@
             }
           ],
           "layoutVersion": 1,
-          "objectKey": "hog-devnode/0.1.29-rc.3/hog-devnode_0.1.29-rc.3_aarch64-apple-darwin.tar.gz",
-          "sha256": "b9a8987e79cc68b89e68da64a694764ad2f483de45bae8b07bb0d6e211923ea0",
-          "size": 10538784
+          "objectKey": "hog-devnode/0.1.29-rc.4/hog-devnode_0.1.29-rc.4_aarch64-apple-darwin.tar.gz",
+          "sha256": "b3cfe11f1e4b47346389c0005869c58e9cc1eff363f6ef9ac07ab50c920f867e",
+          "size": 10559961
         },
         "aarch64-unknown-linux-gnu": {
-          "archive": "hog-devnode_0.1.29-rc.3_aarch64-unknown-linux-gnu.tar.gz",
+          "archive": "hog-devnode_0.1.29-rc.4_aarch64-unknown-linux-gnu.tar.gz",
           "compatibility": {
             "libc": "glibc",
             "minimumVersion": "2.38"
@@ -95,12 +95,12 @@
             }
           ],
           "layoutVersion": 1,
-          "objectKey": "hog-devnode/0.1.29-rc.3/hog-devnode_0.1.29-rc.3_aarch64-unknown-linux-gnu.tar.gz",
-          "sha256": "a40d4165c69f12544fcec40934da7832590181fbab92dde50a3bb32d701cdee3",
-          "size": 8871131
+          "objectKey": "hog-devnode/0.1.29-rc.4/hog-devnode_0.1.29-rc.4_aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "6ef94d911d67439766d229a07b918a17a09330570adb392bd40a7d111617eb08",
+          "size": 8897454
         },
         "x86_64-unknown-linux-gnu": {
-          "archive": "hog-devnode_0.1.29-rc.3_x86_64-unknown-linux-gnu.tar.gz",
+          "archive": "hog-devnode_0.1.29-rc.4_x86_64-unknown-linux-gnu.tar.gz",
           "compatibility": {
             "libc": "glibc",
             "minimumVersion": "2.38"
@@ -120,9 +120,9 @@
             }
           ],
           "layoutVersion": 1,
-          "objectKey": "hog-devnode/0.1.29-rc.3/hog-devnode_0.1.29-rc.3_x86_64-unknown-linux-gnu.tar.gz",
-          "sha256": "6df5ff05e3f5091f7204b7cc87952509a8762f777e2a345acde34d9d0c25ccf5",
-          "size": 9693642
+          "objectKey": "hog-devnode/0.1.29-rc.4/hog-devnode_0.1.29-rc.4_x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "70c1311c473743400e0d8107433a56a4758c1609f4279a5adb9b77c635fa2106",
+          "size": 9719031
         }
       }
     }
