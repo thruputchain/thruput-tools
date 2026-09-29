@@ -7,7 +7,7 @@ description: >
   contains Groundhog configuration, SDK dependencies, or generated artifacts.
 ---
 
-<!-- groundhog-cli-version: 0.19.0-pre.2 -->
+<!-- groundhog-cli-version: 0.19.0 -->
 
 # Groundhog
 
@@ -138,7 +138,7 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.40.0, standard interfaces 0.1.40, protocol-rs 0.42.0,
+This CLI uses SDK 0.41.1, standard interfaces 0.1.41, protocol-rs 0.42.0,
 and XDR 0.10.1. Update the SDK and interface dependencies together when
 migrating an existing Rust project.
 

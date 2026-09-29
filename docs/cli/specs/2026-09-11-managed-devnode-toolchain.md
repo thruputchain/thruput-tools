@@ -65,19 +65,20 @@ Explicit binary, environment, and sibling paths continue bypassing acquisition.
 
 ## Trusted catalog provenance
 
-The CLI pins public hog-devnode `0.1.29-rc.3`, the first published devnode
-whose protocol token (`hogp/edeb6e904647bf4`) matches the groundhog-xdr 0.42.0
-crates this workspace builds against; 0.1.28-rc.3 advertises
-`hogp/d2872e9900ce157` and fails the supervisor's handshake. The CLI uses that
-exact component version, not the platform version.
+The CLI pins public hog-devnode `0.1.29-rc.4`. It keeps the protocol token
+(`hogp/edeb6e904647bf4`) that 0.1.29-rc.3 introduced, matching the
+groundhog-xdr 0.42.0 crates this workspace builds against, and is the first
+published devnode whose native HOG token implements the delta-allowance API
+(groundhogchain/hogd#4145) that SDK 0.41.1 and standard interfaces 0.1.41
+target. The CLI uses that exact component version, not the platform version.
 Its manifest was published at packaging authorization commit
-`a91dcafb9afea9a0144367c2d7642591a2fd9eb5`. The public HTTPS manifest has
+`e41c622419cee47d91fc322787506629703464dd`. The public HTTPS manifest has
 SHA-256
-`86e91dec3c8c6360f97bbdcbf004677e6fc2eb1526520bcef295c1ee26999210`.
-Both Linux archive digests equal the authenticated hogd `v0.1.29-rc.3` release
+`d62996a36e8c8437a7a82e98104871f306f288af3828c65c55169855d05f8d10`.
+Both Linux archive digests equal the authenticated hogd `v0.1.29-rc.4` release
 asset digests, and the macOS entry names the authenticated release asset
 digest as its source, with a `SUCCEEDED` stapled, notarized Xcode Cloud
-build signed by the same Team ID as 0.1.28-rc.3.
+build signed by the same Team ID as 0.1.29-rc.3.
 
 The catalog copies each target's archive, objectKey, size, sha256, layoutVersion,
 files, and compatibility fields, plus source repository/ref, into catalog
@@ -88,14 +89,14 @@ the trust handoff. All three public target archives passed the real installer.
 
 ## Release qualification
 
-The 0.1.29-rc.3 bundle has the same files, layout, and runtime minimums as
-0.1.28-rc.3 and moves the protocol to `edeb6e9`, the one protocol-rs 0.42.0
-targets. For 0.1.29-rc.3 the real managed startup smoke passed on native Linux
-x86_64 (glibc 2.39) without a binary or protocol override, including RPC, clean
+The 0.1.29-rc.4 bundle has the same files, layout, runtime minimums, and
+protocol (`edeb6e9`) as 0.1.29-rc.3 and changes only the node build. For
+0.1.29-rc.4 the real managed startup smoke passed on native Linux x86_64
+(glibc 2.39) without a binary or protocol override, including RPC, clean
 shutdown, offline persistent restart, parent SIGKILL cleanup, and local status
 discovery; all three public archives passed the real installer. 0.1.27-rc.7
 was additionally qualified on macOS and native Linux ARM64; the publish
-workflow's startup smoke is the gate for 0.1.29-rc.3 on its runner.
+workflow's startup smoke is the gate for 0.1.29-rc.4 on its runner.
 
 The pre-publication workflow now runs, before creating a tag or publishing:
 
