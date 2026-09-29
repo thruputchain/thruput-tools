@@ -128,11 +128,12 @@ struct WatchContext {
     ignored_dirs: Vec<PathBuf>,
 }
 
-/// A finished test run of one package: its report and, when a test
-/// invocation failed, the exit code of the first one that did.
+/// A finished test run of one package: its report, the warnings from building
+/// it and, when a test invocation failed, the exit code of the first one that did.
 struct TestOutcome {
     report: TestReport,
     failed_code: Option<i32>,
+    warnings: Vec<crate::checks::Finding>,
 }
 
 struct IntegrationBuild {
@@ -143,6 +144,7 @@ struct IntegrationBuild {
     profile: crate::config::ResolvedProfile,
     test_features: &'static str,
     artifact: ResolvedArtifact,
+    warnings: Vec<crate::checks::Finding>,
 }
 
 struct LocalTestBuild {
@@ -151,6 +153,7 @@ struct LocalTestBuild {
     target_directory: PathBuf,
     profile: crate::config::ResolvedProfile,
     artifact: ResolvedArtifact,
+    warnings: Vec<crate::checks::Finding>,
 }
 
 /// Build the contract to the default local test target, then run tests
@@ -554,6 +557,7 @@ fn run_integration_against_node(
     Ok(TestOutcome {
         report,
         failed_code,
+        warnings: build.warnings.clone(),
     })
 }
 
@@ -584,6 +588,7 @@ fn build_integration_artifact(
             kind: ArtifactKind::Rv32,
             path: build.rv32,
         },
+        warnings: build.warnings,
     })
 }
 
@@ -613,6 +618,7 @@ fn finish_integration_run(
     warnings: Vec<crate::checks::Finding>,
 ) -> Result<(), CliError> {
     print_test_summary(&run.report, print);
+    let warnings: Vec<_> = run.warnings.iter().cloned().chain(warnings).collect();
     if let Some(code) = run.failed_code {
         if print.is_json() {
             print.json(&CommandResult::failure_with_warnings(
@@ -773,13 +779,21 @@ fn finish_package_run(
     print_test_summary(&outcome.report, print);
     if let Some(code) = outcome.failed_code {
         if print.is_json() {
-            print.json(&CommandResult::failure(cmd, &outcome.report))?;
+            print.json(&CommandResult::failure_with_warnings(
+                cmd,
+                outcome.warnings.clone(),
+                &outcome.report,
+            ))?;
             return Err(CliError::CommandReportedFailure);
         }
         return Err(CliError::CargoFailed(code));
     }
 
-    print.json(&CommandResult::new(cmd, &outcome.report))?;
+    print.json(&CommandResult::with_warnings(
+        cmd,
+        outcome.warnings.clone(),
+        &outcome.report,
+    ))?;
     Ok(())
 }
 
@@ -802,6 +816,7 @@ fn run_workspace_once(
     ));
 
     let mut reports = Vec::with_capacity(packages.len());
+    let mut warnings = Vec::new();
     let mut failed = Vec::new();
     let mut skipped = Vec::new();
     let mut errored: Option<(String, CliError)> = None;
@@ -831,6 +846,7 @@ fn run_workspace_once(
         if package_failed {
             failed.push((*package).to_string());
         }
+        warnings.extend(outcome.warnings);
         reports.push(outcome.report);
         if package_failed && options.harness.fail_fast {
             skipped.extend(remaining());
@@ -867,21 +883,26 @@ fn run_workspace_once(
 
     if let Some((_, error)) = errored {
         if print.is_json() {
-            print.json(&CommandResult::failure_with_error(
-                cmd,
-                &report,
-                crate::result::CommandError::from_cli_error(&error),
-            ))?;
+            print.json(
+                &CommandResult::failure_with_error(
+                    cmd,
+                    &report,
+                    crate::result::CommandError::from_cli_error(&error),
+                )
+                .and_warnings(warnings),
+            )?;
             return Err(CliError::CommandReportedFailure);
         }
         return Err(error);
     }
     if failed.is_empty() {
-        print.json(&CommandResult::new(cmd, &report))?;
+        print.json(&CommandResult::with_warnings(cmd, warnings, &report))?;
         return Ok(());
     }
     if print.is_json() {
-        print.json(&CommandResult::failure(cmd, &report))?;
+        print.json(&CommandResult::failure_with_warnings(
+            cmd, warnings, &report,
+        ))?;
         return Err(CliError::CommandReportedFailure);
     }
     Err(CliError::WorkspaceTestsFailed {
@@ -1110,6 +1131,7 @@ fn run_package_once(
             .iter()
             .find(|output| !output.success)
             .map(|output| output.code),
+        warnings: build.warnings,
     })
 }
 
@@ -1137,6 +1159,7 @@ fn build_local_test_artifact(
             kind: ArtifactKind::Rv32,
             path: build.rv32,
         },
+        warnings: build.warnings,
     })
 }
 
@@ -1355,6 +1378,7 @@ fn finish_empty_rerun(
     Ok(TestOutcome {
         report,
         failed_code: None,
+        warnings: build.warnings.clone(),
     })
 }
 
@@ -2122,6 +2146,7 @@ mod tests {
         super::TestOutcome {
             report,
             failed_code: if success { None } else { Some(101) },
+            warnings: Vec::new(),
         }
     }
 

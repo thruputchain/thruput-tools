@@ -66,6 +66,13 @@ pub fn minimal_rv32_elf_with_section(section_name: &str, section_data: &[u8]) ->
 #[must_use]
 #[allow(dead_code)]
 pub fn minimal_contract_spec_raw() -> Vec<u8> {
+    contract_spec_raw_for_interface("Counter")
+}
+
+/// [`minimal_contract_spec_raw`] with its interface named `interface_name`.
+#[must_use]
+#[allow(dead_code)]
+pub fn contract_spec_raw_for_interface(interface_name: &str) -> Vec<u8> {
     fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {
         value.try_into().expect("bug: test spec string should fit")
     }
@@ -85,7 +92,7 @@ pub fn minimal_contract_spec_raw() -> Vec<u8> {
     let fragments = [
         groundhog_spec_tool::SpecFragment::SpecInterface {
             interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
-                interface_name: spec_string("Counter"),
+                interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
                 throws: vec![].try_into().unwrap(),
@@ -94,14 +101,14 @@ pub fn minimal_contract_spec_raw() -> Vec<u8> {
         },
         groundhog_spec_tool::SpecFragment::InterfaceAnchor {
             interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
-                interface_name: spec_string("Counter"),
+                interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
             },
         },
         groundhog_spec_tool::SpecFragment::SpecMethod {
             method_fragment: groundhog_spec_tool::SpecMethodFragment {
-                interface_name: spec_string("Counter"),
+                interface_name: spec_string(interface_name),
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
                 method: groundhog_spec_tool::ContractSpecMethod {

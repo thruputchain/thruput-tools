@@ -42,6 +42,9 @@ Run the installed commands with `--help` for current paths and options. Re-run
 codegen after changing exported methods, events, exceptions, or contract types.
 Do not hand-maintain a TypeScript ABI beside the Rust contract spec.
 
+A plain `groundhog build` warns when codegen would refuse the contract's spec,
+naming the declarations to rename; with `--bindings ts` the build fails instead.
+
 Generated method descriptors sit under their interface's name and major, as in
 `ERC20.v0_1.transfer`, beside their `ERC20.v0_1.TransferArgs` and
 `ERC20.v0_1.TransferResult` types and the interface's `DeclaredException` and
