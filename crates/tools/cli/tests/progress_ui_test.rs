@@ -264,7 +264,9 @@ impl Pty {
         let master = unsafe { File::from_raw_fd(master) };
         // SAFETY: slave is the other descriptor returned by openpty.
         let mut slave = unsafe { File::from_raw_fd(slave) };
-        let original = attributes(&slave);
+        // Darwin revokes slave descriptors when their controlling session exits.
+        // The master retains access to the same terminal attributes after exit.
+        let original = attributes(&master);
         // SAFETY: preserve descriptor flags while enabling nonblocking test reads.
         let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
         assert!(flags >= 0);
@@ -365,7 +367,7 @@ impl Pty {
             thread::sleep(Duration::from_millis(5));
         };
         self.pump();
-        let current = attributes(&self.slave);
+        let current = attributes(&self.master);
         assert_eq!(current.c_lflag, self.original.c_lflag);
         assert_eq!(current.c_iflag, self.original.c_iflag);
         assert_eq!(current.c_oflag, self.original.c_oflag);
@@ -456,7 +458,9 @@ fn attributes(file: &File) -> libc::termios {
     // SAFETY: tcgetattr initializes the termios on success.
     assert_eq!(
         unsafe { libc::tcgetattr(file.as_raw_fd(), result.as_mut_ptr()) },
-        0
+        0,
+        "tcgetattr failed: {}",
+        std::io::Error::last_os_error()
     );
     unsafe { result.assume_init() }
 }
@@ -573,7 +577,7 @@ fn ctrl_c_retains_foreground_signal_behaviour_and_no_success_card() {
         thread::sleep(Duration::from_millis(10));
     };
     assert_eq!(status.signal(), Some(libc::SIGINT));
-    assert_eq!(attributes(&pty.slave).c_lflag, pty.original.c_lflag);
+    assert_eq!(attributes(&pty.master).c_lflag, pty.original.c_lflag);
     assert!(!String::from_utf8_lossy(&pty.raw).contains("Build complete"));
     let deadline = Instant::now() + Duration::from_secs(5);
     while !fixture.root.join("cargo-stopped").exists() {
