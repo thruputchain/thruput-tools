@@ -152,10 +152,12 @@ pub fn run(
         wallet,
         print,
     )?;
-    if !dry_run {
-        print.group(
-            crate::print::Outcome::Information,
+    if !dry_run
+        && !print.confirm_review(
             "Review deployment",
+            force,
+            "deploy a contract",
+            "Deploy this contract?",
             |print| {
                 print.detail("artifact", plan.artifact.path.display());
                 if let Some(package) = package {
@@ -166,8 +168,6 @@ pub fn run(
                     plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
                 );
                 print.detail("profile", &plan.profile_name);
-            },
-        );
         if let Some(native) = &plan.native {
             print.detail("RPC", &plan.rpc_url);
             print.detail("sender", &native.sender);
@@ -182,10 +182,11 @@ pub fn run(
             print.detail("tx", format_tx_hash(&plan.tx_hash));
             print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
         }
-        if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
-            print.cancelled();
-            return Ok(());
-        }
+            },
+        )?
+    {
+        print.cancelled();
+        return Ok(());
     }
     let prepared = sign_deploy_plan(plan)?;
     if dry_run {
@@ -564,10 +565,7 @@ fn prepare_deploy_plan(
     wallet: Option<&str>,
     print: &Print,
 ) -> Result<DeployPlan, CliError> {
-    if resolved.rpc_url.is_none() && resolved.default_key.is_none() {
-        return Err(CliError::MissingRpcUrl);
-    }
-    resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    resolved.rpc_endpoint()?;
 
     let (artifact, package_name) = if let Some(path) = artifact_path {
         (
@@ -649,7 +647,7 @@ fn prepare_deploy_transaction_plan(
     selected_wallet: Option<&str>,
     options: &DeploymentOptions<'_>,
 ) -> Result<DeployPlan, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     if options.init_method.is_none()
         && (!options.init_args.is_empty() || options.init_gas_limit.is_some())
     {

@@ -75,11 +75,7 @@ pub fn list(
     }
 
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let address = resolve_address_target(&profile, contract_input)?;
     let contract_address = ContractAddress::from(address);
     let filters = EventFiltersReport {

@@ -13,10 +13,10 @@ rules, and raw payloads remain command contracts.
 | GH-391 | queries, history, listings | Shared query cards, grouped history, stdout toolchain table; raw `which` path retained | Workspace tests passed; RPC PTYs cover absent storage, pending transactions, sparse pages, empty events/transfers; command matrix verified |
 | GH-416 | config/key/wallet management | Shared mutation/no-change/cancelled results; raw key export retained | Workspace suite and management PTY scenarios passed; existing authorization/secret tests retained |
 | GH-417 | toolchain actions, archives, codegen | Shared acquisition/archive progress and action results; raw codegen/which output retained | Workspace suite and archive round-trip/codegen/raw-source/clean-no-op PTYs passed |
-| GH-396 | new, init | Shared setup cards, outcomes, next steps; removed fixed ANSI boxes and screen clearing | Workspace suite, counter/stub/ready-init PTYs and declined-step scrollback test passed |
+| GH-396 | new, init | Shared guided stepper, theme-accented active view, canonical prompts, and final results; explicit foreground screen refresh | Guided step/state/resize/interrupt PTYs; short-terminal and automation fallbacks; existing authorization and schema coverage |
 | GH-393 | deploy, call, transfer, airdrop, wallet create | Shared review/dry-run/live/error/unconfirmed results; prepared hashes and prefund progress retained; explicit wallet binding partial outcome | Workspace suite; live call/deploy/transfer success, rejection and uncertainty PTYs; wallet prefund/creation partial failure; remote dry runs without service contact |
 | GH-392 | test: single/workspace/watch/integration | Shared per-run/workspace summaries and outcomes; foreground default runs collect passing logs and retain failed output; `--show-output`, no-capture, passthrough, and integration supervisors use append-only child output | Workspace suite, existing watch/JSONL/workspace/integration tests, and compact/failure/full-output PTYs passed |
-| GH-395 | node, docs | Shared Ready/stopped reports; docs startup progress; node uses append-only phases/tracing to avoid competing supervisor writers; `--verbose` expands logs | Workspace suite and service PTYs passed, including ready-but-still-running and signal-driven cleanup; logs use shared semantic colors |
+| GH-395 | node, docs | Shared Ready cards and one-line stop messages; docs startup progress; node uses append-only phases/tracing to avoid competing supervisor writers; `--verbose` expands logs | Workspace suite and service PTYs passed, including ready-but-still-running and signal-driven cleanup; logs use shared semantic colors |
 | GH-394 | recursive command/mode audit, raw/framework output | Complete command audit and platform smoke workflow | Linux workspace, tmux, and macOS terminal checks passed; awaiting user UX review |
 | GH-438 | pre-dispatch version warnings and argument errors | Audit gap fixed with shared warnings and RGB error styles | Argument-error paths checked in a terminal, including no UI; version/NO_COLOR/raw-payload tests |
 | GH-439 | key import and updated non-interactive setup | Integrated current main's input authorization, StrKey fields, and versioned init report; shared public import results | Secret-input, import, and non-interactive regressions |
@@ -68,7 +68,7 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 | `toolchain list` | Catalog/install/selection/path table on stdout | `toolchain_test`, CLI stale/cache status coverage |
 | `toolchain which` | Raw executable path | `toolchain_test`, cache/path/quiet audit fixture |
 | `new` | Project card, warnings, next steps | `new_init_test`, CLI validation, counter/stub PTYs |
-| `init` | Append-only setup steps, existing prompts, partial/ready results | CLI EOF/default/quiet/JSON; decline/scrollback/width PTYs |
+| `init` | Refreshing guided steps and existing prompts; partial/ready results; append-only automation fallback | CLI EOF/default/quiet/JSON; current/done/skipped steps, resize, interrupt, and short-terminal PTYs |
 | `config new` | Created-profile result | CLI atomic/scope/default validation, mutation PTY |
 | `config set` | Changed/no-change result | CLI typed-field/scope/JSON cases, mutation PTY |
 | `config unset` | Removed/no-change result and inherited fallback | CLI inheritance/scope cases, mutation/no-op PTY |
@@ -99,6 +99,20 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
   are unframed. Framework parser errors retain exit code 2 and use the shared red.
 - Cargo/test passthrough and service logs remain append-only where another process
   or supervisor owns output. No alternate screen or raw-input wizard was added.
+- Interactive `init` may clear the visible display between steps. This explicit
+  guided-input behavior does not apply to ordinary result/log output. It never
+  purges scrollback, and keeps final results and scaffold warnings visible.
+- Neutral, review, dry-run, and active/ready panels use the terminal accent.
+  Success is green; warning and error borders match their semantic headings.
+- Neutral card titles have no decorative dot. Progress text is dim; the spinner
+  keeps the terminal accent.
+- Approved confirmations clear only their preview and question on supported
+  foreground terminals. Warnings move into the final result. Declines, force,
+  plain output, resize/resume, and uncertain input layout retain their output.
+  PTYs verify approval, decline, EOF, force, plain output, and resize behavior.
+- Missing local endpoints identify the selected profile and explain how to start
+  a node or select another network. Registered runtime endpoints and explicit RPC
+  overrides are resolved first; this does not add network probes.
 - Node uses shared append-only startup phases instead of animation: asynchronous
   supervisor logs must not compete with cursor updates. Normal logs show warnings
   and errors; `--verbose` or `RUST_LOG` gives fuller detail.
@@ -120,3 +134,5 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
   for terminal-state inspection, and explicit process groups for background jobs.
   No terminal-state or signal assertions were disabled to obtain that result.
 - Generated guidance and package contents are checked before the final push.
+- The latest confirmation, progress, shutdown, and endpoint refinements passed
+  local Linux checks. macOS CI results above cover the published commits.

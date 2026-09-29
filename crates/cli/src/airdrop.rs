@@ -190,16 +190,17 @@ pub fn run(
         return print_remote_dry_run(&prepared, cmd, print);
     }
     let plan = prepare_airdrop_plan(profile, &recipient, amount)?;
-    if !dry_run {
-        print.group(
-            crate::print::Outcome::Information,
+    if !dry_run
+        && !print.confirm_review(
             "Review airdrop",
+            force,
+            "request an airdrop",
+            "Request this airdrop?",
             |print| print_airdrop_plan(&plan, print),
-        );
-        if !print.confirm(force, "request an airdrop", "Request this airdrop?")? {
-            print.cancelled();
-            return Ok(());
-        }
+        )?
+    {
+        print.cancelled();
+        return Ok(());
     }
     let prepared = finalize_airdrop_plan(plan)?;
 
@@ -231,11 +232,7 @@ fn prepare_remote_airdrop_dry_run(
             "remote airdrop amount is set by the faucet service".into(),
         ));
     }
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let faucet_url = profile
         .faucet_url
         .as_deref()
@@ -379,7 +376,7 @@ fn prepare_local_airdrop_plan(
     recipient: &AirdropRecipient,
     amount: Option<&str>,
 ) -> Result<LocalAirdropPlan, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     let manifest = load_configured_runtime_manifest(profile, "faucet")?
         .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
     let recipient_wallet = recipient.wallet.clone();
@@ -654,11 +651,7 @@ fn prepare_remote_airdrop_plan(
     profile: ResolvedProfile,
     recipient: &AirdropRecipient,
 ) -> Result<AirdropPlan, CliError> {
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let faucet_url = profile
         .faucet_url
         .as_deref()

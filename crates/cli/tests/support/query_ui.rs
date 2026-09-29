@@ -109,9 +109,7 @@ fn view(output: Value) -> Value {
 const VIEW: &[&str] = &["view", "counter", "0x0102030405060708"];
 const SLOW: Duration = Duration::from_millis(500);
 
-#[test]
-fn init_declines_preserve_scrollback_and_show_partial_setup() {
-    let root = TempDir::new().unwrap();
+fn init_command(root: &TempDir) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
     command
         .arg("init")
@@ -122,18 +120,101 @@ fn init_declines_preserve_scrollback_and_show_partial_setup() {
         .env("LC_ALL", "C.UTF-8")
         .env_remove("GROUNDHOG_PROFILE")
         .env_remove("NO_COLOR");
-    let mut pty = Pty::spawn(command);
+    command
+}
+
+#[test]
+fn init_refreshes_the_step_overview_and_keeps_canonical_prompts() {
+    let root = TempDir::new().unwrap();
+    let mut pty = Pty::spawn(init_command(&root));
+    pty.resize(80, 24);
     pty.until(|pty| {
         String::from_utf8_lossy(&pty.raw).contains("Generate a local signing key now?")
     });
+    let screen = pty.parser.screen().contents();
+    for text in [
+        "Groundhog Setup",
+        "Progress",
+        "Environment",
+        "Profiles",
+        "Signing key",
+        "current",
+        "Project",
+        "pending",
+        "No signing key found",
+    ] {
+        assert!(screen.contains(text), "missing {text}: {screen}");
+    }
+    assert!(
+        !screen.contains("Cargo available"),
+        "completed step details should not crowd the current question"
+    );
+    assert!(String::from_utf8_lossy(&pty.raw).contains("\x1b[2J"));
+    assert!(String::from_utf8_lossy(&pty.raw).contains("38;5;6m"));
+    pty.resize(40, 20);
     pty.master.write_all(b"n\n").unwrap();
     pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Create a starter project?"));
-    pty.master.write_all(b"n\n").unwrap();
-    assert!(!pty.finish().success());
-    let history = pty.history();
-    assert!(history.contains("PREEXISTING-SHELL-LINE"));
+    let screen = pty.parser.screen().contents();
     assert!(
-        history.contains("skipped") && history.contains("Partially completed"),
+        screen.contains("skipped") && screen.contains("current"),
+        "{screen}"
+    );
+    pty.master.write_all(b"n\n").unwrap();
+    assert!(!pty.finish_guided().success());
+    let history = pty.history();
+    assert!(history.contains("Partially completed"), "{history}");
+}
+
+#[test]
+fn init_refresh_is_optional_and_interrupts_leave_terminal_input_intact() {
+    use std::os::unix::process::ExitStatusExt;
+    for height in [6, 24] {
+        let root = TempDir::new().unwrap();
+        let mut pty = Pty::spawn(init_command(&root));
+        pty.resize(80, height);
+        pty.until(|pty| {
+            String::from_utf8_lossy(&pty.raw).contains("Generate a local signing key now?")
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&pty.raw).contains("\x1b[2J"),
+            height == 24
+        );
+        pty.master.write_all(b"\x03").unwrap();
+        let status = if height == 24 {
+            pty.finish_guided()
+        } else {
+            pty.finish()
+        };
+        assert_eq!(status.signal(), Some(libc::SIGINT));
+    }
+}
+
+#[test]
+fn docs_shutdown_is_a_short_message_on_its_own_line() {
+    let root = TempDir::new().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command
+        .args(["docs", "--port", "0"])
+        .current_dir(root.path())
+        .env("XDG_CONFIG_HOME", root.path().join("config"))
+        .env("XDG_CACHE_HOME", root.path().join("cache"))
+        .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
+        .env_remove("NO_COLOR");
+    let mut pty = Pty::spawn(command);
+    pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Ctrl-C to stop."));
+    pty.master.write_all(b"\x03").unwrap();
+    assert!(pty.finish().success());
+    let history = pty.history();
+    assert_eq!(
+        history.lines().filter(|line| line.starts_with('╭')).count(),
+        1,
+        "{history}"
+    );
+    assert!(
+        history
+            .lines()
+            .any(|line| line.trim_end() == "Documentation server stopped."),
         "{history}"
     );
 }

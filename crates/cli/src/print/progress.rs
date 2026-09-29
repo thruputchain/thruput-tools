@@ -238,7 +238,7 @@ fn stop_sender(sender: &mpsc::SyncSender<Event>) {
     }
 }
 
-fn eligible(print: &Print, policy: Policy) -> bool {
+pub(super) fn eligible(print: &Print, policy: Policy) -> bool {
     !print.json
         && !print.quiet
         && !print.no_ui
@@ -335,7 +335,10 @@ impl Inline {
                     format!("{symbol} "),
                     Theme(policy).outcome(Outcome::Information),
                 ),
-                Span::raw(format!("{}s  {phase}", elapsed.as_secs())),
+                Span::styled(
+                    format!("{}s  {phase}", elapsed.as_secs()),
+                    Theme(policy).routine_log(),
+                ),
             ]);
             let cursor = u16::try_from(line.width())
                 .unwrap_or(u16::MAX)

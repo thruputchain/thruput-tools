@@ -47,8 +47,9 @@ pub(crate) struct ResolvedTransactionSender {
     pub(crate) wallet_name: Option<String>,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
-    /// Configured network identity, validated against hosted RPC before signing.
-    pub(crate) network_hash: groundhog_xdr::types::NetworkHash,
+    /// Optional network pin, validated against hosted RPC before signing.
+    /// Hosted profiles may discover the identity from matching descriptor and RPC data.
+    pub(crate) network_hash: Option<groundhog_xdr::types::NetworkHash>,
 }
 
 impl ResolvedTransactionSender {
@@ -164,21 +165,24 @@ pub(crate) fn resolve_sender_account(
 ///
 /// A runtime manifest is authoritative when configured, since it is written by
 /// the node that owns the chain. Otherwise the profile's own `network_hash` is
-/// the expected identity. Hosted signing validates that expectation against the
-/// live RPC identity and signs with the validated value.
+/// the expected identity. Hosted profiles can omit this pin: signing discovers
+/// the identity from the network descriptor and checks it against the live RPC.
 pub(crate) fn resolve_network_hash(
     profile: &ResolvedProfile,
     key_name: &str,
-) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
+) -> Result<Option<groundhog_xdr::types::NetworkHash>, CliError> {
     if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
-        return Ok(manifest.network_hash.to_network_hash());
+        return Ok(Some(manifest.network_hash.to_network_hash()));
     }
-    let configured = profile
-        .network_hash
-        .as_deref()
-        .ok_or(CliError::MissingNetworkHash)?;
+    let Some(configured) = profile.network_hash.as_deref() else {
+        return if profile.faucet_url.is_some() {
+            Ok(None)
+        } else {
+            Err(CliError::MissingNetworkHash)
+        };
+    };
     NetworkHashHex::try_from(configured.strip_prefix("0x").unwrap_or(configured))
-        .map(|hash| hash.to_network_hash())
+        .map(|hash| Some(hash.to_network_hash()))
         .map_err(|_| CliError::InvalidNetworkHash {
             value: configured.to_owned(),
         })
@@ -1060,13 +1064,36 @@ mod tests {
     }
 
     #[test]
+    fn rpc_only_signing_still_requires_a_network_hash() {
+        let profile = test_profile("alice", None, BTreeMap::new());
+        assert!(matches!(
+            resolve_network_hash(&profile, "alice"),
+            Err(CliError::MissingNetworkHash)
+        ));
+    }
+
+    #[test]
+    fn hosted_signing_does_not_ignore_an_invalid_network_pin() {
+        let mut profile = test_profile("alice", None, BTreeMap::new());
+        profile.faucet_url = Some("http://127.0.0.1:2".into());
+        profile.network_hash = Some("invalid".into());
+        assert!(matches!(
+            resolve_network_hash(&profile, "alice"),
+            Err(CliError::InvalidNetworkHash { .. })
+        ));
+    }
+
+    #[test]
     fn network_hash_accepts_a_hand_edited_0x_prefix() {
         let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.network_hash = Some(format!("0x{}", "ab".repeat(32)));
 
         let resolved = resolve_network_hash(&profile, "alice").unwrap();
 
-        assert_eq!(resolved, NetworkHashHex::from([0xab; 32]).to_network_hash());
+        assert_eq!(
+            resolved,
+            Some(NetworkHashHex::from([0xab; 32]).to_network_hash())
+        );
     }
 
     #[test]

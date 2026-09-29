@@ -1,14 +1,21 @@
 /// Width of the terminal receiving human status output, when available.
 pub(crate) fn stderr_width() -> Option<usize> {
-    output_width(false)
+    output_size(false).map(|(width, _)| width)
+}
+
+/// Height of the terminal receiving human status output, when available.
+pub(crate) fn stderr_height() -> Option<usize> {
+    output_size(false)
+        .map(|(_, height)| height)
+        .filter(|height| *height > 0)
 }
 
 /// Width of the terminal receiving human data output, when available.
 pub(crate) fn stdout_width() -> Option<usize> {
-    output_width(true)
+    output_size(true).map(|(width, _)| width)
 }
 
-fn output_width(stdout: bool) -> Option<usize> {
+fn output_size(stdout: bool) -> Option<(usize, usize)> {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -31,7 +38,7 @@ fn output_width(stdout: bool) -> Option<usize> {
             )
         };
         if result == 0 && size.ws_col > 0 {
-            return Some(usize::from(size.ws_col));
+            return Some((usize::from(size.ws_col), usize::from(size.ws_row)));
         }
     }
     #[cfg(not(unix))]

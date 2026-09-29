@@ -25,6 +25,17 @@ pub fn run_in(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    run_in_with_warnings(dir, name, template, cmd, print).map(|_| ())
+}
+
+/// Return existing scaffold warnings so an enclosing wizard can retain them on its final view.
+pub(crate) fn run_in_with_warnings(
+    dir: &Path,
+    name: &str,
+    template: &str,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<Vec<Finding>, CliError> {
     // Validate before creating anything, so a rejected name leaves no
     // empty directory behind.
     crate::scaffold::validate_name(name)?;
@@ -60,7 +71,7 @@ pub fn run_in(
     render_project_ready(dir, name, template, &warnings, print);
     print.json(&crate::result::CommandResult::with_warnings(
         cmd,
-        warnings,
+        warnings.clone(),
         json!({
             "schemaVersion": NEW_JSON_SCHEMA_VERSION,
             "projectName": name,
@@ -69,7 +80,7 @@ pub fn run_in(
             "configPath": dir.join("groundhog.toml"),
         }),
     ))?;
-    Ok(())
+    Ok(warnings)
 }
 
 /// Environment problems that will break the generated project's first build.
@@ -122,7 +133,12 @@ fn render_project_ready(
 
     print.status("");
     if print.has_human_ui() {
-        print.summary_report("Project Ready", &items, warnings.iter());
+        print.outcome_findings(
+            crate::print::Outcome::Success,
+            "Project Ready",
+            &items,
+            warnings,
+        );
     } else {
         print.summary_card("Project Ready", &items);
     }

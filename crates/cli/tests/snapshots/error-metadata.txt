@@ -271,6 +271,11 @@ MissingRpcUrl
   code: missing_rpc_url
   hint text: for a local profile, start `groundhog node` in another terminal; otherwise run `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
 
+LocalNodeUnavailable
+  code: missing_rpc_url
+  hint text: start `groundhog node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`
+  details: computed
+
 ProfileConfigInvalid
   code: profile_config_invalid
   hint text: update the selected profile in project or global config, or choose a profile that matches the requested command

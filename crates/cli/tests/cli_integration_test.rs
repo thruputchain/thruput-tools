@@ -3168,11 +3168,14 @@ fn init_boxes_respect_stderr_terminal_width() {
         let output = reader.join().unwrap();
         assert!(output.contains("Groundhog Ready"));
         let plain = strip_terminal_styles(&output);
-        assert_eq!(plain.contains("╭─ Groundhog Setup"), columns > 0);
+        assert!(
+            !plain.contains("Groundhog Setup"),
+            "already-ready setup needs no wizard: {plain}"
+        );
         assert_eq!(plain.contains("╭─ ✓ Ready: Groundhog Ready"), columns >= 29);
         assert!(
             !output.contains("\x1b[2J"),
-            "setup must preserve scrollback"
+            "already-ready setup must not take over the screen"
         );
         if columns > 0 {
             use unicode_width::UnicodeWidthStr;
@@ -6581,6 +6584,113 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
     );
     assert_eq!(target, format!("0x{}01", "00".repeat(31)));
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
+}
+
+#[test]
+fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_commands() {
+    for command in ["transfer", "call", "deploy"] {
+        let tmp = TempDir::new().unwrap();
+        let config_home = tmp.path().join("config-home");
+        let owner = generate_key_public_key(&config_home, "alice");
+        let init = groundhog()
+            .args(["init", "--non-interactive", "--json"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        let path = config_home.join("groundhog/config.toml");
+        let mut config = std::fs::read_to_string(&path)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert!(config["profile"]["devnet"].get("network_hash").is_none());
+        let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+        config["profile"]["devnet"]["rpc_url"] = toml_edit::value(&rpc_url);
+        config["profile"]["devnet"]["faucet_url"] = toml_edit::value(&faucet_url);
+        std::fs::write(&path, config.to_string()).unwrap();
+        std::fs::write(tmp.path().join("groundhog.toml"), format!(
+            "[profile.devnet.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n", "aa".repeat(32)
+        )).unwrap();
+        let target = format!("0x{}", "bc".repeat(32));
+        let artifact = write_opaque_rv32_artifact(tmp.path());
+        let mut invocation = groundhog();
+        invocation
+            .args([command, "--profile", "devnet", "--json", "--dry-run"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", &config_home);
+        match command {
+            "transfer" => {
+                invocation.args([&target, "0.01"]);
+            }
+            "call" => {
+                invocation.args([&target, "0x0123456789abcdef", "0x0102"]);
+            }
+            "deploy" => {
+                invocation.arg("--artifact").arg(&artifact);
+            }
+            _ => unreachable!(),
+        }
+        let output = invocation.output().unwrap();
+        descriptor_server.join().unwrap();
+        rpc_server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let field = if command == "transfer" {
+            "signedTransaction"
+        } else {
+            "signedTx"
+        };
+        assert!(result["data"][field].as_str().is_some());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), config.to_string());
+    }
+}
+
+#[test]
+fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let (rpc_url, rpc_server) = spawn_network_info_rpc(&"42".repeat(32));
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(tmp.path(), &rpc_url, &config_home);
+    add_faucet_to_default_profile(tmp.path(), &faucet_url);
+    let path = tmp.path().join("groundhog.toml");
+    let mut config = std::fs::read_to_string(&path)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    config["profile"]["default"]
+        .as_table_mut()
+        .unwrap()
+        .remove("network_hash");
+    std::fs::write(&path, config.to_string()).unwrap();
+    let output = groundhog()
+        .args([
+            "transfer",
+            &format!("0x{}", "bc".repeat(32)),
+            "1",
+            "--dry-run",
+            "--json",
+        ])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(!output.status.success() && output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "network_descriptor_mismatch");
+    assert_eq!(error["error"]["details"]["field"], "networkHash");
 }
 
 #[test]

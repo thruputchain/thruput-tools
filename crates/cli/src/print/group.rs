@@ -5,11 +5,19 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Default)]
 pub(super) struct Content {
-    fields: Vec<(String, String)>,
+    pub fields: Vec<(String, String)>,
     pub warnings: Vec<String>,
 }
 
 impl Print {
+    /// Put a short service shutdown message on its own line after terminal signal echo.
+    pub(crate) fn service_stopped(&self, message: &str) {
+        if self.has_human_ui() {
+            self.status("");
+        }
+        self.status(message);
+    }
+
     /// Report an existing declined action without introducing a new prompt.
     pub(crate) fn cancelled(&self) {
         if self.has_human_ui() {
@@ -27,14 +35,19 @@ impl Print {
             render(self);
             return;
         }
+        let content = self.collect_group(render);
+        self.outcome_report(outcome, title, &content.fields, &content.warnings);
+    }
+
+    pub(super) fn collect_group(&self, render: impl FnOnce(&Self)) -> Content {
         let content = Arc::new(Mutex::new(Content::default()));
         let mut scoped = self.clone();
         scoped.group = Some(content.clone());
         render(&scoped);
-        let content = content
+        let mut content = content
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.outcome_report(outcome, title, &content.fields, &content.warnings);
+        std::mem::take(&mut *content)
     }
 
     pub(super) fn group_detail(&self, label: &str, value: &str) -> bool {

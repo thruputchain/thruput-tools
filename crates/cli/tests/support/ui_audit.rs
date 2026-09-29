@@ -138,6 +138,104 @@ fn toolchain_cache_actions_render_results_and_which_stays_a_raw_path() {
 }
 
 #[test]
+fn missing_local_endpoint_explains_the_selected_profile_and_node_startup() {
+    let temp = TempDir::new().unwrap();
+    let config = temp.path().join("config");
+    std::fs::write(temp.path().join("groundhog.toml"), "default_profile = \"sandbox\"\n[profile.sandbox]\nnetwork = \"local\"\n[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
+    let address = format!("0x{}", "11".repeat(32));
+    for args in [
+        vec!["balance", &address],
+        vec!["tx", "list", &address],
+        vec!["view", &address, "0x0123456789abcdef"],
+        vec!["storage", &address, &address],
+    ] {
+        let output = groundhog()
+            .args(args)
+            .arg("--json")
+            .current_dir(temp.path())
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(!output.status.success() && output.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["error"]["code"], "missing_rpc_url");
+        assert_eq!(error["error"]["details"]["profile"], "sandbox");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no local node endpoint")
+        );
+        assert!(
+            error["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("groundhog node")
+        );
+        assert!(
+            error["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("--profile devnet")
+        );
+    }
+    let remote = groundhog()
+        .args(["balance", &address, "--profile", "devnet", "--json"])
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&remote.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "missing_rpc_url");
+    assert!(
+        !error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("local node")
+    );
+}
+
+#[test]
+fn local_node_registration_and_rpc_overrides_are_used_before_missing_endpoint_errors() {
+    for registered in [false, true] {
+        let temp = TempDir::new().unwrap();
+        let config = temp.path().join("config");
+        std::fs::write(
+            temp.path().join("groundhog.toml"),
+            "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n",
+        )
+        .unwrap();
+        let address = format!("0x{}", "11".repeat(32));
+        let (rpc, server) = spawn_balance_rpc(&address, "0");
+        let mut command = groundhog();
+        command
+            .args(["balance", &address, "--json"])
+            .current_dir(temp.path())
+            .env("XDG_CONFIG_HOME", &config);
+        if registered {
+            write_global_config(
+                &config,
+                &format!(
+                    "[local_runtime_state]\nnode_id = \"{rpc}\"\nrpc_url = \"{rpc}\"\nruntime_manifest = \"{}\"\n",
+                    temp.path().join("runtime.json").display()
+                ),
+            );
+        } else {
+            command.args(["--rpc-url", &rpc]);
+        }
+        let output = command.output().unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["data"]["rpcUrl"], rpc);
+    }
+}
+
+#[test]
 fn version_warning_uses_shared_presentation_without_framing_the_version() {
     let temp = TempDir::new().unwrap();
     let manifest = temp.path().join("bundle.json");

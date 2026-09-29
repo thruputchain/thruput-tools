@@ -26,7 +26,7 @@ new `tui` entry point, navigation application, or background UI service.
 
 ### Component foundation
 
-Use green rounded cards, muted labels, compact layouts, full values, and accurate
+Use rounded cards, muted labels, compact layouts, full values, and accurate
 rendering at the current terminal width. Shared Ratatui widgets and a Crossterm-styled
 append-only writer sit behind the `Print` facade for static cards, tables, outcomes,
 findings, errors, prompts, and output-mode policy.
@@ -140,13 +140,16 @@ callers rather than create a competing output API in every module.
 
 ### Theme, color, and symbols
 
-Define colors, spacing, borders, and symbols once. Keep the approved green rounded
-result card, bold title, muted labels, and normal terminal background. Outcome
-text is authoritative: a green border alone is not proof of transaction success.
+Define colors, spacing, borders, and symbols once. Neutral views, reviews, guided
+setup, and active states use the terminal's cyan accent. Completed successful
+actions use green. Card borders and titles share the outcome color; an error must
+not sit inside a success-green frame. Keep muted labels and the terminal background.
+Outcome text is authoritative; color alone never establishes success.
 
 | Meaning | Default treatment |
 | --- | --- |
-| Successful action / ready service | Green `✓` with an accurate outcome label. |
+| Successful action | Green `✓` with an accurate outcome label. |
+| Ready service / guided setup | Theme-accented heading and explicit ready/current state. |
 | Working / waiting | Cyan spinner or waiting indicator and a phase label. |
 | Warning / partial or unconfirmed result | Yellow `⚠` and explicit text. |
 | Failure | Red `✗` and specific error text. |
@@ -182,7 +185,22 @@ chunks where needed; do not implement a terminal emulator.
 
 For live UI, react to resize and re-layout the current region. On short/narrow
 terminals, reduce the progress region or switch safely to shared append-only output.
-Never clear unrelated shell output or guess how many old wrapped rows to erase.
+Ordinary commands and live progress must not clear shell output or guess how many
+old wrapped rows to erase.
+
+An approved confirmation may clear its own measured preview and question rows
+before progress starts. Keep warnings for the result. Retain the preview after
+resize/resume, when it exceeds the screen, or when input echo cannot be measured
+safely. Declines and plain output remain visible. This does not clear the screen
+or change confirmation rules.
+
+Guided `init` is a deliberate exception: on a supported foreground terminal it
+refreshes the visible display between input steps, showing all done/current/pending/
+skipped states and only the current step's context. Use the shared stepper and
+normal line prompts, not raw mode or a persistent application. Short terminals use
+a compact heading or append-only fallback. Never purge scrollback. Keep final
+results and warnings visible after the wizard finishes. Already-ready setup needs
+only its result, without taking over the screen.
 
 **After a command exits, its output is scrollback text.** Resizing then is handled
 by the terminal emulator, and old borders may reflow. Neither Ratatui nor another

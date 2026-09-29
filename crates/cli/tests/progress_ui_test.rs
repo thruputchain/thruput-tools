@@ -357,6 +357,14 @@ impl Pty {
     }
 
     fn finish(&mut self) -> ExitStatus {
+        self.finish_with_refresh(false)
+    }
+
+    fn finish_guided(&mut self) -> ExitStatus {
+        self.finish_with_refresh(true)
+    }
+
+    fn finish_with_refresh(&mut self, guided: bool) -> ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(15);
         let status = loop {
             self.pump();
@@ -375,9 +383,15 @@ impl Pty {
         assert_eq!(current.c_cc, self.original.c_cc);
         assert!(!self.parser.screen().hide_cursor());
         assert!(!self.parser.screen().alternate_screen());
+        if !guided {
+            assert!(
+                !self.raw.windows(4).any(|bytes| bytes == b"\x1b[2J"),
+                "ordinary commands must not clear previous output"
+            );
+        }
         assert!(
-            !self.raw.windows(4).any(|bytes| bytes == b"\x1b[2J"),
-            "must not clear previous output"
+            !self.raw.windows(4).any(|bytes| bytes == b"\x1b[3J"),
+            "must never purge scrollback"
         );
         assert!(!self.raw.windows(8).any(|bytes| bytes == b"\x1b[?1049h"));
         status
@@ -740,6 +754,177 @@ fn background_process_fixture() {
         }
         thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn guided_setup_keeps_scaffold_warnings_on_the_final_screen() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.root.join("groundhog.toml")).unwrap();
+    fs::write(
+        fixture.root.join("bin/cargo"),
+        "#!/bin/sh\nprintf 'cargo 1.96.0\\n'\n",
+    )
+    .unwrap();
+    let mut pty = Pty::spawn(fixture.command_for("init", "fast"));
+    pty.resize(80, 40);
+    pty.until(|pty| {
+        String::from_utf8_lossy(&pty.raw).contains("Generate a local signing key now?")
+    });
+    pty.master.write_all(b"y\n").unwrap();
+    pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Create a starter project?"));
+    pty.master.write_all(b"y\n").unwrap();
+    pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Project name:"));
+    pty.master.write_all(b"wizard-contract\n").unwrap();
+    assert!(pty.finish_guided().success(), "{}", pty.history());
+    let screen = pty.parser.screen().contents();
+    assert!(screen.contains("Setup Complete"), "{screen}");
+    assert!(
+        screen.contains("cargo_not_rustup_managed") && screen.contains("Hint"),
+        "{screen}"
+    );
+    assert!(fixture.root.join("wizard-contract/groundhog.toml").exists());
+}
+
+#[test]
+fn confirmation_fixture() {
+    let Ok(mode) = std::env::var("GROUNDHOG_UI_CONFIRM_FIXTURE") else {
+        return;
+    };
+    let print = groundhog_cli::Print::new(false, false).with_no_ui(mode == "plain");
+    print.status("KEEP THIS CONTEXT");
+    let approved = print
+        .confirm_review(
+            "Preview fixture",
+            mode == "force",
+            "test preview",
+            "Continue?",
+            |print| {
+                print.detail("Operation", "fixture action");
+                print.warn("Review warning");
+            },
+        )
+        .unwrap();
+    if approved {
+        print.outcome_card(
+            groundhog_cli::print::Outcome::Success,
+            "Action complete",
+            &[("Result".into(), "done".into())],
+        );
+    } else {
+        print.note("Cancelled");
+    }
+}
+
+#[test]
+fn confirmation_fallbacks_preserve_output_and_consent() {
+    for (mode, answer, approved) in [
+        ("decline", "n\n", false),
+        ("eof", "\x04", false),
+        ("eof-after-answer", "y\x04", true),
+        ("plain", "y\n", true),
+        ("force", "", true),
+    ] {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "confirmation_fixture", "--nocapture"])
+            .env("GROUNDHOG_UI_CONFIRM_FIXTURE", mode)
+            .env("TERM", "xterm-256color")
+            .env("LC_ALL", "C.UTF-8")
+            .env_remove("NO_COLOR");
+        let mut pty = Pty::spawn(command);
+        if mode != "force" {
+            pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Continue? [y/N]"));
+            pty.master.write_all(answer.as_bytes()).unwrap();
+            // A second EOF ends read_line after the first delivered the partial line.
+            if mode == "eof-after-answer" {
+                pty.master.write_all(b"\x04").unwrap();
+            }
+        }
+        assert!(pty.finish().success());
+        let history = pty.history();
+        assert!(
+            history.contains("KEEP THIS CONTEXT") && history.contains("fixture action"),
+            "{mode}: {history}"
+        );
+        assert_eq!(
+            history.contains("Action complete"),
+            approved,
+            "{mode}: {history}"
+        );
+        assert_eq!(
+            history.contains("Cancelled"),
+            !approved,
+            "{mode}: {history}"
+        );
+        assert!(history.contains("Review warning"), "{mode}: {history}");
+        assert!(
+            !String::from_utf8_lossy(&pty.raw).contains("\x1b[J"),
+            "{mode}"
+        );
+    }
+}
+
+#[test]
+fn approved_preview_disappears_but_warnings_and_prior_output_remain() {
+    for resize in [false, true] {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "confirmation_fixture", "--nocapture"])
+            .env("GROUNDHOG_UI_CONFIRM_FIXTURE", "1")
+            .env("TERM", "xterm-256color")
+            .env("LC_ALL", "C.UTF-8")
+            .env_remove("NO_COLOR");
+        let mut pty = Pty::spawn(command);
+        pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Continue? [y/N]"));
+        if resize {
+            pty.resize(60, 12);
+        }
+        pty.master.write_all(b"y\n").unwrap();
+        assert!(pty.finish().success());
+        let history = pty.history();
+        assert!(
+            history.contains("KEEP THIS CONTEXT") && history.contains("Action complete"),
+            "{history}"
+        );
+        assert_eq!(history.contains("Preview fixture"), resize, "{history}");
+        assert!(!history.contains("• Preview fixture"), "{history}");
+        assert!(history.contains("Review warning"));
+        if !resize {
+            assert!(!history.contains("Continue?"), "{history}");
+            assert!(
+                history.find("Action complete").unwrap() < history.find("Review warning").unwrap(),
+                "{history}"
+            );
+        }
+    }
+}
+
+#[test]
+fn active_build_phase_is_muted_but_spinner_keeps_the_accent() {
+    let fixture = Fixture::new();
+    let mut pty = Pty::spawn(fixture.command("hang"));
+    pty.until(|pty| pty.queries > 0 && pty.parser.screen().contents().contains("Compiling demo"));
+    let (row, col) = pty
+        .parser
+        .screen()
+        .rows(0, 80)
+        .enumerate()
+        .find_map(|(row, line)| line.find("Compiling demo").map(|col| (row, col)))
+        .unwrap();
+    assert!(
+        pty.parser
+            .screen()
+            .cell(u16::try_from(row).unwrap(), u16::try_from(col).unwrap())
+            .unwrap()
+            .dim()
+    );
+    let spinner = pty
+        .parser
+        .screen()
+        .cell(u16::try_from(row).unwrap(), 0)
+        .unwrap();
+    assert!(!spinner.dim());
+    assert_eq!(spinner.fgcolor(), vt100::Color::Idx(6));
 }
 
 #[test]

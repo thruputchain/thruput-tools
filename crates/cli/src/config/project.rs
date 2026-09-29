@@ -123,6 +123,21 @@ pub struct ProfileOverrides {
 }
 
 impl ResolvedProfile {
+    /// Require an endpoint after applying persisted settings, local runtime state,
+    /// and CLI overrides. An absent local endpoint is a node-startup problem,
+    /// not a request to manually persist the dynamically published RPC URL.
+    pub(crate) fn rpc_endpoint(&self) -> Result<&str, CliError> {
+        self.rpc_url.as_deref().ok_or_else(|| {
+            if self.network == Some(Network::Local) {
+                CliError::LocalNodeUnavailable {
+                    profile: self.name.clone(),
+                }
+            } else {
+                CliError::MissingRpcUrl
+            }
+        })
+    }
+
     /// Resolve a saved wallet name or direct address.
     pub fn resolve_wallet(&self, name_or_address: &str) -> Option<String> {
         if is_valid_address(name_or_address) {

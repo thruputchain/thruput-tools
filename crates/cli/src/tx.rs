@@ -39,11 +39,7 @@ pub fn show(
 ) -> Result<(), CliError> {
     let tx_hash = parse_tx_hash(tx_hash_input)?;
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
@@ -94,11 +90,7 @@ pub fn list(
     let limit = parse_history_limit(limit_input)?;
     let cursor = parse_transaction_cursor(cursor_input)?;
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let (target_input, address) = resolve_address_target_or_default_wallet(&profile, target_input)?;
     let address_hex = format_contract_address(&address);
 

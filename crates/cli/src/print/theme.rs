@@ -62,7 +62,7 @@ impl Outcome {
 
     fn color(self) -> Color {
         match self {
-            Self::Success | Self::Ready => SUCCESS,
+            Self::Success => SUCCESS,
             Self::Warning | Self::Partial | Self::Unconfirmed => WARNING,
             Self::Error => ERROR,
             _ => Color::Cyan,
@@ -75,10 +75,13 @@ pub(super) struct Theme(pub Policy);
 
 impl Theme {
     pub fn border(self) -> Style {
-        self.style(SUCCESS, Modifier::empty())
+        self.style(Color::Cyan, Modifier::empty())
     }
     pub fn title(self) -> Style {
-        self.style(SUCCESS, Modifier::BOLD)
+        self.style(Color::Cyan, Modifier::BOLD)
+    }
+    pub fn heading(self) -> Style {
+        self.style(Color::Reset, Modifier::BOLD)
     }
     pub fn label(self) -> Style {
         self.style(Color::Reset, Modifier::DIM)

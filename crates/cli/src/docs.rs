@@ -171,11 +171,7 @@ pub fn run(
             result = axum::serve(listener, app) => result?,
             result = stop => result?,
         }
-        print.group(
-            crate::print::Outcome::Success,
-            "Documentation server stopped",
-            |_| {},
-        );
+        print.service_stopped("Documentation server stopped.");
         Ok(())
     })
 }

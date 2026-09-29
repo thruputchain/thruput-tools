@@ -26,10 +26,7 @@ pub fn run(
     print: &Print,
 ) -> Result<(), CliError> {
     let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
-    let rpc_url = resolved_profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = resolved_profile.rpc_endpoint()?;
 
     let address = ContractAddress::from(resolve_contract_target(&resolved_profile, address)?);
     let key = parse_storage_key(key)?;

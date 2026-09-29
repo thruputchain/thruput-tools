@@ -97,9 +97,13 @@ fn card_uses_ratatui_theme_cells_and_crossterm_styling() {
 }
 
 #[test]
-fn outcome_card_titles_use_severity_color_without_changing_the_border() {
+fn outcome_cards_use_matching_semantic_titles_and_borders() {
     for (outcome, label, color) in [
         (Outcome::Error, "✗ error:", "38;2;248;113;113m"),
+        (Outcome::Success, "✓", "38;2;79;232;143m"),
+        (Outcome::Information, "Deployment", "38;5;6m"),
+        (Outcome::Ready, "✓ Ready:", "38;5;6m"),
+        (Outcome::DryRun, "Dry run (not submitted):", "38;5;6m"),
         (
             Outcome::Partial,
             "⚠ Partially completed:",
@@ -115,7 +119,64 @@ fn outcome_card_titles_use_severity_color_without_changing_the_border() {
         let lines = report.into_lines();
         assert!(plain(&lines[0]).contains(label));
         assert!(lines[0].contains(color));
-        assert!(lines.last().unwrap().contains("38;2;79;232;143m"));
+        assert!(lines.last().unwrap().contains(color));
+    }
+}
+
+#[test]
+fn guided_steps_use_theme_accent_and_keep_every_state_at_narrow_widths() {
+    use crate::print::StepState;
+    for width in [24, 40, 60, 80, 120] {
+        for (unicode, color) in [(true, true), (true, false), (false, false)] {
+            let mut report = Report::new(Policy {
+                width: Some(width),
+                color,
+                unicode,
+            });
+            report.wizard(
+                "Groundhog Setup",
+                "Set up your local development environment.",
+                &[
+                    ("Environment", StepState::Done),
+                    ("Profiles", StepState::Done),
+                    ("Signing key", StepState::Current),
+                    ("Project", StepState::Pending),
+                ],
+                false,
+            );
+            let styled = report.into_lines();
+            let lines: Vec<_> = styled.iter().map(|line| plain(line)).collect();
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| UnicodeWidthStr::width(line.as_str()) <= usize::from(width))
+            );
+            let current = lines
+                .iter()
+                .position(|line| line.contains("Signing key"))
+                .unwrap();
+            assert!(lines[current].contains("current"));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Environment") && line.contains("done"))
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Project") && line.contains("pending"))
+            );
+            assert!(!lines.join("\n").contains("Purpose:"));
+            if color {
+                assert!(styled[0].contains("38;5;6m"));
+                assert!(styled[current].contains("38;5;6m"));
+            } else {
+                assert!(styled.iter().all(|line| !line.contains('\x1b')));
+            }
+            if !unicode {
+                assert!(lines.join("\n").is_ascii());
+            }
+        }
     }
 }
 

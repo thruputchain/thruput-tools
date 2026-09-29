@@ -29,11 +29,7 @@ pub fn run(
     print: &Print,
 ) -> Result<(), CliError> {
     let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
-    let rpc_url = resolved_profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = resolved_profile.rpc_endpoint()?.to_owned();
 
     let (target, address) = resolve_address_target_or_default_wallet(&resolved_profile, target)?;
     let address_hex = format_contract_address(&address);

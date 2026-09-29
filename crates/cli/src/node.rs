@@ -363,13 +363,9 @@ async fn run_hogd_dev(
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if status.success() {
-                print.group(
-                    crate::print::Outcome::Success,
-                    "Local node stopped",
-                    |print| {
-                        print.note(format_args!("hog-devnode exited with status {status}"));
-                    },
-                );
+                print.service_stopped(&format!(
+                    "Local node stopped (hog-devnode exited with status {status})."
+                ));
                 Ok(())
             } else {
                 Err(CliError::NodeSupervisor(format!(
@@ -378,7 +374,7 @@ async fn run_hogd_dev(
             }
         }
         SupervisorStop::RpcStopped(_) | SupervisorStop::StopRequested(_) => {
-            print.group(crate::print::Outcome::Success, "Local node stopped", |_| {});
+            print.service_stopped("Local node stopped.");
             Ok(())
         }
         other => Err(CliError::NodeSupervisor(format!(

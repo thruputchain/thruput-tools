@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::init_json::{INIT_JSON_SCHEMA_VERSION, InitReport, InitRequirement};
+use crate::print::StepState;
 use crate::result::{CommandError, CommandResult};
 use crate::{CliError, Print};
 
@@ -32,7 +33,6 @@ pub fn run(
     crate::config::initialize_global_profiles()?;
     let report = crate::checks::collect_report(project_start, None)?;
     let mut ui = InitUi::new(print);
-    ui.render_intro();
     let setup = setup_report(&report, false);
     if setup.complete {
         return finish_setup(project_start, &report, setup, None, true, cmd, &ui);
@@ -43,15 +43,15 @@ pub fn run(
         return finish_setup(project_start, &report, setup, None, false, cmd, &ui);
     }
 
-    ui.begin_step(InitStep::Environment);
+    ui.begin_step(InitStep::Environment)?;
     handle_environment_step(&mut ui);
     ui.finish_step(InitStep::Environment, StepState::Done);
-    ui.begin_step(InitStep::Profiles);
+    ui.begin_step(InitStep::Profiles)?;
     handle_profile_step(project_start, &mut ui)?;
     ui.finish_step(InitStep::Profiles, StepState::Done);
-    ui.begin_step(InitStep::SigningKey);
+    ui.begin_step(InitStep::SigningKey)?;
     let key_generated = handle_key_step(&report, options, &mut ui)?;
-    ui.begin_step(InitStep::Project);
+    ui.begin_step(InitStep::Project)?;
     let project_context = handle_scaffold_step(
         report.project.config_path.is_some(),
         project_start,
@@ -150,16 +150,26 @@ fn finish_setup(
             },
             &summary_items(project_start, usable_default_key_for_init(report), project)?,
             next_steps,
-        );
+        )?;
     } else {
-        ui.print.group(
-            crate::print::Outcome::Partial,
-            "Setup Incomplete",
-            |print| {
-                print.status("Setup Incomplete");
-                print.status(&hints);
-            },
-        );
+        ui.finish_view()?;
+        if ui.view_active {
+            ui.print.outcome_findings(
+                crate::print::Outcome::Partial,
+                "Setup Incomplete",
+                &[("Next step".into(), hints)],
+                &ui.warnings,
+            );
+        } else {
+            ui.print.group(
+                crate::print::Outcome::Partial,
+                "Setup Incomplete",
+                |print| {
+                    print.status("Setup Incomplete");
+                    print.status(&hints);
+                },
+            );
+        }
     }
     if complete {
         Ok(())
@@ -220,6 +230,9 @@ fn handle_key_step(
         return Ok(false);
     }
     let can_generate = can_generate_initial_key(report);
+    if can_generate && !options.generate_key && ui.print.can_prompt() {
+        ui.note("No signing key found");
+    }
     if can_generate
         && (options.generate_key || ui.print.ask("Generate a local signing key now?", true)?)
     {
@@ -261,7 +274,9 @@ fn handle_scaffold_step(
             None
         } else {
             let dir = project_start.join(name);
-            crate::new::run_in(&dir, name, "counter", "new", ui.print)?;
+            ui.warnings.extend(crate::new::run_in_with_warnings(
+                &dir, name, "counter", "new", ui.print,
+            )?);
             ui.finish_step(InitStep::Project, StepState::Done);
             Some(ProjectContext {
                 name: name.to_string(),
@@ -300,6 +315,13 @@ enum InitStep {
 }
 
 impl InitStep {
+    const ALL: [Self; INIT_STEPS] = [
+        Self::Environment,
+        Self::Profiles,
+        Self::SigningKey,
+        Self::Project,
+    ];
+
     const fn index(self) -> usize {
         match self {
             Self::Environment => 0,
@@ -319,28 +341,21 @@ impl InitStep {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum StepState {
-    Done,
-    Skipped,
-}
-
-impl StepState {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::Skipped => "skipped",
-        }
-    }
-}
-
 struct InitUi<'a> {
     print: &'a Print,
+    steps: [StepState; INIT_STEPS],
+    view_active: bool,
+    warnings: Vec<crate::checks::Finding>,
 }
 
 impl<'a> InitUi<'a> {
     fn new(print: &'a Print) -> Self {
-        Self { print }
+        Self {
+            print,
+            steps: [StepState::Pending; INIT_STEPS],
+            view_active: false,
+            warnings: Vec::new(),
+        }
     }
 
     fn render_intro(&mut self) {
@@ -351,26 +366,37 @@ impl<'a> InitUi<'a> {
         self.print.summary_card(
             "Groundhog Setup",
             &[(
-                "Purpose".into(),
+                String::new(),
                 "Set up your local development environment.".into(),
             )],
         );
     }
 
-    fn begin_step(&mut self, step: InitStep) {
-        if self.print.is_quiet() {
-            return;
+    fn begin_step(&mut self, step: InitStep) -> Result<(), CliError> {
+        self.steps[step.index()] = StepState::Current;
+        let steps = InitStep::ALL.map(|step| (step.label(), self.steps[step.index()]));
+        let refreshed = self.print.wizard_view(
+            "Groundhog Setup",
+            "Set up your local development environment.",
+            &steps,
+        )?;
+        self.view_active |= refreshed;
+        if !refreshed {
+            if step.index() == 0 {
+                self.render_intro();
+            }
+            self.print.status(format_args!(
+                "[{}/{}] {}",
+                step.index() + 1,
+                INIT_STEPS,
+                step.label()
+            ));
         }
-
-        self.print.status(format_args!(
-            "[{}/{}] {}",
-            step.index() + 1,
-            INIT_STEPS,
-            step.label()
-        ));
+        Ok(())
     }
 
     fn finish_step(&mut self, step: InitStep, state: StepState) {
+        self.steps[step.index()] = state;
         if state == StepState::Skipped {
             self.print
                 .note(format_args!("{}: {}", step.label(), state.label()));
@@ -385,18 +411,30 @@ impl<'a> InitUi<'a> {
         self.print.note(msg);
     }
 
+    fn finish_view(&self) -> Result<(), CliError> {
+        if self.view_active {
+            self.print.clear_guided_view()?;
+        }
+        Ok(())
+    }
+
     fn completion_review(
         &self,
         title: &str,
         items: &[(String, String)],
         next_steps: NextSteps<'_>,
-    ) {
+    ) -> Result<(), CliError> {
         if self.print.is_quiet() {
-            return;
+            return Ok(());
         }
-
-        self.print
-            .outcome_card(crate::print::Outcome::Ready, title, items);
+        self.finish_view()?;
+        if self.view_active {
+            self.print
+                .outcome_findings(crate::print::Outcome::Ready, title, items, &self.warnings);
+        } else {
+            self.print
+                .outcome_card(crate::print::Outcome::Ready, title, items);
+        }
         let mut commands = Vec::new();
         match next_steps {
             NextSteps::Status => commands.push("groundhog status".into()),
@@ -418,6 +456,7 @@ impl<'a> InitUi<'a> {
             }
         }
         self.print.next_steps(&commands);
+        Ok(())
     }
 }
 

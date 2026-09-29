@@ -93,21 +93,22 @@ pub fn run(
         print.require_confirmation_available(force, "transfer HOG")?;
     }
     let plan = prepare_plan(profile, recipient, amount, from)?;
-    if !dry_run {
-        print.group(
-            crate::print::Outcome::Information,
+    if !dry_run
+        && !print.confirm_review(
             "Review transfer",
+            force,
+            "transfer HOG",
+            "Submit this transfer?",
             |print| {
                 print.detail("recipient", format_contract_address(&plan.recipient));
                 print.detail("amount", format_args!("{} HOG", plan.amount));
                 print.detail("from", format_contract_address(&plan.sender));
                 print.detail("profile", &plan.profile);
             },
-        );
-        if !print.confirm(force, "transfer HOG", "Submit this transfer?")? {
-            print.cancelled();
-            return Ok(());
-        }
+        )?
+    {
+        print.cancelled();
+        return Ok(());
     }
     let prepared = sign_plan(plan)?;
     if dry_run {
@@ -148,7 +149,7 @@ fn prepare_plan(
     amount_input: &str,
     from: Option<&str>,
 ) -> Result<TransferPlan, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
 
     let recipient = resolve_address_target(&profile, recipient_input)?;
     let raw_amount = hog::parse_amount(amount_input)?;
@@ -168,7 +169,7 @@ fn prepare_plan(
     let resolved_sender = bind_sender_to_network(&profile, sender_account)?;
     let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
     let wallet_context = resolved_sender.signing_context(&profile, &rt)?;
-    let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
+    let expiry_height = rt.block_on(resolve_block_expiry_height(&rpc_url))?;
 
     let tx = groundhog_client::prepare_call(
         groundhog_client::CallRequest {
@@ -193,7 +194,7 @@ fn prepare_plan(
     );
     Ok(TransferPlan {
         profile: profile.name,
-        rpc_url: rpc_url.to_owned(),
+        rpc_url,
         rpc_url_cli_override: profile.rpc_url_cli_override,
         sender,
         sender_wallet: resolved_sender.wallet_name,

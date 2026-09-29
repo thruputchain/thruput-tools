@@ -1,8 +1,8 @@
 use crate::CliError;
-use crate::terminal::terminal_safe;
 use serde::Serialize;
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
+mod confirmation;
 mod diagnostic;
 mod group;
 mod log;
@@ -11,7 +11,9 @@ pub(crate) mod progress;
 mod render;
 mod report;
 mod theme;
+mod wizard;
 pub use theme::Outcome;
+pub(crate) use wizard::StepState;
 
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
@@ -215,14 +217,7 @@ impl Print {
         action: &'static str,
         message: impl std::fmt::Display,
     ) -> Result<bool, CliError> {
-        self.require_confirmation_available(force, action)?;
-        if force {
-            return Ok(true);
-        }
-
-        let message = terminal_safe(&message.to_string());
-        let answer = self.read_line(format_args!("{message} [y/N] "))?;
-        Ok(confirmation_answer(&answer))
+        confirmation::run(self, force, action, &message.to_string(), None)
     }
 
     /// Ask an optional wizard question when interactive input is available.
@@ -334,7 +329,7 @@ impl Print {
         self.write_report(output);
     }
 
-    /// Render a responsive green summary card on stderr.
+    /// Render a responsive theme-accented summary card on stderr.
     ///
     /// Accepts a title and ordered label/value rows. Handles terminal width,
     /// Unicode wrapping, narrow layouts, color, and plain redirected output.

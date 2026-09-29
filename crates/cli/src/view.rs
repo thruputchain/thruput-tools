@@ -133,10 +133,7 @@ fn prepare_view(
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
     let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
-    let rpc_url = resolved_profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = resolved_profile.rpc_endpoint()?;
 
     let contract_address =
         ContractAddress::from(resolve_contract_target(&resolved_profile, contract)?);

@@ -21,8 +21,9 @@ use crate::{
 };
 
 pub(super) struct Report {
-    renderer: Renderer,
+    pub(super) renderer: Renderer,
     summary_width: Option<u16>,
+    border_style: Style,
 }
 
 impl Report {
@@ -30,6 +31,7 @@ impl Report {
         Self {
             renderer: Renderer::new(policy),
             summary_width: None,
+            border_style: super::theme::Theme(policy).border(),
         }
     }
 
@@ -37,11 +39,21 @@ impl Report {
         self.renderer.lines
     }
 
+    pub fn line_count(&self) -> usize {
+        self.renderer.lines.len()
+    }
+
     pub fn card(&mut self, title: &str, items: &[(String, String)]) {
+        self.border_style = self.renderer.theme.border();
         self.card_with_style(title, items, self.renderer.theme.title());
     }
 
     pub fn outcome_card(&mut self, outcome: Outcome, title: &str, items: &[(String, String)]) {
+        self.border_style = self.renderer.theme.outcome(outcome);
+        if outcome == Outcome::Information {
+            self.card_with_style(title, items, self.renderer.theme.title());
+            return;
+        }
         let prefix = outcome.prefix(self.renderer.policy.unicode);
         self.card_with_style(
             &format!("{prefix} {title}"),
@@ -145,7 +157,7 @@ impl Report {
         let block = Block::default()
             .borders(borders)
             .border_type(BorderType::Rounded)
-            .border_style(self.renderer.theme.border());
+            .border_style(self.border_style);
         if self.renderer.policy.unicode {
             block
         } else {
@@ -412,13 +424,8 @@ impl Report {
     pub fn prompt(&mut self, message: &str) {
         let width = self.renderer.policy.width;
         self.renderer.policy.width = width.map(|width| width.saturating_sub(1).max(1));
-        self.renderer.text(
-            Text::from(safe_line(
-                message,
-                self.renderer.theme.outcome(Outcome::Information),
-            )),
-            0,
-        );
+        self.renderer
+            .text(Text::from(safe_line(message, Style::default())), 0);
         self.renderer.policy.width = width;
         // The caller flushes without a newline so canonical line input stays on this row.
         if let Some(last) = self.renderer.lines.last_mut() {
@@ -429,6 +436,7 @@ impl Report {
 
     /// Readable records at narrow widths; Ratatui tables when every column has room.
     pub fn table(&mut self, title: &str, headers: &[String], records: &[Vec<String>]) {
+        self.border_style = self.renderer.theme.border();
         let columns = records
             .iter()
             .map(Vec::len)

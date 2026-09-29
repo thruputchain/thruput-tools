@@ -22,6 +22,7 @@ const SNAPSHOT_PATH: &str = "tests/snapshots/error-metadata.txt";
 // Variants that intentionally report the code of a broader one, because the
 // distinction is an implementation detail callers should not branch on.
 const SHARED_CODES: &[(&str, &str)] = &[
+    ("missing_rpc_url", "LocalNodeUnavailable"),
     ("cargo_failed", "CargoFailedWithOutput"),
     ("invalid_event_limit", "InvalidTokenTransferLimit"),
     ("invalid_event_cursor", "InvalidTokenTransferCursor"),

@@ -48,11 +48,7 @@ pub fn transfers(
     let cursor = parse_token_transfer_cursor(cursor_input)?;
     let continuation_requested = cursor_input.is_some();
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let token_address = ContractAddress::from(resolve_address_target(&profile, token_input)?);
     let from = from_input
         .map(|input| resolve_address_target(&profile, input).map(ContractAddress::from))

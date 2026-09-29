@@ -111,17 +111,18 @@ pub fn run(
         gas_limit,
     )?;
     if !dry_run {
-        print.group(
-            crate::print::Outcome::Information,
+        if !print.confirm_review(
             "Review contract call",
+            force,
+            "call a contract",
+            "Submit this contract call?",
             |print| {
                 print.detail("contract", &plan.contract_address_hex);
                 print.detail("method", &plan.method);
                 print.detail("wallet", &plan.wallet_address_hex);
                 print.detail("profile", &plan.profile_name);
             },
-        );
-        if !print.confirm(force, "call a contract", "Submit this contract call?")? {
+        )? {
             print.cancelled();
             return Ok(());
         }
@@ -443,13 +444,7 @@ fn prepare_call_plan_with_runtime(
     gas_limit: u64,
     rt: &tokio::runtime::Runtime,
 ) -> Result<CallPlan, CliError> {
-    if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
-        return Err(CliError::MissingRpcUrl);
-    }
-    let rpc_url = resolved_profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = resolved_profile.rpc_endpoint()?;
 
     let contract_address = resolve_contract_target(&resolved_profile, contract)?;
     let contract_address_hex = format_contract_address(&contract_address);
