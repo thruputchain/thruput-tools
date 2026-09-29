@@ -17,7 +17,7 @@ rules, and raw payloads remain command contracts.
 | GH-393 | deploy, call, transfer, airdrop, wallet create | Shared review/dry-run/live/error/unconfirmed results; prepared hashes and prefund progress retained; explicit wallet binding partial outcome | Workspace suite; live call/deploy/transfer success, rejection and uncertainty PTYs; wallet prefund/creation partial failure; remote dry runs without service contact |
 | GH-392 | test: single/workspace/watch/integration | Shared per-run/workspace summaries and outcomes; foreground default runs collect passing logs and retain failed output; `--show-output`, no-capture, passthrough, and integration supervisors use append-only child output | Workspace suite, existing watch/JSONL/workspace/integration tests, and compact/failure/full-output PTYs passed |
 | GH-395 | node, docs | Shared Ready/stopped reports; docs startup progress; node uses append-only phases/tracing to avoid competing supervisor writers; `--verbose` expands logs | Workspace suite and service PTYs passed, including ready-but-still-running and signal-driven cleanup; logs use shared semantic colors |
-| GH-394 | recursive command/mode audit, raw/framework output | Complete local command audit; macOS smoke workflow added | Linux workspace and tmux checks passed; macOS CI result tracked in PR #443 |
+| GH-394 | recursive command/mode audit, raw/framework output | Complete command audit and platform smoke workflow | Linux workspace, tmux, and macOS terminal checks passed; awaiting user UX review |
 | GH-438 | pre-dispatch version warnings and argument errors | Audit gap fixed with shared warnings and RGB error styles | Argument-error paths checked in a terminal, including no UI; version/NO_COLOR/raw-payload tests |
 | GH-439 | key import and updated non-interactive setup | Integrated current main's input authorization, StrKey fields, and versioned init report; shared public import results | Secret-input, import, and non-interactive regressions |
 
@@ -115,6 +115,9 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 - An isolated tmux server ran a slow local balance RPC: progress completed, the
   complete result remained in scrollback, and the command exited successfully.
 - `.github/workflows/cli-ui.yml` runs shared components, progress/listing PTYs, and
-  the command/service audit on the existing macOS ARM runner. Its remote result is
-  recorded on draft PR #443; no local macOS execution is claimed.
+  the command/service audit on the existing macOS ARM runner. The
+  [macOS run on f715116](https://github.com/groundhogchain/groundhog-rpc/actions/runs/36503307389)
+  passed. Darwin fixture checks use compatible PTY arguments, the surviving master
+  for terminal-state inspection, and explicit process groups for background jobs.
+  No terminal-state or signal assertions were disabled to obtain that result.
 - Generated guidance and package contents are checked before the final push.

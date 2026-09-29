@@ -136,7 +136,7 @@ contract, 44-command coverage matrix, compatibility rules, and review checkpoint
 - [x] GH-417: Migrate toolchain actions, chain archives, and codegen output.
 - [x] GH-438: Close pre-dispatch diagnostic gaps found by the command audit.
 - [x] GH-439: Cover key import and preserve current non-interactive setup semantics.
-- [ ] GH-394: Complete the per-command/mode coverage record, renderer-bypass audit,
+- [x] GH-394: Complete the per-command/mode coverage record, renderer-bypass audit,
   regression checks, and release guidance.
 
 Deliver one family or mode per tested chunk. Shared append-only output is a valid
