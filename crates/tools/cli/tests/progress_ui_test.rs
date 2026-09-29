@@ -687,10 +687,10 @@ fn monochrome_progress_and_explicit_cargo_color_use_the_correct_modes() {
 fn background_build_does_not_query_terminal_input() {
     let fixture = Fixture::new();
     let base = fixture.command("slow");
-    let mut shell = Command::new("/bin/sh");
+    let mut shell = Command::new(std::env::current_exe().unwrap());
     shell
-        .args(["-m", "-c", "\"$TEST_GROUNDHOG\" build <&0 & wait"])
-        .env("TEST_GROUNDHOG", env!("CARGO_BIN_EXE_groundhog"))
+        .args(["--exact", "background_process_fixture", "--nocapture"])
+        .env("GROUNDHOG_UI_BACKGROUND_FIXTURE", "1")
         .current_dir(&fixture.root);
     for (name, value) in base.get_envs() {
         if let Some(value) = value {
@@ -703,6 +703,43 @@ fn background_build_does_not_query_terminal_input() {
     assert!(pty.finish().success());
     assert_eq!(pty.queries, 0);
     assert!(pty.history().contains("Build complete"));
+}
+
+#[test]
+fn background_process_fixture() {
+    if std::env::var_os("GROUNDHOG_UI_BACKGROUND_FIXTURE").is_none() {
+        return;
+    }
+    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command.arg("build");
+    // Shell job-control behavior differs between Linux and Darwin. Establish a
+    // real background group explicitly while this fixture owns the foreground.
+    // SAFETY: setpgid is async-signal-safe and only changes this new child.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        if Instant::now() >= deadline {
+            // SAFETY: this child owns the process group created above.
+            unsafe {
+                libc::kill(-i32::try_from(child.id()).unwrap(), libc::SIGKILL);
+            }
+            let _ = child.wait();
+            panic!("background build did not finish");
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
