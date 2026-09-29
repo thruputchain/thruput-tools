@@ -42,7 +42,10 @@ Run the installed commands with `--help` for current paths and options. Re-run
 codegen after changing exported methods, events, exceptions, or contract types.
 Do not hand-maintain a TypeScript ABI beside the Rust contract spec.
 
-Generated method descriptors provide typed operations such as:
+Generated method descriptors sit under their interface's name and major, as in
+`ERC20.v0_1.transfer`, beside their `ERC20.v0_1.TransferArgs` and
+`ERC20.v0_1.TransferResult` types and the interface's `DeclaredException` and
+`Exception` types. They provide typed operations such as:
 
 - `invocation(...)` to encode an application call;
 - `call(...)` in the client DX runtime to retain typed result/exception decoders;
@@ -51,8 +54,18 @@ Generated method descriptors provide typed operations such as:
 - `decodeReceipt(...)` and `decodeReceiptOutcome(...)` for a receipt whose root
   method is known.
 
-Generated event descriptors such as `PingEvent` provide `decode(...)`,
-`filter(...)`, `allFromReceipt(...)`, and `singleFromReceipt(...)`.
+Generated event descriptors such as `my_token.v1.events.Transfer` provide
+`decode(...)`, `filter(...)`, `allFromReceipt(...)`, and
+`singleFromReceipt(...)`.
+
+Declared types, enums and events sit under their spec id's path: crate, major,
+then module, as in `my_token.v1.errors.TokenError`. The same path names the
+type and the value: types live in namespaces, and enum values and event
+descriptors in one object per crate, so a binding is erasable TypeScript that
+Node's type stripping runs without a build step. A path segment that is a
+TypeScript reserved word or `globalThis`, and a crate or interface named
+`spec` or `decodeEvent`, take a leading `$`, as in
+`my_token.v1.$default.Config`.
 
 Use those generated codecs. Do not create a low-level XDR reader when a binding
 already knows the method or event type.
@@ -65,11 +78,7 @@ only the digest, not the original value; generated comments describe their
 filtering restriction. Regenerate bindings together with the reviewed client
 runtime before adopting the new descriptors.
 
-With the scalar-topic encoding in SDK 0.36.0, `u32`, `u64`, `u128`,
-`i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are directly decoded and
-filterable. Integer topics are fixed 32-byte big-endian values with zero/sign
-extension, not compact XDR scalar encodings. Strings and byte slices remain
-hash-only. Rebuild contracts and regenerate their bindings together when adopting
-this encoding; an older artifact's event bytes are not changed by regeneration.
-The workspace SDK dependencies and newly scaffolded contracts are pinned to
-SDK 0.36.0 so they emit the representation these bindings describe.
+`u32`, `u64`, `u128`, `i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are
+directly decoded and filterable. Integer topics are fixed 32-byte big-endian
+values with zero/sign extension, not compact XDR scalar encodings. Strings and
+byte slices remain hash-only.

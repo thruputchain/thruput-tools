@@ -20,10 +20,14 @@ struct Cli {
 
 #[derive(Parser)]
 #[allow(clippy::struct_excessive_bools)]
+#[command(next_help_heading = "Global options")]
 struct GlobalArgs {
     /// Suppress status messages
     #[arg(long, short, global = true)]
     quiet: bool,
+    /// Disable prompts and terminal UI while retaining ordinary output
+    #[arg(long, global = true)]
+    non_interactive: bool,
     /// Emit structured JSON output
     #[arg(long, global = true)]
     json: bool,
@@ -116,15 +120,15 @@ enum Command {
     New(NewArgs),
     /// Serve the bundled developer documentation on localhost
     Docs(DocsArgs),
-    /// Interactive first-run setup wizard
-    #[command(long_about = "Guided setup for new users: checks tools, \
-                      generates a signing key, \
-                      and optionally scaffolds a starter project.\n\n\
-                      With --json, delegates to `groundhog status \
-                      --json`.\n\n\
-                      Re-running when already configured is a \
-                      no-op.")]
-    Init,
+    /// Set up profiles and a signing key, with optional interactive scaffolding
+    #[command(long_about = "Initialize global profiles and check setup readiness. \
+        Interactive sessions offer key generation and optional scaffolding.\n\n\
+        Use --non-interactive to skip all questions and --generate-key to authorize \
+        initial key creation. Existing keys and explicit selections are preserved. \
+        Without a TTY, or with --quiet/--json, questions are skipped.\n\n\
+        --json emits one setup result; use status --json for read-only diagnostics. \
+        Exit 1 means setup is incomplete or failed. Scripts create projects with groundhog new.")]
+    Init(InitArgs),
     /// Show RV32, devnode, keys, and project status
     #[command(long_about = "Non-interactive diagnostic. Reports \
                       the RV32 toolchain, hog-devnode availability, keys, \
@@ -208,7 +212,7 @@ enum Command {
     #[command(
         long_about = "Start a local development node \
                       backed by a supervised hog-devnode process.",
-        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Network exposure:\n  The public JSON-RPC listener binds to 127.0.0.1 by default. --host changes only\n  this public facade; hog-devnode's internal services stay on loopback. Binding to\n  0.0.0.0 or another non-loopback address exposes an unauthenticated development RPC\n  endpoint. Use it only on a trusted network or behind an appropriate firewall.\n\nProtocol override:\n  --hogd-protocol hogp/<hash> overrides the protocol token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Local binary override unless --hog-devnode-version is supplied\n  GROUNDHOG_OFFLINE=1  Forbids managed downloads\n  GROUNDHOG_TOOLCHAIN_BASE_URL  Overrides the public artifact source\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node(NodeArgs),
     /// Dump or restore persistent local-chain state
@@ -259,12 +263,12 @@ impl Command {
     /// Canonical command name for JSON envelopes.
     ///
     /// Used by both success and error JSON output so they
-    /// always agree. Init returns "status" because
-    /// `init --json` delegates to `status --json`.
+    /// always agree.
     fn command_name(&self) -> &'static str {
         match self {
             Self::New(..) => "new",
-            Self::Init | Self::Status(..) => "status",
+            Self::Init(..) => "init",
+            Self::Status(..) => "status",
             Self::Build(..) => "build",
             Self::Test(..) => "test",
             Self::Deploy(..) => "deploy",
@@ -293,7 +297,7 @@ impl Command {
         match self {
             Self::New(args) => args.run(ctx),
             Self::Docs(args) => args.run(ctx),
-            Self::Init => groundhog_cli::init::run(&invocation_cwd()?, ctx.cmd_name, &ctx.print),
+            Self::Init(args) => args.run(ctx),
             Self::Status(args) => args.run(ctx),
             Self::Config { command } => command.run(ctx),
             Self::Toolchain { command } => command.run(ctx),
@@ -321,7 +325,7 @@ impl Command {
 
 #[derive(Args)]
 struct NewArgs {
-    /// Project name
+    /// Project name: lowercase letters, digits, and single hyphens, starting with a letter
     name: String,
     /// Project template
     #[arg(
@@ -351,6 +355,26 @@ struct DocsArgs {
 impl DocsArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
         groundhog_cli::docs::run(self.dir.as_deref(), self.port, ctx.cmd_name, &ctx.print)
+    }
+}
+
+#[derive(Args)]
+struct InitArgs {
+    /// Create the initial key only when no keys or explicit key selections exist
+    #[arg(long)]
+    generate_key: bool,
+}
+
+impl InitArgs {
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        groundhog_cli::init::run(
+            &invocation_cwd()?,
+            &groundhog_cli::init::InitOptions {
+                generate_key: self.generate_key,
+            },
+            ctx.cmd_name,
+            &ctx.print,
+        )
     }
 }
 
@@ -461,7 +485,7 @@ struct TestArgs {
     /// Only used with --integration. Logs are written to stderr.
     #[arg(long, short = 'v', requires = "integration")]
     verbose: bool,
-    /// Override the x23 protocol token for the ephemeral integration node
+    /// Override the hog-devnode handshake protocol token for the ephemeral integration node
     ///
     /// (Only used with --integration)
     /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
@@ -470,6 +494,11 @@ struct TestArgs {
     /// Use one exact managed hog-devnode version for the integration node
     #[arg(long, requires = "integration")]
     hog_devnode_version: Option<String>,
+    /// Override a genesis network parameter on the integration node (repeatable;
+    /// decimal, hex, or K/M/G values). Mirrors `groundhog node --network-config`.
+    #[arg(long = "network-config", value_name = "NAME=VALUE", requires = "integration",
+          value_parser = groundhog_cli::node::parse_network_config_override)]
+    network_config: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     /// Config profile to use
     #[arg(long = "profile")]
     profile: Option<String>,
@@ -504,6 +533,7 @@ impl TestArgs {
                 &groundhog_cli::test_cmd::IntegrationTestOptions {
                     hogd_protocol: self.hogd_protocol,
                     hog_devnode_version: self.hog_devnode_version,
+                    network_config_overrides: self.network_config,
                     offline: ctx.offline,
                     verbose: self.verbose,
                 },
@@ -578,7 +608,8 @@ impl DeployArgs {
 
 #[derive(Args)]
 struct CallArgs {
-    /// Contract alias or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
     method: String,
@@ -591,7 +622,7 @@ struct CallArgs {
     #[arg(long)]
     dry_run: bool,
     /// Gas budget for the transaction and its inner contract invocation
-    #[arg(long, default_value_t = groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+    #[arg(long, default_value_t = groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT,
           value_parser = clap::value_parser!(u64).range(1..))]
     gas_limit: u64,
     /// Saved wallet to call from
@@ -726,7 +757,8 @@ impl BalanceArgs {
 
 #[derive(Args)]
 struct ViewArgs {
-    /// Contract alias or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    #[allow(clippy::doc_markdown)]
     contract: String,
     /// Method name or 0x-prefixed 8-byte entrypoint ID
     method: String,
@@ -772,7 +804,8 @@ impl ViewArgs {
 
 #[derive(Args)]
 struct StorageArgs {
-    /// Contract alias or direct 0x-prefixed address
+    /// Contract alias, C StrKey, or direct 0x-prefixed address
+    #[allow(clippy::doc_markdown)]
     address: String,
     /// 32-byte storage key as 0x-prefixed hex
     key: String,
@@ -826,7 +859,7 @@ struct NodeArgs {
     /// Directory for persistent hog-devnode state; omit for an ephemeral node
     #[arg(long, value_name = "DIR")]
     data_dir: Option<PathBuf>,
-    /// Override hog-devnode x23 intro protocol token
+    /// Override the hog-devnode handshake protocol token
     #[arg(long)]
     hogd_protocol: Option<String>,
     /// Override hog-devnode readiness timeout for smoke tests
@@ -928,15 +961,24 @@ enum KeysCommand {
         #[arg(long, hide = true)]
         fund: bool,
     },
+    /// Import a secret seed from hidden terminal input or piped stdin (S StrKey or 32-byte hex)
+    #[allow(clippy::doc_markdown)]
+    Import {
+        /// New key name; existing keys are never overwritten
+        name: String,
+    },
     /// List stored keys
     Ls,
     /// Export a private key for client use
     #[command(
-        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private key is written to stdout as lowercase, 0x-prefixed hex. Treat it as a secret: do not expose it in logs, CI output, or committed files."
+        long_about = "Export a CLI-managed Ed25519 private key for use with a client signer.\n\nThe 32-byte private key is written to stdout as lowercase, 0x-prefixed hex by default; --format strkey exports an S StrKey. Treat it as a secret: do not expose it in logs, CI output, or committed files."
     )]
     Export {
         /// Key name to export
         name: String,
+        /// Private seed encoding
+        #[arg(long, value_enum, default_value_t = groundhog_cli::keys::KeyExportFormat::Hex)]
+        format: groundhog_cli::keys::KeyExportFormat,
         #[command(flatten)]
         confirmation: ConfirmationArgs,
     },
@@ -958,6 +1000,7 @@ impl KeysCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Generate { .. } => "keys.generate",
+            Self::Import { .. } => "keys.import",
             Self::Ls => "keys.ls",
             Self::Export { .. } => "keys.export",
             Self::Use { .. } => "keys.use",
@@ -969,10 +1012,19 @@ impl KeysCommand {
         let (cmd, print) = (ctx.cmd_name, &ctx.print);
         match self {
             Self::Generate { name, fund } => groundhog_cli::keys::generate(&name, fund, cmd, print),
+            Self::Import { name } => groundhog_cli::keys::import(&name, cmd, print),
             Self::Ls => groundhog_cli::keys::list(cmd, print),
-            Self::Export { name, confirmation } => {
-                groundhog_cli::keys::export(&name, confirmation.force, cmd, print)
-            }
+            Self::Export {
+                name,
+                format,
+                confirmation,
+            } => groundhog_cli::keys::export_with_format(
+                &name,
+                confirmation.force,
+                format,
+                cmd,
+                print,
+            ),
             Self::Use { name } => groundhog_cli::keys::use_key(&name, cmd, print),
             Self::Rm { name, confirmation } => {
                 groundhog_cli::keys::remove(&name, confirmation.force, cmd, print)
@@ -1700,7 +1752,7 @@ fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Par
     let no_ui = std::env::args_os()
         .skip(1)
         .take_while(|arg| arg != "--")
-        .any(|arg| arg == "--no-ui");
+        .any(|arg| arg == "--no-ui" || arg == "--non-interactive");
     let command = cli_command(bundle_identity).color(if no_ui {
         clap::ColorChoice::Never
     } else {
@@ -1750,6 +1802,7 @@ fn main() {
     let ctx = Ctx {
         print: Print::new(cli.global.quiet, cli.global.json)
             .with_no_ui(cli.global.no_ui)
+            .with_non_interactive(cli.global.non_interactive)
             .with_command_trace(cli.global.show_cargo_commands),
         cmd_name: cli.command.command_name(),
         offline: cli.global.offline
@@ -2154,7 +2207,7 @@ mod tests {
     #[test]
     fn call_gas_limit_accepts_override_and_preserves_default() {
         for (extra, expected) in [
-            (vec![], groundhog_signing::DEFAULT_TX_GAS_LIMIT),
+            (vec![], 25_000_000),
             (vec!["--gas-limit", "200000000"], 200_000_000),
         ] {
             let mut args = vec!["groundhog", "call", "counter", "increment"];
@@ -2782,5 +2835,39 @@ mod tests {
             }
             _ => panic!("expected test command"),
         }
+    }
+
+    #[test]
+    fn test_integration_network_config_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "groundhog",
+            "test",
+            "--integration",
+            "--network-config",
+            "max_rv32_memory_bytes=16M",
+            "--network-config",
+            "max_bytestring_len=32K",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Test(TestArgs { network_config, .. }) => assert_eq!(
+                network_config,
+                [
+                    (ConfigParamName::MaxRv32MemoryBytes, 16_777_216),
+                    (ConfigParamName::MaxBytestringLen, 32_768),
+                ]
+            ),
+            _ => panic!("expected test command"),
+        }
+        // The override only reaches a node, so it needs --integration.
+        assert!(
+            Cli::try_parse_from([
+                "groundhog",
+                "test",
+                "--network-config",
+                "max_rv32_memory_bytes=16M",
+            ])
+            .is_err()
+        );
     }
 }

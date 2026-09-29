@@ -63,7 +63,7 @@ Io
 
 ProfileNotFound
   code: profile_not_found
-  hint text: add the profile to project or global config, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
+  hint format: create it with `groundhog config new {0} --network <NETWORK>`, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
 
 ProfileNotFoundInScope
   code: profile_not_found_in_scope
@@ -139,7 +139,10 @@ Rv32LowerFailed
 
 SpecFailed
   code: spec_failed
-  hint text: check that your contract uses `#[contract]` and `#[contracttype]` attributes correctly
+  hint text: check that your contract uses `#[contract]` and `#[contract_type]` attributes correctly
+
+TsBindingsFailed
+  code: ts_bindings_failed
 
 RawSpecFormat
   code: raw_spec_format
@@ -163,6 +166,14 @@ EmptyWalletName
 KeyNameInvalid
   code: key_name_invalid
   hint text: key names may only contain letters, digits, hyphens, and underscores
+
+InvalidSecretSeed
+  code: invalid_secret_seed
+  hint text: provide one private seed through stdin or the hidden prompt; never pass it as a command argument
+
+ReservedDevKeyName
+  code: reserved_dev_key_name
+  hint text: choose a name other than dev-N for an imported key
 
 JsonUnsupported
   code: json_unsupported
@@ -229,15 +240,19 @@ HttpClientInit
 
 MissingRpcUrl
   code: missing_rpc_url
-  hint text: set `rpc_url` in the selected profile in project or global config
+  hint text: for a local profile, start `groundhog node` in another terminal; otherwise run `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
 
 ProfileConfigInvalid
   code: profile_config_invalid
   hint text: update the selected profile in project or global config, or choose a profile that matches the requested command
 
+InteractiveInputRequired
+  code: interactive_input_required
+  hint text: provide the required input explicitly; for key import, pipe the seed on stdin
+
 ConfirmationRequired
   code: confirmation_required
-  hint text: review the warning and rerun with `--force` to confirm non-interactively
+  hint text: rerun from an interactive terminal, or pass `--force` to proceed without a prompt
   details: computed
 
 FaucetService
@@ -251,11 +266,11 @@ MissingSigningKey
 
 MissingNetworkHash
   code: missing_network_hash
-  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash>` for this profile, or point it at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
+  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
 
 InvalidNetworkHash
   code: invalid_network_hash
-  hint text: network_hash is the unprefixed 32-byte network hash: 64 lowercase hexadecimal digits, as `groundhog node` writes it into the runtime manifest
+  hint text: network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, optionally 0x-prefixed, as `groundhog_networkInfo` reports it
 
 InvalidHogAmount
   code: invalid_hog_amount
@@ -339,6 +354,11 @@ InvalidEventSpec
 
 RuntimeInit
   code: runtime_init_failed
+
+CallGasBalanceInsufficient
+  code: call_gas_balance_insufficient
+  hint text: add HOG to the wallet or lower `--gas-limit` if the contract needs less gas
+  details: wallet, availableRaw, requiredRaw
 
 RpcMethodFailed
   code: rpc_method_failed

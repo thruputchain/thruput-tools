@@ -30,15 +30,15 @@ pub enum DocsError {
         source: std::io::Error,
     },
     #[error(
-        "cannot read docs snapshot at {}: {source}; use the output of developers-site \
-         `pnpm build:snapshot`",
+        "cannot read docs snapshot at {}: {source}; pass a directory produced by the \
+         documentation snapshot build",
         path.display()
     )]
     Read {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("invalid docs snapshot: {0}; rebuild with developers-site `pnpm build:snapshot`")]
+    #[error("invalid docs snapshot: {0}; rebuild it with the documentation snapshot build")]
     Invalid(String),
     #[error("cannot listen on 127.0.0.1:{port}: {source}; choose another --port (or --port 0)")]
     Bind { port: u16, source: std::io::Error },

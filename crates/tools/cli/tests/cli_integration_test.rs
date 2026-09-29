@@ -379,9 +379,28 @@ fn spawn_with_terminal_width(command: Command, columns: u16) -> (std::process::C
 
 #[cfg(unix)]
 fn spawn_with_terminal_size(
+    command: Command,
+    columns: u16,
+    rows: u16,
+) -> (std::process::Child, File) {
+    spawn_with_terminal_io(command, columns, rows, false)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_outputs(
+    command: Command,
+    columns: u16,
+    terminal_stdout: bool,
+) -> (std::process::Child, File) {
+    spawn_with_terminal_io(command, columns, 24, terminal_stdout)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_io(
     mut command: Command,
     columns: u16,
     rows: u16,
+    terminal_stdout: bool,
 ) -> (std::process::Child, File) {
     let mut size = libc::winsize {
         ws_row: rows,
@@ -410,9 +429,14 @@ fn spawn_with_terminal_size(
     let slave_stdin = slave
         .try_clone()
         .expect("bug: pseudo-terminal descriptor should be cloneable");
+    let stdout = if terminal_stdout {
+        Stdio::from(slave.try_clone().unwrap())
+    } else {
+        Stdio::piped()
+    };
     command
         .stdin(Stdio::from(slave_stdin))
-        .stdout(Stdio::piped())
+        .stdout(stdout)
         .stderr(Stdio::from(slave));
     let child = command
         .spawn()
@@ -2648,27 +2672,397 @@ fn new_with_stub_template() {
     assert!(imp.contains("pub struct Contract"));
 }
 
-#[test]
-fn init_json_delegates_to_status() {
-    let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .arg("--json")
+fn init_command(root: &std::path::Path) -> Command {
+    let mut command = groundhog();
+    command
         .arg("init")
-        .current_dir(tmp.path())
-        .env("CARGO_HOME", tmp.path().join("cargo-home"))
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .env_remove("HOGD_FFI_PASSWORD")
+        .current_dir(root)
+        .env("XDG_CONFIG_HOME", root)
+        .env("CARGO_HOME", root.join("cargo-home"));
+    command
+}
+
+fn init_report(output: &std::process::Output, complete: bool) -> serde_json::Value {
+    assert_eq!(
+        output.status.code(),
+        Some(i32::from(!complete)),
+        "{output:?}"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+    // from_slice rejects trailing records as well as human output on stdout.
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "init");
+    assert_eq!(report["ok"], complete);
+    assert_eq!(report["data"]["schemaVersion"], 1);
+    assert_eq!(report["data"]["complete"], complete);
+    if !complete {
+        assert_eq!(report["error"]["code"], "init_incomplete");
+    }
+    report
+}
+
+#[test]
+fn init_json_requires_key_consent_and_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let fresh = init_command(tmp.path()).arg("--json").output().unwrap();
+    let fresh = init_report(&fresh, false);
+    assert_eq!(fresh["data"]["cargoAvailable"], true);
+    assert_eq!(fresh["data"]["profilesConfigured"], true);
+    assert_eq!(fresh["data"]["selectedKey"], serde_json::Value::Null);
+    assert_eq!(fresh["data"]["keyGenerated"], false);
+    assert_eq!(fresh["data"]["missing"], serde_json::json!(["signingKey"]));
+    assert!(tmp.path().join("groundhog/config.toml").exists());
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+
+    let generated = init_command(tmp.path())
+        .args(["--non-interactive", "--generate-key", "--json"])
         .output()
         .unwrap();
+    let generated = init_report(&generated, true);
+    assert_eq!(generated["data"]["selectedKey"], "default");
+    assert_eq!(generated["data"]["keyGenerated"], true);
+    assert_eq!(generated["data"]["missing"], serde_json::json!([]));
+    let key_path = tmp.path().join("groundhog/keys/default.json");
+    let key_before = std::fs::read(&key_path).unwrap();
+    let config_path = tmp.path().join("groundhog/config.toml");
+    let config_before = std::fs::read(&config_path).unwrap();
+    for flags in [vec!["--json"], vec!["--json", "--generate-key"]] {
+        let repeated = init_command(tmp.path()).args(flags).output().unwrap();
+        let repeated = init_report(&repeated, true);
+        assert_eq!(repeated["data"]["selectedKey"], "default");
+        assert_eq!(repeated["data"]["keyGenerated"], false);
+        assert!(
+            std::fs::read(&key_path).unwrap() == key_before,
+            "init must preserve the stored key"
+        );
+        assert_eq!(std::fs::read(&config_path).unwrap(), config_before);
+    }
+    assert!(!tmp.path().join("my-contract").exists());
+}
 
-    assert!(!output.status.success());
+#[test]
+fn init_quiet_does_not_authorize_generation_and_json_takes_precedence() {
+    let tmp = TempDir::new().unwrap();
+    let output = init_command(tmp.path()).arg("--quiet").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    let output = init_command(tmp.path())
+        .args(["--quiet", "--json"])
+        .output()
+        .unwrap();
+    let report = init_report(&output, false);
+    assert_eq!(report["data"]["keyGenerated"], false);
+    let output = init_command(tmp.path())
+        .args(["--quiet", "--generate-key"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let output = init_command(tmp.path())
+        .args(["--quiet", "--json"])
+        .output()
+        .unwrap();
+    init_report(&output, true);
+}
 
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "status");
-    assert_eq!(stdout["data"]["environment"]["cargo"], true);
-    assert!(stdout["data"].get("credentials").is_none());
-    assert!(!stdout["warnings"].as_array().unwrap().is_empty());
+#[test]
+fn init_does_not_replace_stored_keys_or_missing_selections() {
+    for selection in [None, Some("ghost")] {
+        let tmp = TempDir::new().unwrap();
+        generate_key_public_key(tmp.path(), "alice");
+        let key_path = tmp.path().join("groundhog/keys/alice.json");
+        let before = std::fs::read(&key_path).unwrap();
+        write_global_config(
+            tmp.path(),
+            &selection
+                .map(|name| format!("default_key = \"{name}\"\n"))
+                .unwrap_or_default(),
+        );
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        let report = init_report(&output, false);
+        assert_eq!(report["data"]["keyGenerated"], false);
+        assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+        assert!(
+            std::fs::read(&key_path).unwrap() == before,
+            "init must preserve the stored key"
+        );
+        assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    }
+}
+
+#[test]
+fn init_rejects_unusable_keypairs_and_mismatched_public_summaries() {
+    for mismatched_public_key in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        init_report(&output, true);
+        let key_path = tmp.path().join("groundhog/keys/default.json");
+        let mut key: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+        if mismatched_public_key {
+            generate_key_public_key(tmp.path(), "other");
+            let other: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(tmp.path().join("groundhog/keys/other.json")).unwrap(),
+            )
+            .unwrap();
+            key["public_key_hex"] = other["public_key_hex"].clone();
+        } else {
+            key["keypair_hex"] = serde_json::json!("invalid");
+        }
+        let before = serde_json::to_vec(&key).unwrap();
+        std::fs::write(&key_path, &before).unwrap();
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        let report = init_report(&output, false);
+        assert_eq!(report["data"]["selectedKey"], "default");
+        assert_eq!(report["data"]["keyGenerated"], false);
+        assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+        assert!(
+            std::fs::read(&key_path).unwrap() == before,
+            "init must preserve the unusable key file"
+        );
+    }
+}
+
+#[test]
+fn init_dangling_selection_prevents_generation_even_without_stored_keys() {
+    for profile_selection in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let config = if profile_selection {
+            "default_profile = \"local\"\n[profile.local]\ndefault_key = \"ghost\"\n"
+        } else {
+            "default_key = \"ghost\"\n"
+        };
+        write_global_config(tmp.path(), config);
+        let output = init_command(tmp.path())
+            .args(["--generate-key", "--json"])
+            .output()
+            .unwrap();
+        let report = init_report(&output, false);
+        assert_eq!(report["data"]["keyGenerated"], false);
+        assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+        assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+    }
+}
+
+#[test]
+fn init_dangling_project_key_does_not_fall_back_to_global_key() {
+    let tmp = TempDir::new().unwrap();
+    generate_key_public_key(tmp.path(), "alice");
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"local\"\n[profile.local]\ndefault_key = \"ghost\"\n",
+    )
+    .unwrap();
+    let output = init_command(tmp.path())
+        .args(["--generate-key", "--json"])
+        .output()
+        .unwrap();
+    let report = init_report(&output, false);
+    assert_eq!(report["data"]["keyGenerated"], false);
+    assert_eq!(report["data"]["missing"], serde_json::json!(["signingKey"]));
+    assert!(!tmp.path().join("groundhog/keys/default.json").exists());
+}
+
+#[test]
+fn init_reports_missing_cargo_and_unresolvable_profile() {
+    let tmp = TempDir::new().unwrap();
+    generate_key_public_key(tmp.path(), "alice");
+    let output = init_command(tmp.path())
+        .arg("--json")
+        .env("PATH", tmp.path().join("empty-path"))
+        .output()
+        .unwrap();
+    let report = init_report(&output, false);
+    assert_eq!(report["data"]["cargoAvailable"], false);
+    assert_eq!(report["data"]["missing"], serde_json::json!(["cargo"]));
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"missing\"\n[profile.local]\nnetwork = \"local\"\n",
+    )
+    .unwrap();
+    let output = init_command(tmp.path()).arg("--json").output().unwrap();
+    let report = init_report(&output, false);
+    assert!(
+        report["data"]["missing"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("profile"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_non_interactive_never_waits_for_terminal_answers() {
+    let tmp = TempDir::new().unwrap();
+    for generate in [false, true] {
+        let mut command = init_command(tmp.path());
+        command.arg("--non-interactive");
+        if generate {
+            command.arg("--generate-key");
+        }
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(10));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert_eq!(status.success(), generate, "{output}");
+        assert!(!output.contains("Generate a"), "{output}");
+        assert!(!output.contains("Would you"), "{output}");
+        assert!(!tmp.path().join("my-contract").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn global_non_interactive_keeps_terminal_output_plain_and_visible() {
+    let tmp = TempDir::new().unwrap();
+    let setup = init_command(tmp.path())
+        .args(["--non-interactive", "--generate-key"])
+        .output()
+        .unwrap();
+    assert!(setup.status.success());
+    for (arguments, expected) in [
+        (vec!["--non-interactive", "status"], "default"),
+        (
+            vec!["new", "plain-project", "--non-interactive"],
+            "plain-project",
+        ),
+        (vec!["config", "get", "--non-interactive"], "local"),
+    ] {
+        let is_status = arguments.contains(&"status");
+        let mut command = groundhog();
+        command
+            .args(arguments)
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .env("TERM", "xterm")
+            .env_remove("NO_COLOR");
+        let (child, terminal) = spawn_with_terminal_outputs(command, 120, true);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(10));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        if is_status {
+            // Diagnostics may report missing optional local-node tooling.
+            assert!(matches!(status.code(), Some(0 | 1)), "{output}");
+        } else {
+            assert!(status.success(), "{output}");
+        }
+        assert!(output.contains(expected), "{output}");
+        assert!(!output.contains('\u{1b}'), "{output}");
+        assert!(!output.contains('╭') && !output.contains('│'), "{output}");
+    }
+    assert!(tmp.path().join("plain-project/groundhog.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn global_non_interactive_terminal_key_removal_requires_force() {
+    let tmp = TempDir::new().unwrap();
+    generate_key_public_key(tmp.path(), "alice");
+    let path = tmp.path().join("groundhog/keys/alice.json");
+    let before = std::fs::read(&path).unwrap();
+    for (force, json) in [(false, false), (false, true), (true, false)] {
+        let mut command = groundhog();
+        command
+            .args(["keys", "rm", "alice", "--non-interactive"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path());
+        if json {
+            command.arg("--json");
+        }
+        if force {
+            command.arg("--force");
+        }
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(5));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert_eq!(status.success(), force);
+        if !force {
+            if json {
+                let report: serde_json::Value = serde_json::from_str(&output).unwrap();
+                assert_eq!(report["error"]["code"], "confirmation_required");
+            } else {
+                assert!(output.contains("--force"), "{output}");
+                assert!(!output.contains("Remove key `alice`?"), "{output}");
+                assert!(!output.contains("[y/N]"), "{output}");
+            }
+            assert!(
+                std::fs::read(&path).unwrap() == before,
+                "refusal must preserve the key"
+            );
+        }
+    }
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn key_import_refuses_terminal_input_in_non_interactive_modes() {
+    for flags in [vec!["--non-interactive"], vec!["--quiet"], vec!["--json"]] {
+        let tmp = TempDir::new().unwrap();
+        let mut command = groundhog();
+        command
+            .args(["keys", "import", "alice"])
+            .args(&flags)
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path());
+        let (child, terminal) = spawn_with_terminal(command);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(5));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert!(!status.success());
+        assert!(!output.contains("Ed25519 secret seed"));
+        assert!(!tmp.path().join("groundhog/keys/alice.json").exists());
+        if flags == ["--json"] {
+            let report: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(report["error"]["code"], "interactive_input_required");
+        }
+    }
+}
+
+#[test]
+fn global_non_interactive_key_import_accepts_piped_seed() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = groundhog()
+        .args(["--non-interactive", "keys", "import", "alice", "--json"])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let seed = "42".repeat(32);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(seed.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(&seed));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "keys.import");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["data"]["key"]["name"], "alice");
+    assert!(tmp.path().join("groundhog/keys/alice.json").exists());
 }
 
 #[test]
@@ -2694,7 +3088,7 @@ fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
         .unwrap();
 
     let output = child.wait_with_output().unwrap();
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(1));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Setup"));
@@ -2704,12 +3098,12 @@ fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
     assert!(stderr.contains("[3/4] Signing key"));
     assert!(!stderr.contains("download credentials"));
     assert!(stderr.contains("[4/4] Project"));
-    assert!(stderr.contains("Setup Complete"));
+    assert!(!stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Setup Incomplete"));
     assert!(stderr.contains("Config:"));
-    assert!(stderr.contains("Profile:"));
+    assert!(stderr.contains("Default profile:"));
     assert!(stderr.contains("Local RPC:"));
-    assert!(stderr.contains("Next:"));
-    assert!(stderr.contains("groundhog new my-contract"));
+    assert!(stderr.contains("--generate-key"));
     assert!(!tmp.path().join("groundhog/keys/default.json").exists());
     assert!(!tmp.path().join("should-not-exist").exists());
 }
@@ -2755,7 +3149,7 @@ fn init_boxes_respect_stderr_terminal_width() {
     let tmp = TempDir::new().unwrap();
     let config = tmp.path().join("long-config-directory-".repeat(5));
     let setup = groundhog()
-        .args(["init", "--quiet"])
+        .args(["init", "--quiet", "--generate-key"])
         .current_dir(tmp.path())
         .env("XDG_CONFIG_HOME", &config)
         .output()
@@ -2816,7 +3210,7 @@ fn init_human_output_builds_existing_project() {
     )
     .unwrap();
     let mut child = groundhog()
-        .arg("init")
+        .args(["init", "--generate-key"])
         .current_dir(&project)
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
@@ -4991,7 +5385,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["key"], "owner");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "10000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "2000000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
         stdout["data"]["owner_public_key"]
@@ -5063,7 +5457,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "owner");
     assert_eq!(stdout["data"]["key"], "owner");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "10000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "2000000000");
     assert!(stdout["data"].get("signed_prefund_tx").is_none());
     assert!(stdout["data"].get("signed_tx").is_none());
 }
@@ -5111,6 +5505,51 @@ fn local_wallet_create_json_warns_when_projected_faucet_balance_is_below_ten_hog
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
     assert_eq!(payload["data"]["schemaVersion"], 4);
+}
+
+#[test]
+fn local_wallet_create_human_does_not_suggest_an_airdrop() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let faucet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet, None);
+    let (rpc_url, rpc_server) = spawn_local_wallet_create_rpc(&faucet);
+    std::fs::write(project.join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "default_profile = \"default\"\n\n[profile.default]\nnetwork = \"local\"\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let generated = groundhog()
+        .args(["keys", "generate", "owner"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+
+    let output = groundhog()
+        .args(["wallet", "create", "--key", "owner", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Wallet created:"), "{stderr}");
+    assert!(!stderr.contains("groundhog airdrop"), "{stderr}");
 }
 
 #[test]
@@ -8499,7 +8938,7 @@ fn contract_command_preserves_prefixed_address_validation_error() {
         stderr["error"]["details"]["message"]
             .as_str()
             .unwrap()
-            .contains("32 bytes")
+            .contains("C StrKey or 64 hex characters, optionally prefixed with 0x")
     );
 }
 
@@ -8564,8 +9003,6 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             "--json",
             "call",
             "--dry-run",
-            "--gas-limit",
-            "200000000",
             "--wallet",
             "trading",
             &contract,
@@ -8611,7 +9048,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             .starts_with("0x")
     );
     let signed_tx = decode_signed_tx(stdout["data"]["signedTx"].as_str().unwrap());
-    assert_eq!(signed_tx.tx.invocation.gas_limit, 200_000_000);
+    assert_eq!(signed_tx.tx.invocation.gas_limit, 25_000_000);
     let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
     let (_, _, target_gas, _): (
         groundhog_xdr::types::ContractAddress,
@@ -8619,7 +9056,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
         u64,
         Vec<u8>,
     ) = xdrs::txs::decode(&inner).unwrap();
-    assert_eq!(target_gas, 200_000_000);
+    assert_eq!(target_gas, 25_000_000);
     assert_eq!(
         format!(
             "0x{}",
@@ -8721,6 +9158,91 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
     assert_eq!(signed_tx_entrypoint(signed_tx), "0x646f416374696f6e");
+}
+
+#[test]
+fn call_with_insufficient_gas_balance_fails_before_submission() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let rpc_server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        assert_eq!(request["method"], "groundhog_chainTip");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "height": 42,
+                "blockHash": format!("0x{}", "00".repeat(32)),
+            }),
+        );
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
+        assert_eq!(request["method"], "groundhog_getBalance");
+        assert_eq!(request["params"][0], format!("0x{}", "aa".repeat(32)));
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "address": format!("0x{}", "aa".repeat(32)),
+                "rawBalance": "10000000",
+                "height": 42,
+            }),
+        );
+        assert_no_follow_up_rpc(&listener);
+    });
+    write_project_config_with_alice_wallet(&project, &format!("http://{addr}"), &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let result: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"]["code"], "call_gas_balance_insufficient");
+    assert_eq!(
+        result["error"]["details"]["wallet"],
+        format!("0x{}", "aa".repeat(32))
+    );
+    assert_eq!(result["error"]["details"]["availableRaw"], 10_000_000);
+    assert_eq!(result["error"]["details"]["requiredRaw"], 25_000_000);
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("1 HOG")
+    );
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("2.5 HOG")
+    );
+    assert!(
+        result["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("--gas-limit")
+    );
 }
 
 #[test]
@@ -10941,16 +11463,24 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
 
 fn write_event_spec(tmp: &TempDir) -> std::path::PathBuf {
     use groundhog_contract_spec::{
-        ContractEventDef, ContractField, ContractSpec, ContractSpecString, ContractType,
+        ContractEventDef, ContractField, ContractSpec, ContractSpecId, ContractSpecString,
+        ContractType,
     };
     use xdr_common::VecM;
 
     let string = |value: &str| ContractSpecString::try_from(value).unwrap();
+    // One crate, one module: the declared name is what this fixture turns on.
+    let id = |declared: &str| ContractSpecId {
+        crate_name: string("demo"),
+        major: string("1"),
+        module_path: string("demo"),
+        declared: string(declared),
+    };
     let spec = ContractSpec {
         interfaces: VecM(vec![]),
         type_defs: VecM(vec![]),
         events: VecM(vec![ContractEventDef {
-            name: string("PingEvent"),
+            name: id("PingEvent"),
             signature: [0x91; 32].into(),
             topics: VecM(vec![ContractField {
                 name: string("tag"),
@@ -13056,7 +13586,7 @@ fn spawn_local_wallet_create_rpc(faucet: &str) -> (String, thread::JoinHandle<()
     let faucet = faucet.to_owned();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
-        serve_balance(&listener, deadline, &faucet, "110024013", 41);
+        serve_balance(&listener, deadline, &faucet, "2100024013", 41);
         serve_chain_tip(&listener, deadline, 42);
         serve_successful_transaction(&listener, deadline, 43);
         serve_successful_transaction(&listener, deadline, 44);
@@ -13069,7 +13599,7 @@ fn spawn_local_wallet_create_rpc(faucet: &str) -> (String, thread::JoinHandle<()
             &request["id"],
             serde_json::json!({
                 "address": wallet,
-                "rawBalance": "10000000",
+                "rawBalance": "1999902045",
                 "height": 44,
             }),
         );
@@ -14026,8 +14556,22 @@ fn spawn_transaction_rpc(
             }),
         );
 
-        // 2. sendRawTransaction
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
+        // Contract calls check the sender balance before submission; deploys do not.
+        let (mut stream, mut request) =
+            read_jsonrpc_request(&listener, deadline, "getBalance or sendRawTransaction");
+        if request["method"] == "groundhog_getBalance" {
+            let address = request["params"][0].as_str().unwrap();
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({
+                    "address": address,
+                    "rawBalance": "100000000",
+                    "height": height,
+                }),
+            );
+            (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
+        }
         assert_eq!(request["method"], "groundhog_sendRawTransaction");
         assert!(
             request["params"][0].as_str().unwrap().starts_with("0x"),
@@ -14160,7 +14704,7 @@ fn library_abort_hex(case_name: &str) -> String {
         .iter()
         .find_map(|def| match def {
             groundhog_contract_spec::ContractTypeDef::TypeDefUnion { union_def }
-                if AsRef::<[u8]>::as_ref(&union_def.name) == b"LibraryExn" =>
+                if AsRef::<[u8]>::as_ref(&union_def.name.declared) == b"LibraryExn" =>
             {
                 union_def
                     .cases

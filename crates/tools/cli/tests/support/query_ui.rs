@@ -127,7 +127,7 @@ fn init_declines_preserve_scrollback_and_show_partial_setup() {
     pty.master.write_all(b"n\n").unwrap();
     pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Create a starter project?"));
     pty.master.write_all(b"n\n").unwrap();
-    assert!(pty.finish().success());
+    assert!(!pty.finish().success());
     let history = pty.history();
     assert!(history.contains("PREEXISTING-SHELL-LINE"));
     assert!(

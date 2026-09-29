@@ -34,7 +34,7 @@ fn view_query_maps_the_public_request_shape() {
     assert_eq!(query.invocation.calldata.0, vec![1, 2, 3]);
     assert_eq!(query.parent_address.as_ref(), Some(&caller.0));
     assert_eq!(query.forwarded_tokens.0.len(), 0);
-    assert_eq!(query.invoke_flags, InvokeFlag::None.0);
+    assert_eq!(query.invoke_flags, InvokeFlag::None.0.cast_unsigned());
     assert_eq!(query.auth_claim, public_view_auth_claim());
 }
 

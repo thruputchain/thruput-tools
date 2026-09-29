@@ -1,7 +1,9 @@
 use groundhog_trace::{
     HostFunctionStatusXdr, InvocationFrameTrace, SyscallTrace, SyscallTraceBody,
 };
-use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta, StorageDeltaFlags};
+use groundhog_xdr::storage_item::{
+    FlaggedStorageDelta, StorageDelta, StorageDeltaFlagSet, StorageDeltaFlags,
+};
 use groundhog_xdr::transaction::{Invocation, InvocationFrameOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -41,7 +43,7 @@ pub struct StorageDeltaInfo {
     /// Human-readable summary used by CLI and terminal output.
     pub summary: String,
     /// Raw delta flags bitset.
-    pub flags: i32,
+    pub flags: u32,
     /// XDR-encoded storage delta body.
     pub delta_xdr: HexBytes,
 }
@@ -263,7 +265,7 @@ fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
         ),
     };
 
-    if delta.flags == StorageDeltaFlags::None.0 {
+    if delta.flags == StorageDeltaFlags::None.0.cast_unsigned() {
         body
     } else {
         format!("{body} [{}]", storage_delta_flags_label(delta.flags))
@@ -380,7 +382,7 @@ fn syscall_error_label(code: groundhog_xdr::syscall_error::SyscallErrorCode) -> 
     }
 }
 
-fn storage_delta_flags_label(flags: i32) -> String {
+fn storage_delta_flags_label(flags: StorageDeltaFlagSet) -> String {
     match flags {
         0 => "StorageDeltaFlags::None".into(),
         1 => "StorageDeltaFlags::ExclusiveLock".into(),

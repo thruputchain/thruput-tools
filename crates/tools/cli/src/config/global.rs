@@ -108,6 +108,23 @@ pub fn save_default_key(name: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Select the first imported key without replacing a default chosen by another process.
+/// Returns whether this key is selected in the locked configuration.
+pub(crate) fn save_default_key_if_unset(name: &str) -> Result<bool, CliError> {
+    let mut selected = false;
+    transact_config_file(|document, config| {
+        selected = config
+            .default_key
+            .as_deref()
+            .is_none_or(|current| current == name);
+        if config.default_key.is_none() {
+            insert_preserving_decor(document.as_table_mut(), "default_key", value(name));
+        }
+        Ok(())
+    })?;
+    Ok(selected)
+}
+
 /// Load the default key name from `config.toml`.
 pub fn load_default_key() -> Result<Option<String>, CliError> {
     load_global_field("default_key")

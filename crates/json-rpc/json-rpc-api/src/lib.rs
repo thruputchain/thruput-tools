@@ -29,7 +29,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "5.3.0";
+pub const WIRE_FORMAT_VERSION: &str = "7.0.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -64,10 +64,11 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check (mempool -> indexer -> unknown). `unknown` is only
-    /// returned after both the mempool and the indexer answered without a match; if
-    /// the mempool could not be consulted and the indexer has no record, the call
-    /// fails with `BackendUnavailable` because the transaction may still be pending.
+    /// Lightweight status check. The indexer is asked first, so `committed` wins; a
+    /// mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown`
+    /// is returned only after both backends answered without a match. If the mempool
+    /// could not be consulted and the indexer has no record, the call fails with
+    /// `BackendUnavailable` because the transaction may still be pending.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 
@@ -127,7 +128,9 @@ pub trait GroundhogApi {
     #[method(name = "getBalance")]
     async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse>;
 
-    /// Execute a sandboxed contract simulation against committed state.
+    /// Execute a sandboxed contract simulation against the latest committed state.
+    /// There is no way to select a past height; `height` in the response names the
+    /// snapshot the view ran against.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 

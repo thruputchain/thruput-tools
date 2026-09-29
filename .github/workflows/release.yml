@@ -18,7 +18,8 @@ env:
     groundhog-rv32-lower
 
 permissions:
-  contents: write
+  # The publish job raises this to "write"
+  contents: read
 
 jobs:
   build:

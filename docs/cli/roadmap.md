@@ -121,7 +121,7 @@ The shared static and live references and command-family migrations are implemen
 in draft PR #443. These checkboxes describe branch implementation, not a shipped release.
 See the [verification record](ui-coverage.md) for command coverage and platform checks.
 See the [active specification](../specs/2026-09-21-cli-tui-mvp.md) for the component
-contract, 43-command coverage matrix, compatibility rules, and review checkpoints.
+contract, 44-command coverage matrix, compatibility rules, and review checkpoints.
 
 - [x] GH-389: Build the component/theme/mode foundation and migrate status as its
   reference. Demonstrate consistent success/error/warning output before live work.
@@ -135,6 +135,7 @@ contract, 43-command coverage matrix, compatibility rules, and review checkpoint
 - [x] GH-416: Migrate profile/key/wallet management, including the key-export exception.
 - [x] GH-417: Migrate toolchain actions, chain archives, and codegen output.
 - [x] GH-438: Close pre-dispatch diagnostic gaps found by the command audit.
+- [x] GH-439: Cover key import and preserve current non-interactive setup semantics.
 - [ ] GH-394: Complete the per-command/mode coverage record, renderer-bypass audit,
   regression checks, and release guidance.
 

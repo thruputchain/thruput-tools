@@ -1,18 +1,23 @@
-use crate::keys_json::{ExportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KeysExportReport};
+use crate::keys_json::{
+    ExportedKey, ImportedKey, KEYS_EXPORT_JSON_SCHEMA_VERSION, KEYS_IMPORT_JSON_SCHEMA_VERSION,
+    KeysExportReport, KeysImportReport,
+};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use getrandom::getrandom;
 use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
+use groundhog_signing::strkey;
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_KEY_NAME: &str = "default";
 const DEFAULT_KEY_ID: u32 = 0;
+const MAX_SEED_INPUT_BYTES: usize = 128;
 
 #[derive(Serialize, Deserialize)]
 struct KeyFile {
@@ -35,6 +40,7 @@ struct KeyInfo {
     is_default: bool,
     key_id: u32,
     public_key: String,
+    public_key_strkey: String,
     address: String,
     path: PathBuf,
 }
@@ -83,7 +89,8 @@ pub fn generate(
 
     print.group(crate::print::Outcome::Success, "Key generated", |print| {
         print.success(format_args!("Generated key `{name}`"));
-        print.detail("address", &info.address);
+        print.detail("public key", &info.public_key_strkey);
+        print.detail("account address", &info.address);
         if fund {
             print.note("Faucet funding is not implemented yet; generated key only");
         }
@@ -100,6 +107,113 @@ pub fn generate(
         }),
     ))?;
     Ok(())
+}
+
+/// Import an S `StrKey` or 32-byte hex seed from a hidden terminal prompt or piped stdin.
+/// No secret command-line argument is accepted and existing keys are never overwritten.
+pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    validate_key_name(name)?;
+    if crate::dev_keys::dev_key_index(name).is_some() {
+        return Err(CliError::ReservedDevKeyName);
+    }
+    if key_path(name)?.exists() {
+        return Err(CliError::KeyExists(name.to_owned()));
+    }
+    let input = if std::io::stdin().is_terminal() {
+        print.read_secret("Ed25519 secret seed (S StrKey or hex): ")?
+    } else {
+        // Bound untrusted piped input before allocating or decoding it.
+        let mut input = Zeroizing::new(String::new());
+        std::io::stdin()
+            .lock()
+            .take(MAX_SEED_INPUT_BYTES as u64 + 1)
+            .read_to_string(&mut input)
+            .map_err(|_| CliError::InvalidSecretSeed)?;
+        input
+    };
+    if input.len() > MAX_SEED_INPUT_BYTES {
+        return Err(CliError::InvalidSecretSeed);
+    }
+    let seed = strkey::parse_secret_seed(input.trim()).map_err(|_| CliError::InvalidSecretSeed)?;
+    let signer = LocalSigner::from_secret_key(*seed);
+    let info = write_key(name, &signer)?;
+    let (is_default, warnings) = import_default_selection(name);
+    if print.has_human_ui() {
+        print.outcome_findings(
+            if warnings.is_empty() {
+                crate::print::Outcome::Success
+            } else {
+                crate::print::Outcome::Partial
+            },
+            "Key imported",
+            &[
+                ("Name".into(), name.into()),
+                ("Public key".into(), info.public_key_strkey.clone()),
+                ("Account address".into(), info.address.clone()),
+                (
+                    "Default".into(),
+                    match is_default {
+                        Some(true) => "Selected",
+                        Some(false) => "Not selected",
+                        None => "Unconfirmed",
+                    }
+                    .into(),
+                ),
+            ],
+            &warnings,
+        );
+    } else {
+        for warning in &warnings {
+            print.warn(&warning.message);
+            if let Some(hint) = &warning.hint {
+                print.note(hint);
+            }
+        }
+        print.success(format_args!("Imported key `{name}`"));
+        print.detail("public key", &info.public_key_strkey);
+        print.detail("account address", &info.address);
+    }
+    let report = KeysImportReport {
+        schema_version: KEYS_IMPORT_JSON_SCHEMA_VERSION,
+        key: ImportedKey {
+            name: info.name,
+            is_default,
+            key_id: info.key_id,
+            public_key: info.public_key,
+            public_key_strkey: info.public_key_strkey,
+            address: info.address,
+            path: info.path,
+        },
+    };
+    print.json(&CommandResult::with_warnings(cmd, warnings, report))?;
+    Ok(())
+}
+
+fn import_default_selection(name: &str) -> (Option<bool>, Vec<crate::checks::Finding>) {
+    match crate::config::save_default_key_if_unset(name) {
+        Ok(selected) => (Some(selected), vec![]),
+        Err(error) => {
+            let selected = crate::config::load_default_key()
+                .map(|current| current.as_deref() == Some(name))
+                .ok();
+            let finding = crate::checks::Finding {
+                level: crate::checks::FindingLevel::Warn,
+                code: "key_import_default_selection_failed",
+                message: format!(
+                    "Key `{name}` was imported, but default selection could not be confirmed ({})",
+                    error.code(),
+                ),
+                hint: Some(
+                    format!(
+                        "After fixing configuration, run `groundhog keys use {name}`; \
+                         do not import the key again"
+                    )
+                    .into(),
+                ),
+            };
+            (selected, vec![finding])
+        }
+    }
 }
 
 /// List stored signing keys.
@@ -121,23 +235,56 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
                     key.name.clone()
                 },
                 key.address.clone(),
+                key.public_key_strkey.clone(),
             ]
         })
         .collect();
     print.data_table(
         "Keys",
-        &["Name".into(), "Address".into()],
+        &["Name".into(), "Account address".into(), "Public key".into()],
         &rows,
         "No keys stored.",
         keys.iter().map(|key| {
             let marker = if key.is_default { "*" } else { " " };
-            format!("{marker} {} {}", key.name, key.address)
+            format!(
+                "{marker} {} public-key={} account-address={}",
+                key.name, key.public_key_strkey, key.address
+            )
         }),
     )
 }
 
 /// Export a stored private key after interactive confirmation or `force` authorization.
 pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    export_with_format(name, force, KeyExportFormat::Hex, cmd, print)
+}
+
+/// Encoding explicitly selected for private seed export. Hex remains the compatibility default.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum KeyExportFormat {
+    /// A 32-byte lowercase 0x-prefixed seed.
+    #[default]
+    Hex,
+    /// A checksummed Stellar S `StrKey` containing the same seed.
+    Strkey,
+}
+
+fn seed_strkey(keypair: &[u8; 64]) -> String {
+    let seed = Zeroizing::new(
+        <[u8; 32]>::try_from(&keypair[..32]).expect("bug: validated keypair contains a seed"),
+    );
+    let mut encoded = strkey::format_secret_seed(&seed);
+    std::mem::take(&mut *encoded)
+}
+
+/// Export a stored seed in a caller-selected encoding after the existing confirmation gate.
+pub fn export_with_format(
+    name: &str,
+    force: bool,
+    format: KeyExportFormat,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     validate_key_name(name)?;
     let path = key_path(name)?;
     if !path.exists() {
@@ -160,7 +307,10 @@ pub fn export(name: &str, force: bool, cmd: &'static str, print: &Print) -> Resu
         key: ExportedKey {
             name: name.to_string(),
             scheme: "ed25519".into(),
-            private_key: prefixed_hex(&keypair_bytes[..32]),
+            private_key: match format {
+                KeyExportFormat::Hex => prefixed_hex(&keypair_bytes[..32]),
+                KeyExportFormat::Strkey => seed_strkey(&keypair_bytes),
+            },
         },
     };
 
@@ -259,6 +409,8 @@ fn validate_key_name(name: &str) -> Result<(), CliError> {
 }
 
 fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError> {
+    // Validate configuration before committing a key; never reread it after the write.
+    let default_key = crate::config::load_default_key()?;
     let path = key_path(name)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -277,19 +429,27 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         serde_json::to_vec_pretty(&keyfile).map_err(|e| CliError::Other(e.to_string()))?,
     );
 
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-
-    let mut file = opts.open(&path)?;
-    file.write_all(&contents)?;
-    file.write_all(b"\n")?;
-
-    load_key_info(name)
+    let parent = path.parent().expect("bug: key path has a parent directory");
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(&contents)?;
+    staged.write_all(b"\n")?;
+    staged.as_file().sync_all()?;
+    staged.persist_noclobber(&path).map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            CliError::KeyExists(name.to_owned())
+        } else {
+            CliError::Io(error.error)
+        }
+    })?;
+    Ok(KeyInfo {
+        name: name.to_owned(),
+        is_default: default_key.as_deref() == Some(name),
+        key_id: DEFAULT_KEY_ID,
+        public_key: prefixed_hex(public_bytes),
+        public_key_strkey: strkey::format_public_key(&public_bytes),
+        address: prefixed_hex(derive_pubkey_account_address(public_bytes)),
+        path,
+    })
 }
 
 fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
@@ -321,6 +481,7 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         is_default: default_key.as_deref() == Some(name),
         key_id: DEFAULT_KEY_ID,
         public_key: prefixed_hex(public_key),
+        public_key_strkey: strkey::format_public_key(&public_key),
         address: prefixed_hex(address),
         path,
     })

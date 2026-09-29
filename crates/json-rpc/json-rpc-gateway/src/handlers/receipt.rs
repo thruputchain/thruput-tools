@@ -5,6 +5,7 @@ use crate::metrics::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
 
 use groundhog_hogd_backend::{
     indexer as shared_indexer, receipt as shared_receipt, scheduler as shared_scheduler,
+    status as shared_status,
 };
 use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client,
@@ -25,7 +26,7 @@ use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 use groundhog_json_rpc_server::RpcServerError;
 
-use super::{INDEXER, backend_deadline, timed_backend_call};
+use super::{INDEXER, SCHEDULER, backend_deadline, timed_backend_call};
 
 struct SchedulerLookupGuard<T: Send + 'static> {
     worker: Option<JoinHandle<T>>,
@@ -232,15 +233,7 @@ async fn transaction_is_pending(
         started_at.elapsed(),
     );
     match rpc_result {
-        // Any cardinality other than one leaves the queried transaction
-        // unaccounted for, which cannot support a `false`.
-        Ok(Ok(results)) => match shared_scheduler::mempool_holds_tx(&results) {
-            Some(pending) => Ok(pending),
-            None => Err(RpcServerError::BackendUnavailable(format!(
-                "scheduler returned {} lookup results for one transaction",
-                results.0.len()
-            ))),
-        },
+        Ok(Ok(results)) => shared_scheduler::mempool_holds_tx(SCHEDULER, &results),
         Ok(Err(error)) => Err(RpcServerError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
@@ -291,11 +284,31 @@ async fn lookup_transaction_info(
     .await
 }
 
-/// Check the indexer first so committed reads do not occupy the scheduler lane.
-/// Pending takes precedence over advisory failure diagnostics. After an indexer
-/// miss and scheduler miss, recheck the indexer to cover a commit between reads.
-/// All stages share one deadline; Unknown requires successful misses from both
-/// backends. A pending answer remains available if the indexer is disconnected.
+/// The gateway's two status lookups: the admission-bounded, metered
+/// scheduler lane and the indexer, both against one request deadline.
+struct GatewayStatusProbe<'a> {
+    ctx: &'a GatewayContext,
+    deadline: Instant,
+}
+
+impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
+    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+        transaction_is_pending(self.ctx, self.deadline, tx_hash).await
+    }
+
+    async fn indexed_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
+        indexed_transaction_status(self.ctx, self.deadline, tx_hash).await
+    }
+}
+
+/// Status by the probe order shared with the node supervisor
+/// (`groundhog_hogd_backend::status`). All stages share one deadline, so a
+/// slow indexer can consume the budget before the scheduler lookup is
+/// dispatched. A pending answer remains available if the indexer is
+/// disconnected.
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
@@ -303,30 +316,7 @@ pub async fn get_transaction_status(
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, RpcServerError> {
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    let indexed = indexed_transaction_status(ctx, deadline, tx_hash).await;
-    if let Ok(Some(TransactionStatus::Committed { height })) = indexed {
-        return Ok(TransactionStatus::Committed { height });
-    }
-    let scheduler_failure = match transaction_is_pending(ctx, deadline, tx_hash).await {
-        Ok(true) => return Ok(TransactionStatus::Pending),
-        Ok(false) => None,
-        Err(error) => {
-            tracing::warn!(%error, "scheduler lookup did not complete; checking indexer");
-            Some(error)
-        }
-    };
-    // Retain the existing pending-over-diagnostic precedence. Indexer failures
-    // cannot yield Unknown, even if the scheduler reports a miss.
-    if let Some(status) = indexed? {
-        return Ok(status);
-    }
-    if let Some(status) = indexed_transaction_status(ctx, deadline, tx_hash).await? {
-        return Ok(status);
-    }
-    match scheduler_failure {
-        Some(error) => Err(error),
-        None => Ok(TransactionStatus::Unknown),
-    }
+    shared_status::transaction_status(&GatewayStatusProbe { ctx, deadline }, tx_hash).await
 }
 
 #[cfg(test)]
@@ -367,7 +357,7 @@ mod tests {
 
     use super::*;
 
-    use crate::config::GatewayConfig;
+    use crate::config::{GatewayConfig, X23MultiplexConnections};
     use crate::context::{
         BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SCHEDULER_LOOKUP_MAX_OUTSTANDING,
         SchedulerClient, connect_optional_scheduler,
@@ -658,11 +648,14 @@ mod tests {
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => {
-                connect_optional_scheduler(&addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                    .await
-                    .expect("bug: test scheduler should connect")
-            }
+            Some(addr) => connect_optional_scheduler(
+                X23MultiplexConnections::default(),
+                &addr.to_string(),
+                PROTOCOL_VERSION,
+                None,
+            )
+            .await
+            .expect("bug: test scheduler should connect"),
             None => None,
         };
         let indexer = try_connect(
@@ -739,7 +732,9 @@ mod tests {
                 jsonrpsee::server::ServerConfig::builder()
                     .max_connections(config.max_connections)
                     .max_response_body_size(max_response_body_size)
-                    .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
+                    .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
+                        groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS,
+                    ))
                     .build(),
             )
             .set_http_middleware(crate::middleware::http_middleware(
@@ -775,6 +770,67 @@ mod tests {
             .into_rpc(),
         );
         (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn rpc_array_limit_rejects_oversized_receipt_reads_before_dispatch() {
+        use groundhog_json_rpc_server::batch::MAX_RPC_BATCH_REQUESTS;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (indexer_addr, indexer) = start_fake_indexer(
+            TxInfoResult::Default {
+                outcome: TxInfoOutcome::TxInfoNotFound.0,
+            },
+            calls.clone(),
+        )
+        .await;
+        let ctx = Arc::new(test_context(None, indexer_addr).await);
+        let (addr, handle) = watchdog(start_status_http_server(ctx.clone())).await;
+        let client = reqwest::Client::new();
+        for count in [MAX_RPC_BATCH_REQUESTS, MAX_RPC_BATCH_REQUESTS + 1] {
+            let request: Vec<_> = (0..count)
+                .map(|id| {
+                    serde_json::json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "method": "groundhog_getTransactionReceipt", "params": [test_hash()],
+                    })
+                })
+                .collect();
+            let response: serde_json::Value = watchdog(async {
+                client
+                    .post(format!("http://{addr}"))
+                    .json(&request)
+                    .send()
+                    .await
+                    .unwrap()
+                    .json()
+                    .await
+                    .unwrap()
+            })
+            .await;
+            if count == MAX_RPC_BATCH_REQUESTS {
+                let results = response.as_array().unwrap();
+                assert_eq!(results.len(), count as usize);
+                for (id, result) in results.iter().enumerate() {
+                    assert_eq!(
+                        result,
+                        &serde_json::json!({
+                            "jsonrpc": "2.0", "id": id, "result": null,
+                        })
+                    );
+                }
+            } else {
+                assert_eq!(response["error"]["code"], -32010);
+            }
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                MAX_RPC_BATCH_REQUESTS as usize
+            );
+        }
+        handle.stop().unwrap();
+        watchdog(handle.stopped()).await;
+        ctx.abort_request_workers();
+        indexer.abort();
     }
 
     #[tokio::test]
@@ -846,7 +902,7 @@ mod tests {
                 );
             }
             assert_eq!(gate.calls.load(Ordering::SeqCst), 20);
-            assert_eq!(indexer_calls.load(Ordering::SeqCst), 40);
+            assert_eq!(indexer_calls.load(Ordering::SeqCst), 20);
             assert_eq!(gate.max_active.load(Ordering::SeqCst), width);
             let snapshot = crate::health::GatewayHealthSnapshot::for_test(
                 crate::health::HealthStatus::Starting,
@@ -1081,9 +1137,8 @@ mod tests {
         ));
         poll_pending(lookup.as_mut());
         let replacement = watchdog(connect_optional_scheduler(
+            X23MultiplexConnections::default(),
             &new_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         ))
@@ -1165,7 +1220,7 @@ mod tests {
                     address: [0; 32].into(),
                     key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
                 },
-                code: DbConflictCode::kDbConflictExclusiveLock,
+                code: DbConflictCode::ExclusiveLockDenied,
             },
         }
     }
@@ -1288,40 +1343,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn indexer_recheck_covers_commit_race_and_preserves_errors() {
-        // Both a scheduler miss and a scheduler failure can race with a commit.
-        for mode in [FakeSchedulerMode::MempoolMiss, FakeSchedulerMode::RpcFail] {
-            for second in [Some(committed_result()), Some(indexer_miss()), None] {
-                let expected_commit = matches!(second, Some(TxInfoResult::TxInfoFound { .. }));
-                let expected_unknown = matches!(mode, FakeSchedulerMode::MempoolMiss)
-                    && matches!(second, Some(TxInfoResult::Default { .. }));
-                let (scheduler_addr, _scheduler) = start_fake_scheduler(mode.clone()).await;
-                let calls = Arc::new(AtomicUsize::new(0));
-                let (indexer_addr, _indexer) =
-                    start_scripted_indexer(vec![Some(indexer_miss()), second], calls.clone()).await;
-                let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
-                let result = watchdog(get_transaction_status(
-                    &ctx,
-                    RpcRequestContext::unbounded(),
-                    test_hash(),
-                ))
-                .await;
-                if expected_commit {
-                    assert!(matches!(
-                        result.unwrap(),
-                        TransactionStatus::Committed { .. }
-                    ));
-                } else if expected_unknown {
-                    assert!(matches!(result.unwrap(), TransactionStatus::Unknown));
-                } else {
-                    assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
-                }
-                assert_eq!(calls.load(Ordering::SeqCst), 2);
-            }
-        }
-    }
-
-    #[tokio::test]
     async fn expired_indexer_wait_does_not_dispatch_scheduler() {
         let gate = LookupGate::new();
         let (scheduler_addr, _scheduler) =
@@ -1340,7 +1361,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_timeout_does_not_dispatch_indexer_recheck() {
+    async fn scheduler_timeout_is_returned_after_an_indexer_miss() {
         let gate = LookupGate::new();
         let (scheduler_addr, _scheduler) =
             start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
@@ -1609,6 +1630,8 @@ mod tests {
         );
     }
 
+    /// A canceled lookup keeps its connection in service; the scheduler
+    /// generation stays valid and lookup capacity recovers.
     #[tokio::test]
     async fn canceled_lookups_preserve_scheduler_and_recover_capacity() {
         let started = Arc::new(Notify::new());

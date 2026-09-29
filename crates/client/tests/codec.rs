@@ -1,4 +1,5 @@
 use groundhog_contract_spec::ContractField;
+use groundhog_contract_spec::ContractSpecId;
 use groundhog_contract_spec::ContractSpecMethod;
 use groundhog_contract_spec::ContractSpecString;
 use groundhog_contract_spec::ContractType;
@@ -11,6 +12,18 @@ use groundhog_client::codec::*;
 
 fn spec_string(s: &str) -> ContractSpecString {
     s.try_into().unwrap()
+}
+
+/// A spec id for these fixtures: one crate, one module, so the declared name
+/// is what tells the types apart -- which is all these tests turn on. Tests
+/// that turn on identity itself live in the spec tool's canonicalizer.
+fn spec_id(declared: &str) -> ContractSpecId {
+    ContractSpecId {
+        crate_name: spec_string("counter"),
+        major: spec_string("1"),
+        module_path: spec_string("counter"),
+        declared: spec_string(declared),
+    }
 }
 
 #[test]
@@ -63,7 +76,7 @@ const COUNTER_ERROR_SELECTOR: u64 = 0xb199_47ac_b2fa_14ff;
 fn counter_error_type_defs() -> Vec<ContractTypeDef> {
     vec![ContractTypeDef::TypeDefUnion {
         union_def: ContractUnionDef {
-            name: spec_string("CounterError"),
+            name: spec_id("CounterError"),
             cases: vec![
                 ContractUnionCase {
                     name: spec_string("Underflow"),
@@ -97,7 +110,7 @@ fn throwing_spec_metadata() -> SpecMethodMetadata {
         throws: vec![groundhog_contract_spec::ContractExceptionType {
             selector: COUNTER_ERROR_SELECTOR,
             ty: ContractType::Named {
-                named: spec_string("CounterError"),
+                named: spec_id("CounterError"),
             },
         }],
     }
@@ -144,7 +157,7 @@ fn decode_abort_decodes_declared_spec_exception() {
     let bytes = encode_abort_bytes(
         COUNTER_ERROR_SELECTOR,
         ContractType::Named {
-            named: spec_string("CounterError"),
+            named: spec_id("CounterError"),
         },
         counter_error_type_defs(),
         &expected.to_string(),
@@ -192,7 +205,7 @@ fn decode_abort_reports_unknown_selector() {
     let bytes = encode_abort_bytes(
         0x1234_5678_9abc_def0,
         ContractType::Named {
-            named: spec_string("CounterError"),
+            named: spec_id("CounterError"),
         },
         counter_error_type_defs(),
         "Underflow",
@@ -215,7 +228,7 @@ fn decode_abort_reports_trailing_bytes() {
     let mut bytes = encode_abort_bytes(
         COUNTER_ERROR_SELECTOR,
         ContractType::Named {
-            named: spec_string("CounterError"),
+            named: spec_id("CounterError"),
         },
         counter_error_type_defs(),
         "Underflow",
@@ -250,4 +263,74 @@ fn decode_abort_reports_undecodable_declared_payload() {
 fn decode_abort_reports_unreadable_selector() {
     let err = decode_abort(&[], None).expect_err("bug: empty abort buffer must be reported");
     assert!(err.to_string().contains("selector"), "{err}");
+}
+
+#[test]
+fn strkey_contract_arguments_match_hex_and_reject_wrong_type() {
+    let hex_address = format!("0x{}", "42".repeat(32));
+    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let metadata = CallMetadata::Local(ContractMetadata {
+        interface_name: "test".into(),
+        version: "1".into(),
+        source: std::path::PathBuf::default(),
+        method: MethodMetadata {
+            arg_types: vec!["ContractAddress".into()],
+            return_type: None,
+        },
+    });
+    assert_eq!(
+        encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+        encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
+    );
+    assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
+}
+
+#[test]
+fn strkey_public_key_arguments_match_hex_and_reject_wrong_type() {
+    let hex_address = format!("0x{}", "42".repeat(32));
+    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let metadata = CallMetadata::Local(ContractMetadata {
+        interface_name: "test".into(),
+        version: "1".into(),
+        source: std::path::PathBuf::default(),
+        method: MethodMetadata {
+            arg_types: vec!["Ed25519PublicKey".into()],
+            return_type: None,
+        },
+    });
+    assert_eq!(
+        encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+        encode_args(std::slice::from_ref(&public_key_strkey), Some(&metadata)).unwrap()
+    );
+    assert!(encode_args(&[contract_strkey], Some(&metadata)).is_err());
+}
+
+#[test]
+fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
+    let hex_address = format!("0x{}", "42".repeat(32));
+    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let metadata = CallMetadata::Spec(SpecMethodMetadata {
+        interface_name: "test".into(),
+        version: "1".into(),
+        method: ContractSpecMethod {
+            name: spec_string("send"),
+            args: vec![ContractField {
+                name: spec_string("to"),
+                ty: ContractType::Address,
+            }]
+            .try_into()
+            .unwrap(),
+            return_type: ContractType::Void,
+        },
+        type_defs: vec![],
+        throws: vec![],
+    });
+    assert_eq!(
+        encode_args(std::slice::from_ref(&hex_address), Some(&metadata)).unwrap(),
+        encode_args(std::slice::from_ref(&contract_strkey), Some(&metadata)).unwrap()
+    );
+    assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
 }

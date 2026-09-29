@@ -58,7 +58,16 @@ fn terminal_output(command: Command, columns: u16) -> Output {
     terminal_capture(command, columns, false)
 }
 
-fn terminal_capture(mut command: Command, columns: u16, status: bool) -> Output {
+fn terminal_capture(command: Command, columns: u16, status: bool) -> Output {
+    terminal_capture_with_input(command, columns, status, None)
+}
+
+fn terminal_capture_with_input(
+    mut command: Command,
+    columns: u16,
+    status: bool,
+    input: Option<&[u8]>,
+) -> Output {
     let mut master = -1;
     let mut slave = -1;
     let size = libc::winsize {
@@ -84,7 +93,11 @@ fn terminal_capture(mut command: Command, columns: u16, status: bool) -> Output 
     let mut master = unsafe { fs::File::from_raw_fd(master) };
     let slave = unsafe { fs::File::from_raw_fd(slave) };
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if status {
@@ -92,7 +105,11 @@ fn terminal_capture(mut command: Command, columns: u16, status: bool) -> Output 
     } else {
         command.stdout(slave);
     }
-    let child = command.spawn().unwrap();
+    let mut child = command.spawn().unwrap();
+    if let Some(input) = input {
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(input).unwrap();
+    }
     drop(command);
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -115,6 +132,35 @@ fn terminal_capture(mut command: Command, columns: u16, status: bool) -> Output 
         output.stdout = reader.join().unwrap();
     }
     output
+}
+
+#[test]
+fn key_import_shows_only_public_results_in_all_output_modes() {
+    let fixture = Fixture::new();
+    let seed = format!("0x{}\n", "11".repeat(32));
+    for (name, flags) in [
+        ("imported", vec![]),
+        ("plain", vec!["--non-interactive"]),
+        ("structured", vec!["--json"]),
+    ] {
+        let mut command = fixture.command(&["keys", "import", name]);
+        command.args(&flags);
+        let output = terminal_capture_with_input(command, 80, true, Some(seed.as_bytes()));
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(seed.trim()));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(seed.trim()));
+        if flags.is_empty() {
+            assert!(output.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&output.stderr).contains('╭'));
+        } else if flags == ["--json"] {
+            assert!(output.stderr.is_empty());
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["data"]["key"]["name"], name);
+        } else {
+            assert!(output.stdout.is_empty());
+            assert!(!output.stderr.contains(&0x1b));
+        }
+    }
 }
 
 #[test]

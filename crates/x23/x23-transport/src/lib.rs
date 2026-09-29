@@ -1,10 +1,15 @@
 //! Shared x23 RPC transport helpers.
 //!
 //! Both the production gateway and the local node supervisor connect to
-//! hogd-side x23 services using `rpc_driver::FixedSerialPool` and a
+//! hogd-side x23 services using an `rpc_driver` connection pool and a
 //! codegen client crate. This crate hoists the small amount of
-//! plumbing — pool construction, address parsing, typed startup
-//! errors — into one place so consumers do not copy it.
+//! plumbing (pool construction, address parsing, typed startup errors)
+//! into one place so consumers do not copy it.
+//!
+//! [`PoolKind`] picks the pool shape: the serial pool every `connect*`
+//! function below builds, or the multiplexed pool [`connect_pool`] and
+//! [`try_connect_pool`] build on request.
+//!
 //! It is an internal workspace boundary and follows the Groundhog workspace
 //! release rather than maintaining an independent public API contract.
 //!
@@ -27,7 +32,8 @@
 use std::{sync::Arc, time::Duration};
 
 use rpc_driver::{
-    CanceledCallPolicy, ConnectionConfig, FixedSerialPool, RpcError, RpcSender, ServiceMap,
+    CanceledCallPolicy, ConnectionConfig, FixedSerialPool, MultiplexPool, RpcError, RpcSender,
+    ServiceMap,
 };
 
 /// Maximum RPC message accepted from trusted hogd data-plane endpoints.
@@ -43,6 +49,28 @@ pub const HOGD_LARGE_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
 /// trusted hogd endpoint.
 pub fn hogd_large_message_config() -> ConnectionConfig {
     ConnectionConfig::new(Some(HOGD_LARGE_MESSAGE_SIZE), ServiceMap::new())
+}
+
+/// Bytes a multiplexed connection may hold unsent before it refuses new
+/// calls, so a peer that stops draining its socket costs bounded memory.
+/// Twice the largest message the gateway sends, so one such call still fits.
+pub const MULTIPLEX_OUTPUT_BACKLOG_BYTES: usize = 2 * HOGD_LARGE_MESSAGE_SIZE as usize;
+
+/// Which `rpc_driver` pool a backend uses, and what a canceled call means
+/// to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolKind {
+    /// `FixedSerialPool`: one call in flight per connection, so the
+    /// connection count is the execution width; `canceled_call_policy`
+    /// decides what a canceled call does to its connection.
+    Serial {
+        canceled_call_policy: CanceledCallPolicy,
+    },
+    /// `MultiplexPool`: any number of calls in flight per connection, each
+    /// routed to the least-loaded one. A canceled call's request may still
+    /// run at the peer, whose late reply is discarded. A connection refuses
+    /// new calls once [`MULTIPLEX_OUTPUT_BACKLOG_BYTES`] are unsent.
+    Multiplex,
 }
 
 /// Errors from establishing an x23 connection pool.
@@ -150,25 +178,66 @@ pub async fn connect_with_config_and_canceled_call_policy<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
+    connect_pool(
+        service,
+        addr,
+        PoolKind::Serial {
+            canceled_call_policy,
+        },
+        pool_size,
+        connection_config,
+        build,
+    )
+    .await
+}
+
+/// Establish a pool of `kind` over `connections` connections and construct
+/// the typed client. Fails hard on any error.
+pub async fn connect_pool<C, F>(
+    service: &'static str,
+    addr: &str,
+    kind: PoolKind,
+    connections: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+) -> Result<C, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
     let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| ConnectError::BadAddress {
         addr: addr.to_string(),
         source: e,
     })?;
-    let pool: Arc<dyn RpcSender> = Arc::new(
-        FixedSerialPool::connect_with_config_and_canceled_call_policy(
-            &socket_addr,
-            pool_size,
-            connection_config,
+    let connect_failed = |source| ConnectError::ConnectFailed {
+        service,
+        addr: addr.to_string(),
+        source,
+    };
+    let pool: Arc<dyn RpcSender> = match kind {
+        PoolKind::Serial {
             canceled_call_policy,
-        )
-        .await
-        .map_err(|e| ConnectError::ConnectFailed {
-            service,
-            addr: addr.to_string(),
-            source: e,
-        })?,
-    );
-    tracing::info!(addr, service, "connected");
+        } => Arc::new(
+            FixedSerialPool::connect_with_config_and_canceled_call_policy(
+                &socket_addr,
+                connections,
+                connection_config,
+                canceled_call_policy,
+            )
+            .await
+            .map_err(connect_failed)?,
+        ),
+        PoolKind::Multiplex => Arc::new(
+            MultiplexPool::connect_with_config(
+                &socket_addr,
+                connections,
+                connection_config
+                    .with_output_admission_threshold_bytes(Some(MULTIPLEX_OUTPUT_BACKLOG_BYTES)),
+            )
+            .await
+            .map_err(connect_failed)?,
+        ),
+    };
+    tracing::info!(addr, service, pool = ?kind, connections, "connected");
     Ok(build(pool))
 }
 
@@ -252,16 +321,32 @@ pub async fn try_connect_with_config_and_canceled_call_policy<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
-    match connect_with_config_and_canceled_call_policy(
+    try_connect_pool(
         service,
         addr,
+        PoolKind::Serial {
+            canceled_call_policy,
+        },
         pool_size,
         connection_config,
-        canceled_call_policy,
         build,
     )
     .await
-    {
+}
+
+/// Like [`connect_pool`], but tolerates only explicit connection failures.
+pub async fn try_connect_pool<C, F>(
+    service: &'static str,
+    addr: &str,
+    kind: PoolKind,
+    connections: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+) -> Result<Option<C>, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    match connect_pool(service, addr, kind, connections, connection_config, build).await {
         Ok(client) => Ok(Some(client)),
         Err(
             error @ ConnectError::ConnectFailed {

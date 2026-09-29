@@ -30,6 +30,7 @@ pub struct Print {
     compact_build: bool,
     diagnostics: std::sync::Arc<std::sync::Mutex<Vec<diagnostic::Diagnostic>>>,
     group: Option<std::sync::Arc<std::sync::Mutex<group::Content>>>,
+    non_interactive: bool,
 }
 
 impl Print {
@@ -53,6 +54,7 @@ impl Print {
             compact_build: false,
             diagnostics: std::sync::Arc::default(),
             group: None,
+            non_interactive: false,
         }
     }
 
@@ -68,7 +70,20 @@ impl Print {
             compact_build: false,
             diagnostics: std::sync::Arc::default(),
             group: None,
+            non_interactive: false,
         }
+    }
+
+    /// Disable interactive input and terminal rendering without suppressing text.
+    #[must_use]
+    pub fn with_non_interactive(mut self, non_interactive: bool) -> Self {
+        self.non_interactive = non_interactive;
+        self
+    }
+
+    /// Whether the caller explicitly disabled interactive terminal features.
+    pub fn is_non_interactive(&self) -> bool {
+        self.non_interactive
     }
 
     /// Enable or disable tracing of subprocess invocations to stderr.
@@ -90,7 +105,8 @@ impl Print {
     }
 
     fn output_policy(&self) -> policy::Policy {
-        let mut policy = policy::Policy::stderr(self.no_ui || self.quiet || self.json);
+        let mut policy =
+            policy::Policy::stderr(self.no_ui || self.non_interactive || self.quiet || self.json);
         // The live viewport inserts safe plain diagnostic text; final reports are
         // rendered with the parent's full theme after the worker has finished.
         if self.is_live() {
@@ -114,7 +130,9 @@ impl Print {
 
     /// Per-record append-only writer for background service tracing.
     pub(crate) fn log_writer(&self) -> log::Writer {
-        log::Writer::new(policy::Policy::stderr(self.no_ui || self.json))
+        log::Writer::new(policy::Policy::stderr(
+            self.no_ui || self.non_interactive || self.json,
+        ))
     }
 
     fn emit_human(&self, line: &str) {
@@ -166,14 +184,14 @@ impl Print {
         self.json
     }
 
-    /// Returns whether quiet (non-interactive) mode is active.
+    /// Returns whether ordinary status output is suppressed.
     pub fn is_quiet(&self) -> bool {
         self.quiet
     }
 
     /// Returns whether this invocation may safely read an interactive answer.
     pub fn can_prompt(&self) -> bool {
-        self.output_allows_prompt()
+        self.allows_interaction()
             && terminals_allow_prompt(io::stdin().is_terminal(), io::stderr().is_terminal())
     }
 
@@ -203,39 +221,42 @@ impl Print {
         }
 
         let message = terminal_safe(&message.to_string());
-        self.prompt(format_args!("{message} [y/N] "))?;
-        let mut answer = String::new();
-        io::stdin().read_line(&mut answer)?;
+        let answer = self.read_line(format_args!("{message} [y/N] "))?;
         Ok(confirmation_answer(&answer))
     }
 
-    /// Ask an optional wizard question, using its default in quiet mode.
+    /// Ask an optional wizard question when interactive input is available.
     pub fn ask(
         &self,
         message: impl std::fmt::Display,
         default_yes: bool,
     ) -> Result<bool, CliError> {
-        if self.quiet {
-            return Ok(default_yes);
-        }
         if !self.can_prompt() {
             return Ok(false);
         }
 
         let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
-        self.prompt(format_args!("{message} {suffix} "))?;
-        let mut answer = String::new();
-        let bytes_read = io::stdin().read_line(&mut answer)?;
-        Ok(wizard_answer(&answer, default_yes, bytes_read != 0))
+        let answer = self.read_line(format_args!("{message} {suffix} "))?;
+        Ok(wizard_answer(&answer, default_yes, !answer.is_empty()))
     }
 
-    fn output_allows_prompt(&self) -> bool {
-        !self.quiet && !self.json
+    fn allows_interaction(&self) -> bool {
+        !self.quiet && !self.json && !self.non_interactive
     }
 
     /// Whether stderr supports the shared human layout, including monochrome terminals.
     pub(crate) fn has_human_ui(&self) -> bool {
         self.output_policy().width.is_some()
+    }
+
+    /// Whether stderr supports colored human output under the active mode.
+    pub fn is_human_tty(&self) -> bool {
+        self.output_policy().color
+    }
+
+    /// Whether stdout supports colored human data under the active mode.
+    pub fn is_human_stdout_tty(&self) -> bool {
+        policy::Policy::stdout(self.no_ui || self.non_interactive || self.quiet || self.json).color
     }
 
     /// Trace a subprocess invocation to stderr when command tracing is on.
@@ -338,6 +359,23 @@ impl Print {
         self.write_report(output);
     }
 
+    /// Render a typed outcome with findings and their hints below the card.
+    pub(crate) fn outcome_findings(
+        &self,
+        outcome: Outcome,
+        title: &str,
+        items: &[(String, String)],
+        findings: &[crate::checks::Finding],
+    ) {
+        if self.quiet || self.json {
+            return;
+        }
+        let mut output = report::Report::new(self.output_policy());
+        output.outcome_card(outcome, title, items);
+        output.findings(findings.iter());
+        self.write_report(output);
+    }
+
     /// Render records as a responsive table, or stacked cards on narrow terminals.
     /// Missing cells are empty; extra cells receive numbered column labels.
     pub fn summary_table(&self, title: &str, headers: &[String], rows: &[Vec<String>]) {
@@ -405,7 +443,7 @@ impl Print {
         if self.json {
             return Ok(());
         }
-        let policy = policy::Policy::stdout(self.no_ui || self.quiet);
+        let policy = policy::Policy::stdout(self.no_ui || self.non_interactive || self.quiet);
         let mut stdout = io::stdout().lock();
         if policy.width.is_none() {
             for line in plain_rows {
@@ -485,9 +523,9 @@ impl Print {
         }
     }
 
-    /// Prompt the user for input — always printed
-    /// regardless of --quiet.
+    /// Write a prompt only when interactive input is available.
     pub fn prompt(&self, msg: impl std::fmt::Display) -> Result<(), CliError> {
+        self.require_interactive_input()?;
         let mut report = report::Report::new(self.output_policy());
         report.prompt(&msg.to_string());
         let lines = report.into_lines();
@@ -500,6 +538,28 @@ impl Print {
         }
         stderr.flush()?;
         Ok(())
+    }
+
+    fn require_interactive_input(&self) -> Result<(), CliError> {
+        if self.can_prompt() {
+            Ok(())
+        } else {
+            Err(CliError::InteractiveInputRequired)
+        }
+    }
+
+    /// Ask for a line of terminal input under the shared interaction policy.
+    pub fn read_line(&self, message: impl std::fmt::Display) -> Result<String, CliError> {
+        self.prompt(message)?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        Ok(answer)
+    }
+
+    /// Read hidden terminal input under the same policy as ordinary prompts.
+    pub fn read_secret(&self, message: &str) -> Result<zeroize::Zeroizing<String>, CliError> {
+        self.prompt(message)?;
+        Ok(zeroize::Zeroizing::new(rpassword::read_password()?))
     }
 
     /// Write a structured success payload to stdout when
@@ -657,9 +717,9 @@ mod tests {
 
     #[test]
     fn prompts_require_human_mode_and_terminal_input_and_output() {
-        assert!(Print::new(false, false).output_allows_prompt());
-        assert!(!Print::quiet().output_allows_prompt());
-        assert!(!Print::new(false, true).output_allows_prompt());
+        assert!(Print::new(false, false).allows_interaction());
+        assert!(!Print::quiet().allows_interaction());
+        assert!(!Print::new(false, true).allows_interaction());
         assert!(terminals_allow_prompt(true, true));
         assert!(!terminals_allow_prompt(false, true));
         assert!(!terminals_allow_prompt(true, false));
@@ -682,10 +742,34 @@ mod tests {
     }
 
     #[test]
-    fn quiet_wizard_questions_use_their_default() {
+    fn non_interactive_policy_never_prompts_or_grants_consent() {
+        let print = Print::new(false, false).with_non_interactive(true);
+        assert!(!print.is_quiet());
+        assert!(!print.is_json());
+        assert!(!print.can_prompt());
+        assert!(!print.is_human_tty());
+        assert!(!print.is_human_stdout_tty());
+        assert!(!print.ask("Create key?", true).unwrap());
+        assert!(matches!(
+            print.confirm(false, "test", "Confirm?"),
+            Err(crate::CliError::ConfirmationRequired { .. })
+        ));
+        assert!(print.confirm(true, "test", "Confirm?").unwrap());
+        assert!(matches!(
+            print.read_line("Input: "),
+            Err(crate::CliError::InteractiveInputRequired)
+        ));
+        assert!(matches!(
+            print.read_secret("Secret: "),
+            Err(crate::CliError::InteractiveInputRequired)
+        ));
+    }
+
+    #[test]
+    fn quiet_wizard_questions_do_not_authorize_actions() {
         let print = Print::quiet();
 
-        assert!(print.ask("Create key?", true).unwrap());
+        assert!(!print.ask("Create key?", true).unwrap());
         assert!(!print.ask("Create project?", false).unwrap());
     }
 }

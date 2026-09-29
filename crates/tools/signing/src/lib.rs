@@ -8,9 +8,11 @@ pub mod dev_wallet;
 pub mod encode;
 pub mod error;
 pub mod hash;
+pub mod hog;
 pub mod indices;
 pub mod local;
 pub mod signer;
+pub mod strkey;
 
 pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 pub use build::{
@@ -34,6 +36,7 @@ pub use dev_wallet::{
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
 pub use hash::transaction_hash;
+pub use hog::{ParseHogAmountError, parse_hog_amount};
 pub use indices::{AuthClaimIndex, PublicKeyId};
 pub use local::LocalSigner;
 pub use signer::Signer;

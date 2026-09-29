@@ -138,9 +138,8 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     #[hint(
-        "add the profile to project or global config, or switch to \
-         an existing one with `--profile` or \
-         `GROUNDHOG_PROFILE`"
+        "create it with `groundhog config new {0} --network <NETWORK>`, or switch to \
+         an existing one with `--profile` or `GROUNDHOG_PROFILE`"
     )]
     ProfileNotFound(String),
     #[error("profile `{profile}` not found in {scope} config")]
@@ -235,9 +234,13 @@ pub enum CliError {
     #[error("contract spec finalization failed: {0}")]
     #[hint(
         "check that your contract uses `#[contract]` and \
-         `#[contracttype]` attributes correctly"
+         `#[contract_type]` attributes correctly"
     )]
     SpecFailed(String),
+    /// TypeScript codegen cannot express the spec. The contract itself builds;
+    /// the message names the declarations involved and how to rename them.
+    #[error("cannot generate TypeScript bindings: {0}")]
+    TsBindingsFailed(String),
     /// The contract's raw spec wire format is one this build cannot read.
     ///
     /// Surfaced verbatim rather than reworded: the inner error names both
@@ -267,6 +270,14 @@ pub enum CliError {
     )]
     #[hint(text = KEY_NAME_HINT)]
     KeyNameInvalid,
+    #[error("expected an S StrKey or 32-byte hex Ed25519 seed on stdin")]
+    #[hint(
+        "provide one private seed through stdin or the hidden prompt; never pass it as a command argument"
+    )]
+    InvalidSecretSeed,
+    #[error("dev-N key names are reserved for local bootstrap identities")]
+    #[hint("choose a name other than dev-N for an imported key")]
+    ReservedDevKeyName,
     #[error("`--json` is not supported for `{0}`")]
     #[hint("run `groundhog {0}` without `--json`")]
     JsonUnsupported(&'static str),
@@ -359,7 +370,10 @@ pub enum CliError {
     #[hint("check the standard proxy environment variables, then retry")]
     HttpClientInit,
     #[error("no rpc_url configured for the selected profile")]
-    #[hint("set `rpc_url` in the selected profile in project or global config")]
+    #[hint(
+        "for a local profile, start `groundhog node` in another terminal; otherwise run \
+         `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`"
+    )]
     MissingRpcUrl,
     #[error("profile `{profile}` {message}")]
     #[hint(
@@ -367,8 +381,11 @@ pub enum CliError {
          matches the requested command"
     )]
     ProfileConfigInvalid { profile: String, message: String },
-    #[error("confirmation required to {action}")]
-    #[hint("review the warning and rerun with `--force` to confirm non-interactively")]
+    #[error("interactive input is unavailable")]
+    #[hint("provide the required input explicitly; for key import, pipe the seed on stdin")]
+    InteractiveInputRequired,
+    #[error("cannot confirm the request to {action}: no interactive terminal is available")]
+    #[hint("rerun from an interactive terminal, or pass `--force` to proceed without a prompt")]
     #[details(expr = Some(json!({ "action": action, "requiredFlag": "--force" })))]
     ConfirmationRequired { action: &'static str },
     #[error(
@@ -398,15 +415,15 @@ pub enum CliError {
     #[error("cannot determine the network hash for this profile")]
     #[hint(
         "signing binds each transaction to a network: run `groundhog config set \
-         network-hash <hash>` for this profile, or point it at a runtime manifest \
-         from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
+         network-hash <hash> --profile <name>`, or point the profile at a runtime \
+         manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
          profile.<name>.runtime_manifest"
     )]
     MissingNetworkHash,
     #[error("profile network_hash {value:?} is not 64 lowercase hexadecimal digits")]
     #[hint(
-        "network_hash is the unprefixed 32-byte network hash: 64 lowercase \
-         hexadecimal digits, as `groundhog node` writes it into the runtime manifest"
+        "network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, \
+         optionally 0x-prefixed, as `groundhog_networkInfo` reports it"
     )]
     InvalidNetworkHash { value: String },
     #[error("invalid HOG amount `{input}`: {message}")]
@@ -538,6 +555,18 @@ pub enum CliError {
     #[error("failed to initialize async runtime: {0}")]
     #[code("runtime_init_failed")]
     RuntimeInit(String),
+    #[error(
+        "wallet {wallet} has {} HOG, below the {} HOG required by this call's gas limit",
+        crate::hog::format_amount(*available_raw),
+        crate::hog::format_amount(u128::from(*required_raw))
+    )]
+    #[hint("add HOG to the wallet or lower `--gas-limit` if the contract needs less gas")]
+    #[details(wallet, available_raw, required_raw)]
+    CallGasBalanceInsufficient {
+        wallet: String,
+        available_raw: u128,
+        required_raw: u64,
+    },
     #[error("{method} failed: {message}")]
     #[hint("check the RPC endpoint and node logs for details")]
     RpcMethodFailed {
@@ -1022,162 +1051,5 @@ impl From<groundhog_client::codec::Error> for CliError {
             Error::CallDecode { path, message } => Self::CallDecode { path, message },
             Error::Other(message) => Self::Other(message),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use groundhog_rv32_lower::LowerError;
-
-    fn hint(error: &CliError) -> String {
-        error.hint().expect("hint expected").into_owned()
-    }
-
-    #[test]
-    fn rv32_lower_data_too_large_hints_at_stack_size_and_memory_size() {
-        let error = CliError::Rv32LowerFailed(LowerError::DataTooLarge {
-            section: ".bss".to_string(),
-            end: 70168,
-            max: 65536,
-        });
-        let hint = hint(&error);
-        assert!(hint.contains("--stack-size"));
-        assert!(hint.contains("initial_memory_bytes"));
-    }
-
-    #[test]
-    fn pre_submission_rejections_hint_at_the_violated_bound() {
-        let code = CliError::TransactionRejectedBeforeSubmission {
-            detail: TxInvalidDetail::Rv32CodeTooLarge {
-                index: 0,
-                code_bytes: 70_000,
-                max_bytes: 65_536,
-            },
-        };
-        assert!(hint(&code).contains("reduce code size"));
-        assert_eq!(code.code(), "transaction_rejected_before_submission");
-        assert_eq!(
-            code.details_json().expect("details expected")["reason"],
-            "rv32CodeTooLarge"
-        );
-
-        let memory = CliError::TransactionRejectedBeforeSubmission {
-            detail: TxInvalidDetail::Rv32MemoryTooLarge {
-                index: 0,
-                memory_bytes: 131_072,
-                max_bytes: 65_536,
-            },
-        };
-        assert!(hint(&memory).contains("initial_memory_bytes"));
-
-        let count = CliError::TransactionRejectedBeforeSubmission {
-            detail: TxInvalidDetail::TooManyContracts {
-                attached: 5,
-                max: 4,
-            },
-        };
-        assert!(hint(&count).contains("resubmit"));
-        assert!(
-            count
-                .to_string()
-                .contains("transaction attaches 5 contracts; chain permits 4")
-        );
-    }
-
-    #[test]
-    fn package_metadata_invalid_names_the_key_and_package() {
-        let error = CliError::PackageMetadataInvalid {
-            package: "my-counter".to_string(),
-            key: "initial_memory_bytes",
-            message: "0 is not a positive byte count".to_string(),
-        };
-        assert_eq!(error.code(), "package_metadata_invalid");
-        assert!(error.to_string().contains(
-            "`[package.metadata.groundhog] initial_memory_bytes` in package `my-counter`"
-        ));
-        assert!(hint(&error).contains("128K"));
-        assert_eq!(
-            error.details_json().expect("details expected")["key"],
-            "initial_memory_bytes"
-        );
-    }
-
-    #[test]
-    fn rv32_lower_invalid_keeps_the_malformed_elf_hint() {
-        let error = CliError::Rv32LowerFailed(LowerError::Invalid(
-            ".text must start at vaddr 0, got 4".to_string(),
-        ));
-        assert!(hint(&error).contains("malformed"));
-    }
-
-    #[test]
-    fn rv32_lower_verify_hints_at_reporting_a_bug() {
-        let error =
-            CliError::Rv32LowerFailed(LowerError::Verify("code digest mismatch".to_string()));
-        assert!(hint(&error).contains("bug"));
-    }
-
-    #[test]
-    fn node_supervisor_errors_hint_at_the_contract_artifact_directory_override() {
-        let error =
-            CliError::NodeSupervisor("hog-devnode exited before emitting readiness".to_string());
-
-        assert!(hint(&error).contains("--contract-artifacts-dir"));
-    }
-
-    #[test]
-    fn rv32_lower_failed_details_json_keeps_the_message_field() {
-        let inner = LowerError::DataTooLarge {
-            section: ".data".to_string(),
-            end: 65540,
-            max: 65536,
-        };
-        let message = inner.to_string();
-        let details = CliError::Rv32LowerFailed(inner)
-            .details_json()
-            .expect("details expected");
-        assert_eq!(details["message"], message);
-    }
-
-    #[test]
-    fn generated_command_hints_quote_dynamic_arguments() {
-        let error = CliError::SavedWalletMissing {
-            key_name: "-alice;echo bad\n".into(),
-            profile: "-dev&net\u{202e}".into(),
-        };
-        let rendered = error.to_string();
-        assert!(!rendered.contains('\n'));
-        assert!(!rendered.contains('\u{202e}'));
-        assert_eq!(
-            hint(&error),
-            r"run `groundhog wallet create --key='-alice;echo bad\n' --profile='-dev&net\u{202e}'` before using this stored key"
-        );
-
-        let error = CliError::NodeSupervisorProtocolIntroRejected {
-            message: "rejected".into(),
-            expected_protocol: Some("hogp/test;echo bad".into()),
-        };
-        assert_eq!(
-            hint(&error),
-            "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild groundhog node against a matching groundhog-xdr"
-        );
-    }
-
-    #[test]
-    fn faucet_service_error_preserves_machine_readable_response_fields() {
-        let error = CliError::FaucetService {
-            url: "https://faucet.example/v1/airdrop".into(),
-            http_status: 429,
-            service_code: "airdrop_recipient_cooldown".into(),
-            message: "recipient is cooling down".into(),
-            retry_after_seconds: Some(42),
-        };
-        let details = error.details_json().expect("bug: details should exist");
-
-        assert_eq!(error.code(), "faucet_service_error");
-        assert_eq!(details["httpStatus"], 429);
-        assert_eq!(details["code"], "airdrop_recipient_cooldown");
-        assert_eq!(details["retryAfterSeconds"], 42);
     }
 }

@@ -220,6 +220,7 @@
     },
     "schemas": {
       "AddressTransactionQuery": {
+        "additionalProperties": false,
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
         "properties": {
           "address": {
@@ -336,6 +337,7 @@
         ]
       },
       "AirdropRequest": {
+        "additionalProperties": false,
         "description": "Public parameters for `groundhog_requestAirdrop`.",
         "properties": {
           "clientNonce": {
@@ -380,6 +382,7 @@
         "description": "Where to begin iteration on the initial call.",
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atBeginning",
@@ -392,6 +395,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atEnd",
@@ -404,6 +408,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "height": {
                 "$ref": "#/components/schemas/BlockHeight"
@@ -556,6 +561,11 @@
             "type": "string"
           },
           {
+            "const": "insufficientFunds",
+            "description": "The native HOG balance at the diagnostic's address cannot cover the\ndebits in this block, or a newly created balance item cannot cover\nits own storage cost. Storage written under a contract's address is\ncharged to that contract's balance, so a deployment reports this at\nthe new contract's address when it holds no HOG.",
+            "type": "string"
+          },
+          {
             "const": "other",
             "description": "Unrecognized conflict code. Check for gateway updates.",
             "type": "string"
@@ -591,6 +601,7 @@
           "$ref": "#/components/schemas/Hex0x_ContractAddress"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
       },
       "EmittedEvent": {
@@ -620,6 +631,7 @@
         "type": "object"
       },
       "EventFilter": {
+        "additionalProperties": false,
         "description": "A single event-filter predicate: events must be emitted by one of\n`contractAddresses` AND match the topic constraints. Required\nnon-empty `contractAddresses` — the indexer has no topic-indexed\ncolumn family and can't efficiently serve \"any contract\" scans.\n(When such an index is added, the gateway relaxes the non-empty\ncheck; the wire contract stays the same.)",
         "properties": {
           "contractAddresses": {
@@ -641,6 +653,7 @@
           "$ref": "#/components/schemas/EventFilter"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
       },
       "EventPage": {
@@ -675,6 +688,7 @@
         "type": "object"
       },
       "EventQuery": {
+        "additionalProperties": false,
         "description": "`getEvents` request. A candidate event matches the query iff it\nmatches at least one `EventFilter` in `filters` (OR across filters,\nAND within each filter).",
         "properties": {
           "anchor": {
@@ -685,7 +699,8 @@
             "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
           },
           "filters": {
-            "$ref": "#/components/schemas/EventFilterList"
+            "$ref": "#/components/schemas/EventFilterList",
+            "description": "At least one filter is required. Empty lists are not all-contract scans."
           },
           "limit": {
             "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
@@ -707,6 +722,7 @@
         "type": "object"
       },
       "EventTopicFilter": {
+        "additionalProperties": false,
         "description": "Positional topic filter. For each topic position (0, 1, 2):\n  - An empty list means \"match anything at this position.\"\n  - A non-empty list means \"match if the event's topic at this\n    position is in this list.\" OR within a position, AND across\n    positions.\n\nPartial match: a filter that specifies only topic0 matches events\nwith more topics. Extra topics on the event past the filter's\nspecified positions are ignored. (This is the ethereum getLogs /\nstellar-rpc post-#358 semantics.)",
         "properties": {
           "topic0": {
@@ -1468,6 +1484,7 @@
         "type": "object"
       },
       "ViewRequest": {
+        "additionalProperties": false,
         "description": "Request for sandboxed contract simulation against the latest committed state.",
         "properties": {
           "calldata": {
@@ -1531,7 +1548,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.3.0"
+    "version": "7.0.0"
   },
   "methods": [
     {
@@ -1669,7 +1686,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check (mempool -> indexer -> unknown). `unknown` is only returned after both the mempool and the indexer answered without a match; if the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. The indexer is asked first, so `committed` wins; a mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown` is returned only after both backends answered without a match. If the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
       "tags": [
         {
           "name": "Core API"
@@ -2041,7 +2058,7 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against committed state.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against.",
       "tags": [
         {
           "name": "Core API"

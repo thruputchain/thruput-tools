@@ -346,8 +346,8 @@ waiters when all execution slots are occupied. `scheduler_lookup_pool_size`
 (`--scheduler-lookup-pool-size`) configures execution width from 1 to 68 without
 changing total admission. Queueing,
 execution, and indexer fallback share one absolute backend deadline. A lookup
-deadline or cancellation releases permits and replaces only its active lookup
-connection, without invalidating the scheduler's normal submit/tip lane. Actual
+deadline or cancellation releases permits and leaves its connection in
+service, without invalidating the scheduler's normal submit/tip lane. Actual
 RPC failures invalidate only the matching scheduler generation. This finite
 backend bound is independent of the default JSON-RPC array concurrency of 128:
 a sufficiently contended array can intentionally receive per-entry `Overloaded`
@@ -384,13 +384,18 @@ do not hide abandoned queue waits. No transaction hash is used as a metric label
 immediately without occupying the scheduler lookup lane. Otherwise it checks
 the scheduler: a mempool hit returns `Pending`, including when the indexer is
 unavailable or holds an advisory failure from an earlier attempt. Without a
-mempool hit, a recent-failure diagnostic is returned. An initial indexer miss
-is checked again after the scheduler lookup to cover a commit between the
-reads; only successful misses from both backends can produce `Unknown`.
+mempool hit, a recent-failure diagnostic is returned. Only successful misses
+from both backends produce `Unknown`. A transaction that commits between the
+two reads is reported `Unknown` once; the client's next call sees it.
+That sequence is `groundhog_hogd_backend::status::transaction_status`, shared
+with `groundhog node`: each binary supplies its two raw lookups through the
+`StatusProbe` trait, so the gateway keeps its admission lane, deadline, and
+metrics inside those lookups and the two binaries cannot order the probe
+differently.
 
-Committed reads use one backend RPC. Pending reads normally use two, and
-unknown reads use three. All stages share one deadline, so a slow indexer can
-consume the budget before a pending lookup is dispatched.
+Committed reads use one backend RPC; pending and unknown reads use two. Both
+stages share one deadline, so a slow indexer can consume the budget before a
+pending lookup is dispatched.
 
 `RecentFailure` is best-effort and advisory: the indexer caches
 proposal-time two-phase-commit failure diagnostics for a few blocks,
@@ -414,6 +419,31 @@ in the indexer" — only produced when both backends answered.
 
 A scheduler timeout, unavailability, or overload never turns an indexer miss
 into `Unknown`.
+
+
+### x23 data pools
+
+Every x23 data pool is an `rpc_driver::MultiplexPool` built through
+`x23-transport`: many calls in flight per connection, each routed to the
+connection with the fewest outstanding. Every data pool opens
+`x23_multiplex_connections` (`--x23-multiplex-connections`, default 4)
+sockets, and the transport imposes no cap of its own on calls in flight: the
+batchers' in-flight caps and the 68-call lookup admission bound with its
+`scheduler_lookup_pool_size` execution permits shape load, and inbound
+request concurrency bounds the rest. Roughly one connection per worker the
+backend serves with is the useful range; each connection's read loop is one
+task, so more sockets do not add throughput.
+
+Health probes use one serial `FixedSerialPool` connection, which a canceled
+probe poisons. A canceled data call frees its place at once; its request may
+still run at the backend, whose late reply is discarded, and the connection
+stays in service. A connection refuses new calls once it holds
+`MULTIPLEX_OUTPUT_BACKLOG_BYTES` (128 MiB) unsent, so a backend that stops
+draining its socket costs bounded memory and fails calls fast rather than
+queuing them. A submit timeout invalidates the scheduler generation, which
+drops all of that generation's pools, and the health loop rebuilds them
+behind the readiness grace. A lookup timeout aborts only that lookup's worker
+and leaves the generation alone.
 
 ---
 

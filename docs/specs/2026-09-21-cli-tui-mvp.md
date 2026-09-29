@@ -202,7 +202,8 @@ their own TTY/color/prompt decisions.
 | `--quiet` | Existing command-specific suppression/data/error behaviour. No spinner; do not hide data or warnings that currently remain visible. |
 | Redirected/non-TTY or `TERM=dumb` | Shared plain append-only presentation for human diagnostics; preserve raw data channels. |
 | `NO_COLOR` | Shared monochrome components; independent from whether cursor-based rendering is supported. |
-| Proposed global `--no-ui` | Shared plain append-only output with no boxes, animation, cursor control, or raw-mode widgets; current line prompts still follow their existing rules. |
+| Global `--no-ui` | Shared plain append-only output with no boxes, animation, cursor control, or raw-mode widgets; current line prompts still follow their existing rules. |
+| `--non-interactive` | Plain output and no prompts or child terminal input. Does not grant consent; keep explicit force/key-generation requirements. |
 
 Define `--no-ui` and mode precedence in the foundation slice. JSON and quiet rules
 take precedence; `--no-ui` never confirms an action. Keep `--offline` and
@@ -297,7 +298,7 @@ owned by the existing operations; make only the adaptations the renderer require
 
 ## 7. Complete command migration matrix
 
-The command definitions and recursive `--help` audit contain **43 leaf commands**.
+The command definitions and recursive `--help` audit contain **44 leaf commands**.
 Every row has an owner and requires an explicit migration/compatibility check.
 There is no “only if convenient” or “untouched legacy renderer” category.
 
@@ -329,13 +330,14 @@ with shared surrounding diagnostics. Progress appears only when real work warran
 | `toolchain list` | Query; catalog/installed/selected/stale state and existing stdout contract. | GH-391 |
 | `toolchain which` | Raw path; missing/stale selection uses shared diagnostics. | GH-391 |
 | `new` | Result; counter/stub templates, path/name validation and existing next steps. | GH-396 |
-| `init` | Prompted steps + Result; new/partial/already-ready state, defaults/declines, quiet behaviour, JSON delegates to status. | GH-396 |
+| `init` | Prompted steps + Result; new/partial/already-ready state, explicit key generation, non-interactive mode, versioned init JSON. | GH-396, GH-439 |
 | `config new` | Result; global/project scope, fields, select default, atomic failure/no mutation. | GH-416 |
 | `config set` | Result; typed fields, scope/profile, changed/no-op/invalid result. | GH-416 |
 | `config unset` | Result; removed/no-op field and revealed inherited value. | GH-416 |
 | `config use` | Result; saved selection and environment override warning. | GH-416 |
 | `config rm` | Review + Result; scope, confirmation, removed contents/default selection. | GH-416 |
 | `keys generate` | Result; optional/default name, duplicate/invalid failure; preserve existing hidden option handling. | GH-416 |
+| `keys import` | Result; hidden/piped secret input, native StrKey/hex seed, default-selection warning, secret-safe errors. | GH-439 |
 | `keys use` | Result; selected/nonexistent/invalid key, actual saved-default mutation. | GH-416 |
 | `keys rm` | Review + Result; decline/force/non-TTY/missing key, default cleanup. | GH-416 |
 | `keys export` | Raw secret; current authorization/loading order and output bytes; shared prompt/errors only. | GH-416 |
@@ -459,7 +461,7 @@ close a migration ticket based solely on its happy-path screenshot.
 - Ordinary commands consistently show useful progress followed by an appropriate
   bordered result/outcome, warnings below, or the shared error presentation.
 - The new stack, not parallel hand-built renderers, owns normal human UI layout.
-- All 43 commands and framework/raw outputs have verified disposition. New commands
+- All 44 commands and framework/raw outputs have verified disposition. New commands
   added during implementation must receive a row and owner before release.
 - Full values, diagnostics, and existing machine/data contracts are preserved.
 - No persistent TUI app or new domain behaviour has been introduced.
@@ -474,7 +476,7 @@ generated guidance or change JSON schema versions solely for human styling.
 
 ## 10. Sources and migration boundaries
 
-- `crates/tools/cli/src/main.rs`: current 43-command argument/dispatch surface.
+- `crates/tools/cli/src/main.rs`: current 44-command argument/dispatch surface.
 - `print.rs`, `print/`, `terminal.rs`: shared facade, Ratatui components, capabilities,
   output formatting, and the live-task output migration boundary.
 - `status.rs`, `checks.rs`: status presentation and authoritative findings.

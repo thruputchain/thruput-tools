@@ -49,7 +49,7 @@ fn command_paths() -> Vec<Vec<&'static str>> {
 #[test]
 fn every_documented_command_has_working_help_and_shared_argument_error_colors() {
     let commands = command_paths();
-    assert_eq!(commands.len(), 43);
+    assert_eq!(commands.len(), 44);
     for args in commands {
         let help = groundhog().args(&args).arg("--help").output().unwrap();
         assert!(help.status.success(), "{args:?}");
@@ -70,13 +70,13 @@ fn every_documented_command_has_working_help_and_shared_argument_error_colors() 
             .unwrap();
         assert_eq!(plain.status.code(), Some(2));
         assert!(!plain.stderr.contains(&0x1b));
-        let mut no_ui = groundhog();
-        no_ui
-            .args(&args)
-            .args(["--no-ui", "--ui-audit-unknown-option"]);
-        let (output, raw) = captured(no_ui, 40);
-        assert_eq!(output.status.code(), Some(2));
-        assert!(!raw.contains('\x1b'), "{args:?}: {raw:?}");
+        for flag in ["--no-ui", "--non-interactive"] {
+            let mut plain = groundhog();
+            plain.args(&args).args([flag, "--ui-audit-unknown-option"]);
+            let (output, raw) = captured(plain, 40);
+            assert_eq!(output.status.code(), Some(2));
+            assert!(!raw.contains('\x1b'), "{args:?}: {raw:?}");
+        }
     }
 }
 

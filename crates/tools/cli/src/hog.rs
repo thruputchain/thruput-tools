@@ -24,53 +24,10 @@ pub(crate) fn encode_transfer_calldata(
 }
 
 pub(crate) fn parse_amount(input: &str) -> Result<u128, CliError> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Err(invalid_amount(input, "amount cannot be empty"));
-    }
-    if input.starts_with(['-', '+']) {
-        return Err(invalid_amount(input, "amount must be unsigned"));
-    }
-
-    let mut parts = input.split('.');
-    let whole = parts.next().unwrap_or_default();
-    let fractional = parts.next();
-    if parts.next().is_some() || whole.is_empty() || !whole.bytes().all(|c| c.is_ascii_digit()) {
-        return Err(invalid_amount(input, "expected a decimal number"));
-    }
-
-    let whole = whole
-        .parse::<u128>()
-        .map_err(|_| invalid_amount(input, "amount is too large"))?;
-    let fractional = fractional.map_or(Ok(0), |value| parse_fractional(input, value))?;
-    let raw = whole
-        .checked_mul(SCALE)
-        .and_then(|value| value.checked_add(fractional))
-        .ok_or_else(|| invalid_amount(input, "amount is too large"))?;
-    if raw == 0 {
-        return Err(invalid_amount(input, "amount must be greater than zero"));
-    }
-    Ok(raw)
-}
-
-fn parse_fractional(input: &str, fractional: &str) -> Result<u128, CliError> {
-    if fractional.is_empty()
-        || fractional.len() > DECIMALS as usize
-        || !fractional.bytes().all(|c| c.is_ascii_digit())
-    {
-        return Err(invalid_amount(
-            input,
-            "expected at most seven fractional digits",
-        ));
-    }
-
-    let mut padded = fractional.to_owned();
-    while padded.len() < DECIMALS as usize {
-        padded.push('0');
-    }
-    padded
-        .parse::<u128>()
-        .map_err(|_| invalid_amount(input, "amount is too large"))
+    groundhog_signing::parse_hog_amount(input).map_err(|error| CliError::InvalidHogAmount {
+        input: input.trim().to_owned(),
+        message: error.to_string(),
+    })
 }
 
 pub(crate) fn format_amount(raw_amount: u128) -> String {
@@ -85,25 +42,9 @@ pub(crate) fn format_amount(raw_amount: u128) -> String {
     format!("{whole}.{fractional}")
 }
 
-fn invalid_amount(input: &str, message: &str) -> CliError {
-    CliError::InvalidHogAmount {
-        input: input.to_owned(),
-        message: message.to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_valid_amounts_to_raw_units() {
-        assert_eq!(parse_amount("1").unwrap(), SCALE);
-        assert_eq!(parse_amount("1.0").unwrap(), SCALE);
-        assert_eq!(parse_amount("0.0000001").unwrap(), 1);
-        assert_eq!(parse_amount("10.5000000").unwrap(), 105_000_000);
-        assert_eq!(parse_amount(" \t1.5\n").unwrap(), 15_000_000);
-    }
 
     #[test]
     fn rejects_invalid_amounts() {
@@ -128,19 +69,6 @@ mod tests {
                 "unexpected error for {input:?}"
             );
         }
-    }
-
-    #[test]
-    fn checks_full_u128_conversion_range() {
-        let whole = u128::MAX / SCALE;
-        let fractional = u128::MAX % SCALE;
-        let max = format!("{whole}.{fractional:07}");
-        let addition_overflow = format!("{whole}.{:07}", fractional + 1);
-        let multiplication_overflow = (whole + 1).to_string();
-
-        assert_eq!(parse_amount(&max).unwrap(), u128::MAX);
-        assert!(parse_amount(&addition_overflow).is_err());
-        assert!(parse_amount(&multiplication_overflow).is_err());
     }
 
     #[test]

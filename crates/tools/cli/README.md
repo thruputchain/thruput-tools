@@ -125,11 +125,20 @@ build was compiled with, so overrides need a `hog-devnode` build carrying the
 matching flag. These settings affect genesis; when using `--data-dir`, supply
 the same overrides on every restart or choose a fresh directory.
 
+`groundhog test --integration` accepts the same repeatable flag for its
+ephemeral node:
+
+```bash
+groundhog test --integration --network-config max_rv32_memory_bytes=16M
+```
+
 ## Contract call gas
 
 `groundhog call --gas-limit 200000000` sets the total transaction gas budget
 and the requested inner invocation budget; the inner call remains bounded by
-the transaction's remaining gas. The default is still 10,000,000.
+the transaction's remaining gas. The default is 25,000,000, which requires
+at least 2.5 HOG in the sending wallet. The CLI checks that balance before
+submitting a call; use `--gas-limit` to set a different budget.
 
 ## Using cargo directly
 
@@ -152,19 +161,64 @@ through feature unification. The `.cargo/contract.toml` overlay supplies
 `panic=immediate-abort` lives in `.cargo/config.toml` alongside the rest of
 the target rustflags.
 
+## Interaction and output
+
+`--non-interactive` is a global flag, accepted before or after subcommands.
+It disables CLI prompts, boxes, styled tables, and progress-line updates while
+retaining ordinary status and data output. It does not mean yes: commands that
+require confirmation still need their explicit `--force` option. `init` needs
+`--generate-key` to create an initial key. `--quiet` suppresses status output;
+`--json` selects structured output. Neither grants consent.
+
+`keys import` accepts piped stdin in automation. When stdin is a terminal and
+prompting is disabled (including quiet or JSON mode), it fails promptly with
+`interactive_input_required` instead of opening a password prompt. Do not put
+private seeds in command arguments.
+
+Cargo and test subprocesses receive no terminal stdin under `--non-interactive`,
+and CLI-controlled Cargo color is disabled. Explicit long-running commands such
+as `node` or `test --watch` still run until stopped; this flag is not a timeout.
+
 ## Commands
 
 ### `groundhog init`
 
-Interactive first-run setup wizard. Checks your toolchain,
-generates a signing key, configures profiles, and optionally scaffolds a starter
-project. Re-running when already
-configured is a no-op.
+Initializes global profiles and checks for Cargo and a usable selected stored
+signing key. Interactive sessions offer initial key generation and optional
+project scaffolding. Existing keys, explicit key selections, and profile
+settings are preserved.
 
 ```bash
-groundhog init          # guided setup
-groundhog init --json   # delegates to `groundhog status --json`
+groundhog init                         # guided setup
+groundhog init --non-interactive        # initialize profiles, skip all questions
+groundhog init --non-interactive --generate-key --json
 ```
+
+`--generate-key` authorizes creating the initial `default` key only when no
+stored keys or explicit key selections exist. To repair an existing selection,
+use `groundhog keys use <name>` or change the profile's `default_key` with
+`groundhog config`. A missing profile key does not fall back to the global key.
+
+Without interactive stdin and stderr, or with `--quiet` or `--json`, questions
+are skipped. Piped answers are ignored. `--quiet` never authorizes key creation.
+Use `groundhog new` to create projects in scripts.
+
+Setup exits 0 when Cargo, the active profile, and a selected stored signing key
+are available. Otherwise it exits 1 and reports incomplete setup; global profiles
+may already have been initialized. Skipping optional scaffolding is not a
+failure. This is setup readiness, not full toolchain or network validation;
+use `groundhog status` for diagnostics.
+
+`--json` performs setup and emits one stdout envelope with `command: "init"`
+and `data.schemaVersion: 1`. Its data includes `complete`, `cargoAvailable`,
+`profilesConfigured`, `selectedKey`, `keyGenerated`, and `missing` (entries
+`cargo`, `profile`, or `signingKey`). Incomplete setup has `ok: false` and error
+code `init_incomplete`. Preflight errors such as corrupt configuration or key
+files use the standard stderr error envelope.
+
+This replaces the former `init --json` alias for status. Use `groundhog status
+--json` for read-only diagnostics. `init --quiet` also no longer creates a key
+implicitly; scripts that need a new key must pass `--generate-key`.
 
 ### `groundhog status`
 
@@ -214,11 +268,10 @@ same profile, toolchain, and target directory. Run `groundhog build -p
 
 ### `groundhog test`
 
-Run contract tests against the test executor. During early access, follow the
-invite instructions to authenticate Cargo with the private Groundhog registry
-before building generated projects. The SDK downloads checksum-verified
-mock-executor FFI artifacts from public storage without download credentials.
-Tests target the host platform so they run natively.
+Run contract tests against the test executor. Building generated projects
+resolves the SDK from the Groundhog Cargo registry, so configure a Cargo
+credential provider first. The SDK downloads its checksum-verified test
+executor from public storage. Tests target the host platform so they run natively.
 
 ```bash
 groundhog test                              # run all tests
@@ -320,9 +373,10 @@ groundhog wallet rm alice
 Wallet creation is always prefund-first. The CLI or hosted faucet derives the
 future wallet address, transfers HOG to that address, waits for the prefund to
 commit, and only then deploys and initializes the wallet contract. The wallet
-contract does not transfer HOG during `create_wallet`. The default prefund is
-1 HOG on Local and Devnet. This funds wallet creation only; run `groundhog
-airdrop <wallet>` before deploying another contract from the new wallet.
+contract does not transfer HOG during `create_wallet`. Local wallet creation
+prefunds 200 HOG by default, leaving room for multiple dev-wallet contract
+deployments (each transfers 10 HOG) and transaction costs. Remote faucets
+advertise their own prefund amount.
 
 For `network = "local"`, the CLI signs the prefund and create transactions with
 the fixed local bootstrap faucet role advertised by `groundhog node` (`dev-0`).
@@ -338,8 +392,9 @@ For a remote faucet-backed profile such as Devnet, the CLI sends one
 idempotent `POST /v1/create-wallet` request. The faucet performs the same
 prefund-then-create sequence with its hosted signing wallet. The client never
 receives that signing key. Wallet-create prefunding is separate from ordinary
-`groundhog airdrop` requests. Devnet wallet creation uses the service-advertised
-1 HOG prefund and rejects `--prefund` because the service controls the amount.
+`groundhog airdrop` requests. Devnet wallet creation uses the
+service-advertised prefund and rejects `--prefund` because the service controls
+the amount.
 
 The CLI, faucet, and node must advertise and use the same dev-wallet contract
 build. An older self-funding `create_wallet` contract combined with a
@@ -600,8 +655,7 @@ When recovering `--data-dir`, pass the original explicit user allocation.
 Changing it requires a fresh data directory; recovered state does not bypass
 authoritative validation.
 
-The wallet-create prefund is 1 HOG; the local bootstrap uses a fixed
-1,000,000 HOG faucet and 100 HOG per user.
+The local bootstrap uses a fixed 1,000,000 HOG faucet and 100 HOG per user.
 
 `--hogd-protocol` overrides the protocol token used for hog-devnode x23 intro
 handshakes. It is useful when a local `hog-devnode` build is slightly ahead of

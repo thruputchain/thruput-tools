@@ -9,6 +9,14 @@ bootstrap_order = 60
 +++
 ## Local Development
 
+For first-run setup in automation, use `groundhog init --non-interactive --json`.
+It initializes global profiles and reports incomplete setup with exit 1 when
+Cargo, the active profile, or a selected stored signing key is unavailable.
+Add `--generate-key` only when authorized to create the initial signing key;
+existing keys and explicit key selections are preserved. `--quiet` does not
+accept wizard defaults. `init --json` performs setup; use `status --json` for
+read-only diagnostics. Create scripted projects separately with `groundhog new`.
+
 Use the CLI to start the supported local stack:
 
 ```console
@@ -28,61 +36,12 @@ application work. Prefer the active local profile and runtime information
 reported by `groundhog status --json` and `groundhog node --json`. Do not copy
 deterministic local-development keys into production configuration.
 
-Human command results use shared responsive cards, tables, diagnostics, and prompts.
-Error, warning, and success colors use explicit RGB values; `NO_COLOR` disables color.
-Use `--no-ui` for plain human output without boxes or terminal controls. It keeps
-existing confirmation rules; use `--json` for machine-readable command results.
-
-`groundhog keys ls` and `groundhog wallet ls` show tables when the columns fit,
-or stacked records on narrower terminals. They mark defaults and retain full
-addresses. Wallet listings show the selected profile and owner public keys;
-missing owner keys appear as `Not recorded`. Listing data stays on stdout.
-Pipes, `--quiet`, and `--no-ui` retain the plain rows; `--json` retains the
-structured records.
-
-`groundhog config get` shows a persisted configuration card. Add `--sources`
-to show each value's global or project origin and how the profile was selected.
-`groundhog config profiles` marks the active profile, lists config layers and
-validation states, and shows invalid or missing profile warnings below the list.
-These commands keep data on stdout and retain plain and JSON output modes.
-
-`groundhog balance` and `groundhog view` show delayed progress while waiting for
-RPC, followed by result cards on stderr. Balance cards include HOG and raw amounts,
-the address, height, profile, and RPC URL. View cards distinguish returns, aborts,
-and faults, and include decoded or raw values and emitted events. Abort decode
-warnings appear below the card. Plain, quiet, and JSON modes retain their existing
-output and exit-status rules.
-
-On compatible foreground terminals, `groundhog build` shows delayed phase and
-elapsed-time progress, then an artifact summary with compiler diagnostics and
-Groundhog warnings below it. Compiler messages retain source locations, snippets,
-and notes; identical diagnostics from the same package appear once. Use
-`groundhog build --verbose` (or `-v`) to see Cargo logs live. Resizing or resuming a
-stopped job switches progress to append-only output to preserve scrollback.
-Redirected streams, `--no-ui`, and explicit Cargo output-format/color settings
-keep live append-only logs. `--json` retains its machine-readable output contract.
-
-Default foreground `groundhog test` runs show compact progress and a final test
-summary. Failed test output remains available below the result. Use `--show-output`
-for full output, including passing tests. No-capture, harness passthrough, and
-integration-node modes keep append-only child output. Watch keeps one result per
-iteration and its existing JSONL behavior; workspace runs retain package order,
-skipped packages, and partial results.
-
-Transaction and funding commands show existing reviews before confirmation, then
-results that distinguish dry runs, committed execution, rejection, partial work,
-and unconfirmed outcomes. Prepared transaction hashes remain visible before waits.
-Do not treat a prepared hash as proof of submission or retry uncertain transactions
-without inspecting their status.
-
-`node` and `docs` show a Ready report while their servers remain running. Node
-startup and background logs are append-only so supervisor output cannot overwrite
-an animated region. Default node logs retain warnings and errors; `--verbose`
-enables informational diagnostics, and `RUST_LOG` supplies an explicit filter.
-`init` keeps completed setup steps in scrollback and uses the existing line prompts.
-
-Key exports, generated TypeScript without an output file, completion scripts,
-toolchain executable paths, and help/version/skill payloads remain unframed.
+Human output uses responsive cards and diagnostics. `--no-ui` selects plain output
+without granting consent; `NO_COLOR` disables color. Use `build --verbose`,
+`test --show-output`, or `node --verbose` for fuller logs. Node also accepts
+`RUST_LOG`. A prepared transaction hash is not proof of submission. Service Ready
+reports mean the server is still running. Secret exports, generated source,
+completion scripts, executable paths, and help/version/skill remain unframed.
 
 Typical CLI discovery:
 
@@ -97,6 +56,12 @@ groundhog view --help
 groundhog codegen ts --help
 ```
 
+Use global `--non-interactive` to disable CLI prompts and terminal UI while
+retaining ordinary output. It does not grant consent: protected actions still
+require `--force`, and initial key creation requires `init --generate-key`.
+`keys import` needs piped stdin when prompts are disabled; never place seeds
+in arguments. Cargo/test subprocesses cannot read terminal stdin in this mode.
+
 Use `--json` for agent-consumed command results. Respect commands that require
 explicit confirmation, and never add a confirmation override unless the user
 has authorized the consequential action.
@@ -107,3 +72,28 @@ operation again. An `unknown` status does not explain why the transaction is
 absent. For detailed local backend logs, start `groundhog node --verbose`;
 output goes to that terminal unless redirected. Do not restart an ephemeral
 node just to enable logging: stopping it discards its chain state.
+
+### Key and address interoperability
+
+`groundhog keys import <name>` reads an Ed25519 seed from a hidden terminal
+prompt or piped stdin. It accepts a checksummed Stellar S StrKey or a 32-byte
+hex seed, never a 64-byte stored keypair. Do not put private seeds in command
+arguments. Existing names are not overwritten; `dev-N` names are reserved.
+Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
+Malformed TOML or an invalid `default_key` is rejected before storing the key.
+If the key is stored but selecting the default fails, import succeeds with a
+warning and a recovery
+command (`groundhog keys use <name>`); do not import it again. `isDefault` is
+null when the configuration cannot be reread to confirm selection.
+
+`groundhog keys export <name> --format strkey` exports the same seed as an S
+StrKey after the normal confirmation gate. The default export remains hex.
+For an authorized non-interactive transfer between key stores, pipe export
+stdout directly to the receiving CLI's stdin rather than capturing it in logs.
+
+A G StrKey is an Ed25519 public key, not a derived Groundhog account or wallet
+address. Key commands display public keys separately from account addresses.
+C StrKeys and legacy hex are accepted for contract/wallet address inputs,
+including typed contract arguments. Saved wallet owners accept G StrKeys or
+hex public keys. These encodings preserve bytes and do not identify a network.
+Existing key files and public JSON-RPC wire encodings remain unchanged.

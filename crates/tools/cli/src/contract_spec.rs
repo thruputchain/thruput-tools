@@ -325,7 +325,7 @@ mod tests {
         let fragments = [groundhog_spec_tool::SpecFragment::SpecTypeDef {
             type_def: groundhog_spec_tool::ContractTypeDef::TypeDefStruct {
                 struct_def: groundhog_spec_tool::ContractStructDef {
-                    name: spec_string_bytes("Payload"),
+                    name: spec_id("Payload"),
                     fields: vec![].try_into().unwrap(),
                 },
             },
@@ -493,7 +493,7 @@ mod tests {
     fn rendered_spec_json_includes_events() {
         let mut spec = sample_contract_spec();
         spec.events = vec![groundhog_contract_spec::ContractEventDef {
-            name: spec_string_bytes("PingEvent"),
+            name: spec_id("PingEvent"),
             signature: [0xAB; 32].into(),
             topics: vec![ContractField {
                 name: spec_string_bytes("tag"),
@@ -554,6 +554,17 @@ mod tests {
 
     fn spec_string_bytes(value: &str) -> groundhog_spec_tool::ContractSpecString {
         value.try_into().expect("bug: test string should fit")
+    }
+
+    /// A fixture id: one crate, one module, so the declared name is what
+    /// tells these types apart.
+    fn spec_id(declared: &str) -> groundhog_contract_spec::ContractSpecId {
+        groundhog_contract_spec::ContractSpecId {
+            crate_name: spec_string_bytes("demo"),
+            major: spec_string_bytes("1"),
+            module_path: spec_string_bytes("demo"),
+            declared: spec_string_bytes(declared),
+        }
     }
 
     #[test]

@@ -70,11 +70,24 @@ pub fn minimal_contract_spec_raw() -> Vec<u8> {
         value.try_into().expect("bug: test spec string should fit")
     }
 
+    /// The crate that declares this interface. A bare `#[contract]` block
+    /// records its crate rather than a trait, so the module path and the
+    /// declared name are both empty -- see `crate_id_tokens` in the SDK.
+    fn declarer() -> groundhog_contract_spec::ContractSpecId {
+        groundhog_contract_spec::ContractSpecId {
+            crate_name: spec_string("counter"),
+            major: spec_string("0.1"),
+            module_path: spec_string(""),
+            declared: spec_string(""),
+        }
+    }
+
     let fragments = [
         groundhog_spec_tool::SpecFragment::SpecInterface {
             interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
                 interface_name: spec_string("Counter"),
                 interface_version: spec_string("0.1.0"),
+                declared_by: declarer(),
                 throws: vec![].try_into().unwrap(),
                 emits: vec![].try_into().unwrap(),
             },
@@ -83,12 +96,14 @@ pub fn minimal_contract_spec_raw() -> Vec<u8> {
             interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
                 interface_name: spec_string("Counter"),
                 interface_version: spec_string("0.1.0"),
+                declared_by: declarer(),
             },
         },
         groundhog_spec_tool::SpecFragment::SpecMethod {
             method_fragment: groundhog_spec_tool::SpecMethodFragment {
                 interface_name: spec_string("Counter"),
                 interface_version: spec_string("0.1.0"),
+                declared_by: declarer(),
                 method: groundhog_spec_tool::ContractSpecMethod {
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),

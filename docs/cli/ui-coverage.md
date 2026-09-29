@@ -18,7 +18,8 @@ rules, and raw payloads remain command contracts.
 | GH-392 | test: single/workspace/watch/integration | Shared per-run/workspace summaries and outcomes; foreground default runs collect passing logs and retain failed output; `--show-output`, no-capture, passthrough, and integration supervisors use append-only child output | Workspace suite, existing watch/JSONL/workspace/integration tests, and compact/failure/full-output PTYs passed |
 | GH-395 | node, docs | Shared Ready/stopped reports; docs startup progress; node uses append-only phases/tracing to avoid competing supervisor writers; `--verbose` expands logs | Workspace suite and service PTYs passed, including ready-but-still-running and signal-driven cleanup; logs use shared semantic colors |
 | GH-394 | recursive command/mode audit, raw/framework output | Complete local command audit; macOS smoke workflow added | Linux workspace and tmux checks passed; macOS CI result tracked in PR #443 |
-| GH-438 | pre-dispatch version warnings and argument errors | Audit gap fixed with shared warnings and RGB error styles | All 43 argument-error paths checked in a terminal, including no UI; version/NO_COLOR/raw-payload tests passed |
+| GH-438 | pre-dispatch version warnings and argument errors | Audit gap fixed with shared warnings and RGB error styles | Argument-error paths checked in a terminal, including no UI; version/NO_COLOR/raw-payload tests |
+| GH-439 | key import and updated non-interactive setup | Integrated current main's input authorization, StrKey fields, and versioned init report; shared public import results | Secret-input, import, and non-interactive regressions |
 
 ## Review rules
 
@@ -33,7 +34,7 @@ rules, and raw payloads remain command contracts.
 
 ## Command-by-command record
 
-All 43 leaf definitions are checked against the specification by
+All 44 leaf definitions are checked against the specification by
 `command_matrix_covers_every_leaf_command`. The binary audit executes `--help`,
 terminal argument errors, and `--no-ui` errors for every row. The evidence below
 adds command-specific success, error, state, stream, or lifecycle coverage. This
@@ -74,6 +75,7 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 | `config use` | Saved selection with environment-override warning | CLI selection cases, mutation PTY |
 | `config rm` | Existing confirmation and removal result | CLI force/decline/default cleanup, mutation PTY |
 | `keys generate` | Public result and default state | CLI duplicate/invalid/JSON cases, generation PTY |
+| `keys import` | Public result and default-selection warnings; secret input remains hidden or piped | StrKey/import tests, secret-safe input and result PTY |
 | `keys use` | Default-selection result | CLI/`keys_test`, mutation PTY |
 | `keys rm` | Existing confirmation and cleanup result | CLI force/decline/default cleanup, mutation PTY |
 | `keys export` | Raw secret only after existing authorization | CLI authorization tests, exact raw/JSON payload audit |

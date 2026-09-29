@@ -20,7 +20,15 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
 
 jobs:
+  dependency-policy:
+    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@af074672d3a6f3ddedcacd758224ea5a5cf2a8f3
+    with:
+      runs-on: namespace-profile-hogd-linux-2604
+      registry-name: groundhog
+    secrets:
+      registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
   macos-terminal:
+    needs: dependency-policy
     name: macOS terminal smoke
     runs-on: namespace-profile-hogd-arm64-macos
     timeout-minutes: 30

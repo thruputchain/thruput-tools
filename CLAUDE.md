@@ -66,10 +66,13 @@ Workspace crates are grouped by boundary:
 - **hogd-backend** — shared hogd x23 backend adapters: intro-handshake
   classification and the XDR-to-JSON-RPC mapping for `SchedGateway`,
   `IndexerBlockExplorer`, `DbGateway`, and `ViewGateway` results, plus submit
-  batch packing and deadline cohorting. Gateway and node-supervisor both
-  decode hogd through it, so a wire result has one meaning across both
-  binaries. It owns no connections, timeouts, retry policy, or metrics —
-  those stay with each consumer, which is where the two genuinely differ.
+  batch packing and deadline cohorting, and the `getTransactionStatus`
+  probe order (`status::transaction_status` over a `StatusProbe` the binary
+  implements). Gateway and node-supervisor both decode hogd through it, so a
+  wire result has one meaning across both binaries and a composite answer
+  has one sequence. It owns no connections, timeouts, retry policy, or
+  metrics: those stay with each consumer, which is where the two genuinely
+  differ.
   Its mapping functions take a `service` label because the gateway and the
   supervisor name the same backend differently ("indexer" vs "hogd-dev
   indexer"). Add new hogd result decoding here, not in a binary.
@@ -378,6 +381,16 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 ### CLI Output
 
+- Interaction policy belongs in `Print`. Global `--non-interactive` disables
+  prompts and terminal rendering without suppressing ordinary output or granting
+  consent. Use `can_prompt`, `confirm`, `ask`, `read_line`, and `read_secret`
+  for interactive input; use `is_human_tty` / `is_human_stdout_tty` for styling.
+  Do not add command-local terminal detection or password prompts. Reading
+  explicit piped input (such as key import) is distinct from prompting.
+- Child-process runners must honor `Print::is_non_interactive`: do not inherit
+  terminal stdin or force terminal color. Long-running services/watch modes
+  remain explicit command behavior, not interactive prompts.
+
 - Commands in `groundhog-cli` use the `Print` struct (`print.status()`,
   `print.warn()`, `print.prompt()`), not raw `eprintln!`.
   Standalone build tools such as `groundhog-agent-knowledge` may report errors
@@ -446,8 +459,16 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `groundhog-hogd-backend`, not in a handler or a supervisor adapter: the
   gateway and node-supervisor serve the same RPC surface from the same
   services, and a second copy is how their answers drift apart. Handlers
-  keep what is theirs alone — client acquisition, timeouts, metrics,
-  degraded-mode policy — and call the shared decoder for the mapping.
+  keep what is theirs alone (client acquisition, timeouts, metrics,
+  degraded-mode policy) and call the shared decoder for the mapping. The
+  same holds for an answer composed from several backend reads:
+  `getTransactionStatus` runs `groundhog_hogd_backend::status` in both
+  binaries, each supplying only its raw indexer and mempool lookups.
+- Request structs in `json-rpc-types` use `deny_unknown_fields`, so a field
+  a request does not define (a height on a latest-state read) is rejected
+  rather than ignored. An internally tagged enum with unit variants needs a
+  struct-variant mirror to deserialize from, as `BlockAnchor` does: serde's
+  `deny_unknown_fields` does not reach unit variants.
 - `json-rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.

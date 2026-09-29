@@ -15,6 +15,7 @@ fn line_column(contents: &str, offset: usize) -> (usize, usize) {
 }
 
 pub(crate) use dirs::cargo_config_path;
+pub(crate) use global::save_default_key_if_unset;
 
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
 pub use global::{

@@ -567,8 +567,7 @@ fn process_group_exists(process_group: u32) -> bool {
         return false;
     };
 
-    let result = unsafe { libc::kill(target.as_raw(), 0) };
-    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    crate::process::process_group_has_live_member(-target.as_raw()).unwrap_or(false)
 }
 
 #[cfg(unix)]

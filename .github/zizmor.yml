@@ -1,27 +1,10 @@
-# zizmor configuration. https://docs.zizmor.sh/configuration/
+# zizmor exceptions
 #
-# `unpinned-uses` default: hash-pinning policy for every action
+# https://docs.zizmor.sh/configuration/
 
 rules:
-  # HIGH severity, and the one worth fixing first: publish.yml interpolates
-  # ${{ github.actor }} straight into a run block, and writes ${{ github.token }}
-  # into the git remote URL (persisting it in .git/config).
-  template-injection:
-    ignore:
-      - publish.yml
-
-  # Checkout steps that do not set `persist-credentials: false`.
-  artipacked:
-    ignore:
-      - publish.yml
-      - publish_dry_run.yml
-
-  # Job runs with default (write) permissions.
-  excessive-permissions:
-    ignore:
-      - publish_dry_run.yml
-
-  # Style: prefers '$/...' over './...' for same-repo composite actions.
+  # Style: prefers '$/...' over './...' for same-repo composite actions,
+  # but that offends actionlint.
   self-repository:
     ignore:
       - publish.yml

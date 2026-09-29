@@ -12,9 +12,11 @@
 //! no connections, no timeouts, no retry policy, and no metrics: callers keep
 //! those, because that is where the gateway and the supervisor genuinely
 //! differ (the gateway reconnects, coalesces, meters, and degrades; the
-//! supervisor owns a child process and fails fast). Functions here are
+//! supervisor owns a child process and fails fast). Mapping functions are
 //! synchronous and total — given a decoded wire value they return a public
-//! payload or an [`RpcServerError`], and never block.
+//! payload or an [`RpcServerError`], and never block. The one place that
+//! composes several backend reads into an answer, the [`status`] probe,
+//! takes the reads from the caller and owns only their order and precedence.
 //!
 //! `groundhog-x23-transport` remains the layer below: it builds the
 //! connection pools these adapters are driven with.
@@ -35,6 +37,7 @@ pub mod indexer;
 pub mod intro;
 pub mod receipt;
 pub mod scheduler;
+pub mod status;
 pub mod submit;
 pub mod view;
 

@@ -45,7 +45,7 @@ pub struct TestOptions {
 /// Options for the `groundhog test --integration` orchestration path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IntegrationTestOptions {
-    /// Override the x23 protocol token used when launching the ephemeral
+    /// Override the hog-devnode handshake protocol token used when launching the ephemeral
     /// hog-devnode node (mirrors `groundhog node --hogd-protocol`). Useful
     /// when the local hog-devnode build is ahead of the published protocol
     /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
@@ -53,6 +53,9 @@ pub struct IntegrationTestOptions {
     pub hogd_protocol: Option<String>,
     /// Exact managed hog-devnode version requested for the ephemeral node.
     pub hog_devnode_version: Option<String>,
+    /// Genesis network parameter overrides for the ephemeral node (mirrors
+    /// `groundhog node --network-config`). A parameter given twice is rejected.
+    pub network_config_overrides: Vec<(groundhog_node_supervisor::ConfigParamName, u32)>,
     /// Forbid managed network acquisition for the ephemeral node.
     pub offline: bool,
     /// Show local-node supervisor and forwarded hog-devnode diagnostics while
@@ -289,6 +292,7 @@ fn run_integration_with_dev_node(
         pid_file: crate::node::LocalNodePidFile::Disabled,
         hogd_protocol,
         hogd_dev_version: integration.hog_devnode_version.clone(),
+        network_config_overrides: integration.network_config_overrides.clone(),
         offline: integration.offline,
         ..crate::node::LocalNodeOptions::default()
     };
@@ -1797,6 +1801,10 @@ fn run_test_command(
     filter: SelectedFilter<'_>,
     compact: bool,
 ) -> Result<TestRunOutput, CliError> {
+    if print.is_non_interactive() {
+        crate::keep_cargo_color(cargo_cmd, print);
+        cargo_cmd.stdin(Stdio::null());
+    }
     let mut child = cargo_cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2017,6 +2025,36 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn non_interactive_tests_disable_color_and_stdin() {
+        use std::io::Write;
+        use std::process::Stdio;
+
+        let mut input = tempfile::NamedTempFile::new().unwrap();
+        writeln!(input, "unexpected input").unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "test \"$CARGO_TERM_COLOR\" = never && ! read -r answer",
+            ])
+            .env("CARGO_TERM_COLOR", "always")
+            .stdin(Stdio::from(input.reopen().unwrap()));
+
+        let output = super::run_test_command(
+            &mut command,
+            &Print::new(false, true).with_non_interactive(true),
+            SelectedFilter {
+                name: None,
+                exact: false,
+            },
+            false,
+        )
+        .unwrap();
+        assert!(output.success, "{output:?}");
+    }
 
     fn test_watch_context(root: &std::path::Path) -> WatchContext {
         WatchContext {

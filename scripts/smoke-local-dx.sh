@@ -1012,28 +1012,16 @@ if [[ -n "$GATEWAY_RPC_URL" ]]; then
     update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
 
-USER_KEY="smoke-user"
-log "Generating non-dev signing key: $USER_KEY"
-"$CLI" keys generate "$USER_KEY"
-
-WALLET_JSON="$(run_json "wallet create" "$CLI" --json wallet create --force --key "$USER_KEY")"
-WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
-[[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
-    || die "wallet create did not return a wallet address"
-WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
-[[ "$WALLET_PREFUND" == "10000000" ]] \
-    || die "wallet create prefund was $WALLET_PREFUND, expected 10000000"
-[[ "$(json_field data.prefund_tx_hash "$WALLET_JSON")" != "null" ]] \
-    || die "wallet create did not return a prefund transaction hash"
-[[ "$(json_field data.create_tx_hash "$WALLET_JSON")" != "null" ]] \
-    || die "wallet create did not return a create transaction hash"
-log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
-
-"$CLI" keys use "$USER_KEY"
-# Wallet creation leaves the default 1 HOG prefund just below the transaction
-# gas limit. Add 1 HOG so this deploy reaches execution and exercises the
-# receipt-level insufficient-funding guidance instead of scheduler rejection.
-SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop --force "$USER_KEY" --amount 1)"
+UNDERFUNDED_KEY="smoke-underfunded"
+log "Generating non-dev signing key: $UNDERFUNDED_KEY"
+"$CLI" keys generate "$UNDERFUNDED_KEY"
+UNDERFUNDED_WALLET_JSON="$(run_json "wallet create with a 1 HOG override" "$CLI" --json wallet create --force --key "$UNDERFUNDED_KEY" --prefund 1)"
+[[ "$(json_field data.prefund_raw_amount "$UNDERFUNDED_WALLET_JSON")" == "10000000" ]] \
+    || die "underfunded wallet create did not use the 1 HOG override"
+"$CLI" keys use "$UNDERFUNDED_KEY"
+# 1 HOG leaves less than the tx gas limit; add 1 HOG so deploy reaches
+# execution and exercises the receipt-level funding guidance.
+SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop --force "$UNDERFUNDED_KEY" --amount 1)"
 [[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
     || die "scheduler-floor airdrop did not commit successfully"
 UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy --force)"
@@ -1054,22 +1042,44 @@ UNDERFUNDED_HINT="$(json_field error.hint "$UNDERFUNDED_DEPLOY_JSON")"
     || die "underfunded deploy did not provide airdrop guidance"
 log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDERFUNDED_CODE"
 
-WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
+WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$UNDERFUNDED_KEY")"
 WALLET_BALANCE_BEFORE="$(json_field data.rawBalance "$WALLET_BALANCE_BEFORE_JSON")"
-AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop --force "$USER_KEY" --amount 10)"
+AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop --force "$UNDERFUNDED_KEY" --amount 10)"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
 [[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" ]] \
     || die "saved-wallet airdrop JSON did not identify faucet key dev-0"
 [[ "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
     || die "saved-wallet airdrop JSON did not identify role faucet"
-WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$USER_KEY")"
+WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$UNDERFUNDED_KEY")"
 WALLET_BALANCE_AFTER="$(json_field data.rawBalance "$WALLET_BALANCE_AFTER_JSON")"
 AIRDROP_RAW_AMOUNT="$(json_field data.rawAmount "$AIRDROP_JSON")"
 assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
 log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.txHash "$AIRDROP_JSON")"
 
-USER_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy --force)"
+RECOVERED_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy --force)"
+[[ "$(json_field data.address "$RECOVERED_DEPLOY_JSON")" != "null" ]] \
+    || die "saved-wallet deploy after airdrop did not return a contract address"
+
+USER_KEY="smoke-user"
+log "Generating non-dev signing key: $USER_KEY"
+"$CLI" keys generate "$USER_KEY"
+WALLET_JSON="$(run_json "wallet create with default prefund" "$CLI" --json wallet create --force --key "$USER_KEY")"
+WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
+[[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
+    || die "wallet create did not return a wallet address"
+WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
+[[ "$WALLET_PREFUND" == "2000000000" ]] \
+    || die "wallet create prefund was $WALLET_PREFUND, expected 2000000000"
+[[ "$(json_field data.prefund_tx_hash "$WALLET_JSON")" != "null" ]] \
+    || die "wallet create did not return a prefund transaction hash"
+[[ "$(json_field data.create_tx_hash "$WALLET_JSON")" != "null" ]] \
+    || die "wallet create did not return a create transaction hash"
+log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
+
+"$CLI" keys use "$USER_KEY"
+"$CLI" wallet use --profile "$SMOKE_PROFILE" "$USER_KEY"
+USER_DEPLOY_JSON="$(run_json "saved-wallet first deploy without airdrop" "$CLI" --json deploy --force)"
 USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"

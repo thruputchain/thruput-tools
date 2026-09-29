@@ -11,7 +11,7 @@ use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
 use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
-use groundhog_json_rpc_server::batch::ConcurrentBatchService;
+use groundhog_json_rpc_server::batch::{ConcurrentBatchService, MAX_RPC_BATCH_REQUESTS};
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_json_rpc_types::protocol_token::protocol_text;
 use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
@@ -541,6 +541,9 @@ where
     let server_config = ServerConfig::builder()
         .max_connections(rpc_max_connections)
         .max_response_body_size(max_response_body_size)
+        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(
+            MAX_RPC_BATCH_REQUESTS,
+        ))
         .build();
     let rpc_middleware =
         jsonrpsee::core::middleware::RpcServiceBuilder::new().layer_fn(move |inner| {
@@ -1163,6 +1166,82 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "concurrent public submissions should produce a multi-transaction batch: {sizes:?}"
         );
         handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn rpc_array_limit_rejects_oversized_submissions_before_dispatch() {
+        use jsonrpsee::core::{client::ClientT, params::BatchRequestBuilder};
+
+        let directory = tempfile::tempdir().unwrap();
+        let submit_log = directory.path().join("submit-batches.log");
+        let _mode = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "submit-batch-probe");
+        let _log = EnvGuard::set(
+            "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG",
+            submit_log.to_str().unwrap(),
+        );
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let handle = NodeSupervisorHandle::start(
+            NodeSupervisorConfig::default()
+                .with_rpc_listen_address("127.0.0.1:0")
+                .with_hogd_dev(hogd),
+        )
+        .await
+        .unwrap();
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .unwrap();
+        let mut allowed = BatchRequestBuilder::new();
+        for _ in 0..MAX_RPC_BATCH_REQUESTS {
+            allowed
+                .insert("groundhog_version", jsonrpsee::rpc_params![])
+                .unwrap();
+        }
+        let responses = client
+            .batch_request::<serde_json::Value>(allowed)
+            .await
+            .unwrap();
+        assert_eq!(responses.len(), MAX_RPC_BATCH_REQUESTS as usize);
+        assert!(responses.into_iter().all(|response| response.is_ok()));
+
+        let oversized: Vec<_> = (0..=MAX_RPC_BATCH_REQUESTS)
+            .map(|id| {
+                serde_json::json!({
+                    "jsonrpc": "2.0", "id": id, "method": "groundhog_sendRawTransaction",
+                    "params": [format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}")],
+                })
+            })
+            .collect();
+        // Use raw HTTP: jsonrpsee's batch client expects an array and cannot
+        // decode the single null-ID error returned for a rejected whole batch.
+        let error = tokio::time::timeout(Duration::from_secs(5), async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let body = serde_json::to_string(&oversized).unwrap();
+            let mut socket = tokio::net::TcpStream::connect(handle.rpc_addr())
+                .await
+                .unwrap();
+            let request = format!(
+                "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            socket.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            socket.read_to_string(&mut response).await.unwrap();
+            serde_json::from_str::<serde_json::Value>(response.split_once("\r\n\r\n").unwrap().1)
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(error["error"]["code"], -32010);
+        assert!(
+            !submit_log.exists(),
+            "oversized array must not submit any transactions"
+        );
+        handle.stop().await.unwrap();
     }
 
     #[tokio::test]
@@ -2361,13 +2440,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .build(&url)
             .expect("bug: jsonrpsee http client builds");
 
-        // Build a minimal EventQuery (first page, no filters).
+        // Build a minimal EventQuery (first page, one named contract).
         // Serialization shapes:
         //   - `IterationOrder` serializes as "ascending" / "descending"
         //   - `BlockAnchor` serializes as a tagged object
         //   - `PaginationCursor` serializes as `0x`-prefixed hex; `0x` = empty
+        let contract = format!("0x{}", "01".repeat(32));
         let query = serde_json::json!({
-            "filters": [],
+            "filters": [{
+                "contractAddresses": [contract],
+                "topics": {"topic0": [], "topic1": [], "topic2": []},
+            }],
             "order": "ascending",
             "anchor": { "kind": "atBeginning" },
             "cursor": "0x",
@@ -2385,6 +2468,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .as_array()
             .expect("bug: events should be array");
         assert_eq!(events.len(), 2, "first event page should contain 2 events");
+        assert!(
+            events
+                .iter()
+                .all(|event| event["event"]["contractAddress"] == contract),
+            "events should come from the filtered contract"
+        );
         let cursor = page["cursor"].as_str().unwrap_or("");
         assert!(
             cursor.len() > 2,

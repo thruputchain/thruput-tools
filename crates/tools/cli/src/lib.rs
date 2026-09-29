@@ -31,6 +31,7 @@ pub(crate) mod faucet_client;
 pub(crate) mod hog;
 pub(crate) mod http_client;
 pub mod init;
+pub mod init_json;
 pub mod keys;
 pub(crate) mod keys_json;
 pub(crate) mod network_descriptor;
@@ -85,13 +86,14 @@ pub fn require_cargo() -> Result<(), CliError> {
 /// Piping stderr is what lets cargo's output be relayed and kept at the same
 /// time, and it is also what makes cargo drop color, so restore it when our
 /// own stderr is a terminal and the user has not already chosen.
+/// Explicit non-interactive mode disables inherited color and input.
 pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command, print: &Print) {
-    use std::io::IsTerminal;
-    if print.is_no_ui() || print.is_live() || print.is_compact_build() {
+    if print.is_non_interactive() || print.is_no_ui() || print.is_live() || print.is_compact_build()
+    {
         cmd.env("CARGO_TERM_COLOR", "never");
         return;
     }
-    if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
+    if print.is_human_tty() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
         cmd.env("CARGO_TERM_COLOR", "always");
     }
 }
@@ -151,6 +153,10 @@ pub fn run_cargo(
     cmd: &mut std::process::Command,
     print: &Print,
 ) -> Result<(String, String), CliError> {
+    if print.is_non_interactive() {
+        keep_cargo_color(cmd, print);
+        cmd.stdin(std::process::Stdio::null());
+    }
     if print.is_compact_build() {
         return crate::build_output::run(cmd, print);
     }
@@ -231,5 +237,34 @@ pub fn run_cargo(
             });
         }
         Ok((String::new(), String::new()))
+    }
+}
+
+#[cfg(all(test, unix))]
+mod subprocess_tests {
+    use super::{Print, run_cargo};
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn non_interactive_cargo_disables_color_and_stdin() {
+        for json in [false, true] {
+            let mut input = tempfile::NamedTempFile::new().unwrap();
+            writeln!(input, "unexpected input").unwrap();
+            let mut command = Command::new("sh");
+            command
+                .args([
+                    "-c",
+                    "test \"$CARGO_TERM_COLOR\" = never && ! read -r answer",
+                ])
+                .env("CARGO_TERM_COLOR", "always")
+                .stdin(Stdio::from(input.reopen().unwrap()));
+
+            run_cargo(
+                &mut command,
+                &Print::new(false, json).with_non_interactive(true),
+            )
+            .unwrap();
+        }
     }
 }

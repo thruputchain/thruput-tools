@@ -57,6 +57,7 @@ impl JsonSchema for ContractAddressList {
         json_schema!({
             "type": "array",
             "items": items,
+            "minItems": 1,
             "maxItems": MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER,
             "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound."
         })
@@ -97,6 +98,7 @@ impl JsonSchema for EventFilterList {
         json_schema!({
             "type": "array",
             "items": items,
+            "minItems": 1,
             "maxItems": MAX_EVENT_FILTERS_PER_QUERY,
             "description": "Event filters accepted by a single event query. Mirrors the hogd-indexer per-query filter bound."
         })
@@ -113,11 +115,40 @@ pub enum IterationOrder {
 
 /// Where to begin iteration on the initial call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", from = "BlockAnchorFields")]
 pub enum BlockAnchor {
     AtBeginning,
     AtEnd,
     AtHeight { height: BlockHeight },
+}
+
+/// `BlockAnchor` as it is read off the wire. serde's `deny_unknown_fields`
+/// does not reach the unit variants of an internally tagged enum, so
+/// `{"kind": "atEnd", "height": 5}` would read as `AtEnd`; every variant here
+/// has fields, so a field the variant lacks is an error.
+// Variant names are `BlockAnchor`'s, from which the wire `kind` tags derive.
+#[allow(clippy::enum_variant_names)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename = "BlockAnchor",
+    deny_unknown_fields
+)]
+enum BlockAnchorFields {
+    AtBeginning {},
+    AtEnd {},
+    AtHeight { height: BlockHeight },
+}
+
+impl From<BlockAnchorFields> for BlockAnchor {
+    fn from(anchor: BlockAnchorFields) -> Self {
+        match anchor {
+            BlockAnchorFields::AtBeginning {} => Self::AtBeginning,
+            BlockAnchorFields::AtEnd {} => Self::AtEnd,
+            BlockAnchorFields::AtHeight { height } => Self::AtHeight { height },
+        }
+    }
 }
 
 /// Opaque pagination cursor authored by the server.
@@ -168,7 +199,7 @@ impl JsonSchema for PaginationCursor {
 /// specified positions are ignored. (This is the ethereum getLogs /
 /// stellar-rpc post-#358 semantics.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventTopicFilter {
     pub topic0: TopicList,
     pub topic1: TopicList,
@@ -182,7 +213,7 @@ pub struct EventTopicFilter {
 /// (When such an index is added, the gateway relaxes the non-empty
 /// check; the wire contract stays the same.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventFilter {
     pub contract_addresses: ContractAddressList,
     pub topics: EventTopicFilter,
@@ -192,8 +223,9 @@ pub struct EventFilter {
 /// matches at least one `EventFilter` in `filters` (OR across filters,
 /// AND within each filter).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventQuery {
+    /// At least one filter is required. Empty lists are not all-contract scans.
     pub filters: EventFilterList,
     pub order: IterationOrder,
     pub anchor: BlockAnchor,

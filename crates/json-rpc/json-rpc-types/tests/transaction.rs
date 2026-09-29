@@ -19,7 +19,7 @@ fn diagnostic(code: DbConflictCode) -> TxFailureDiagnostic {
 
 #[test]
 fn recent_failure_serializes_camel_case() {
-    let status = TransactionStatus::from(&diagnostic(DbConflictCode::kDbConflictExclusiveLock));
+    let status = TransactionStatus::from(&diagnostic(DbConflictCode::ExclusiveLockDenied));
 
     let value = serde_json::to_value(&status).expect("recent failure should serialize");
 
@@ -44,20 +44,14 @@ fn recent_failure_serializes_camel_case() {
 #[test]
 fn conflict_code_maps_all_known_codes() {
     let cases = [
-        (DbConflictCode::kDbConflictExclusiveLock, "exclusiveLock"),
-        (DbConflictCode::kDbConflictTypeMismatch, "typeMismatch"),
-        (DbConflictCode::kDbConflictValueMismatch, "valueMismatch"),
-        (DbConflictCode::kDbConflictBoundsExceeded, "boundsExceeded"),
-        (DbConflictCode::kDbConflictOverflow, "overflow"),
-        (
-            DbConflictCode::kDbConflictReplayProtection,
-            "replayProtection",
-        ),
-        (DbConflictCode::kDbConflictQueueConsumer, "queueConsumer"),
-        (
-            DbConflictCode::kDbConflictCapacityExceeded,
-            "capacityExceeded",
-        ),
+        (DbConflictCode::ExclusiveLockDenied, "exclusiveLock"),
+        (DbConflictCode::TypeMismatch, "typeMismatch"),
+        (DbConflictCode::ValueMismatch, "valueMismatch"),
+        (DbConflictCode::BoundsExceeded, "boundsExceeded"),
+        (DbConflictCode::Overflow, "overflow"),
+        (DbConflictCode::ReplayProtection, "replayProtection"),
+        (DbConflictCode::QueueConsumer, "queueConsumer"),
+        (DbConflictCode::CapacityExceeded, "capacityExceeded"),
     ];
     for (code, expected) in cases {
         let json =
