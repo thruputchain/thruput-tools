@@ -1676,6 +1676,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-firehose"
+version = "0.19.0-pre.2"
+dependencies = [
+ "async-trait",
+ "axum",
+ "clap",
+ "fs2",
+ "groundhog-json-rpc-types",
+ "groundhog-signing",
+ "groundhog-x23-transport",
+ "groundhog-xdr",
+ "groundhog_indexer",
+ "groundhog_scheduler",
+ "hex",
+ "jsonrpsee",
+ "prometheus",
+ "rpc_driver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "xdrs",
+]
+
+[[package]]
 name = "groundhog-hogd-backend"
 version = "0.19.0-pre.2"
 dependencies = [
