@@ -350,6 +350,17 @@ async fn ingest(
             }
             match outcome {
                 Outcome::Block => {
+                    // Only CaughtUp may establish a fresh archive's start point.
+                    // NotReady already covers an outbox awaiting initialization.
+                    if matches!(
+                        store.cursor(false),
+                        groundhog_indexer::IndexerProgress::Default { .. }
+                    ) {
+                        return Err(Error::Invalid(
+                            "block received before caught-up origin; tip-only bootstrap required"
+                                .into(),
+                        ));
+                    }
                     let EventIndexerPullResult::EventIndexerPullBlock { pulled_block } = result
                     else {
                         return Err(Error::Invalid("invalid block union".into()));
@@ -615,6 +626,9 @@ mod tests {
         let replies = vec![
             diagnostic(2),
             diagnostic(5),
+            EventIndexerPullResult::EventIndexerPullCaughtUp {
+                origin: block.origin.clone(),
+            },
             EventIndexerPullResult::EventIndexerPullBlock {
                 pulled_block: block.clone(),
             },
@@ -627,7 +641,7 @@ mod tests {
         let config = config(&endpoint, dir.path());
         let metrics = Metrics::new().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        let expected = [0, 0, 0, 1, 2];
+        let expected = [0, 0, 0, 2, 1, 2];
         // Two transient outcomes sleep a second each, so a fixed budget leaves
         // almost no headroom and fails on a loaded runner. Wait for the state
         // the assertions describe, with a ceiling that only trips on a hang.
@@ -649,12 +663,61 @@ mod tests {
         };
         assert!(result.is_none(), "the final pull must remain parked");
         assert_eq!(*states.lock().unwrap(), expected);
-        for label in ["not_ready", "internal_failure", "block", "caught_up"] {
+        assert!(dir.path().join("origin.xdr").exists());
+        assert_eq!(metrics.outcomes.with_label_values(&["caught_up"]).get(), 2);
+        for label in ["not_ready", "internal_failure", "block"] {
             assert_eq!(metrics.outcomes.with_label_values(&[label]).get(), 1);
         }
         assert!(metrics.is_healthy());
         assert!(metrics.parked.get() > 0.);
         assert_eq!(Store::open(dir.path()).unwrap().height(), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn block_before_caught_up_leaves_archive_empty() {
+        let hex: String = include_str!("../tests/fixtures/bootstrap.hex")
+            .split_whitespace()
+            .collect();
+        let block: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
+        assert_eq!(
+            *block
+                .block
+                .payload
+                .consensus_value
+                .proposal_header
+                .block_height,
+            1
+        );
+        let (endpoint, states, task) =
+            server(vec![EventIndexerPullResult::EventIndexerPullBlock {
+                pulled_block: block,
+            }])
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(&endpoint, dir.path());
+        let metrics = Metrics::new().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, Err(Error::Invalid(message)) if message.contains("tip-only bootstrap"))
+        );
+        assert_eq!(*states.lock().unwrap(), [0]);
+        let recovered = Store::open(dir.path()).unwrap();
+        assert_eq!(recovered.blocks, 0);
+        assert_eq!(recovered.bytes, 0);
+        assert_eq!(recovered.height(), -1);
+        assert!(!dir.path().join("origin.xdr").exists());
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "only LOCK may exist"
+        );
         task.abort();
     }
 
@@ -690,6 +753,7 @@ mod tests {
         let block: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
         // Replay the recorded block with its original protocol identity.
         let protocol = block.origin.protocol;
+        let origin = block.origin.clone();
         let replies = vec![
             EventIndexerPullResult::EventIndexerPullBlock {
                 pulled_block: block
@@ -700,6 +764,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = config(&endpoint, dir.path());
         let metrics = Metrics::new().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.adopt(&origin).unwrap();
+        drop(store);
         let store = Store::open(dir.path()).unwrap();
         let run = ingest(&config, protocol, store, &metrics, Tail::Off);
         tokio::pin!(run);
@@ -717,7 +784,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(*states.lock().unwrap(), [0, 1]);
+        assert_eq!(*states.lock().unwrap(), [1, 1]);
         assert_eq!(metrics.outcomes.with_label_values(&["replay"]).get(), 1);
         assert_eq!(metrics.outcomes.with_label_values(&["block"]).get(), 1);
         assert_eq!(metrics.blocks.get(), 1);
@@ -729,7 +796,7 @@ mod tests {
                 }
             }) => result.unwrap(),
         }
-        assert_eq!(*states.lock().unwrap(), [0, 1, 1]);
+        assert_eq!(*states.lock().unwrap(), [1, 1, 1]);
         assert_eq!(metrics.blocks.get(), 1);
         task.abort();
     }

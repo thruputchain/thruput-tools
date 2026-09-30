@@ -114,6 +114,12 @@ request to the 0.36.0 **request-only `CaughtUp` cursor state**, which parks unti
 publication. This state is never persisted. After a block the client asks with
 `Initialized` again. There is no polling timer or deadline on the parked pull.
 
+A new archive starts only after `CaughtUp` supplies its origin. A block received
+before that point is refused and store exits without writing it. This makes
+tip-only bootstrap independent of upstream retention policy. An outbox awaiting
+initialization can return `NotReady`, which retains the existing retry behavior.
+Archives with an adopted origin continue ingesting normally.
+
 All outcomes have distinct logs and counter labels:
 
 | Outcome | Action |
