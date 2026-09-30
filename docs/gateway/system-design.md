@@ -449,6 +449,10 @@ and leaves the generation alone.
 
 ## Event Query Bounds
 
+Cursors continue one historical scan; they are not application checkpoints.
+See the [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract)
+for continuation and restart rules.
+
 `get_events` is paginated server-side (the indexer clamps page size to
 its own cap), but the gateway adds a defensive pre-XDR check before
 encoding so clearly-bogus inputs fail at the JSON-RPC boundary:
