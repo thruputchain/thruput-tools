@@ -9,62 +9,31 @@ bootstrap_order = 60
 +++
 ## Local Development
 
-For first-run setup in automation, use `groundhog init --non-interactive --json`.
-It initializes global profiles and reports incomplete setup with exit 1 when
-Cargo, the active profile, or a selected stored signing key is unavailable.
-Add `--generate-key` only when authorized to create the initial signing key;
-existing keys and explicit key selections are preserved. `--quiet` does not
-accept wizard defaults. `init --json` performs setup; use `status --json` for
-read-only diagnostics. Create scripted projects separately with `groundhog new`.
+Use `groundhog init --non-interactive --json` for scripted setup. Missing Cargo,
+profile, or stored key exits 1. Key creation requires authorized `--generate-key`;
+existing selections are preserved. `--quiet` does not grant consent. `init` writes;
+`status --json` is read-only. Create projects with `groundhog new`.
 
-Use the CLI to start the supported local stack:
+Start the local stack with `groundhog node`. Inspect, prefetch, or locate its
+catalog-pinned bundle with `toolchain list`, `toolchain install`, and `toolchain
+which`. `--offline node` forbids managed downloads, not RPC/Cargo elsewhere.
+`GROUNDHOG_DEVNODE_BINARY` selects a matching build. Diagnose compatibility
+failures; do not override protocols. Use `status --json` / `node --json` for runtime
+information and `--help` for flags. Never use deterministic local keys in production.
 
-```console
-groundhog node
-```
+`--non-interactive` disables prompts/UI without granting consent: protected
+operations require authorized `--force`. Key imports need piped stdin; Cargo/test
+subprocesses cannot read terminal stdin. Use `--json` for machine results.
 
-The CLI can acquire a catalog-pinned devnode bundle on startup. Use
-`groundhog toolchain list` to inspect the embedded catalog, `toolchain install`
-to prefetch it, and `toolchain which` to find the installed executable.
-`groundhog --offline node` forbids managed downloads; it does not disable RPC
-or Cargo network traffic in other commands. Keep `GROUNDHOG_DEVNODE_BINARY`
-for a matching local build. Diagnose startup compatibility failures rather
-than adding a protocol override.
+Timeout or `unknown` does not prove transaction failure. Inspect the hash before
+retrying. `node --verbose` enables backend logs; restarting an ephemeral node
+loses its state.
 
-Use another terminal for status, build, deploy, call, view, or TypeScript
-application work. Prefer the active local profile and runtime information
-reported by `groundhog status --json` and `groundhog node --json`. Do not copy
-deterministic local-development keys into production configuration.
-
-Typical CLI discovery:
-
-```console
-groundhog status --json
-groundhog build --help
-groundhog test --help
-groundhog node --help
-groundhog deploy --help
-groundhog call --help
-groundhog view --help
-groundhog codegen ts --help
-```
-
-Use global `--non-interactive` to disable CLI prompts and terminal UI while
-retaining ordinary output. It does not grant consent: protected actions still
-require `--force`, and initial key creation requires `init --generate-key`.
-`keys import` needs piped stdin when prompts are disabled; never place seeds
-in arguments. Cargo/test subprocesses cannot read terminal stdin in this mode.
-
-Use `--json` for agent-consumed command results. Respect commands that require
-explicit confirmation, and never add a confirmation override unless the user
-has authorized the consequential action.
-
-A receipt timeout does not establish that a transaction failed. Inspect the
-transaction using the command printed in the error before submitting the
-operation again. An `unknown` status does not explain why the transaction is
-absent. For detailed local backend logs, start `groundhog node --verbose`;
-output goes to that terminal unless redirected. Do not restart an ephemeral
-node just to enable logging: stopping it discards its chain state.
+`events list`, `tx list`, and `token transfers` read newest-first pages.
+Omit `--cursor` to refresh from the head; a continuation goes toward older rows.
+Continue with the returned opaque cursor and the same target/filters. `tx list`
+matches root invocation targets, not every address touched by a transaction.
+See [Event pages and restart](#event-pages-and-restart) for cursor rules.
 
 ### Key and address interoperability
 
@@ -93,17 +62,14 @@ Existing key files and public JSON-RPC wire encodings remain unchanged.
 
 ### Native accounts
 
-Unsaved ordinary keys use nonce-zero native accounts. `wallet create` saves that
-identity offline; it never funds. Use `airdrop` explicitly. `--prefund` is rejected.
-Saved wallets and dev-N retain their identity and format.
+Ordinary keys derive nonce-zero native accounts. `wallet create` saves the empty
+identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
+wallets and dev-N retain identity and format.
 
-Native deploy requires `--experimental-native-deploy --fund <HOG>`: support is
-operator-asserted; RPC cannot verify activation. Qualify the published bundle. Legacy senders reject native options. Funding is an exact
-transfer, not a minimum estimate; zero skips it. For atomic initialization, use
-`--init <METHOD>` with repeated `--init-arg <VALUE>` from the artifact's current
-spec sidecar, or a 0x selector with one raw hex argument. `--init-gas-limit` sets
-the child budget. Init targets the new contract, sees the wallet as caller, and
-discards its return. Failure rolls back funding, deployment and init. Dry-run
-submits nothing. Unverified outcomes retain signed bytes and identity, including
-init. Inspect before retrying: timeout/`unknown` is inconclusive; rerunning changes
-nonce/address. Aliases require verified success at the exact address.
+Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
+amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated
+`--init-arg <VALUE>` using the artifact spec, or a 0x selector and raw hex argument.
+`--init-gas-limit` sets child gas. Init runs as the wallet, discards its return,
+and rolls back with funding/deployment on failure. Dry-run submits nothing.
+Unverified results retain signed identity: inspect before retrying because nonce
+and address change. Aliases require verified success at the predicted address.

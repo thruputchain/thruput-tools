@@ -67,17 +67,12 @@ pub enum CliError {
     #[error("wallet create no longer accepts --prefund")]
     #[hint("create the empty wallet first, then run groundhog airdrop <wallet-name>")]
     WalletCreatePrefundUnsupported,
-    #[error("native deployment requires explicit experimental opt-in")]
-    #[hint(
-        "use --experimental-native-deploy --fund <HOG> only on a network known to support atomic deploy with optional initialization; runtime support is not detected automatically"
-    )]
-    NativeWalletDeploymentUnavailable,
     #[error("native deployment requires an explicit --fund <HOG> amount")]
     #[hint(
         "choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate"
     )]
     NativeDeploymentFundingRequired,
-    #[error("--fund, --init and --experimental-native-deploy require a native wallet")]
+    #[error("--fund and --init require a native wallet")]
     #[hint("existing legacy wallets retain their own deployment funding behavior")]
     NativeDeploymentOptionsForLegacy,
     #[error("invalid deployment initializer: {message}")]
@@ -170,9 +165,8 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     #[hint(
-        "add the profile to project or global config, or switch to \
-         an existing one with `--profile` or \
-         `GROUNDHOG_PROFILE`"
+        "create it with `groundhog config new {0} --network <NETWORK>`, or switch to \
+         an existing one with `--profile` or `GROUNDHOG_PROFILE`"
     )]
     ProfileNotFound(String),
     #[error("profile `{profile}` not found in {scope} config")]
@@ -267,9 +261,13 @@ pub enum CliError {
     #[error("contract spec finalization failed: {0}")]
     #[hint(
         "check that your contract uses `#[contract]` and \
-         `#[contracttype]` attributes correctly"
+         `#[contract_type]` attributes correctly"
     )]
     SpecFailed(String),
+    /// TypeScript codegen cannot express the spec. The contract itself builds;
+    /// the message names the declarations involved and how to rename them.
+    #[error("cannot generate TypeScript bindings: {0}")]
+    TsBindingsFailed(String),
     /// The contract's raw spec wire format is one this build cannot read.
     ///
     /// Surfaced verbatim rather than reworded: the inner error names both
@@ -399,7 +397,10 @@ pub enum CliError {
     #[hint("check the standard proxy environment variables, then retry")]
     HttpClientInit,
     #[error("no rpc_url configured for the selected profile")]
-    #[hint("set `rpc_url` in the selected profile in project or global config")]
+    #[hint(
+        "for a local profile, start `groundhog node` in another terminal; otherwise run \
+         `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`"
+    )]
     MissingRpcUrl,
     #[error("profile `{profile}` {message}")]
     #[hint(
@@ -410,8 +411,8 @@ pub enum CliError {
     #[error("interactive input is unavailable")]
     #[hint("provide the required input explicitly; for key import, pipe the seed on stdin")]
     InteractiveInputRequired,
-    #[error("confirmation required to {action}")]
-    #[hint("review the warning and rerun with `--force` to confirm non-interactively")]
+    #[error("cannot confirm the request to {action}: no interactive terminal is available")]
+    #[hint("rerun from an interactive terminal, or pass `--force` to proceed without a prompt")]
     #[details(expr = Some(json!({ "action": action, "requiredFlag": "--force" })))]
     ConfirmationRequired { action: &'static str },
     #[error(
@@ -441,8 +442,8 @@ pub enum CliError {
     #[error("cannot determine the network hash for this profile")]
     #[hint(
         "signing binds each transaction to a network: run `groundhog config set \
-         network-hash <hash>` for this profile, or point it at a runtime manifest \
-         from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
+         network-hash <hash> --profile <name>`, or point the profile at a runtime \
+         manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or \
          profile.<name>.runtime_manifest"
     )]
     MissingNetworkHash,

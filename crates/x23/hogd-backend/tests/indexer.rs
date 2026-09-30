@@ -55,6 +55,34 @@ fn a_miss_has_no_committed_status() {
 }
 
 #[test]
+fn empty_and_fully_filtered_pages_keep_the_indexer_continuation() {
+    let malformed = IdentifiedEvent {
+        tx_hash: [0x33; 32].into(),
+        block_height: 5.into(),
+        sequence_number: 0,
+        emitted_event: TxEmittedEvent {
+            contract_address: [7; 32].into(),
+            num_topics: 3,
+            serialized_event: BytesM(vec![0xab; 1]),
+        },
+    };
+    for events in [vec![], vec![malformed]] {
+        let dropped = events.len();
+        let decoded = public_event_page(EventPage {
+            events: VecM(events),
+            cursor: BytesM(vec![9, 9]),
+            latest_block: 6.into(),
+            oldest_block: 1.into(),
+        });
+        assert!(decoded.page.events.is_empty());
+        assert_eq!(decoded.page.cursor.0, vec![9, 9]);
+        assert_eq!(decoded.page.latest_block, 6.into());
+        assert_eq!(decoded.page.oldest_block, 1.into());
+        assert_eq!(decoded.dropped.len(), dropped);
+    }
+}
+
+#[test]
 fn a_page_keeps_good_events_and_names_the_dropped_ones() {
     let event = |sequence_number: u32, num_topics: u32, len: usize| IdentifiedEvent {
         tx_hash: [0x33; 32].into(),

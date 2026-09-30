@@ -151,13 +151,10 @@ impl Fixture {
             manifest,
         }
     }
-    async fn scenario(&self, gate: bool, legacy: bool) -> Scenario {
+    async fn scenario(&self, legacy: bool) -> Scenario {
         let mut builder = Scenario::builder("native-test")
             .network(NetworkConfig::existing(&self.url, self.manifest.path()))
             .artifact_bytes("counter", [1, 2, 3], ArtifactKind::Rv32);
-        if gate {
-            builder = builder.experimental_native_deploy();
-        }
         if legacy {
             builder = builder.legacy_bootstrap_accounts();
         }
@@ -168,7 +165,7 @@ impl Fixture {
 #[tokio::test]
 async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_returns() {
     let fixture = Fixture::new(Outcome::Success).await;
-    let scenario = fixture.scenario(false, false).await;
+    let scenario = fixture.scenario(false).await;
     assert!(fixture.state.submitted.lock().unwrap().is_empty());
     scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
@@ -204,7 +201,7 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
 #[tokio::test]
 async fn deployment_has_exact_effects_and_registers_once() {
     let fixture = Fixture::new(Outcome::Success).await;
-    let scenario = fixture.scenario(true, false).await;
+    let scenario = fixture.scenario(false).await;
     scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
             let options = DeployOptions {
@@ -237,37 +234,29 @@ async fn deployment_has_exact_effects_and_registers_once() {
 }
 
 #[tokio::test]
-async fn deployment_gates_do_not_submit_or_change_legacy_identity() {
-    for (gate, legacy) in [(false, false), (true, true)] {
-        let fixture = Fixture::new(Outcome::Success).await;
-        let scenario = fixture.scenario(gate, legacy).await;
-        scenario
-            .run_agents([Agent::new("alice", move |mut ctx| async move {
-                if legacy {
-                    assert_eq!(ctx.address().as_ref(), &[0x72; 32]);
-                }
-                let error = ctx
-                    .deploy_artifact("counter", DeployOptions::funded(0))
-                    .await
-                    .unwrap_err();
-                assert!(matches!(
-                    error,
-                    TestkitError::NativeDeploymentUnsupported
-                        | TestkitError::LegacyDeploymentUnsupported
-                ));
-                Ok(())
-            })])
-            .await
-            .unwrap();
-        assert!(fixture.state.submitted.lock().unwrap().is_empty());
-    }
+async fn deployment_does_not_submit_or_change_legacy_identity() {
+    let fixture = Fixture::new(Outcome::Success).await;
+    let scenario = fixture.scenario(true).await;
+    scenario
+        .run_agents([Agent::new("alice", |mut ctx| async move {
+            assert_eq!(ctx.address().as_ref(), &[0x72; 32]);
+            let error = ctx
+                .deploy_artifact("counter", DeployOptions::funded(0))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, TestkitError::LegacyDeploymentUnsupported));
+            Ok(())
+        })])
+        .await
+        .unwrap();
+    assert!(fixture.state.submitted.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn ambiguous_submissions_keep_signed_identity_and_reserve_nonce() {
     for outcome in [Outcome::SendError, Outcome::SendHash] {
         let fixture = Fixture::new(outcome).await;
-        let scenario = fixture.scenario(true, false).await;
+        let scenario = fixture.scenario(false).await;
         scenario
             .run_agents([Agent::new("alice", |mut ctx| async move {
                 for _ in 0..2 {
@@ -311,7 +300,7 @@ async fn registry_never_accepts_unverified_receipts_or_resubmits_pending_attempt
         Outcome::Pending,
     ] {
         let fixture = Fixture::new(outcome).await;
-        let scenario = fixture.scenario(true, false).await;
+        let scenario = fixture.scenario(false).await;
         scenario
             .run_agents([Agent::new("alice", move |mut ctx| async move {
                 let submitted = ctx
@@ -350,7 +339,7 @@ async fn high_level_raw_deploy_preserves_unverified_attempt() {
         Outcome::ReceiptHash,
     ] {
         let fixture = Fixture::new(outcome).await;
-        let scenario = fixture.scenario(true, false).await;
+        let scenario = fixture.scenario(false).await;
         scenario
             .run_agents([Agent::new("alice", |mut ctx| async move {
                 let error = ctx

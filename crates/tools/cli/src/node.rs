@@ -439,7 +439,7 @@ fn print_started_local_node(
         print.detail("chain state", chain_state);
     }
     if started.backend_planes().read.is_indexer_backed() {
-        print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
+        print.detail("backend", "hog-devnode (chainTip, submit, and reads live)");
     } else {
         print.warn(
             "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",

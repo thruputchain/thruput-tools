@@ -78,9 +78,6 @@ impl fmt::Display for AgentFailures {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TestkitError {
-    /// The caller has not asserted support for the new deployment ABI.
-    #[error("native deployment requires experimental_native_deploy() and a supporting runtime")]
-    NativeDeploymentUnsupported,
     /// Existing legacy wallet identities cannot use native deployment semantics.
     #[error("legacy bootstrap accounts support calls only; deploy from a native account")]
     LegacyDeploymentUnsupported,

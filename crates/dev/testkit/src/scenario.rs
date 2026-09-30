@@ -27,7 +27,6 @@ pub struct ScenarioBuilder {
     network: Option<NetworkConfig>,
     artifacts: Vec<ArtifactSpec>,
     legacy_accounts: bool,
-    native_deploy: bool,
 }
 
 impl ScenarioBuilder {
@@ -36,14 +35,6 @@ impl ScenarioBuilder {
     #[must_use]
     pub fn legacy_bootstrap_accounts(mut self) -> Self {
         self.legacy_accounts = true;
-        self
-    }
-
-    /// Assert that the selected runtime supports atomic native deployment.
-    /// Runtime manifests do not advertise this capability; verify the binary yourself.
-    #[must_use]
-    pub fn experimental_native_deploy(mut self) -> Self {
-        self.native_deploy = true;
         self
     }
 
@@ -104,7 +95,7 @@ impl ScenarioBuilder {
         let config = self.network.ok_or(TestkitError::NoNetwork)?;
         let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
         let (network, accounts, guard) =
-            acquire_network(config, &self.seed, self.legacy_accounts, self.native_deploy).await?;
+            acquire_network(config, &self.seed, self.legacy_accounts).await?;
         Ok(Scenario {
             seed: self.seed,
             network,
@@ -144,7 +135,6 @@ impl Scenario {
             network: None,
             artifacts: Vec::new(),
             legacy_accounts: false,
-            native_deploy: false,
         }
     }
 
@@ -315,7 +305,6 @@ async fn acquire_network(
     config: NetworkConfig,
     seed: &str,
     legacy_accounts: bool,
-    native_deploy: bool,
 ) -> Result<(Network, AccountSource, NetworkGuard)> {
     match config {
         NetworkConfig::Existing {
@@ -323,7 +312,7 @@ async fn acquire_network(
             runtime_manifest,
         } => {
             let manifest = load_runtime_manifest(&runtime_manifest)?;
-            let network = Network::connect(&rpc_url, &manifest, None, seed, native_deploy)?;
+            let network = Network::connect(&rpc_url, &manifest, None, seed)?;
             Ok((
                 network,
                 account_source(manifest, seed, legacy_accounts),
@@ -339,13 +328,7 @@ async fn acquire_network(
                 .clone()
                 .ok_or(TestkitError::MissingRuntimeManifest)?;
             let manual_block_producer = handle.manual_block_producer();
-            let network = Network::connect(
-                &rpc_url,
-                &manifest,
-                manual_block_producer,
-                seed,
-                native_deploy,
-            )?;
+            let network = Network::connect(&rpc_url, &manifest, manual_block_producer, seed)?;
             Ok((
                 network,
                 account_source(manifest, seed, legacy_accounts),

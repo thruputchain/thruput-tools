@@ -9274,6 +9274,63 @@ fn call_live_json_decodes_library_abort() {
 }
 
 #[test]
+fn call_live_json_decodes_erc20_permit_abort() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // No local metadata declares the exception, so it resolves through the
+    // same standard-exception registry an ERC20 abort does.
+    let abort_data = xdrs::cxs::encode(&(
+        <groundhog_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
+        groundhog_erc20_permit_if::ERC20PermitError::ExceedsGrant,
+    ))
+    .expect("bug: ERC20 permit exception should encode");
+    let abort_hex = format!("0x{}", hex::encode(&abort_data));
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_reverted_call_receipt(42, &abort_hex),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args([
+            "--json",
+            "call",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+            "--force",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["error"]["code"], "transaction_reverted");
+    assert_eq!(stdout["data"]["status"]["result"], "reverted");
+    assert_eq!(stdout["data"]["abortData"], abort_hex);
+    assert_eq!(stdout["data"]["abortException"], "ERC20PermitError");
+    assert_eq!(
+        stdout["data"]["abortExceptionCrate"],
+        "groundhog-erc20-permit-if"
+    );
+    assert_eq!(stdout["data"]["abortExceptionVersion"], "0.1");
+    assert_eq!(stdout["data"]["abortValue"], "ExceedsGrant");
+    assert!(stdout["data"].get("abortDecodeError").is_none());
+}
+
+#[test]
 fn call_live_human_prints_decoded_abort() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");

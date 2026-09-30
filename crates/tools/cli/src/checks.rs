@@ -490,7 +490,7 @@ fn add_environment_findings(
                 .clone()
                 .unwrap_or_else(|| "hog-devnode binary is unavailable".into()),
             hint: Some(Cow::Borrowed(
-                "install groundhog-client or set GROUNDHOG_DEVNODE_BINARY to an executable hog-devnode; fix or unset the variable if it points to an old path",
+                "run `groundhog toolchain install`, or set GROUNDHOG_DEVNODE_BINARY to an executable hog-devnode; fix or unset the variable if it points to an old path",
             )),
         });
     } else if !environment.dev_wallet_artifact.valid {
@@ -507,7 +507,7 @@ fn add_environment_findings(
                 .clone()
                 .unwrap_or_else(|| "dev_wallet.rv32a is unavailable".into()),
             hint: Some(Cow::Borrowed(
-                "install the dev-wallet artifact from the same groundhog-client build as hog-devnode",
+                "install the dev-wallet artifact from the same client bundle as hog-devnode",
             )),
         });
     }

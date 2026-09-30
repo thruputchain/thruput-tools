@@ -189,11 +189,35 @@ mod tests {
     }
 
     #[test]
+    fn decode_abort_decodes_erc20_permit_error_without_metadata() {
+        let bytes = xdrs::cxs::encode(&(
+            <groundhog_erc20_permit_if::ERC20PermitError as sdk::exn::Exn>::SELECTOR,
+            groundhog_erc20_permit_if::ERC20PermitError::NotSpender,
+        ))
+        .expect("bug: ERC20 permit exception should encode");
+
+        let decoded =
+            decode_abort(&bytes, None).expect("bug: ERC20 permit exception should decode");
+
+        assert_eq!(decoded.exception.as_deref(), Some("ERC20PermitError"));
+        assert_eq!(decoded.value, serde_json::json!("NotSpender"));
+        assert_eq!(decoded.exception_crate, Some("groundhog-erc20-permit-if"));
+        assert_eq!(decoded.exception_version, Some("0.1"));
+    }
+
+    #[test]
     fn describe_registry_covers_wallet_ambient_exceptions() {
         // The registry's label/selector consistency is asserted upstream in
         // groundhog-spec-tool; this only pins that the exceptions the CLI's
-        // wallet flows depend on stay registered.
-        for name in ["LibraryExn", "ERC20Error"] {
+        // wallet flows depend on stay registered. A permit flow can surface
+        // any of the last three: the wallet refuses the signed operation, the
+        // token refuses the grant, or the token refuses the transfer itself.
+        for name in [
+            "LibraryExn",
+            "ERC20Error",
+            "SignedOpError",
+            "ERC20PermitError",
+        ] {
             assert!(
                 groundhog_spec_tool::describe::lookup(name).is_some(),
                 "{name} missing from the describe registry"

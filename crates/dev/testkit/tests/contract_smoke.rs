@@ -170,7 +170,6 @@ async fn caller_counter_deploy_call_read() {
 
     let scenario = Scenario::builder("caller-counter-smoke")
         .network(NetworkConfig::local(config))
-        .experimental_native_deploy()
         .artifact("caller-counter", artifact)
         .build()
         .await
@@ -259,7 +258,6 @@ async fn multiple_runs_are_possible() {
 
     let scenario = Scenario::builder("multiple-runs")
         .network(NetworkConfig::local(config))
-        .experimental_native_deploy()
         .artifact("caller-counter", artifact)
         .build()
         .await
@@ -318,7 +316,6 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
 
     let scenario = Scenario::builder("registration-across-runs")
         .network(NetworkConfig::local(config))
-        .experimental_native_deploy()
         .artifact("caller-counter", artifact)
         .build()
         .await
@@ -405,7 +402,6 @@ async fn manual_block_production_stages_deploys_and_calls() {
 
     let scenario = Scenario::builder("manual-block-production")
         .network(NetworkConfig::local(config))
-        .experimental_native_deploy()
         .artifact("caller-counter", artifact)
         .build()
         .await

@@ -320,7 +320,6 @@ impl Account {
         contract: Option<Contract>,
         options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
-        network.require_native_deploy()?;
         if !self.dev.native {
             return Err(TestkitError::LegacyDeploymentUnsupported);
         }

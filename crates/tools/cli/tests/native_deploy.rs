@@ -121,7 +121,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
             groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,
         ),
         (
-            fixture.deploy(&["--experimental-native-deploy", "--fund", "0", "--dry-run"]),
+            fixture.deploy(&["--fund", "0", "--dry-run"]),
             "signedTx",
             groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
         ),
@@ -223,19 +223,11 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
 }
 
 #[test]
-fn native_deploy_requires_opt_in_and_explicit_funding_without_rpc() {
+fn native_deploy_requires_explicit_funding_without_rpc() {
     let fixture = Fixture::new("http://127.0.0.1:1");
     for (args, code) in [
-        (vec![], "native_wallet_deployment_unavailable"),
-        (vec!["--fund", "5"], "native_wallet_deployment_unavailable"),
-        (
-            vec!["--experimental-native-deploy"],
-            "native_deployment_funding_required",
-        ),
-        (
-            vec!["--experimental-native-deploy", "--fund", "0.00000001"],
-            "invalid_hog_amount",
-        ),
+        (vec![], "native_deployment_funding_required"),
+        (vec!["--fund", "0.00000001"], "invalid_hog_amount"),
     ] {
         let output = fixture.deploy(&args);
         assert!(!output.status.success());
@@ -260,7 +252,7 @@ fn legacy_wallet_rejects_native_funding_options_without_rpc() {
     wallet.remove("account_nonce");
     wallet.remove("kind");
     std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
-    for args in [vec!["--fund", "5"], vec!["--experimental-native-deploy"]] {
+    for args in [vec!["--fund", "5"], vec!["--init", "initialize"]] {
         let output = fixture.deploy(&args);
         assert!(!output.status.success());
         let report: Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -280,7 +272,7 @@ async fn native_deployment_rejects_network_mismatch_before_submission() {
         .unwrap()
         .replace(NETWORK, &"08".repeat(32));
     std::fs::write(path, config).unwrap();
-    let output = fixture.deploy(&["--experimental-native-deploy", "--fund", "5"]);
+    let output = fixture.deploy(&["--fund", "5"]);
     assert!(!output.status.success());
     assert!(state.submissions.lock().unwrap().is_empty());
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
@@ -297,12 +289,7 @@ async fn native_deployment_rejects_network_mismatch_before_submission() {
 async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
     let (url, handle, state) = server(Outcome::Success).await;
     let fixture = Fixture::new(&url);
-    let output = fixture.deploy(&[
-        "--experimental-native-deploy",
-        "--fund",
-        "5.0000001",
-        "--dry-run",
-    ]);
+    let output = fixture.deploy(&["--fund", "5.0000001", "--dry-run"]);
     assert!(
         output.status.success(),
         "{}",
@@ -323,10 +310,6 @@ async fn native_deploy_dry_run_describes_canonical_effects_without_sending() {
     assert_eq!(amount, 50_000_001);
     assert_eq!(initializer, None);
     assert_eq!(data["nativeDeployment"]["fundingRawAmount"], "50000001");
-    assert_eq!(
-        data["nativeDeployment"]["runtimeSupport"],
-        "operator_asserted"
-    );
     assert_eq!(
         data["nativeDeployment"]["deploymentNonce"],
         format!("0x{}", hex::encode(nonce.as_ref()))
@@ -374,7 +357,7 @@ fn initializer_options_require_a_method_and_valid_arguments_before_rpc() {
             "18446744073709551615",
         ],
     ] {
-        let mut all = vec!["--experimental-native-deploy", "--fund", "5"];
+        let mut all = vec!["--fund", "5"];
         all.extend(args);
         let output = fixture.deploy(&all);
         assert!(!output.status.success());
@@ -418,7 +401,6 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
     )
     .unwrap();
     let output = fixture.deploy(&[
-        "--experimental-native-deploy",
         "--fund",
         "5",
         "--init",
@@ -446,15 +428,7 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
         groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT
     );
     for value in ["not-a-number", "18446744073709551616"] {
-        let bad = fixture.deploy(&[
-            "--experimental-native-deploy",
-            "--fund",
-            "5",
-            "--init",
-            "initialize",
-            "--init-arg",
-            value,
-        ]);
+        let bad = fixture.deploy(&["--fund", "5", "--init", "initialize", "--init-arg", value]);
         assert!(!bad.status.success());
     }
     assert!(state.submissions.lock().unwrap().is_empty());
@@ -467,7 +441,6 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
         let (url, handle, state) = server(outcome).await;
         let fixture = Fixture::new(&url);
         let mut args = vec![
-            "--experimental-native-deploy",
             "--fund",
             "0.0000000",
             "--init",
@@ -533,7 +506,7 @@ async fn native_deploy_preserves_identity_and_never_saves_alias_for_unverified_r
     ] {
         let (url, handle, state) = server(outcome).await;
         let fixture = Fixture::new(&url);
-        let output = fixture.deploy(&["--experimental-native-deploy", "--fund", "5"]);
+        let output = fixture.deploy(&["--fund", "5"]);
         assert!(!output.status.success(), "{outcome:?}");
         assert!(
             output.stderr.is_empty(),
@@ -571,7 +544,7 @@ async fn only_verified_success_saves_the_native_alias() {
     for outcome in [Outcome::Success, Outcome::Reverted] {
         let (url, handle, state) = server(outcome).await;
         let fixture = Fixture::new(&url);
-        let output = fixture.deploy(&["--experimental-native-deploy", "--fund", "5"]);
+        let output = fixture.deploy(&["--fund", "5"]);
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         let submissions = state.submissions.lock().unwrap();
         assert_eq!(submissions.len(), 1);
@@ -604,13 +577,7 @@ async fn recovery_hint_preserves_explicit_profile_without_a_default() {
     let mut config: toml::Value = toml::from_str(&config).unwrap();
     config.as_table_mut().unwrap().remove("default_profile");
     std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
-    let output = fixture.deploy(&[
-        "--profile",
-        "default",
-        "--experimental-native-deploy",
-        "--fund",
-        "5",
-    ]);
+    let output = fixture.deploy(&["--profile", "default", "--fund", "5"]);
     assert!(!output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     let hint = report["error"]["hint"].as_str().unwrap();
@@ -629,7 +596,7 @@ async fn native_alias_write_failure_preserves_verified_deployment() {
         .unwrap()
         .replace("[profile.default]", "[profile.default]\ncontracts = {}");
     std::fs::write(path, config).unwrap();
-    let output = fixture.deploy(&["--experimental-native-deploy", "--fund", "5"]);
+    let output = fixture.deploy(&["--fund", "5"]);
     assert!(output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     let submitted = state.submissions.lock().unwrap();

@@ -24,8 +24,9 @@ PROFILE ?= release
 # assume ./target.
 TARGET_ROOT := $(or $(CARGO_TARGET_DIR),target)
 
-# `dev` and `debug` are the same profile under two names and both land in
-# $(TARGET_ROOT)/debug, so neither can be pasted into the directory as-is.
+# Cargo's reserved profiles share output directories: `dev` and `test` land in
+# debug, while `release` and `bench` land in release. `debug` is our alias for
+# `dev`, so profile names cannot always be pasted into the directory as-is.
 ifeq ($(PROFILE),release)
 CARGO_PROFILE_FLAG := --release
 TARGET_DIR := $(TARGET_ROOT)/release
@@ -34,6 +35,12 @@ CARGO_PROFILE_FLAG :=
 TARGET_DIR := $(TARGET_ROOT)/debug
 else ifeq ($(PROFILE),dev)
 CARGO_PROFILE_FLAG :=
+TARGET_DIR := $(TARGET_ROOT)/debug
+else ifeq ($(PROFILE),bench)
+CARGO_PROFILE_FLAG := --profile $(PROFILE)
+TARGET_DIR := $(TARGET_ROOT)/release
+else ifeq ($(PROFILE),test)
+CARGO_PROFILE_FLAG := --profile $(PROFILE)
 TARGET_DIR := $(TARGET_ROOT)/debug
 else
 CARGO_PROFILE_FLAG := --profile $(PROFILE)
@@ -63,6 +70,7 @@ help:
 	@echo ""
 	@echo "Build"
 	@echo "  build         the whole workspace ($(PROFILE))"
+	@echo "  build-native  local-only host-tuned workspace; NEVER use for release artifacts"
 	@echo "  cli           just the groundhog binary, all a local node needs"
 	@echo "  node          run groundhog node against DEVNODE_BINARY"
 	@echo ""
@@ -72,6 +80,7 @@ help:
 	@echo "  lint          clippy with -D warnings"
 	@echo "  fmt           rewrite formatting; fmt-check reports instead"
 	@echo "  version       workspace, toolchain, and built binary versions"
+	@echo "  check-native  count hardware SHA-256 instructions in portable/native BINS"
 	@echo ""
 	@echo "Install"
 	@echo "  install       copy $(BINS) to $(BINDIR)"
@@ -92,6 +101,43 @@ config:
 .PHONY: build
 build:
 	$(CARGO) build --workspace $(CARGO_PROFILE_FLAG)
+
+# Local-only: target-cpu=native can fault on other cores; NEVER use for release artifacts.
+# A separate target directory keeps the portable build cache valid.
+.PHONY: build-native
+build-native:
+	RUSTFLAGS="-C target-cpu=native" $(CARGO) build --workspace $(CARGO_PROFILE_FLAG) --target-dir "$(TARGET_ROOT)/native"
+
+# Advisory only: instruction presence does not prove runtime dispatch uses it.
+# Apple objdump adds a vector suffix (sha256h.4s); do not also count sha256h2.
+.PHONY: check-native
+check-native:
+	@set -o pipefail; \
+	case "$$(uname -m)" in \
+		aarch64|arm64) instruction=sha256h ;; \
+		x86_64|amd64) instruction=sha256rnds2 ;; \
+		*) echo "hardware SHA-256 check unavailable for this architecture"; exit 0 ;; \
+	esac; \
+	disassembler=""; \
+	for tool in llvm-objdump objdump; do \
+		if command -v "$$tool" >/dev/null 2>&1; then disassembler=$$tool; break; fi; \
+	done; \
+	if [ -z "$$disassembler" ]; then \
+		echo "hardware SHA-256 check unavailable: install llvm-objdump or objdump"; exit 0; \
+	fi; \
+	for dir in "$(TARGET_DIR)" "$(TARGET_ROOT)/native/$(notdir $(TARGET_DIR))"; do \
+		for b in $(BINS); do \
+			binary="$$dir/$$b"; \
+			if [ ! -f "$$binary" ]; then \
+				echo "$$binary: not built"; \
+			elif count=$$("$$disassembler" -d "$$binary" 2>/dev/null | \
+				awk -v op="$$instruction" '$$0 ~ "[[:space:]]" op "([.][[:alnum:]]+)?[[:space:]]" { n++ } END { print n+0 }'); then \
+				echo "$$binary: $$count $$instruction instructions"; \
+			else \
+				echo "$$binary: disassembly unavailable with $$disassembler"; \
+			fi; \
+		done; \
+	done
 
 .PHONY: cli
 cli:

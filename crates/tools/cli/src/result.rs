@@ -126,6 +126,13 @@ impl<T: Serialize> CommandResult<T> {
         }
     }
 
+    /// Append warnings to an envelope made by any of the constructors above.
+    #[must_use]
+    pub fn and_warnings(mut self, warnings: Vec<Finding>) -> Self {
+        self.warnings.extend(warnings);
+        self
+    }
+
     /// True when any warn-level finding exists.
     pub fn has_warnings(&self) -> bool {
         self.warnings.iter().any(|w| w.level == FindingLevel::Warn)

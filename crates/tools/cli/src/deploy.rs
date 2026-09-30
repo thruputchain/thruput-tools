@@ -32,13 +32,11 @@ use crate::{CliError, Print};
 /// Current schema version for `deploy --json` data payloads.
 pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
 
-/// Explicit native deployment effects and runtime opt-in.
+/// Explicit native deployment funding and initialization.
 #[derive(Debug, Default)]
 pub struct DeploymentOptions<'a> {
     /// Exact HOG transfer, including zero to skip funding.
     pub fund: Option<&'a str>,
-    /// Caller assertion that the network supports the current native deployment ABI.
-    pub experimental: bool,
     /// Method name from the artifact spec, or an explicit eight-byte selector.
     pub init_method: Option<&'a str>,
     /// Typed method arguments, or one raw hex argument with an explicit selector.
@@ -56,7 +54,7 @@ struct InitializerReport {
     calldata: HexBytes,
 }
 
-/// Exact effects and identity of an experimental native deployment.
+/// Exact effects and identity of a native deployment.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct NativeDeployment {
@@ -68,7 +66,6 @@ struct NativeDeployment {
     gas_limit: u64,
     funding_hog: String,
     funding_raw_amount: String,
-    runtime_support: &'static str,
     initializer: Option<InitializerReport>,
 }
 
@@ -177,7 +174,7 @@ pub fn run(
             print.detail("expiry height", native.expiry_height);
             print.detail("gas budget", native.gas_limit);
             print.detail("tx", format_tx_hash(&plan.tx_hash));
-            print.warn("Experimental: runtime support is asserted by you, not detected. Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
+            print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
         }
         if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
             print.note("Cancelled");
@@ -460,7 +457,9 @@ fn print_dry_run(
         print_initializer(native.initializer.as_ref(), print);
         print.detail("expiry height", native.expiry_height);
         print.detail("gas budget", native.gas_limit);
-        print.warn("Experimental runtime support is operator-asserted. Funding is the authorized transfer, not a minimum-cost estimate or final balance.");
+        print.warn(
+            "Funding is the authorized transfer, not a minimum-cost estimate or final balance.",
+        );
     }
     print.detail("tx", format_tx_hash(&prepared.tx_hash));
     print.status(format_args!("  signed tx: {}", prepared.tx_hex));
@@ -641,11 +640,7 @@ fn prepare_deploy_transaction_plan(
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let sender = resolve_transaction_sender(profile, selected_wallet)?;
-    let funding = resolve_native_funding(
-        sender.native_account.is_some(),
-        options.fund,
-        options.experimental,
-    )?;
+    let funding = resolve_native_funding(sender.native_account.is_some(), options.fund)?;
 
     if sender.native_account.is_none() && options.init_method.is_some() {
         return Err(CliError::NativeDeploymentOptionsForLegacy);
@@ -747,7 +742,6 @@ fn prepare_deploy_transaction_plan(
         gas_limit,
         funding_hog: crate::hog::format_amount(amount),
         funding_raw_amount: amount.to_string(),
-        runtime_support: "operator_asserted",
         initializer: init_call.map(|(entrypoint, calldata)| InitializerReport {
             method: options
                 .init_method
@@ -818,19 +812,12 @@ fn print_initializer(initializer: Option<&InitializerReport>, print: &Print) {
     }
 }
 
-fn resolve_native_funding(
-    native: bool,
-    fund: Option<&str>,
-    experimental: bool,
-) -> Result<Option<u128>, CliError> {
+fn resolve_native_funding(native: bool, fund: Option<&str>) -> Result<Option<u128>, CliError> {
     if !native {
-        if fund.is_some() || experimental {
+        if fund.is_some() {
             return Err(CliError::NativeDeploymentOptionsForLegacy);
         }
         return Ok(None);
-    }
-    if !experimental {
-        return Err(CliError::NativeWalletDeploymentUnavailable);
     }
     let amount = fund.ok_or(CliError::NativeDeploymentFundingRequired)?;
     match groundhog_signing::parse_hog_amount(amount) {

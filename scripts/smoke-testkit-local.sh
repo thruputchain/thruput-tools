@@ -123,4 +123,8 @@ log "running testkit cross-run registration smoke"
 env "${ENV_ARGS[@]}" \
     cargo test -p groundhog-testkit --test contract_smoke later_run_does_not_recover_an_earlier_runs_pending_registration -- --ignored --nocapture
 
+log "running testkit repeated scenario smoke"
+env "${ENV_ARGS[@]}" \
+    cargo test -p groundhog-testkit --test contract_smoke multiple_runs_are_possible -- --ignored --nocapture
+
 log "testkit live contract smoke passed"

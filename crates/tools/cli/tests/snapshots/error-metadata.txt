@@ -11,10 +11,6 @@ WalletCreatePrefundUnsupported
   code: wallet_create_prefund_unsupported
   hint text: create the empty wallet first, then run groundhog airdrop <wallet-name>
 
-NativeWalletDeploymentUnavailable
-  code: native_wallet_deployment_unavailable
-  hint text: use --experimental-native-deploy --fund <HOG> only on a network known to support atomic deploy with optional initialization; runtime support is not detected automatically
-
 NativeDeploymentFundingRequired
   code: native_deployment_funding_required
   hint text: choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate
@@ -96,7 +92,7 @@ Io
 
 ProfileNotFound
   code: profile_not_found
-  hint text: add the profile to project or global config, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
+  hint format: create it with `groundhog config new {0} --network <NETWORK>`, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
 
 ProfileNotFoundInScope
   code: profile_not_found_in_scope
@@ -172,7 +168,10 @@ Rv32LowerFailed
 
 SpecFailed
   code: spec_failed
-  hint text: check that your contract uses `#[contract]` and `#[contracttype]` attributes correctly
+  hint text: check that your contract uses `#[contract]` and `#[contract_type]` attributes correctly
+
+TsBindingsFailed
+  code: ts_bindings_failed
 
 RawSpecFormat
   code: raw_spec_format
@@ -270,7 +269,7 @@ HttpClientInit
 
 MissingRpcUrl
   code: missing_rpc_url
-  hint text: set `rpc_url` in the selected profile in project or global config
+  hint text: for a local profile, start `groundhog node` in another terminal; otherwise run `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
 
 ProfileConfigInvalid
   code: profile_config_invalid
@@ -282,7 +281,7 @@ InteractiveInputRequired
 
 ConfirmationRequired
   code: confirmation_required
-  hint text: review the warning and rerun with `--force` to confirm non-interactively
+  hint text: rerun from an interactive terminal, or pass `--force` to proceed without a prompt
   details: computed
 
 FaucetService
@@ -296,7 +295,7 @@ MissingSigningKey
 
 MissingNetworkHash
   code: missing_network_hash
-  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash>` for this profile, or point it at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
+  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
 
 InvalidNetworkHash
   code: invalid_network_hash

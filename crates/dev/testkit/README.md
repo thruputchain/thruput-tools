@@ -13,7 +13,6 @@ config.hog_devnode_binary = Some("/path/to/supporting/hog-devnode".into());
 config.contract_artifact_directories.push("/path/to/built_contracts".into());
 let scenario = Scenario::builder("counter-test")
     .network(NetworkConfig::local(config))
-    .experimental_native_deploy()
     .artifact("counter", "target/groundhog/counter.rv32a")
     .build()
     .await?;
@@ -29,10 +28,9 @@ scenario.stop().await?;
 # }
 ```
 
-`experimental_native_deploy()` asserts that the selected runtime supports
-`DefaultWallet.deploy(nonce, contract_hash, amount, initializer)`. It does not
-discover runtime capabilities. Use a supporting binary; older packaged runtimes
-cannot execute this deployment ABI.
+Native deployment uses `DefaultWallet.deploy(nonce, contract_hash, amount, initializer)`.
+Use a supporting runtime (hogd 0.1.29-rc.2 or later); older runtimes cannot execute
+this deployment ABI.
 
 Every deploy helper takes `DeployOptions`. Amounts are exact raw HOG units,
 including explicit zero. An optional `WalletInitCall` supplies an entrypoint, gas

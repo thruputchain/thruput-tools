@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "The Groundhog v3 RV32 artifact format: constants, fingerprint, writer, and validator"
+description = "The Groundhog RV32 artifact format: constants, fingerprint, writer, and validator"
 publish.workspace = true
 
 [lints]

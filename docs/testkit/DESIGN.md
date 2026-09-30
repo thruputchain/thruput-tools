@@ -233,9 +233,8 @@ Every deployment takes `DeployOptions { amount, initializer }`: `amount` is an
 exact raw HOG amount, including explicit zero, and `initializer` optionally calls
 the newly deployed contract as its wallet in the same atomic transaction.
 Funding, deployment, and initialization either commit together or roll back.
-Use `DeployOptions::funded(amount)` when no initializer is needed. Select
-`.experimental_native_deploy()` only for a runtime that supports this ABI;
-the runtime manifest does not advertise support and older bundles cannot run it.
+Use `DeployOptions::funded(amount)` when no initializer is needed. Use a runtime supporting this ABI (hogd 0.1.29-rc.2 or later); older bundles
+cannot run it.
 
 Calldata and return values are Rust-native: agent code encodes and decodes with
 `xdrs` (re-exported as `groundhog_testkit::xdrs`) and passes raw entrypoint

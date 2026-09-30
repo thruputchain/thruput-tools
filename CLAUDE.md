@@ -204,6 +204,11 @@ cargo clippy --workspace --all-targets -- -D warnings   # lint (must be clean)
 cargo fmt --check                # format check (must pass)
 ```
 
+`make build` builds the workspace with `PROFILE=release` by default.
+`make build-native` builds a local-only, host-tuned workspace; `make check-native`
+counts hardware SHA-256 instructions. ARM hardware SHA-256 is enabled by
+`sha2/asm` with runtime detection, not by the native build. See `make help`.
+
 ### Per-crate
 
 ```bash

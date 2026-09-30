@@ -82,7 +82,6 @@ impl SubmittedTransaction {
 struct NetworkInner {
     rpc_url: Option<String>,
     client: Option<HttpClient>,
-    native_deploy: bool,
     faucet: tokio::sync::Mutex<Option<crate::account::Account>>,
     do_action_entrypoint: Option<ContractEntrypointID>,
     manual_block_producer: Option<ManualBlockProducer>,
@@ -108,7 +107,6 @@ impl Network {
         manifest: &RuntimeManifest,
         manual_block_producer: Option<ManualBlockProducer>,
         seed: &str,
-        native_deploy: bool,
     ) -> Result<Self> {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
@@ -125,7 +123,6 @@ impl Network {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
                 client: Some(client),
-                native_deploy,
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?.map(
                     |dev| {
                         crate::account::Account::new(
@@ -146,7 +143,6 @@ impl Network {
             inner: Arc::new(NetworkInner {
                 rpc_url: None,
                 client: None,
-                native_deploy: false,
                 faucet: tokio::sync::Mutex::new(None),
                 do_action_entrypoint: None,
                 manual_block_producer: None,
@@ -318,14 +314,6 @@ impl Network {
             .get_events(query)
             .await
             .map_err(|e| TestkitError::rpc("getEvents", e))
-    }
-
-    pub(crate) fn require_native_deploy(&self) -> Result<()> {
-        self.require_client("deploy")?;
-        if !self.inner.native_deploy {
-            return Err(TestkitError::NativeDeploymentUnsupported);
-        }
-        Ok(())
     }
 
     pub(crate) async fn submit_fund(
