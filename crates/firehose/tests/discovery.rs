@@ -27,7 +27,7 @@ impl RpcHandler for Reply {
 }
 
 async fn run(addresses: &[&str], json: bool) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hog-firehose"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hog-firehose-store"));
     command.env_remove("RUST_LOG").arg("discover");
     if json {
         command.arg("--json");
@@ -130,7 +130,7 @@ async fn http_listener_is_a_quiet_clean_negative() {
 
 #[test]
 fn help_documents_all_exit_codes() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose-store"))
         .args(["discover", "--help"])
         .output()
         .unwrap();

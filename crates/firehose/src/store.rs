@@ -24,7 +24,6 @@ pub struct Store {
     directory: PathBuf,
     _lock: File,
     progress: Option<IndexerInitializedProgress>,
-    hub: Option<crate::subscription::Hub>,
     /// Total bytes in durable block and origin records (excludes filesystem allocation).
     pub bytes: u64,
     /// Allocated record bytes, including filesystem block rounding on Unix.
@@ -45,7 +44,6 @@ impl Store {
             .open(directory.join("LOCK"))?;
         fs2::FileExt::try_lock_exclusive(&lock)?;
         let mut store = Self {
-            hub: None,
             directory: directory.to_owned(),
             _lock: lock,
             progress: None,
@@ -105,11 +103,6 @@ impl Store {
     /// Highest contiguous height, or -1 before adopting an origin.
     pub fn height(&self) -> i64 {
         self.progress.as_ref().map_or(-1, |p| *p.contiguous_height)
-    }
-
-    /// Attach read-side fanout; publication remains after the archive is durable.
-    pub fn subscribe_with(&mut self, hub: crate::subscription::Hub) {
-        self.hub = Some(hub);
     }
 
     fn publish(&self, path: &Path, bytes: &[u8]) -> Result<(), Error> {
@@ -234,9 +227,6 @@ impl Store {
         self.bytes += bytes.len() as u64;
         self.allocated_bytes += allocated_bytes(&path)?;
         self.blocks += 1;
-        if let Some(hub) = &self.hub {
-            hub.publish(pulled, bytes);
-        }
         Ok(true)
     }
 }

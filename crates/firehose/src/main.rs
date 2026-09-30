@@ -10,7 +10,6 @@ use groundhog_firehose::{
     client::{self, Client, Outcome},
     metrics::Metrics,
     store::Store,
-    subscription::{self, Hub},
 };
 use groundhog_indexer::EventIndexerPullResult;
 use groundhog_xdr::{PROTOCOL_VERSION, network::ProtocolCommit};
@@ -20,9 +19,9 @@ mod discovery;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "hog-firehose",
+    name = "hog-firehose-store",
     version,
-    about = "Experimental committed-block archive and WebSocket firehose"
+    about = "Experimental committed-block archive writer"
 )]
 struct Cli {
     /// Emit machine-readable discovery and tail output.
@@ -75,8 +74,6 @@ struct Config {
     /// Health and Prometheus listener.
     #[arg(long, default_value = "127.0.0.1:9550")]
     listen: std::net::SocketAddr,
-    #[command(flatten)]
-    subscriptions: subscription::Config,
     /// Optional `SchedGateway` address for independent chain-tip lag sampling.
     #[arg(long)]
     tip_endpoint: Option<String>,
@@ -117,14 +114,14 @@ async fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 serde_json::json!({"blocks": store.blocks, "height": store.height(), "bytes": store.bytes, "recoverySeconds": start.elapsed().as_secs_f64()})
             );
         }
-        Command::Run(config) => serve(config, protocol, Tail::Off).await?,
-        Command::Tail(config) if cli.json => serve(config, protocol, Tail::Json).await?,
-        Command::Tail(config) => serve(config, protocol, Tail::Text).await?,
+        Command::Run(config) => run_store(config, protocol, Tail::Off).await?,
+        Command::Tail(config) if cli.json => run_store(config, protocol, Tail::Json).await?,
+        Command::Tail(config) => run_store(config, protocol, Tail::Text).await?,
     }
     Ok(std::process::ExitCode::SUCCESS)
 }
 
-async fn health(State((metrics, _)): State<(Metrics, Hub)>) -> (StatusCode, &'static str) {
+async fn health(State(metrics): State<Metrics>) -> (StatusCode, &'static str) {
     if metrics.is_healthy() {
         (StatusCode::OK, "ok\n")
     } else {
@@ -133,17 +130,14 @@ async fn health(State((metrics, _)): State<(Metrics, Hub)>) -> (StatusCode, &'st
 }
 
 async fn exposition(
-    State((metrics, hub)): State<(Metrics, Hub)>,
+    State(metrics): State<Metrics>,
 ) -> (StatusCode, [(&'static str, &'static str); 1], Vec<u8>) {
     match metrics.render() {
-        Ok(mut bytes) => {
-            bytes.extend_from_slice(hub.render_metrics().as_bytes());
-            (
-                StatusCode::OK,
-                [("content-type", "text/plain; version=0.0.4")],
-                bytes,
-            )
-        }
+        Ok(bytes) => (
+            StatusCode::OK,
+            [("content-type", "text/plain; version=0.0.4")],
+            bytes,
+        ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [("content-type", "text/plain")],
@@ -168,22 +162,13 @@ async fn shutdown() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-async fn serve(
+async fn run_store(
     config: Config,
     protocol: ProtocolCommit,
     tail: Tail,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
-    config.subscriptions.validate(config.listen)?;
-    let mut store = Store::open(&config.store)?;
-    let hub = Hub::new(
-        config.store.clone(),
-        store.height(),
-        config.subscriptions.clone(),
-    );
-    store.subscribe_with(hub.clone());
-    let (ws_address, ws) = hub.serve().await?;
-    tracing::info!(%ws_address, "subscription listener started");
+    let store = Store::open(&config.store)?;
     tracing::info!(
         blocks = store.blocks,
         height = store.height(),
@@ -195,7 +180,7 @@ async fn serve(
     let router = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(exposition))
-        .with_state((metrics.clone(), hub));
+        .with_state(metrics.clone());
     let listener = tokio::net::TcpListener::bind(&config.listen).await?;
     let (stop, mut stopped) = watch::channel(false);
     let http = axum::serve(listener, router).with_graceful_shutdown(async move {
@@ -210,12 +195,9 @@ async fn serve(
     let (result, http_done) = tokio::select! {
         result = ingest(&config, protocol, store, &metrics, tail) => (result.map_err(Into::into), false),
         result = &mut http => (result.map_err(Into::into), true),
-        () = ws.clone().stopped() => (Err("WebSocket server stopped unexpectedly".into()), false),
         () = shutdown() => (Ok(()), false),
     };
     metrics.set_healthy(false);
-    let _ = ws.stop();
-    ws.stopped().await;
     let _ = stop.send(true);
     if let Some(task) = tip_task {
         task.abort();
@@ -470,7 +452,7 @@ mod tests {
     /// Every bound comes from the real CLI defaults, as a deployment would get them.
     fn config(event_endpoint: &str, store: &Path) -> Config {
         let cli = Cli::parse_from([
-            "hog-firehose",
+            "hog-firehose-store",
             "run",
             "--event-endpoint",
             event_endpoint,

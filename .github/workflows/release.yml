@@ -33,14 +33,18 @@ jobs:
             release_target: x86_64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-2604
             artifact_name: groundhog-rpc-x86_64-release-artifacts
-            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+            release_apps: >-
+              hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+              hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: aarch64
             platform: linux
             release_target: aarch64-unknown-linux-gnu
             runner: namespace-profile-hogd-linux-arm64
             artifact_name: groundhog-rpc-arm64-release-artifacts
-            release_apps: hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+            release_apps: >-
+              hog-gateway groundhog rv32-lower hogsim groundhog-faucet
+              hog-firehose-store hog-firehose-serve
           - architecture: arm64
             machine: arm64
             platform: macos
@@ -110,9 +114,10 @@ jobs:
             -p groundhog-rv32-lower \
             -p groundhog-sim \
             -p groundhog-faucet \
+            -p groundhog-firehose \
             --bins
 
-          for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
+          for app in ${{ matrix.release_apps }}; do
             app_version="$CRATE_VERSION"
             if [ "$app" = groundhog ] || [ "$app" = hog-gateway ]; then
               app_version="$CRATE_VERSION (commit ${source_commit:0:8})"
@@ -142,6 +147,8 @@ jobs:
               rv32-lower) package_args+=(-p groundhog-rv32-lower) ;;
               hogsim) package_args+=(-p groundhog-sim) ;;
               groundhog-faucet) package_args+=(-p groundhog-faucet) ;;
+              hog-firehose-store|hog-firehose-serve)
+                package_args+=(-p groundhog-firehose) ;;
               *)
                 echo "unsupported release app: $app" >&2
                 exit 1
@@ -276,7 +283,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 12
+          test "${#archives[@]}" -eq 16
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done

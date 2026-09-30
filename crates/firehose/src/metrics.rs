@@ -22,6 +22,9 @@ pub struct Metrics {
     pub height: IntGauge,
     /// Lag from an independently sampled scheduler tip; NaN when unknown.
     pub lag: Gauge,
+    /// Age of serve's latest record; NaN before the first record.
+    pub tip_age: Gauge,
+    health: IntGauge,
     /// End-to-end pull duration, including parked time.
     pub pull: Histogram,
     /// Accumulated parked seconds including the currently outstanding pull.
@@ -52,6 +55,12 @@ impl Metrics {
             "Sampled scheduler tip minus durable height; NaN if unavailable",
         )?;
         lag.set(f64::NAN);
+        let tip_age = Gauge::new(
+            "firehose_tip_age_seconds",
+            "Age of the latest archive record",
+        )?;
+        tip_age.set(f64::NAN);
+        let health = IntGauge::new("firehose_healthy", "Whether this process is healthy")?;
         let pull = Histogram::with_opts(
             HistogramOpts::new("firehose_pull_seconds", "Pull latency including parking")
                 .buckets(vec![0.001, 0.01, 0.1, 1., 5., 30., 60., 300.]),
@@ -91,6 +100,8 @@ impl Metrics {
             Box::new(events.clone()),
             Box::new(height.clone()),
             Box::new(lag.clone()),
+            Box::new(tip_age.clone()),
+            Box::new(health.clone()),
             Box::new(pull.clone()),
             Box::new(parked.clone()),
             Box::new(store.clone()),
@@ -106,6 +117,8 @@ impl Metrics {
             events,
             height,
             lag,
+            tip_age,
+            health,
             pull,
             parked,
             store,
@@ -124,6 +137,7 @@ impl Metrics {
 
     /// Mark the ingest connection healthy or degraded.
     pub fn set_healthy(&self, healthy: bool) {
+        self.health.set(i64::from(healthy));
         self.healthy.store(healthy, Ordering::Relaxed);
     }
 
