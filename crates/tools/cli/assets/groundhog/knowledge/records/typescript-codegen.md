@@ -9,79 +9,40 @@ bootstrap_order = 40
 +++
 ## Build Artifacts and TypeScript Codegen
 
-`groundhog build` compiles and lowers the deployable RV32 artifact. A contract
-spec produced by the Rust contract is the canonical interface for generated
-bindings.
-
-The build is offline and checks the artifact against no chain. It reports the
-code and guest data memory sizes, and warns when the code section is over the
-protocol-default 64 KiB. Whether a chain admits the artifact is decided at
-deploy: the RPC endpoint rejects a transaction whose artifact exceeds the
-chain's `max_rv32_code_bytes` or `max_rv32_memory_bytes` before submitting
-it, and `groundhog deploy` reports the violated bound. Guest data memory
-defaults to 64 KiB. A contract that needs more sets `initial_memory_bytes`
-under `[package.metadata.groundhog]` in its `Cargo.toml` (an integer, or a
-string such as `"128K"`); `groundhog build` and `groundhog test` both read
-it, size the linker layout from it, and stamp it into the artifact. Do not
-raise it for a chain that has not raised `max_rv32_memory_bytes`.
-`--stack-size` still adjusts the stack reserve per build.
-
-Generate a TypeScript binding as part of the build:
+The Rust contract's `.spec.xdr` is the canonical interface. Build deployable RV32
+code and generate bindings together, or generate from an existing spec:
 
 ```console
 groundhog build --bindings ts
-```
-
-Or generate it from an existing spec:
-
-```console
 groundhog codegen ts path/to/contract.spec.xdr -o path/to/contract.ts
 ```
 
-Run the installed commands with `--help` for current paths and options. Re-run
-codegen after changing exported methods, events, exceptions, or contract types.
-Do not hand-maintain a TypeScript ABI beside the Rust contract spec.
+Use installed `--help` for paths/options. Regenerate after API changes; never
+maintain a second TypeScript ABI. Plain build warns on codegen-incompatible names;
+`--bindings ts` makes them errors. Rename the reported declarations.
 
-A plain `groundhog build` warns when codegen would refuse the contract's spec,
-naming the declarations to rename; with `--bindings ts` the build fails instead.
+Build is offline. It reports code/memory sizes and warns above the default 64 KiB
+code limit; deployment enforces max_rv32_code_bytes and max_rv32_memory_bytes.
+Guest memory defaults to 64 KiB. Set `initial_memory_bytes` in
+`[package.metadata.groundhog]` (integer or `"128K"`) within the chain's limit.
+Build/test use it for linker layout and artifact metadata. `--stack-size` sets a
+reserve within that memory, not a larger total allowance.
 
-Generated method descriptors sit under their interface's name and major, as in
-`ERC20.v0_1.transfer`, beside their `ERC20.v0_1.TransferArgs` and
-`ERC20.v0_1.TransferResult` types and the interface's `DeclaredException` and
-`Exception` types. They provide typed operations such as:
-
-- `invocation(...)` to encode an application call;
-- `call(...)` in the client DX runtime to retain typed result/exception decoders;
-- `view(...)` and `viewOutcome(...)` for read-only execution;
-- `decodeReturn(...)` and `decodeException(...)` for raw call data;
-- `decodeReceipt(...)` and `decodeReceiptOutcome(...)` for a receipt whose root
-  method is known.
+Methods/types live under interface and compatibility major:
+`ERC20.v0_1.transfer`, `ERC20.v0_1.TransferArgs`. Descriptors provide invocation,
+call, view/viewOutcome, decodeArgs, decodeReturn/decodeException, and root
+decodeReceipt/decodeReceiptOutcome. Select a known method before decoding;
+decodeArgs checks the complete buffer, not the deployed contract's behavior.
+No-argument decoding returns undefined. The runtime adds decodeArgs without new
+metadata; the separate spec/namespace migration requires regenerated bindings.
 
 Generated event descriptors such as `my_token.v1.events.Transfer` provide
-`decode(...)`, `filter(...)`, `allFromReceipt(...)`, and
-`singleFromReceipt(...)`.
+decode, filter, allFromReceipt, and singleFromReceipt. Named types, enums, and
+events follow the spec id: crate, major, module, declaration. Value objects and
+type namespaces share paths, preserving erasable TypeScript and Node type
+stripping. Reserved path names, globalThis, and crate/interface names spec or
+decodeEvent take a leading `$`. Use generated codecs rather than manual XDR.
 
-Declared types, enums and events sit under their spec id's path: crate, major,
-then module, as in `my_token.v1.errors.TokenError`. The same path names the
-type and the value: types live in namespaces, and enum values and event
-descriptors in one object per crate, so a binding is erasable TypeScript that
-Node's type stripping runs without a build step. A path segment that is a
-TypeScript reserved word or `globalThis`, and a crate or interface named
-`spec` or `decodeEvent`, take a leading `$`, as in
-`my_token.v1.$default.Config`.
-
-Use those generated codecs. Do not create a low-level XDR reader when a binding
-already knows the method or event type.
-
-Bindings emit canonical interface/version and ABI/public method names for runtime
-diagnostics. They require a client runtime accepting this method metadata. The
-client DX runtime implements typed calls, execution and receipt observation;
-codegen does not embed wallet or transport behavior. Hashed event topics contain
-only the digest, not the original value; generated comments describe their
-filtering restriction. Regenerate bindings together with the reviewed client
-runtime before adopting the new descriptors.
-
-`u32`, `u64`, `u128`, `i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are
-directly decoded and filterable. Integer topics are fixed 32-byte big-endian
-values with zero/sign extension, not compact XDR scalar encodings. Strings and
-byte slices remain hash-only.
+Address/fixed 32-byte topics and u32/u64/u128/i32/i64/i128/U256/I256/bool topics
+are directly filterable. Integers are 32-byte big-endian, zero/sign-extended,
+not CXS scalars. Strings/byte slices expose only a hash, not their preimage.

@@ -71,6 +71,14 @@ Gas meters computation and bounds cross-contract call depth. It has no token
 price and is not burned. Choose storage operations for correct conflict
 semantics, not gas-price optimisation.
 
+Declared root gas reserves scheduling capacity against the sender's free HOG;
+target storage funding is separate. Use workload-tested budgets. A sufficient
+first HOG credit can fund a recipient's balance-item deposit; a small first
+credit may fail. Do not hard-code a universal deposit or require an airdrop for
+every new address. Current ERC20 adjustAllowance takes a signed difference and
+an exclusive flag. Exclusive locking does not make an earlier off-chain read
+current, so read-then-adjust is not an exact-target allowance operation.
+
 ### Start with Balance, Then Choose by Behaviour
 
 For contract authors, `Balance` is the practical starting point for ordinary
@@ -180,166 +188,121 @@ public Rustdoc for the SDK version the project actually uses.
 
 ## Build Artifacts and TypeScript Codegen
 
-`groundhog build` compiles and lowers the deployable RV32 artifact. A contract
-spec produced by the Rust contract is the canonical interface for generated
-bindings.
-
-The build is offline and checks the artifact against no chain. It reports the
-code and guest data memory sizes, and warns when the code section is over the
-protocol-default 64 KiB. Whether a chain admits the artifact is decided at
-deploy: the RPC endpoint rejects a transaction whose artifact exceeds the
-chain's `max_rv32_code_bytes` or `max_rv32_memory_bytes` before submitting
-it, and `groundhog deploy` reports the violated bound. Guest data memory
-defaults to 64 KiB. A contract that needs more sets `initial_memory_bytes`
-under `[package.metadata.groundhog]` in its `Cargo.toml` (an integer, or a
-string such as `"128K"`); `groundhog build` and `groundhog test` both read
-it, size the linker layout from it, and stamp it into the artifact. Do not
-raise it for a chain that has not raised `max_rv32_memory_bytes`.
-`--stack-size` still adjusts the stack reserve per build.
-
-Generate a TypeScript binding as part of the build:
+The Rust contract's `.spec.xdr` is the canonical interface. Build deployable RV32
+code and generate bindings together, or generate from an existing spec:
 
 ```console
 groundhog build --bindings ts
-```
-
-Or generate it from an existing spec:
-
-```console
 groundhog codegen ts path/to/contract.spec.xdr -o path/to/contract.ts
 ```
 
-Run the installed commands with `--help` for current paths and options. Re-run
-codegen after changing exported methods, events, exceptions, or contract types.
-Do not hand-maintain a TypeScript ABI beside the Rust contract spec.
+Use installed `--help` for paths/options. Regenerate after API changes; never
+maintain a second TypeScript ABI. Plain build warns on codegen-incompatible names;
+`--bindings ts` makes them errors. Rename the reported declarations.
 
-A plain `groundhog build` warns when codegen would refuse the contract's spec,
-naming the declarations to rename; with `--bindings ts` the build fails instead.
+Build is offline. It reports code/memory sizes and warns above the default 64 KiB
+code limit; deployment enforces max_rv32_code_bytes and max_rv32_memory_bytes.
+Guest memory defaults to 64 KiB. Set `initial_memory_bytes` in
+`[package.metadata.groundhog]` (integer or `"128K"`) within the chain's limit.
+Build/test use it for linker layout and artifact metadata. `--stack-size` sets a
+reserve within that memory, not a larger total allowance.
 
-Generated method descriptors sit under their interface's name and major, as in
-`ERC20.v0_1.transfer`, beside their `ERC20.v0_1.TransferArgs` and
-`ERC20.v0_1.TransferResult` types and the interface's `DeclaredException` and
-`Exception` types. They provide typed operations such as:
-
-- `invocation(...)` to encode an application call;
-- `call(...)` in the client DX runtime to retain typed result/exception decoders;
-- `view(...)` and `viewOutcome(...)` for read-only execution;
-- `decodeReturn(...)` and `decodeException(...)` for raw call data;
-- `decodeReceipt(...)` and `decodeReceiptOutcome(...)` for a receipt whose root
-  method is known.
+Methods/types live under interface and compatibility major:
+`ERC20.v0_1.transfer`, `ERC20.v0_1.TransferArgs`. Descriptors provide invocation,
+call, view/viewOutcome, decodeArgs, decodeReturn/decodeException, and root
+decodeReceipt/decodeReceiptOutcome. Select a known method before decoding;
+decodeArgs checks the complete buffer, not the deployed contract's behavior.
+No-argument decoding returns undefined. The runtime adds decodeArgs without new
+metadata; the separate spec/namespace migration requires regenerated bindings.
 
 Generated event descriptors such as `my_token.v1.events.Transfer` provide
-`decode(...)`, `filter(...)`, `allFromReceipt(...)`, and
-`singleFromReceipt(...)`.
+decode, filter, allFromReceipt, and singleFromReceipt. Named types, enums, and
+events follow the spec id: crate, major, module, declaration. Value objects and
+type namespaces share paths, preserving erasable TypeScript and Node type
+stripping. Reserved path names, globalThis, and crate/interface names spec or
+decodeEvent take a leading `$`. Use generated codecs rather than manual XDR.
 
-Declared types, enums and events sit under their spec id's path: crate, major,
-then module, as in `my_token.v1.errors.TokenError`. The same path names the
-type and the value: types live in namespaces, and enum values and event
-descriptors in one object per crate, so a binding is erasable TypeScript that
-Node's type stripping runs without a build step. A path segment that is a
-TypeScript reserved word or `globalThis`, and a crate or interface named
-`spec` or `decodeEvent`, take a leading `$`, as in
-`my_token.v1.$default.Config`.
-
-Use those generated codecs. Do not create a low-level XDR reader when a binding
-already knows the method or event type.
-
-Bindings emit canonical interface/version and ABI/public method names for runtime
-diagnostics. They require a client runtime accepting this method metadata. The
-client DX runtime implements typed calls, execution and receipt observation;
-codegen does not embed wallet or transport behavior. Hashed event topics contain
-only the digest, not the original value; generated comments describe their
-filtering restriction. Regenerate bindings together with the reviewed client
-runtime before adopting the new descriptors.
-
-`u32`, `u64`, `u128`, `i32`, `i64`, `i128`, `U256`, `I256` and `bool` topics are
-directly decoded and filterable. Integer topics are fixed 32-byte big-endian
-values with zero/sign extension, not compact XDR scalar encodings. Strings and
-byte slices remain hash-only.
+Address/fixed 32-byte topics and u32/u64/u128/i32/i64/i128/U256/I256/bool topics
+are directly filterable. Integers are 32-byte big-endian, zero/sign-extended,
+not CXS scalars. Strings/byte slices expose only a hash, not their preimage.
 
 ## TypeScript Application Path
 
-Use the package's public exports and generated binding, not files below its
-`src/` directory or dependencies below `node_modules`.
-
-The application flow is:
-
-1. Create a cluster-aware Groundhog client.
-2. Create or load an account and signer appropriate for that network.
-3. Bind the account to a wallet client.
-4. Build an application invocation with the generated method descriptor.
-5. Execute the invocation through the wallet.
-6. Wait for the receipt.
-7. Decode the wallet root outcome, then decode child return data when needed.
-
-Generated methods sit under their interface's major, which the app selects once:
+Use public package exports and generated bindings, not package internals. Select
+an interface version for values; explicit types still use the full namespace:
 
 ```ts
 import { Counter as CounterVersions } from "./counter";
-import { DefaultWallet as DefaultWalletVersions } from "@groundhogchain/client/contracts";
-
 const Counter = CounterVersions.v0_1;
-const DefaultWallet = DefaultWalletVersions.v0_1;
+type Result = CounterVersions.v0_1.GetResult;
+
+const result = await Counter.get.view({ client, contract, caller, signal });
+const invocation = Counter.increment.invocation(contract, callGas, { amount: 1n });
+const execution = await wallet.executeAndWait({ invocation, gasLimit: walletGas });
 ```
 
-These constants hold only values, so name generated types by their full path,
-as in `CounterVersions.v0_1.GetResult`.
+Connect a cluster-aware client, create/load an account, then bind a wallet client.
+One public client supports multiple independent wallet bindings. Pubkey accounts
+use DefaultWallet; local source-address accounts use `devWalletAdapter`.
+Do not submit an application invocation directly as the transaction root.
 
-A read-only call goes through the generated descriptor:
+`method.call` retains decoders for `executeCallsAndWait` on wallets that expose
+child returns. For manual decoding, decode the known wallet root receipt first,
+then each known child's return buffer. DevWallet discards child returns. Never
+decode root abort bytes as a child's exception merely because there was one call.
+Submission, commitment, and execution success differ. `executeAndWait` requires
+success. `TransactionObservationError` retains the original hash; observe it on
+the original network after uncertainty, without automatically re-signing.
+Provider-backed helpers require `onSigned` to persist signed evidence before
+broadcast. Explicit prepare/sign/persist/submit remains available.
 
-```ts
-const result = await Counter.get.view({
-  client,
-  contract,
-  caller,
-});
-```
+### Amounts, reads, and diagnostics
 
-A state-changing call is built as an invocation and executed through a wallet:
+- Common primitives and constructors are client root exports. Protocol-only
+  symbols such as HOG_ADDRESS remain in the protocol package.
+- `parseUnits("12.05", 2)` returns `1205n`; `formatUnits(1205n, 2)` returns
+  `"12.05"`. No floating point or rounding. ParseUnitsError rejects malformed
+  input/excess precision. Applications check positivity and ABI bounds.
+- `getContract({ binding: Counter, address: contract, client })` binds defaults.
+  Pass `{ signal }` to actions and `signal` inside generated/bound view options.
+- `classifyReadError(error, { signal })` returns transient, permanent, cancelled,
+  or unknown without replacing errors. A bare TypeError is not proof of a network
+  failure. Classification does not authorize transaction resubmission.
+- `getVersion` returns nullable releaseVersion/bundleManifestDigest diagnostics.
+  Use wireFormat for RPC compatibility decisions.
 
-```ts
-const invocation = Counter.increment.invocation(contract, callGas, {
-  amount: 1n,
-});
+### HTTP batching and pages
 
-const txHash = await wallet.execute({
-  invocation,
-  gasLimit: walletGas,
-});
+`new HttpTransport(url, { batch: true })` groups concurrent requests; defaults are
+`{ maxSize: 100, waitMs: 0 }`. It is off by default. Both supported servers cap
+arrays at 1,000 entries. IDs correlate out-of-order responses; RPC errors remain
+per-call. Shared HTTP/malformed-response failures affect the group. No automatic
+retry occurs. timeoutMs includes body reading after dispatch. One cancellation
+does not cancel neighboring calls. HTTP grouping provides no shared snapshot,
+execution order, or atomicity. Await dependent operations separately.
 
-const receipt = await wallet.waitForTransactionReceipt(txHash);
-```
+`getContractEvents({ event, contractAddresses, topics, limit })` fetches one typed
+page. `iterateEventPages(query, { signal })` yields raw pages on demand, without
+prefetch, retries, polling, or persistence. Errors propagate. Break stops future
+requests; abort cancels an in-flight read.
 
-Do not submit `Counter.increment` directly as the transaction root. A pubkey
-account normally uses DefaultWallet. Local bootstrap source-address accounts
-normally use DevWallet with the local-development adapter. Custom smart
-wallets provide their own root invocation adapter.
-
-For a DefaultWallet transaction, first decode the root wallet receipt:
-
-```ts
-const root = DefaultWallet.execute.decodeReceiptOutcome(receipt);
-```
-
-If the wallet returned raw child values, select the child corresponding to the
-application invocation and decode it with that method's generated
-`decodeReturn`. The receipt does not contain enough TypeScript method identity
-for a generic decoder to choose the child descriptor automatically.
-
-Submission, commitment, and successful contract execution are separate facts.
-Check the typed receipt outcome before treating a state-changing operation as
-successful. For dependent flows such as an airdrop followed by a transfer,
-verify the first execution result before submitting the second operation.
+A cursor belongs to the same network/target/filters and one bounded historical
+walk, not future blocks. Raw continuations still require order and anchor. Wire
+`"0x"` is an empty Uint8Array in the client. Stop on an empty returned cursor,
+not an empty page. For later scans, reread the last stored row's height and
+deduplicate by tx hash plus event sequence number (hash alone for transaction
+refs). Save rows/progress together; never skip a partially processed block.
+latestBlock is the indexer head, not an application checkpoint. Check oldestBlock
+for lost history. Current indexers do not reliably reject corrupt cursors; do not
+silently restart. The site's events tutorial explains durable restart.
 
 ## Local Development
 
-For first-run setup in automation, use `groundhog init --non-interactive --json`.
-It initializes global profiles and reports incomplete setup with exit 1 when
-Cargo, the active profile, or a selected stored signing key is unavailable.
-Add `--generate-key` only when authorized to create the initial signing key;
-existing keys and explicit key selections are preserved. `--quiet` does not
-accept wizard defaults. `init --json` performs setup; use `status --json` for
-read-only diagnostics. Create scripted projects separately with `groundhog new`.
+For scripted setup, use `groundhog init --non-interactive --json`. Exit 1 means
+Cargo, the profile, or a selected stored key is unavailable. Add `--generate-key`
+only when authorized; existing keys/selections are preserved. `--quiet` does not
+accept wizard defaults. `init` changes setup; `status --json` is read-only.
+Create projects separately with `groundhog new`.
 
 Use the CLI to start the supported local stack:
 
@@ -355,23 +318,12 @@ or Cargo network traffic in other commands. Keep `GROUNDHOG_DEVNODE_BINARY`
 for a matching local build. Diagnose startup compatibility failures rather
 than adding a protocol override.
 
-Use another terminal for status, build, deploy, call, view, or TypeScript
-application work. Prefer the active local profile and runtime information
-reported by `groundhog status --json` and `groundhog node --json`. Do not copy
-deterministic local-development keys into production configuration.
+Use another terminal for application work and the runtime reported by
+`groundhog status --json` / `groundhog node --json`. Never use deterministic
+local keys in production.
 
-Typical CLI discovery:
-
-```console
-groundhog status --json
-groundhog build --help
-groundhog test --help
-groundhog node --help
-groundhog deploy --help
-groundhog call --help
-groundhog view --help
-groundhog codegen ts --help
-```
+Check `--help` on build, test, node, deploy, call, view, and codegen ts before
+using unfamiliar flags.
 
 Use global `--non-interactive` to disable CLI prompts and terminal UI while
 retaining ordinary output. It does not grant consent: protected actions still
@@ -389,6 +341,12 @@ operation again. An `unknown` status does not explain why the transaction is
 absent. For detailed local backend logs, start `groundhog node --verbose`;
 output goes to that terminal unless redirected. Do not restart an ephemeral
 node just to enable logging: stopping it discards its chain state.
+
+`events list`, `tx list`, and `token transfers` inspect one page at a time.
+Continue with the returned opaque cursor and the same target/filters. `tx list`
+matches root invocation targets, not every address touched by a transaction.
+An exhausted walk is not a durable checkpoint for later blocks. Apply the
+event-page restart rules above when building an indexer.
 
 ### Key and address interoperability
 

@@ -24,6 +24,14 @@ Gas meters computation and bounds cross-contract call depth. It has no token
 price and is not burned. Choose storage operations for correct conflict
 semantics, not gas-price optimisation.
 
+Declared root gas reserves scheduling capacity against the sender's free HOG;
+target storage funding is separate. Use workload-tested budgets. A sufficient
+first HOG credit can fund a recipient's balance-item deposit; a small first
+credit may fail. Do not hard-code a universal deposit or require an airdrop for
+every new address. Current ERC20 adjustAllowance takes a signed difference and
+an exclusive flag. Exclusive locking does not make an earlier off-chain read
+current, so read-then-adjust is not an exact-target allowance operation.
+
 ### Start with Balance, Then Choose by Behaviour
 
 For contract authors, `Balance` is the practical starting point for ordinary

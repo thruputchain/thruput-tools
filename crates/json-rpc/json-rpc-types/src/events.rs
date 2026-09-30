@@ -230,8 +230,9 @@ pub struct EventQuery {
     pub order: IterationOrder,
     pub anchor: BlockAnchor,
     /// `0x` on the initial call. Non-empty to continue where a previous
-    /// response left off; `order` and `anchor` in the request are
-    /// ignored when a cursor is supplied — the cursor carries them.
+    /// response left off. `order` and `anchor` remain required request fields,
+    /// but the cursor supplies continuation state. Keep the same filters.
+    /// A cursor continues one bounded historical walk, not subsequently added blocks.
     pub cursor: PaginationCursor,
     /// Values above the server's per-page cap (default 200) are
     /// rejected as invalid params; `0` means server default (50).
@@ -282,7 +283,10 @@ pub struct IdentifiedEvent {
 ///
 /// To fetch the next page, send the same query back with `cursor`
 /// set to the value returned here.  An empty `cursor` means the
-/// stream is exhausted in the requested direction.
+/// walk is exhausted in the requested direction. For a later scan, start at the
+/// last durably stored row's height and deduplicate that block. Save rows and
+/// progress together; do not skip a partially processed block. Cursors are opaque
+/// and subject to backend validity/retention rules, not durable coverage markers.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {
@@ -298,7 +302,8 @@ pub struct EventPage {
     pub cursor: PaginationCursor,
 
     /// Highest block height the indexer has processed at response time.
-    /// Compare to last-seen heights to decide caught-up state.
+    /// This is not proof that the caller has consumed history through that height.
+    /// Never use this field alone as a durable application checkpoint.
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at

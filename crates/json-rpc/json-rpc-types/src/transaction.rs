@@ -178,8 +178,9 @@ pub struct AddressTransactionQuery {
     pub order: IterationOrder,
     pub anchor: BlockAnchor,
     /// `0x` on the initial call. Non-empty to continue where a previous
-    /// response left off; `order` and `anchor` in the request are
-    /// ignored when a cursor is supplied — the cursor carries them.
+    /// response left off. `order` and `anchor` remain required request fields,
+    /// but the cursor supplies continuation state. Keep the same address.
+    /// The historical walk does not follow blocks added after it began.
     pub cursor: PaginationCursor,
     /// Values above the server's per-page cap (default 200) are
     /// rejected as invalid params; `0` means server default (50).
@@ -197,6 +198,10 @@ pub struct TransactionRef {
 
 /// `getTransactionsByAddress` response: transaction refs in the
 /// requested order.
+/// Continue through empty pages with non-empty cursors. To scan later history,
+/// reread the last stored row's height and deduplicate by transaction hash.
+/// Persist rows and progress together; an opaque cursor is not a durable
+/// coverage checkpoint or a promise that pruned history remains available.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRefPage {
@@ -209,7 +214,8 @@ pub struct TransactionRefPage {
     /// argument.
     pub cursor: PaginationCursor,
 
-    /// Highest block height the indexer has processed at response time.
+    /// Highest block height the indexer has processed at response time,
+    /// not the height through which the application has stored every result.
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at

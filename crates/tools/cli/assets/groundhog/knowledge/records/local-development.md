@@ -9,13 +9,11 @@ bootstrap_order = 60
 +++
 ## Local Development
 
-For first-run setup in automation, use `groundhog init --non-interactive --json`.
-It initializes global profiles and reports incomplete setup with exit 1 when
-Cargo, the active profile, or a selected stored signing key is unavailable.
-Add `--generate-key` only when authorized to create the initial signing key;
-existing keys and explicit key selections are preserved. `--quiet` does not
-accept wizard defaults. `init --json` performs setup; use `status --json` for
-read-only diagnostics. Create scripted projects separately with `groundhog new`.
+For scripted setup, use `groundhog init --non-interactive --json`. Exit 1 means
+Cargo, the profile, or a selected stored key is unavailable. Add `--generate-key`
+only when authorized; existing keys/selections are preserved. `--quiet` does not
+accept wizard defaults. `init` changes setup; `status --json` is read-only.
+Create projects separately with `groundhog new`.
 
 Use the CLI to start the supported local stack:
 
@@ -31,23 +29,12 @@ or Cargo network traffic in other commands. Keep `GROUNDHOG_DEVNODE_BINARY`
 for a matching local build. Diagnose startup compatibility failures rather
 than adding a protocol override.
 
-Use another terminal for status, build, deploy, call, view, or TypeScript
-application work. Prefer the active local profile and runtime information
-reported by `groundhog status --json` and `groundhog node --json`. Do not copy
-deterministic local-development keys into production configuration.
+Use another terminal for application work and the runtime reported by
+`groundhog status --json` / `groundhog node --json`. Never use deterministic
+local keys in production.
 
-Typical CLI discovery:
-
-```console
-groundhog status --json
-groundhog build --help
-groundhog test --help
-groundhog node --help
-groundhog deploy --help
-groundhog call --help
-groundhog view --help
-groundhog codegen ts --help
-```
+Check `--help` on build, test, node, deploy, call, view, and codegen ts before
+using unfamiliar flags.
 
 Use global `--non-interactive` to disable CLI prompts and terminal UI while
 retaining ordinary output. It does not grant consent: protected actions still
@@ -65,6 +52,12 @@ operation again. An `unknown` status does not explain why the transaction is
 absent. For detailed local backend logs, start `groundhog node --verbose`;
 output goes to that terminal unless redirected. Do not restart an ephemeral
 node just to enable logging: stopping it discards its chain state.
+
+`events list`, `tx list`, and `token transfers` inspect one page at a time.
+Continue with the returned opaque cursor and the same target/filters. `tx list`
+matches root invocation targets, not every address touched by a transaction.
+An exhausted walk is not a durable checkpoint for later blocks. Apply the
+event-page restart rules above when building an indexer.
 
 ### Key and address interoperability
 

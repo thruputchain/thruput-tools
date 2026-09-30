@@ -443,6 +443,13 @@ transaction; it does not wait. `tx list` preserves the endpoint's opaque cursor
 and does not fetch receipts. Address history includes root invocations only, so
 incoming wallet-wrapped transfers may not appear in a recipient's history.
 
+Keep the target and filters unchanged when continuing a page. A returned `"0x"`
+cursor ends that historical walk; an empty page with a non-empty cursor does not.
+To scan later blocks, start again at the last stored row's height and deduplicate
+that block. Store rows and progress together. `latestBlock` is the indexer's head,
+not a checkpoint for work the application completed. See the
+[restart walkthrough](https://docs.groundhog.dev/tutorials/add-events-to-a-contract/#resume-without-missing-events).
+
 A receipt timeout includes the last successfully observed status and inspection
 guidance to reuse the original profile and RPC endpoint. Endpoint URLs are omitted
 from timeout diagnostics because they may contain credentials. `unknown` is inconclusive: it does not
