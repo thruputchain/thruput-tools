@@ -63,11 +63,11 @@ where
 }
 
 async fn connect_event_indexer(
-    addr: SocketAddr,
+    address: SocketAddr,
 ) -> Result<Client, groundhog_x23_transport::ConnectError> {
     groundhog_x23_transport::connect_with_config(
         "event_indexer",
-        &addr.to_string(),
+        &address.to_string(),
         1,
         rpc_driver::ConnectionConfig::new(Some(0x7fff_ffff), rpc_driver::ServiceMap::new()),
         EventIndexer_EventIndexer1_Client::new,
