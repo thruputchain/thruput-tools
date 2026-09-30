@@ -632,6 +632,7 @@ mod tests {
         airdrop::ClientNonce,
         block::ChainTip,
         hex::{Hex0x, HexBytes},
+        strkey::StrKey,
         transaction::{ConflictCode, ConflictDiagnostic, TransactionStatus},
     };
 
@@ -976,7 +977,7 @@ mod tests {
         let config = NodeSupervisorConfig::default();
         let mut manifest = runtime_manifest(&config);
         manifest.bootstrap_accounts[0].public_key =
-            Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x99; 32]));
+            StrKey(groundhog_xdr::types::Ed25519PublicKey::from([0x99; 32]));
 
         let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
             .err()
@@ -1207,7 +1208,7 @@ mod tests {
                 TransactionStatus::RecentFailure {
                     attempt_height: BlockHeight::from(8),
                     conflict: ConflictDiagnostic {
-                        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
+                        address: StrKey(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
                         key: HexBytes(vec![0x01]),
                         code: ConflictCode::BoundsExceeded,
                     },
@@ -1435,7 +1436,7 @@ mod tests {
 
     fn test_request(recipient: u8, nonce: u8) -> AirdropRequest {
         AirdropRequest {
-            recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([recipient; 32])),
+            recipient: StrKey(groundhog_xdr::types::ContractAddress::from([recipient; 32])),
             client_nonce: ClientNonce::new(vec![nonce])
                 .expect("bug: one-byte nonce should validate"),
         }

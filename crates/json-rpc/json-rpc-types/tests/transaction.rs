@@ -27,7 +27,7 @@ fn recent_failure_serializes_camel_case() {
     assert_eq!(value["attemptHeight"], 1234);
     assert_eq!(
         value["conflict"]["address"],
-        format!("0x{}", "11".repeat(32))
+        "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V"
     );
     let expected_key = format!(
         "0x{}",

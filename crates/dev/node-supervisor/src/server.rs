@@ -708,7 +708,7 @@ mod tests {
     use groundhog_json_rpc_types::{
         airdrop::{AirdropAttemptResponse, AirdropRequest, ClientNonce},
         error::codes,
-        hex::Hex0x,
+        strkey::StrKey,
     };
     use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
@@ -1000,7 +1000,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         let airdrop_error = client
             .request_airdrop(AirdropRequest {
-                recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+                recipient: StrKey(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
                 client_nonce: ClientNonce::new(vec![0x99])
                     .expect("bug: test client nonce should validate"),
             })
@@ -2232,7 +2232,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         let response = client
             .request_airdrop(AirdropRequest {
-                recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+                recipient: StrKey(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
                 client_nonce: ClientNonce::new(vec![0x99])
                     .expect("bug: test client nonce should validate"),
             })
@@ -2269,7 +2269,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: jsonrpsee http client builds");
         let error = client
             .request_airdrop(AirdropRequest {
-                recipient: Hex0x(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
+                recipient: StrKey(groundhog_xdr::types::ContractAddress::from([0x88; 32])),
                 client_nonce: ClientNonce::new(vec![0x99])
                     .expect("bug: test client nonce should validate"),
             })
@@ -2445,7 +2445,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         //   - `IterationOrder` serializes as "ascending" / "descending"
         //   - `BlockAnchor` serializes as a tagged object
         //   - `PaginationCursor` serializes as `0x`-prefixed hex; `0x` = empty
-        let contract = format!("0x{}", "01".repeat(32));
+        //   - contract addresses serialize as C StrKeys
+        let contract = "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
         let query = serde_json::json!({
             "filters": [{
                 "contractAddresses": [contract],

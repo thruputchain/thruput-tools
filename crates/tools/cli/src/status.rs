@@ -14,7 +14,7 @@ use crate::checks::{self, FindingLevel};
 use crate::{CliError, Print};
 
 /// Schema version of the `status --json` data payload.
-pub const STATUS_JSON_SCHEMA_VERSION: u32 = 2;
+pub const STATUS_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Run the `status` diagnostic command.
 pub fn run(

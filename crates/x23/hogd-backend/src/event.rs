@@ -8,7 +8,8 @@
 
 use groundhog_json_rpc_types::{
     events::EmittedEvent,
-    hex::{Hex0x, HexBytes, Topic},
+    hex::{HexBytes, Topic},
+    strkey::StrKey,
 };
 use groundhog_xdr::event::TxEmittedEvent;
 use xdr_common::VecM;
@@ -68,7 +69,7 @@ pub fn parse_emitted_event(raw: TxEmittedEvent) -> Option<EmittedEvent> {
     bytes.drain(..topics_len);
 
     Some(EmittedEvent {
-        contract_address: Hex0x(raw.contract_address),
+        contract_address: StrKey(raw.contract_address),
         topics,
         data: HexBytes(bytes),
     })

@@ -396,7 +396,9 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         key_id: DEFAULT_KEY_ID,
         public_key: prefixed_hex(public_bytes),
         public_key_strkey: strkey::format_public_key(&public_bytes),
-        address: prefixed_hex(derive_pubkey_account_address(public_bytes)),
+        address: strkey::format_contract_address(
+            &derive_pubkey_account_address(public_bytes).into(),
+        ),
         path,
     })
 }
@@ -431,7 +433,7 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         key_id: DEFAULT_KEY_ID,
         public_key: prefixed_hex(public_key),
         public_key_strkey: strkey::format_public_key(&public_key),
-        address: prefixed_hex(address),
+        address: strkey::format_contract_address(&address.into()),
         path,
     })
 }

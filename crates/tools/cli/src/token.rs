@@ -9,7 +9,7 @@ use groundhog_json_rpc_types::hex::Topic;
 use groundhog_json_rpc_types::{ContractAddress, events::IdentifiedEvent};
 use xdr_common::VecM;
 
-use crate::account_resolution::resolve_address_target;
+use crate::account_resolution::{is_literal_of_address, resolve_address_target};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::events::fetch_event_page;
@@ -298,7 +298,7 @@ fn print_transfers(report: &TokenTransfersReport, continuation_requested: bool, 
         return;
     }
     let token = format_contract_address(&report.token_address.0);
-    if !report.token_input.eq_ignore_ascii_case(&token) {
+    if !is_literal_of_address(&report.token_input, &token) {
         print.detail("token", terminal_safe(&report.token_input));
     }
     print.detail("token address", token);

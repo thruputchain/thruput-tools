@@ -16,7 +16,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `balance --json` data payload.
-pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 1;
+pub const BALANCE_JSON_SCHEMA_VERSION: u32 = 2;
 const LOW_LOCAL_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
@@ -36,7 +36,7 @@ pub fn run(
         .to_owned();
 
     let (target, address) = resolve_address_target_or_default_wallet(&resolved_profile, target)?;
-    let address_hex = format_contract_address(&address);
+    let address_strkey = format_contract_address(&address);
     let address = ContractAddress::from(address);
 
     let balance = fetch_balance_blocking(&rpc_url, address)?;
@@ -44,14 +44,14 @@ pub fn run(
     let balance_hog = hog::format_amount(raw_balance);
 
     print.status(format_args!("Balance: {balance_hog} HOG"));
-    print.status(format_args!("Address: {address_hex}"));
+    print.status(format_args!("Address: {address_strkey}"));
     print.json(&CommandResult::new(
         cmd,
         json!({
             "schemaVersion": BALANCE_JSON_SCHEMA_VERSION,
             "rpcUrl": rpc_url,
             "target": target,
-            "address": address_hex,
+            "address": address_strkey,
             "rawBalance": balance.raw_balance,
             "balanceHog": balance_hog,
             "height": balance.height,

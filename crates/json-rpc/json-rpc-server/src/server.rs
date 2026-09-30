@@ -804,6 +804,7 @@ mod tests {
         IterationOrder, PaginationCursor, TopicList,
     };
     use groundhog_json_rpc_types::hex::Hex0x;
+    use groundhog_json_rpc_types::strkey::StrKey;
     use xdr_common::VecM;
 
     // Canonical XDR/hash vector only. This transaction is structurally valid
@@ -2199,7 +2200,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
 
         let request = ViewRequest {
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -2395,7 +2396,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn simple_query() -> EventQuery {
         EventQuery {
             filters: EventFilterList(VecM(vec![EventFilter {
-                contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+                contract_addresses: ContractAddressList(VecM(vec![StrKey(
                     groundhog_xdr::types::ContractAddress::from([0u8; 32]),
                 )])),
                 topics: EventTopicFilter {
@@ -2422,7 +2423,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     fn simple_address_query() -> AddressTransactionQuery {
         AddressTransactionQuery {
-            address: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            address: StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             order: IterationOrder::Ascending,
             anchor: BlockAnchor::AtBeginning,
             cursor: PaginationCursor(vec![]),

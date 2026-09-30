@@ -15,6 +15,7 @@ use groundhog_json_rpc_types::network_descriptor::{
 };
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::state::StorageItemInfo;
+use groundhog_json_rpc_types::strkey::StrKey;
 use groundhog_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
 };
@@ -36,8 +37,10 @@ fn zero_hash() -> SHA256Hash {
     Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32]))
 }
 
+const ZERO_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
 fn zero_address() -> groundhog_json_rpc_types::ContractAddress {
-    Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+    StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 fn test_consensus_value() -> ConsensusValue {
@@ -115,11 +118,13 @@ fn network_descriptor_wire_format_is_public_and_camel_case() {
     assert_eq!(value["networkHash"], format!("0x{}", "12".repeat(32)));
     assert_eq!(value["endpoints"]["rpcUrl"], "https://rpc.devnet.example");
     assert!(value["endpoints"].get("faucetUrl").is_none());
+    assert_eq!(value["nativeHog"]["tokenAddress"], ZERO_ADDRESS);
     assert_eq!(value["nativeHog"]["decimals"], 7);
     assert_eq!(
         value["nativeHog"]["transferEntrypoint"],
         "0x63285b3523f9dc3f"
     );
+    assert_eq!(value["faucet"]["walletAddress"], ZERO_ADDRESS);
     assert_eq!(value["walletCreate"]["prefundRawAmount"], "100000000");
     assert_eq!(value["airdrop"]["rawAmount"], "100000000");
     assert!(value["airdrop"].get("amountHog").is_none());
@@ -219,7 +224,7 @@ fn view_request_wire_format() {
         caller: None,
     };
     let v: Value = serde_json::to_value(&request).unwrap();
-    assert!(v["contract"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["contract"], ZERO_ADDRESS);
     assert_eq!(v["entrypoint"], "0x0102030405060708");
     assert_eq!(v["calldata"], "0xcafe");
     assert!(v.get("caller").is_none());
@@ -297,7 +302,7 @@ fn emitted_event_wire_format() {
         data: HexBytes(vec![0xca, 0xfe]),
     };
     let v: Value = serde_json::to_value(&event).unwrap();
-    assert!(v["contractAddress"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["contractAddress"], ZERO_ADDRESS);
     assert!(v["topics"][0].as_str().unwrap().starts_with("0x"));
     assert_eq!(v["topics"][0].as_str().unwrap().len(), 66);
     assert!(v["data"].as_str().unwrap().starts_with("0x"));
@@ -327,7 +332,7 @@ fn identified_event_wire_format() {
 }
 
 #[test]
-fn event_query_wire_format_uses_rpc_hex_projections() {
+fn event_query_wire_format_uses_rpc_projections() {
     let query = EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
             contract_addresses: ContractAddressList(VecM(vec![zero_address()])),
@@ -343,12 +348,7 @@ fn event_query_wire_format_uses_rpc_hex_projections() {
         limit: 50,
     };
     let v: Value = serde_json::to_value(&query).unwrap();
-    assert!(
-        v["filters"][0]["contractAddresses"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
+    assert_eq!(v["filters"][0]["contractAddresses"][0], ZERO_ADDRESS);
     assert!(v["filters"][0].get("contract_addresses").is_none());
     assert!(
         v["filters"][0]["topics"]["topic0"][0]
@@ -445,7 +445,7 @@ fn request_types_reject_unknown_fields() {
 }
 
 #[test]
-fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
+fn address_transaction_query_wire_format_uses_rpc_projections() {
     let query = AddressTransactionQuery {
         address: zero_address(),
         order: IterationOrder::Descending,
@@ -454,7 +454,7 @@ fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
         limit: 50,
     };
     let v: Value = serde_json::to_value(&query).unwrap();
-    assert!(v["address"].as_str().unwrap().starts_with("0x"));
+    assert_eq!(v["address"], ZERO_ADDRESS);
     assert_eq!(v["order"], "descending");
     assert_eq!(v["anchor"]["kind"], "atEnd");
     assert_eq!(v["cursor"], "0x");

@@ -149,7 +149,7 @@ fn generated_key_address_matches_shared_signing_crate() {
     assert_eq!(keys.len(), 1);
     assert_eq!(
         keys[0].address,
-        format!("0x{}", hex::encode(expected.as_ref()))
+        groundhog_signing::strkey::format_contract_address(&expected)
     );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };

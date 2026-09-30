@@ -231,7 +231,9 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::{hex::Hex0x, runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION};
+    use groundhog_json_rpc_types::{
+        hex::Hex0x, runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION, strkey::StrKey,
+    };
     use groundhog_xdr::types::{
         ContractAddress as XdrContractAddress, Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash,
     };
@@ -352,7 +354,7 @@ mod tests {
     #[test]
     fn send_raw_transaction_rejects_public_key_mismatch() {
         let mut manifest = manifest();
-        manifest.bootstrap_accounts[0].public_key = Hex0x(XdrEd25519PublicKey::from([0x99; 32]));
+        manifest.bootstrap_accounts[0].public_key = StrKey(XdrEd25519PublicKey::from([0x99; 32]));
 
         let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1) {
             Ok(_) => panic!("bug: public key mismatch should fail"),
@@ -429,8 +431,8 @@ mod tests {
             public_key.copy_from_slice(&signer.verifying_key_bytes());
             let mut account = manifest.bootstrap_accounts[0].clone();
             account.index = u32::try_from(index).expect("bug: test account index should fit");
-            account.public_key = Hex0x(XdrEd25519PublicKey::from(public_key));
-            account.wallet_address = Hex0x(XdrContractAddress::from([index as u8; 32]));
+            account.public_key = StrKey(XdrEd25519PublicKey::from(public_key));
+            account.wallet_address = StrKey(XdrContractAddress::from([index as u8; 32]));
             manifest.bootstrap_accounts.push(account);
         }
         manifest

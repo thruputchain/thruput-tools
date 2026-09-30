@@ -415,13 +415,16 @@ groundhog-bench --url http://127.0.0.1:9546 \
   types; re-export them.
 - JSON field names use `camelCase` (serde `rename_all`). Enums use
   tagged serialization (`#[serde(tag = "...")]`).
-- Wire format: `0x`-prefixed lowercase hex for all byte values (hashes,
-  addresses, topics, event data). Decimal JSON numbers for heights,
+- Wire format: `0x`-prefixed lowercase hex for byte values (hashes,
+  topics, event data), and Stellar StrKeys for addresses (`C...`) and
+  Ed25519 public keys (`G...`). Decimal JSON numbers for heights,
   counts, and other quantities. See docs/gateway/system-design.md
   "Wire Format Conventions".
 - Byte fields use `HexBytes` (variable-length) or `Topic` (32-byte fixed) from
   `crates/json-rpc/json-rpc-types/src/hex.rs`; never raw `Vec<u8>` in
-  RPC-facing types.
+  RPC-facing types. Addresses and public keys use the `ContractAddress` and
+  `Ed25519PublicKey` aliases, which wrap `StrKey<T>` from `strkey.rs`; their
+  parsers also accept legacy hex, so do not add another address wrapper.
 - `#[non_exhaustive]` on public enums that will gain variants
   (`TransactionStatus`, `ExecStatus`, `SupervisorStop`).
 - The jsonrpsee trait in `crates/json-rpc/json-rpc-api/src/lib.rs` is the

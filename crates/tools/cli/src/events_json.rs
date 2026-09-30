@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const EVENTS_LIST_JSON_SCHEMA_VERSION: u32 = 1;
+pub const EVENTS_LIST_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Effective positional topic filters for one event query.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -49,7 +49,8 @@ pub enum EventDecodeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DecodedEventReport {
     pub name: String,
-    pub topics: BTreeMap<String, Topic>,
+    /// Indexed topics by name: address topics as C `StrKeys`, others as `0x` hex.
+    pub topics: BTreeMap<String, String>,
     pub fields: BTreeMap<String, serde_json::Value>,
 }
 

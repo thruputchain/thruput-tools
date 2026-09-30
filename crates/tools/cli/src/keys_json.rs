@@ -27,8 +27,8 @@ impl Drop for ExportedKey {
     }
 }
 
-/// First version of the public import result.
-pub(crate) const KEYS_IMPORT_JSON_SCHEMA_VERSION: u32 = 1;
+/// Version of the public import result. Version 2 renders the account address as a C `StrKey`.
+pub(crate) const KEYS_IMPORT_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Stable machine-readable result for `groundhog keys import`.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

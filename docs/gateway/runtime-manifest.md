@@ -174,6 +174,8 @@ come from a live producer because these fields are runtime state:
   chain. Data-directory presence alone does not make a chain recovered.
 - `endpoints` contain bound ports.
 - `bootstrapAccounts[].walletAddress` must match the deployed dev wallets.
+  Consumers read `walletAddress` and `publicKey` as `0x`-prefixed hex, which
+  hog-devnode writes, or as C and G StrKeys.
 - `bootstrap.devWallet.*Hash` and `bootstrap.storageCostModel.hash` must match
   the backend that produced the chain.
 - `manifestHash` lives in the readiness pointer and is computed over the exact

@@ -10,7 +10,7 @@ use groundhog_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
 };
 
-use crate::account_resolution::resolve_address_target_or_default_wallet;
+use crate::account_resolution::{is_literal_of_address, resolve_address_target_or_default_wallet};
 use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
@@ -96,7 +96,7 @@ pub fn list(
         .ok_or(CliError::MissingRpcUrl)?
         .to_owned();
     let (target_input, address) = resolve_address_target_or_default_wallet(&profile, target_input)?;
-    let address_hex = format_contract_address(&address);
+    let address_strkey = format_contract_address(&address);
 
     let query = AddressTransactionQuery {
         address: ContractAddress::from(address),
@@ -110,7 +110,7 @@ pub fn list(
     let page = rt.block_on(fetch_transaction_page(&rpc_url, query))?;
 
     if !print.is_json() {
-        print_list(&target_input, &address_hex, &page, print);
+        print_list(&target_input, &address_strkey, &page, print);
     }
     print.json(&CommandResult::with_warnings(
         cmd,
@@ -296,7 +296,7 @@ fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, prin
     if print.is_quiet() {
         return;
     }
-    if !target_input.eq_ignore_ascii_case(address) {
+    if !is_literal_of_address(target_input, address) {
         print.detail("target", terminal_safe(target_input));
     }
     print.detail("address", address);

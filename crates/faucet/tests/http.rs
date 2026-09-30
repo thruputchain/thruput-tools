@@ -6,6 +6,7 @@ use groundhog_json_rpc_types::network_descriptor::{
     NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
 };
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::strkey::StrKey;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
@@ -147,7 +148,7 @@ async fn airdrop_validates_request_then_submits() {
         json,
         serde_json::json!({
             "attemptStatus": "succeeded",
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V",
             "txHash": format!("0x{}", "22".repeat(32)),
             "rawAmount": "100000000",
             "height": 42,
@@ -479,7 +480,10 @@ async fn airdrop_duplicate_in_flight_returns_pending_attempt() {
     let json: serde_json::Value =
         serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
     assert_eq!(json["attemptStatus"], "pending");
-    assert_eq!(json["recipient"], format!("0x{}", "11".repeat(32)));
+    assert_eq!(
+        json["recipient"],
+        "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V"
+    );
     assert_eq!(json["retryAfterSeconds"], 5);
     assert!(json.get("txHash").is_none());
 }
@@ -503,7 +507,7 @@ async fn airdrop_pending_response_matches_shared_wire_type() {
         json,
         serde_json::json!({
             "attemptStatus": "pending",
-            "recipient": format!("0x{}", "11".repeat(32)),
+            "recipient": "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V",
             "txHash": format!("0x{}", "22".repeat(32)),
             "rawAmount": "100000000",
             "retryAfterSeconds": 5
@@ -1166,7 +1170,10 @@ async fn wallet_create_validates_request_then_submits() {
     let json: serde_json::Value =
         serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
     assert_eq!(json["attemptStatus"], "created");
-    assert_eq!(json["walletAddress"], format!("0x{}", "55".repeat(32)));
+    assert_eq!(
+        json["walletAddress"],
+        "CBKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVKVLO6Q"
+    );
     assert_eq!(json["prefundTxHash"], format!("0x{}", "22".repeat(32)));
     assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
     assert_eq!(json["height"], 42);
@@ -2307,7 +2314,7 @@ impl wallet_create::WalletCreateSubmitter for MockWalletCreateSubmitter {
         _deploy_nonce: SHA256Hash,
     ) -> Result<wallet_create::PreparedWalletCreate, wallet_create::WalletCreateError> {
         Ok(wallet_create::PreparedWalletCreate {
-            wallet_address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
+            wallet_address: StrKey(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
             prefund_raw_amount: "100000000".into(),
             wallet_contract_hash: Hex0x(SHA256Hash::from([0x77; 32])),
         })
@@ -2351,7 +2358,7 @@ impl wallet_create::WalletCreateSubmitter for MockWalletCreateSubmitter {
             ));
         }
         Ok(wallet_create::AcceptedWalletCreate {
-            wallet_address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
+            wallet_address: StrKey(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
             tx_hash: test_tx_hash(),
         })
     }

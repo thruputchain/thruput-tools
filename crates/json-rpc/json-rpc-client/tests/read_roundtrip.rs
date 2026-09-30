@@ -21,6 +21,7 @@ use groundhog_json_rpc_types::{
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
+    strkey::StrKey,
     transaction::{
         AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
     },
@@ -62,7 +63,7 @@ fn canned_event_page() -> EventPage {
             block_height: BlockHeight::from(11),
             sequence_number: 3,
             event: EmittedEvent {
-                contract_address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+                contract_address: StrKey(groundhog_xdr::types::ContractAddress::from(
                     EVENT_CONTRACT,
                 )),
                 topics: vec![Topic(EVENT_TOPIC)],
@@ -261,7 +262,7 @@ async fn stop(handle: ServerHandle) {
 fn populated_event_query() -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+            contract_addresses: ContractAddressList(VecM(vec![StrKey(
                 groundhog_xdr::types::ContractAddress::from(EVENT_CONTRACT),
             )])),
             topics: EventTopicFilter {
@@ -318,7 +319,7 @@ async fn get_transactions_by_address_roundtrips_a_populated_page() {
     let queries = backend.address_queries.clone();
     let (client, handle) = start_server(backend).await;
     let query = AddressTransactionQuery {
-        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x31; 32])),
+        address: StrKey(groundhog_xdr::types::ContractAddress::from([0x31; 32])),
         order: IterationOrder::Ascending,
         anchor: BlockAnchor::AtBeginning,
         cursor: PaginationCursor(vec![]),
@@ -349,7 +350,7 @@ async fn get_storage_at_roundtrips_a_bytestring_item() {
     let backend = PopulatedReadBackend::default();
     let reads = backend.storage_reads.clone();
     let (client, handle) = start_server(backend).await;
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x61; 32]));
+    let address: ContractAddress = StrKey(groundhog_xdr::types::ContractAddress::from([0x61; 32]));
     let key = [0x62u8; 32];
 
     let read = client
@@ -372,7 +373,7 @@ async fn get_storage_at_roundtrips_a_bytestring_item() {
 #[tokio::test]
 async fn get_balance_roundtrips_a_decimal_string_balance() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x64; 32]));
+    let address: ContractAddress = StrKey(groundhog_xdr::types::ContractAddress::from([0x64; 32]));
 
     let balance = client
         .get_balance(address)

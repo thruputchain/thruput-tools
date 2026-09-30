@@ -198,7 +198,7 @@ fn usable_default_key_for_init(
         groundhog_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
     )
     .address();
-    (groundhog_json_rpc_types::hex::prefixed_hex(address.as_ref()) == key.address).then_some(key)
+    (crate::codec::format_contract_address(&address) == key.address).then_some(key)
 }
 
 fn can_generate_initial_key(report: &crate::checks::StatusReport) -> bool {

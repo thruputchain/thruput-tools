@@ -296,6 +296,7 @@ pub enum RuntimeManifestError {
 mod tests {
     use groundhog_json_rpc_types::hex::Hex0x;
     use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
+    use groundhog_json_rpc_types::strkey::StrKey;
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::Ed25519PublicKey;
     use serde_json::json;
@@ -332,7 +333,7 @@ mod tests {
         let mut local_user = manifest.bootstrap_accounts[0].clone();
         local_user.index = 3;
         local_user.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
-        local_user.public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
+        local_user.public_key = StrKey(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         manifest.bootstrap_accounts.push(local_user);
 
         let accounts = derive_accounts(&manifest).expect("local-user account should derive");

@@ -13,7 +13,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `storage --json` data payload.
-pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 1;
+pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Read the latest committed storage item at a contract address/key pair.
 pub fn run(
@@ -34,7 +34,7 @@ pub fn run(
     let address = ContractAddress::from(resolve_contract_target(&resolved_profile, address)?);
     let key = parse_storage_key(key)?;
     let key_hex = prefixed_hex(&key);
-    let address_hex = prefixed_hex(address.0);
+    let address_strkey = address.to_string();
 
     let task = print.start_task("Reading storage");
 
@@ -42,13 +42,13 @@ pub fn run(
     let read = rt.block_on(fetch_storage_at(rpc_url, address, key))?;
 
     task.success("Storage read complete");
-    print_storage_read(&address_hex, &key_hex, &read, print)?;
+    print_storage_read(&address_strkey, &key_hex, &read, print)?;
     print.json(&CommandResult::new(
         cmd,
         json!({
             "schemaVersion": STORAGE_JSON_SCHEMA_VERSION,
             "rpcUrl": rpc_url,
-            "address": address_hex,
+            "address": address_strkey,
             "key": key_hex,
             "blockHeight": read.block_height,
             "item": read.item,

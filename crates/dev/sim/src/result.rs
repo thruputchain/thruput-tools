@@ -484,7 +484,7 @@ pub struct ContractDeploymentRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeDeploymentCollateral {
-    /// Predicted deployment address receiving collateral, encoded as `0x` hex.
+    /// Predicted deployment address receiving collateral, encoded as a C `StrKey`.
     pub recipient: String,
     /// Raw HOG amount to transfer, encoded as a decimal string.
     pub raw_amount: String,

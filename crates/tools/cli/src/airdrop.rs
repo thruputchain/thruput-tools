@@ -43,7 +43,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Schema version of the `airdrop --json` data payload.
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 3;
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_AIRDROP_HOG: &str = "10";
 
 #[derive(Debug)]
@@ -971,6 +971,7 @@ mod tests {
         prepare_remote_airdrop_with_descriptor, remote_airdrop_attempt_path,
         resolve_airdrop_recipient, validate_remote_airdrop_amount,
     };
+    use crate::codec::format_contract_address;
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
     use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
@@ -1016,11 +1017,11 @@ mod tests {
 
         assert_eq!(
             resolve_airdrop_recipient(&profile, "alice").unwrap(),
-            format!("0x{}", "ab".repeat(32))
+            format_contract_address(&[0xab; 32].into())
         );
         assert_eq!(
             resolve_airdrop_recipient(&profile, &format!("0x{}", "cD".repeat(32))).unwrap(),
-            format!("0x{}", "cd".repeat(32))
+            format_contract_address(&[0xcd; 32].into())
         );
         assert!(resolve_airdrop_recipient(&profile, "missing").is_err());
     }
@@ -1213,7 +1214,10 @@ mod tests {
         assert_eq!(prepared.faucet_url, "http://127.0.0.1:8081");
         assert_eq!(prepared.rpc_url, "http://127.0.0.1:9545");
         assert_eq!(prepared.recipient_input, "alice");
-        assert_eq!(prepared.recipient_wallet, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(
+            prepared.recipient_wallet,
+            format_contract_address(&[0xab; 32].into())
+        );
         assert_eq!(prepared.client_nonce.len(), 34);
         unsafe { env::remove_var("XDG_CACHE_HOME") };
     }

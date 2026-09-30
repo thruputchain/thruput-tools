@@ -9,8 +9,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ContractAddress;
-use crate::hex::{Hex0x, HexBytes};
+use crate::hex::HexBytes;
 use crate::receipt::TransactionReceipt;
+use crate::strkey::StrKey;
 
 /// Dev-only execution detail for a committed transaction.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -110,7 +111,7 @@ pub enum FrameOutputInfo {
 impl From<&FlaggedStorageDelta> for StorageDeltaInfo {
     fn from(delta: &FlaggedStorageDelta) -> Self {
         Self {
-            address: Hex0x(delta.addrkey.address),
+            address: StrKey(delta.addrkey.address),
             key: xdr_hex_bytes(&delta.addrkey.key),
             kind: storage_delta_kind(&delta.delta),
             summary: storage_delta_summary(delta),
@@ -150,7 +151,7 @@ impl From<InvocationFrameTrace> for TraceInfo {
 impl From<&Invocation> for InvocationInfo {
     fn from(invocation: &Invocation) -> Self {
         Self {
-            address: Hex0x(invocation.invoked_address),
+            address: StrKey(invocation.invoked_address),
             entrypoint: HexBytes(invocation.entrypoint.into_inner().to_vec()),
             gas_limit: configured_gas_limit(invocation.gas_limit),
             calldata: HexBytes(invocation.calldata.0.clone()),

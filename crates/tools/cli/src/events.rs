@@ -10,7 +10,7 @@ use groundhog_json_rpc_types::hex::Topic;
 use groundhog_xdr::event::{kMaxEventLength, kMaxTopics};
 use xdr_common::VecM;
 
-use crate::account_resolution::resolve_address_target;
+use crate::account_resolution::{is_literal_of_address, resolve_address_target};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::event_spec::ValidatedEventSpec;
@@ -236,7 +236,7 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
         return;
     }
     let address = format_contract_address(&report.contract_address.0);
-    if !report.contract_input.eq_ignore_ascii_case(&address) {
+    if !is_literal_of_address(&report.contract_input, &address) {
         print.detail("contract", terminal_safe(&report.contract_input));
     }
     print.detail("emitter", &address);
@@ -278,10 +278,7 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
                     print.detail("signature", format_args!("0x{}", hex::encode(signature.0)));
                 }
                 for (name, topic) in &decoded.topics {
-                    print.detail(
-                        &terminal_safe(name),
-                        format_args!("0x{}", hex::encode(topic.0)),
-                    );
+                    print.detail(&terminal_safe(name), topic);
                 }
             } else {
                 for (topic_index, topic) in item.raw.topics.iter().enumerate() {

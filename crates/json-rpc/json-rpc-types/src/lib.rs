@@ -13,11 +13,13 @@ pub mod protocol_token;
 pub mod receipt;
 pub mod runtime_manifest;
 pub mod state;
+pub mod strkey;
 pub mod transaction;
 pub mod version;
 pub mod view;
 
 use hex::Hex0x;
+use strkey::StrKey;
 
 pub use hex::NetworkHashHex;
 
@@ -31,10 +33,13 @@ pub use groundhog_xdr::types::{BlockHeight, Protocol, TimePoint};
 // Hash newtypes are represented as SHA256Hash at the API layer. They carry the
 // same 32 bytes while retaining `0x` JSON encoding.
 pub type SHA256Hash = Hex0x<groundhog_xdr::types::SHA256Hash>;
-pub type ContractAddress = Hex0x<groundhog_xdr::types::ContractAddress>;
 pub type BlockHash = Hex0x<groundhog_xdr::types::SHA256Hash>;
 pub type NetworkHash = Hex0x<groundhog_xdr::types::SHA256Hash>;
 pub type StorageHash = Hex0x<groundhog_xdr::types::SHA256Hash>;
 pub type DbHash = Hex0x<groundhog_xdr::types::StorageLongHash>;
-pub type Ed25519PublicKey = Hex0x<groundhog_xdr::types::Ed25519PublicKey>;
 pub type ValidatorID = Hex0x<groundhog_xdr::validator::ValidatorID>;
+
+// Addresses and public keys cross the API boundary as Stellar StrKeys:
+// `C...` for contract and wallet addresses, `G...` for Ed25519 public keys.
+pub type ContractAddress = StrKey<groundhog_xdr::types::ContractAddress>;
+pub type Ed25519PublicKey = StrKey<groundhog_xdr::types::Ed25519PublicKey>;

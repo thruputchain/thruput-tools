@@ -12,8 +12,7 @@ import { AppHeader } from "@/components/app-header"
 import { FaucetHero } from "@/components/faucet-hero"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
-
-const ADDRESS_REGEX = /^0x[0-9a-fA-F]{64}$/
+import { parseWalletAddress } from "@/lib/address"
 
 export function App() {
   const [address, setAddress] = useState("")
@@ -67,13 +66,15 @@ export function App() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    const normalized = address.trim().toLowerCase()
+    const recipient = parseWalletAddress(address)
     if (!networkDescriptor) {
       toast.error("Faucet metadata is still loading.")
       return
     }
-    if (!ADDRESS_REGEX.test(normalized)) {
-      setFieldError("Enter a 0x-prefixed 64-character Thruput address.")
+    if (!recipient) {
+      setFieldError(
+        "Enter a Thruput wallet address: a C... StrKey or 0x-prefixed 64-character hex.",
+      )
       return
     }
 
@@ -81,7 +82,7 @@ export function App() {
     setFieldError(null)
 
     try {
-      const result = await requestAirdrop(normalized, networkDescriptor)
+      const result = await requestAirdrop(recipient, networkDescriptor)
       showSuccessToast(
         formatAirdropAmount(result.rawAmount, networkDescriptor),
         result.txHash,

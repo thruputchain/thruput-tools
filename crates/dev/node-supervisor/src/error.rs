@@ -339,9 +339,9 @@ pub enum NodeSupervisorError {
     DevAccountPublicKeyMismatch {
         /// Dev-account index.
         index: usize,
-        /// Expected 0x-prefixed public key.
+        /// Expected public key as a G `StrKey`.
         expected: String,
-        /// Advertised 0x-prefixed public key.
+        /// Advertised public key as a G `StrKey`.
         actual: String,
     },
 

@@ -338,7 +338,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use groundhog_json_rpc_types::hex::Hex0x;
+    use groundhog_json_rpc_types::strkey::StrKey;
     use groundhog_xdr::storage_item::WireStorageItem;
     use xdr_common::BytesM;
 
@@ -410,7 +410,7 @@ mod tests {
     }
 
     fn address_zero() -> ContractAddress {
-        Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+        StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
     }
 
     fn config_for_tests(

@@ -225,7 +225,8 @@ All JSON-RPC responses follow these serialization rules:
 | Type | JSON Format | Example |
 |------|------------|---------|
 | Hashes (`SHA256Hash`, `TxHash`) | `0x`-prefixed lowercase hex, 64 chars | `"0xa1b2c3d4..."` |
-| Addresses (`ContractAddress`) | `0x`-prefixed lowercase hex, 64 chars | `"0x00112233..."` |
+| Addresses (`ContractAddress`) | C StrKey (SEP-23), 56 chars | `"CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"` |
+| Public keys (`Ed25519PublicKey`) | G StrKey (SEP-23), 56 chars | `"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"` |
 | Event topics (`Topic`) | `0x`-prefixed lowercase hex, 64 chars | `"0xdeadbeef..."` |
 | Event data (`HexBytes`) | `0x`-prefixed lowercase hex, variable length | `"0xcafe"` |
 | Block height, tx count, etc. | JSON number (decimal integer) | `42` |
@@ -236,10 +237,16 @@ Ethereum's hex-encoded *quantities* (`"0x1a4"` for block 420) are widely
 considered a UX mistake — Solana, Sui, Aptos, and Stellar all use plain
 integers. We take the best of both: hex bytes, decimal numbers.
 
+Addresses and public keys use Stellar's StrKey encoding instead, as the
+`stellar-xdr` crate renders `ScAddress` and `AccountId`. The leading letter
+names the kind and a checksum catches typos, so a public key cannot be read as
+an address and a mistyped address is rejected rather than sent. Requests and
+other inputs also accept the legacy `0x`-prefixed hex form of both.
+
 **Note on `groundhog-xdr`:** The XDR crate serializes hash/address types as
 bare hex (no `0x` prefix) via `serde_arrays::hex`. The public RPC boundary wraps
-byte-like values in `json-rpc-types` so JSON-RPC clients see the
-`0x`-prefixed format consistently.
+byte-like values in `json-rpc-types` (`Hex0x` for hashes, `StrKey` for
+addresses and public keys) so JSON-RPC clients see one format per kind.
 
 ### Structured error data
 

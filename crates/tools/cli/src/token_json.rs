@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events_json::RawEventReport;
 
-pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 2;
+pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Effective participant constraint for a token-transfer query.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

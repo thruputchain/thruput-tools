@@ -344,9 +344,9 @@ fn parse_public_key(value: &str) -> Result<Ed25519PublicKey, Error> {
         })
 }
 
-/// Format a contract address as 0x-prefixed lowercase hex.
+/// Format a contract address as its C `StrKey`.
 pub fn format_contract_address(address: &ContractAddress) -> String {
-    prefixed_hex(address)
+    groundhog_signing::strkey::format_contract_address(address)
 }
 
 /// Render a spec id for a diagnostic, validating every segment.
@@ -1501,7 +1501,7 @@ fn decode_spec_scalar_value_from_reader(
                 .map_err(|e| decode_value_error(path, format!("failed to decode bytes: {e}"))),
         ),
         ContractType::Address => {
-            Some(read_xdr_value::<ContractAddress>(reader, path).map(hex_json_value))
+            Some(read_xdr_value::<ContractAddress>(reader, path).map(contract_address_json_value))
         }
         _ => None,
     }
@@ -1770,8 +1770,12 @@ fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<Value> {
             .map(|value| Value::from(value.to_string())),
         "bool" => decode_xdr_value::<bool>(bytes).map(Value::from),
         "String" | "str" => decode_xdr_value::<String>(bytes).map(Value::from),
-        "ContractAddress" => decode_xdr_value::<ContractAddress>(bytes).map(hex_json_value),
-        "Ed25519PublicKey" => decode_xdr_value::<Ed25519PublicKey>(bytes).map(hex_json_value),
+        "ContractAddress" => {
+            decode_xdr_value::<ContractAddress>(bytes).map(contract_address_json_value)
+        }
+        "Ed25519PublicKey" => {
+            decode_xdr_value::<Ed25519PublicKey>(bytes).map(public_key_json_value)
+        }
         "SHA256Hash" => decode_xdr_value::<SHA256Hash>(bytes).map(hex_json_value),
         "ContractEntrypointID" => {
             decode_xdr_value::<ContractEntrypointID>(bytes).map(hex_json_value)
@@ -1813,4 +1817,14 @@ where
     T: AsRef<[u8]>,
 {
     Value::from(prefixed_hex(value))
+}
+
+fn contract_address_json_value(address: ContractAddress) -> Value {
+    Value::from(format_contract_address(&address))
+}
+
+fn public_key_json_value(key: Ed25519PublicKey) -> Value {
+    Value::from(groundhog_signing::strkey::format_public_key(
+        &key.into_inner(),
+    ))
 }

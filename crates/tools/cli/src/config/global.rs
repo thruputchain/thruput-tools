@@ -13,8 +13,7 @@ use crate::CliError;
 const INITIAL_DEFAULT_PROFILE: &str = "local";
 const DEVNET_RPC_URL: &str = "https://rpc.thruput.network";
 const DEVNET_FAUCET_URL: &str = "https://faucet.thruput.network";
-const HOG_CONTRACT_ADDRESS: &str =
-    "0x0000000000000000000000000000000000000000000000000000000000000001";
+const HOG_CONTRACT_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalRuntimeState {
@@ -300,4 +299,15 @@ pub(super) fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hog_alias_is_the_native_token_strkey() {
+        assert_eq!(
+            super::HOG_CONTRACT_ADDRESS,
+            crate::codec::format_contract_address(&groundhog_signing::NATIVE_HOG_ADDRESS)
+        );
+    }
 }

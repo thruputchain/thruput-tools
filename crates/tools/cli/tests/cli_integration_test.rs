@@ -3088,7 +3088,7 @@ fn interactive_init_points_to_created_project() {
 
     assert!(terminal_output.contains("Setup Complete"));
     assert!(terminal_output.contains("Key"));
-    assert!(terminal_output.contains("default (0x"));
+    assert!(terminal_output.contains("default (C"));
     assert!(terminal_output.contains("Project"));
     assert!(terminal_output.contains("demo-contract"));
     assert!(terminal_output.contains("Next:"));
@@ -4303,7 +4303,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 6);
+    assert_eq!(stdout["data"]["schemaVersion"], 7);
     assert_eq!(stdout["data"]["mode"], "rv32");
     assert_eq!(stdout["data"]["package"], "demo-contract");
     assert_rv32_test_artifact(&stdout["data"]);
@@ -4700,7 +4700,7 @@ fn deploy_workspace_package_persists_selected_package_alias() {
         String::from_utf8_lossy(&output.stderr)
     );
     let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
-    let expected_address = format!("0x{}", "bb".repeat(32));
+    let expected_address = address_strkey(&format!("0x{}", "bb".repeat(32)));
     assert!(config.contains(&format!("counter = \"{expected_address}\"")));
     assert!(!config.contains("shared-workspace ="));
 }
@@ -4788,7 +4788,7 @@ fn deploy_artifact_with_alias_records_that_name() {
     );
 
     let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
-    let deployed_address = format!("0x{}", "bb".repeat(32));
+    let deployed_address = address_strkey(&format!("0x{}", "bb".repeat(32)));
     assert!(
         config.contains(&format!("token = \"{deployed_address}\"")),
         "--alias should be recorded verbatim; config was:\n{config}"
@@ -4850,7 +4850,7 @@ fn deploy_alias_outside_a_project_lands_in_the_global_profile() {
 
     let global = std::fs::read_to_string(config_home.join("groundhog").join("config.toml"))
         .expect("global config should exist");
-    let deployed_address = format!("0x{}", "bb".repeat(32));
+    let deployed_address = address_strkey(&format!("0x{}", "bb".repeat(32)));
     assert!(
         global.contains(&format!("token = \"{deployed_address}\"")),
         "the alias should land in the global profile; config was:\n{global}"
@@ -4964,8 +4964,8 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 4);
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION, 5);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     for old_key in ["dry_run", "rpc_url", "artifact_kind", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
@@ -4982,7 +4982,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["predictedAddress"]
             .as_str()
             .unwrap()
-            .starts_with("0x")
+            .starts_with('C')
     );
     assert!(
         stdout["data"]["signedTx"]
@@ -5110,7 +5110,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "trading");
@@ -5118,12 +5118,12 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
     assert_eq!(stdout["data"]["prefund_raw_amount"], "2000000000");
-    assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
+    assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with('C'));
     assert!(
         stdout["data"]["owner_public_key"]
             .as_str()
             .unwrap()
-            .starts_with("0x")
+            .starts_with('G')
     );
     assert_eq!(
         std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
@@ -5184,7 +5184,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "owner");
@@ -5236,7 +5236,7 @@ fn local_wallet_create_json_warns_when_projected_faucet_balance_is_below_ten_hog
     );
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
-    assert_eq!(payload["data"]["schemaVersion"], 4);
+    assert_eq!(payload["data"]["schemaVersion"], 5);
 }
 
 #[test]
@@ -5406,8 +5406,18 @@ fn wallet_ls_json_outputs_saved_wallets() {
     assert_eq!(
         stdout["data"]["wallets"],
         serde_json::json!([
-            { "name": "alice", "address": alice, "owner_public_key": alice_owner, "is_default": true },
-            { "name": "bob", "address": bob, "owner_public_key": bob_owner, "is_default": false },
+            {
+                "name": "alice",
+                "address": address_strkey(&alice),
+                "owner_public_key": public_key_strkey(&[0x11; 32]),
+                "is_default": true,
+            },
+            {
+                "name": "bob",
+                "address": address_strkey(&bob),
+                "owner_public_key": public_key_strkey(&[0x22; 32]),
+                "is_default": false,
+            },
         ])
     );
 
@@ -5645,11 +5655,14 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "airdrop");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
-    assert_eq!(stdout["data"]["recipientWallet"], recipient_wallet);
+    assert_eq!(
+        stdout["data"]["recipientWallet"],
+        address_strkey(&recipient_wallet)
+    );
     assert_eq!(stdout["data"]["amountHog"], "1.25");
     assert_eq!(stdout["data"]["rawAmount"], "12500000");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
@@ -5738,7 +5751,7 @@ fn local_airdrop_json_warns_when_projected_faucet_balance_is_below_ten_hog() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["warnings"][0]["level"], "warn");
     assert_eq!(payload["warnings"][0]["code"], "low_local_faucet_balance");
-    assert_eq!(payload["data"]["schemaVersion"], 3);
+    assert_eq!(payload["data"]["schemaVersion"], 4);
 }
 
 #[test]
@@ -5771,8 +5784,11 @@ fn hosted_airdrop_uses_request_airdrop_rpc() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["mode"], "remote");
-    assert_eq!(stdout["data"]["schemaVersion"], 3);
-    assert_eq!(stdout["data"]["recipientWallet"], recipient);
+    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(
+        stdout["data"]["recipientWallet"],
+        address_strkey(&recipient)
+    );
     assert_eq!(stdout["data"]["rawAmount"], "25000000");
     assert_eq!(stdout["data"]["txHash"], format!("0x{}", "22".repeat(32)));
 }
@@ -5950,25 +5966,25 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["schemaVersion"], 2);
     assert_eq!(data["profile"], "default");
     assert_eq!(data["rpcUrl"], rpc_url);
     assert_eq!(data["dryRun"], true);
     assert_eq!(data["submitted"], false);
-    assert_eq!(data["sender"], sender);
+    assert_eq!(data["sender"], address_strkey(&sender));
     assert_eq!(data["senderWallet"], serde_json::Value::Null);
     assert_eq!(
         data["signerPublicKey"],
-        format!(
-            "0x{}",
-            hex::encode(
-                groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
-            )
+        public_key_strkey(
+            &groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
         )
     );
     assert_eq!(data["recipientInput"], "alice");
-    assert_eq!(data["recipient"], recipient);
-    assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
+    assert_eq!(data["recipient"], address_strkey(&recipient));
+    assert_eq!(
+        data["tokenAddress"],
+        address_strkey(&format!("0x{}01", "00".repeat(31)))
+    );
     assert_eq!(data["amount"], "10.5");
     assert_eq!(data["rawAmount"], "105000000");
     assert_eq!(data["expiryHeight"], 1042);
@@ -6048,10 +6064,10 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     );
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let public_key = format!(
-        "0x{}",
-        hex::encode(groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes())
+    let public_key = public_key_strkey(
+        &groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes(),
     );
+    let sender = address_strkey(&sender);
     assert!(stderr.contains(&format!("sender: {sender}")));
     assert!(stderr.contains(&format!("signer public key: {public_key}")));
     assert!(stderr.contains("signed transaction can be submitted until its expiry height"));
@@ -6199,7 +6215,7 @@ fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["sender"], sender);
+    assert_eq!(stdout["data"]["sender"], address_strkey(&sender));
 }
 
 #[test]
@@ -6342,7 +6358,10 @@ fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
     assert!(output.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"]["code"], "transfer_to_self");
-    assert_eq!(error["error"]["details"]["address"], address);
+    assert_eq!(
+        error["error"]["details"]["address"],
+        address_strkey(&address)
+    );
     assert!(error["error"]["hint"].as_str().unwrap().contains("--from"));
 }
 
@@ -6387,7 +6406,7 @@ fn transfer_from_selects_named_owner_matched_wallet() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["sender"], trading);
+    assert_eq!(stdout["data"]["sender"], address_strkey(&trading));
     assert_eq!(stdout["data"]["senderWallet"], "trading");
 }
 
@@ -6409,7 +6428,10 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
     assert!(committed.output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&committed.output.stdout).unwrap();
     assert_eq!(stdout["data"]["senderWallet"], "primary");
-    assert_eq!(stdout["data"]["sender"], format!("0x{}", "a1".repeat(32)));
+    assert_eq!(
+        stdout["data"]["sender"],
+        address_strkey(&format!("0x{}", "a1".repeat(32)))
+    );
     assert_eq!(stdout["data"]["txHash"], committed.local_hash);
 
     let unavailable = run_saved_wallet_transfer_live_mock(
@@ -6425,14 +6447,17 @@ fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
     let stdout: serde_json::Value = serde_json::from_slice(&unavailable.output.stdout).unwrap();
     assert_eq!(stdout["data"]["confirmation"], "unavailable");
     assert_eq!(stdout["data"]["senderWallet"], "trading");
-    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
+    assert_eq!(
+        stdout["data"]["sender"],
+        address_strkey(&format!("0x{}", "b2".repeat(32)))
+    );
     assert_eq!(stdout["data"]["txHash"], unavailable.local_hash);
 }
 
 #[test]
 fn transfer_live_success_returns_matching_receipt_and_events() {
     let event = serde_json::json!({
-        "contractAddress": format!("0x{}", "01".repeat(32)),
+        "contractAddress": address_strkey(&format!("0x{}", "01".repeat(32))),
         "topics": [format!("0x{}", "02".repeat(32))],
         "data": "0x0304",
     });
@@ -6520,7 +6545,7 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
         ),
     ] {
         let event = serde_json::json!({
-            "contractAddress": format!("0x{}", "09".repeat(32)),
+            "contractAddress": address_strkey(&format!("0x{}", "09".repeat(32))),
             "topics": [],
             "data": "0x0a0b",
         });
@@ -6650,7 +6675,7 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
         "status": "recentFailure",
         "attemptHeight": 43,
         "conflict": {
-            "address": format!("0x{}", "77".repeat(32)),
+            "address": address_strkey(&format!("0x{}", "77".repeat(32))),
             "key": "0x0102",
             "code": "boundsExceeded",
         },
@@ -6893,7 +6918,7 @@ fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
     assert!(success.stdout.is_empty());
     let stderr = String::from_utf8(success.stderr).unwrap();
     assert!(stderr.contains("Transferred 1.5 HOG."));
-    assert!(stderr.contains("recipient: 0x"));
+    assert!(stderr.contains("recipient: C"));
     assert!(stderr.contains("tx: 0x"));
     assert!(stderr.contains("height: 43"));
 
@@ -6986,7 +7011,7 @@ fn assert_transfer_live_common(
     local_hash: &str,
     sender_wallet: Option<&str>,
 ) {
-    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["schemaVersion"], 2);
     assert_eq!(data["profile"], "default");
     assert!(
         data["rpcUrl"]
@@ -6995,7 +7020,10 @@ fn assert_transfer_live_common(
     );
     assert_eq!(data["dryRun"], false);
     assert_eq!(data["submitted"], true);
-    assert_eq!(data["sender"], advertised_dev_wallet_address(0));
+    assert_eq!(
+        data["sender"],
+        address_strkey(&advertised_dev_wallet_address(0))
+    );
     match sender_wallet {
         Some(name) => assert_eq!(data["senderWallet"], name),
         None => assert_eq!(data["senderWallet"], serde_json::Value::Null),
@@ -7003,11 +7031,17 @@ fn assert_transfer_live_common(
     assert!(
         data["signerPublicKey"]
             .as_str()
-            .is_some_and(|value| value.starts_with("0x"))
+            .is_some_and(|value| value.starts_with('G'))
     );
     assert_eq!(data["recipientInput"], format!("0x{}", "ab".repeat(32)));
-    assert_eq!(data["recipient"], format!("0x{}", "ab".repeat(32)));
-    assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
+    assert_eq!(
+        data["recipient"],
+        address_strkey(&format!("0x{}", "ab".repeat(32)))
+    );
+    assert_eq!(
+        data["tokenAddress"],
+        address_strkey(&format!("0x{}01", "00".repeat(31)))
+    );
     assert_eq!(data["amount"], "1.5");
     assert_eq!(data["rawAmount"], "15000000");
     assert_eq!(data["txHash"], local_hash);
@@ -7050,7 +7084,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["artifactKind"], "rv32");
     assert_eq!(
         stdout["data"]["artifactPath"].as_str().unwrap(),
@@ -7503,7 +7537,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
         stderr["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("expected 0x")
+            .contains("expected G")
     );
 }
 
@@ -7594,7 +7628,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
     );
 
     // The mock returns 0xbb..bb as the deployed address via return_data.
-    let expected_address = format!("0x{}", "bb".repeat(32));
+    let expected_address = address_strkey(&format!("0x{}", "bb".repeat(32)));
     assert_eq!(stdout["data"]["address"], expected_address);
     assert_eq!(stdout["data"]["addressSource"], "receipt");
     assert_eq!(stdout["data"]["gasUsed"], 1500);
@@ -7684,7 +7718,7 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "deploy");
-    assert_eq!(stdout["data"]["schemaVersion"], 4);
+    assert_eq!(stdout["data"]["schemaVersion"], 5);
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
@@ -7915,9 +7949,9 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["contract"], address);
+    assert_eq!(stdout["data"]["contract"], address_strkey(&address));
     assert_eq!(stdout["data"]["entrypointId"], entrypoint);
     assert_eq!(stdout["data"]["calldata"], calldata);
     assert_eq!(stdout["data"]["caller"], serde_json::Value::Null);
@@ -7978,8 +8012,8 @@ fn view_json_resolves_contract_alias_and_from_address() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
-    assert_eq!(stdout["data"]["contract"], address);
-    assert_eq!(stdout["data"]["caller"], caller);
+    assert_eq!(stdout["data"]["contract"], address_strkey(&address));
+    assert_eq!(stdout["data"]["caller"], address_strkey(&caller));
 }
 
 #[test]
@@ -8020,7 +8054,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
-    assert_eq!(stdout["data"]["caller"], caller);
+    assert_eq!(stdout["data"]["caller"], address_strkey(&caller));
 }
 
 #[test]
@@ -8143,6 +8177,7 @@ fn view_human_prints_event_details() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("View succeeded"));
     assert!(stderr.contains("events: 1"));
+    let address = address_strkey(&address);
     assert!(stderr.contains(&format!(
         "    [0] {address} topic0={topic} data={event_data}"
     )));
@@ -8178,9 +8213,9 @@ fn storage_json_reads_latest_item() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "storage");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["address"], address_strkey(&address));
     assert_eq!(stdout["data"]["key"], key);
     assert_eq!(stdout["data"]["blockHeight"], 12);
     assert_eq!(stdout["data"]["item"]["kind"], "bytestring");
@@ -8225,10 +8260,10 @@ fn balance_json_uses_default_wallet_when_target_is_omitted() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "balance");
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], "alice");
-    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["address"], address_strkey(&address));
     assert_eq!(stdout["data"]["rawBalance"], "123456789");
     assert_eq!(stdout["data"]["balanceHog"], "12.3456789");
     assert_eq!(stdout["data"]["height"], 34);
@@ -8266,7 +8301,7 @@ fn balance_json_uses_global_default_profile_when_profile_omitted() {
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["address"], address_strkey(&address));
     assert_eq!(stdout["data"]["balanceHog"], "7");
 }
 
@@ -8304,7 +8339,7 @@ fn balance_json_cli_rpc_url_overrides_profile() {
     assert_eq!(stdout["command"], "balance");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["target"], address);
-    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["address"], address_strkey(&address));
     assert_eq!(stdout["data"]["rawBalance"], "42");
 }
 
@@ -8504,7 +8539,7 @@ fn storage_json_resolves_contract_alias() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "storage");
-    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["address"], address_strkey(&address));
     assert_eq!(stdout["data"]["key"], key);
 }
 
@@ -8759,15 +8794,15 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "call");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(groundhog_cli::call::CALL_JSON_SCHEMA_VERSION, 1);
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(groundhog_cli::call::CALL_JSON_SCHEMA_VERSION, 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     for old_key in ["dry_run", "rpc_url", "entrypoint_id", "signed_tx"] {
         assert!(stdout["data"].get(old_key).is_none(), "found {old_key}");
     }
     assert_eq!(stdout["data"]["dryRun"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
-    assert_eq!(stdout["data"]["contract"], contract);
+    assert_eq!(stdout["data"]["contract"], address_strkey(&contract));
     assert_eq!(stdout["data"]["method"], "0x0123456789abcdef");
     assert_eq!(stdout["data"]["entrypointId"], "0x0123456789abcdef");
     assert_eq!(stdout["data"]["calldata"], "0x0102");
@@ -8916,7 +8951,10 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
         );
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "groundhog_getBalance");
-        assert_eq!(request["params"][0], format!("0x{}", "aa".repeat(32)));
+        assert_eq!(
+            request["params"][0],
+            address_strkey(&format!("0x{}", "aa".repeat(32)))
+        );
         send_jsonrpc_response(
             stream,
             &request["id"],
@@ -8953,7 +8991,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     assert_eq!(result["error"]["code"], "call_gas_balance_insufficient");
     assert_eq!(
         result["error"]["details"]["wallet"],
-        format!("0x{}", "aa".repeat(32))
+        address_strkey(&format!("0x{}", "aa".repeat(32)))
     );
     assert_eq!(result["error"]["details"]["availableRaw"], 10_000_000);
     assert_eq!(result["error"]["details"]["requiredRaw"], 25_000_000);
@@ -9102,7 +9140,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     assert_eq!(stdout["data"]["gasUsed"], 1500);
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
-        advertised_wallet
+        address_strkey(&advertised_wallet)
     );
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
@@ -9200,11 +9238,11 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("warning: Call failed with a deterministic execution fault"));
-    assert!(stderr.contains("contract: 0x"));
+    assert!(stderr.contains("contract: C"));
     assert!(stderr.contains("tx: 0x"));
     assert!(stderr.contains("height: 42"));
     assert!(stderr.contains("gas used: 1500"), "stderr: {stderr}");
-    assert!(stderr.contains("wallet: 0x"));
+    assert!(stderr.contains("wallet: C"));
 }
 
 #[test]
@@ -9245,7 +9283,7 @@ fn call_live_json_decodes_library_abort() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_reverted");
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert!(stdout["data"].get("abort_exception").is_none());
     assert_eq!(stdout["data"]["status"]["result"], "reverted");
     assert_eq!(stdout["data"]["abortData"], abort_hex);
@@ -10043,7 +10081,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     .unwrap();
     let hash = format!("0x{}", "ab".repeat(32));
     let event = serde_json::json!({
-        "contractAddress": format!("0x{}", "11".repeat(32)),
+        "contractAddress": address_strkey(&format!("0x{}", "11".repeat(32))),
         "topics": [format!("0x{}", "22".repeat(32))],
         "data": "0x0304",
     });
@@ -10091,7 +10129,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.show");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["txHash"], hash);
@@ -10206,7 +10244,7 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
             "status": "recentFailure",
             "attemptHeight": 17,
             "conflict": {
-                "address": format!("0x{}", "11".repeat(32)),
+                "address": address_strkey(&format!("0x{}", "11".repeat(32))),
                 "key": "0xaabb",
                 "code": "boundsExceeded",
             },
@@ -10268,7 +10306,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "profile": "default",
             "rpcUrl": rpc_url,
             "txHash": hash,
@@ -10764,11 +10802,11 @@ fn tx_list_json_uses_default_wallet_when_target_is_omitted() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "profile": "devnet",
             "rpcUrl": rpc_url,
             "targetInput": "alice",
-            "address": wallet_address,
+            "address": address_strkey(&wallet_address),
             "refs": [
                 { "txHash": first_hash, "height": 90 },
                 { "txHash": second_hash, "height": 80 },
@@ -11026,7 +11064,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
         );
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(stdout["data"]["targetInput"], target);
-        assert_eq!(stdout["data"]["address"], address);
+        assert_eq!(stdout["data"]["address"], address_strkey(&address));
     }
 }
 
@@ -11194,7 +11232,7 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
     assert!(stderr.contains("root invocations only"));
     assert!(stderr.contains("incoming wallet-wrapped transfers may not appear"));
     assert!(!stderr.contains("target:"));
-    assert!(stderr.contains(&format!("address: {address}")));
+    assert!(stderr.contains(&format!("address: {}", address_strkey(&address))));
     assert!(stderr.contains("transactions: none in this page"));
     assert!(stderr.contains("next cursor: 0xcafe"));
     assert!(
@@ -11245,7 +11283,7 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("target: local-wallet"));
-    assert!(stderr.contains(&format!("address: {address}")));
+    assert!(stderr.contains(&format!("address: {}", address_strkey(&address))));
     assert!(stderr.contains(&format!("tx: {tx_hash} at height 18")));
     assert!(!stderr.contains("receipt"));
 }
@@ -11380,7 +11418,7 @@ fn events_spec_selected_event_injects_filter_and_decodes_payload() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(
         stdout["data"]["filters"]["topic0"],
         serde_json::json!([signature, signature])
@@ -11612,18 +11650,18 @@ fn events_list_json_sends_default_filter_and_reports_complete_raw_schema() {
             "ok": true,
             "command": "events.list",
             "data": {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "profile": "default",
                 "rpcUrl": rpc_url,
                 "contractInput": contract,
-                "contractAddress": contract,
+                "contractAddress": address_strkey(&contract),
                 "filters": { "topic0": [], "topic1": [], "topic2": [] },
                 "spec": null,
                 "events": [{
                     "txHash": tx_hash,
                     "blockHeight": 90,
                     "sequenceNumber": 3,
-                    "contractAddress": emitter,
+                    "contractAddress": address_strkey(&emitter),
                     "topics": [topic],
                     "data": "0xdeadbeef",
                     "decodeStatus": "notRequested",
@@ -11847,7 +11885,7 @@ fn events_list_resolves_runtime_manifest_dev_account() {
     assert!(output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["contractInput"], "dev-7");
-    assert_eq!(stdout["data"]["contractAddress"], address);
+    assert_eq!(stdout["data"]["contractAddress"], address_strkey(&address));
 }
 
 #[test]
@@ -11902,7 +11940,10 @@ fn events_list_resolves_saved_wallet_before_contract_alias_and_alias_without_wal
 
         assert!(output.status.success());
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(stdout["data"]["contractAddress"], expected_address.as_str());
+        assert_eq!(
+            stdout["data"]["contractAddress"],
+            address_strkey(expected_address)
+        );
     }
 }
 
@@ -11954,7 +11995,10 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
 
     assert!(output.status.success());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["contractAddress"], explicit_address);
+    assert_eq!(
+        stdout["data"]["contractAddress"],
+        address_strkey(&explicit_address)
+    );
 }
 
 #[test]
@@ -12243,14 +12287,14 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     for expected in [
         "contract: counter".to_owned(),
-        format!("emitter: {queried_address}"),
+        format!("emitter: {}", address_strkey(&queried_address)),
         "latest indexed block: 100".to_owned(),
         "oldest retained block: 7".to_owned(),
         "\nevent\n".to_owned(),
         "height: 88".to_owned(),
         "sequence: 6".to_owned(),
         format!("txn: {tx_hash}"),
-        format!("event emitter: {emitter}"),
+        format!("event emitter: {}", address_strkey(&emitter)),
         format!("topic 0: {}", topics[0]),
         format!("topic 1: {}", topics[1]),
         format!("topic 2: {}", topics[2]),
@@ -12542,9 +12586,9 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["command"], "token.transfers");
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["tokenInput"], token);
-    assert_eq!(stdout["data"]["tokenAddress"], token);
+    assert_eq!(stdout["data"]["tokenAddress"], address_strkey(&token));
     assert!(stdout["data"]["participantFilter"].is_null());
     assert_eq!(stdout["data"]["cursor"], "0xcafe");
     assert_eq!(stdout["data"]["latestBlock"], 12);
@@ -12553,8 +12597,8 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     assert_eq!(records.len(), 5);
     assert_eq!(records[0]["decodeStatus"], "decoded");
     assert_eq!(records[0]["transfer"]["kind"], "transfer");
-    assert_eq!(records[0]["transfer"]["from"], from);
-    assert_eq!(records[0]["transfer"]["to"], to);
+    assert_eq!(records[0]["transfer"]["from"], address_strkey(&from));
+    assert_eq!(records[0]["transfer"]["to"], address_strkey(&to));
     assert_eq!(records[0]["transfer"]["rawAmount"], "125");
     assert_eq!(records[0]["data"], amount_data);
     assert!(records[0].get("decodeError").is_none());
@@ -12570,9 +12614,9 @@ fn token_transfers_json_queries_signature_and_preserves_decoded_and_malformed_re
     assert_eq!(records[2], records[0]);
     assert_eq!(records[3]["transfer"]["kind"], "mint");
     assert_eq!(records[3]["transfer"]["from"], serde_json::Value::Null);
-    assert_eq!(records[3]["transfer"]["to"], to);
+    assert_eq!(records[3]["transfer"]["to"], address_strkey(&to));
     assert_eq!(records[4]["transfer"]["kind"], "burn");
-    assert_eq!(records[4]["transfer"]["from"], from);
+    assert_eq!(records[4]["transfer"]["from"], address_strkey(&from));
     assert_eq!(records[4]["transfer"]["to"], serde_json::Value::Null);
 }
 
@@ -12637,7 +12681,10 @@ fn token_transfers_account_uses_four_server_side_filters_in_one_request() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["participantFilter"]["kind"], "account");
     assert_eq!(stdout["data"]["participantFilter"]["input"], account);
-    assert_eq!(stdout["data"]["participantFilter"]["address"], account);
+    assert_eq!(
+        stdout["data"]["participantFilter"]["address"],
+        address_strkey(&account)
+    );
 }
 
 #[test]
@@ -12788,12 +12835,16 @@ fn token_transfers_human_output_preserves_participants_and_malformed_evidence() 
     assert!(stderr.contains("\nmint\n"), "stderr: {stderr}");
     assert!(stderr.contains("\nburn\n"), "stderr: {stderr}");
     assert!(
-        stderr.contains(&format!("from: {from}")),
+        stderr.contains(&format!("from: {}", address_strkey(&from))),
         "stderr: {stderr}"
     );
-    assert!(stderr.contains(&format!("to: {to}")), "stderr: {stderr}");
     assert!(
-        !stderr.contains(&format!("0x{}", "00".repeat(32))),
+        stderr.contains(&format!("to: {}", address_strkey(&to))),
+        "stderr: {stderr}"
+    );
+    let zero_address = format!("0x{}", "00".repeat(32));
+    assert!(
+        !stderr.contains(&zero_address) && !stderr.contains(&address_strkey(&zero_address)),
         "stderr: {stderr}"
     );
     assert!(
@@ -12958,7 +13009,10 @@ fn spawn_tx_list_rpc(
         let (stream, request) =
             read_jsonrpc_request(&listener, deadline, "getTransactionsByAddress");
         assert_eq!(request["method"], "groundhog_getTransactionsByAddress");
-        assert_eq!(request["params"], serde_json::json!([expected_query]));
+        assert_eq!(
+            request["params"],
+            serde_json::json!([with_strkey_addresses(expected_query)])
+        );
         match response {
             TxListRpcResponse::Result(result) => {
                 send_jsonrpc_response(stream, &request["id"], result);
@@ -12989,7 +13043,10 @@ fn spawn_events_rpc(
         let deadline = Instant::now() + Duration::from_secs(5);
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getEvents");
         assert_eq!(request["method"], "groundhog_getEvents");
-        assert_eq!(request["params"], serde_json::json!([expected_query]));
+        assert_eq!(
+            request["params"],
+            serde_json::json!([with_strkey_addresses(expected_query)])
+        );
         match response {
             EventRpcResponse::Result(result) => {
                 send_jsonrpc_response(stream, &request["id"], result);
@@ -13309,7 +13366,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let recipient = recipient.to_owned();
+    let recipient = address_strkey(recipient);
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
@@ -13404,6 +13461,7 @@ fn serve_balance(
     raw_balance: &str,
     height: i64,
 ) {
+    let address = address_strkey(address);
     let (stream, request) = read_jsonrpc_request(listener, deadline, "getBalance");
     assert_eq!(request["method"], "groundhog_getBalance");
     assert_eq!(request["params"][0], address);
@@ -13464,7 +13522,7 @@ fn spawn_balance_then_chain_tip_rpc(
     let listener = MockListener::bind();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
-    let address = address.to_owned();
+    let address = address_strkey(address);
     let raw_balance = raw_balance.to_owned();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -13886,7 +13944,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let expected_address = address.to_owned();
+    let expected_address = address_strkey(address);
     let expected_key = key.to_owned();
 
     let handle = thread::spawn(move || {
@@ -13917,7 +13975,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let expected_address = address.to_owned();
+    let expected_address = address_strkey(address);
     let raw_balance = raw_balance.to_owned();
 
     let handle = thread::spawn(move || {
@@ -14032,10 +14090,10 @@ fn spawn_view_rpc_inner_with_events(
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let expected_address = address.to_owned();
+    let expected_address = address_strkey(address);
     let expected_entrypoint = entrypoint.to_owned();
     let expected_calldata = calldata.to_owned();
-    let expected_caller = caller.map(ToOwned::to_owned);
+    let expected_caller = caller.map(address_strkey);
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -14061,6 +14119,49 @@ fn spawn_view_rpc_inner_with_events(
     });
 
     (format!("http://{addr}"), handle)
+}
+
+/// The C `StrKey` the CLI sends and prints for an address fixture, which tests
+/// may write as hex.
+fn address_strkey(address: &str) -> String {
+    groundhog_signing::strkey::format_contract_address(
+        &groundhog_signing::strkey::parse_contract_address(address)
+            .expect("bug: address fixture should parse"),
+    )
+}
+
+/// The G `StrKey` the CLI prints for a public-key fixture.
+fn public_key_strkey(public_key: &[u8; 32]) -> String {
+    groundhog_signing::strkey::format_public_key(public_key)
+}
+
+/// An RPC query with its address fixtures in the C `StrKey` form the CLI sends.
+fn with_strkey_addresses(mut query: serde_json::Value) -> serde_json::Value {
+    if let Some(address) = query
+        .get("address")
+        .and_then(serde_json::Value::as_str)
+        .map(address_strkey)
+    {
+        query["address"] = address.into();
+    }
+    for filter in query
+        .get_mut("filters")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        for address in filter
+            .get_mut("contractAddresses")
+            .and_then(serde_json::Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(strkey) = address.as_str().map(address_strkey) {
+                *address = strkey.into();
+            }
+        }
+    }
+    query
 }
 
 fn advertised_dev_wallet_address(index: u8) -> String {

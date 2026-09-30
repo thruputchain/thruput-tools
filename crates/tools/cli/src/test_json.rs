@@ -10,7 +10,7 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 6;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 7;
 
 /// Schema version for the `groundhog test --workspace --json` payload.
 ///

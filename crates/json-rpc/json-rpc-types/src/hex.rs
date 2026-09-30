@@ -1,8 +1,9 @@
 //! Hex-encoded byte types for the JSON-RPC wire format.
 //!
-//! All byte values in the Groundhog RPC API are serialized as
-//! `0x`-prefixed lowercase hex strings, following the Ethereum
-//! convention (e.g., `"0xa1b2c3"`).
+//! Byte values in the Groundhog RPC API are serialized as `0x`-prefixed
+//! lowercase hex strings, following the Ethereum convention (e.g.,
+//! `"0xa1b2c3"`). Addresses and public keys are the exception: they use
+//! Stellar `StrKeys` (see [`crate::strkey`]).
 //!
 //! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
@@ -228,8 +229,8 @@ pub fn sha256_prefixed_hex(bytes: &[u8]) -> String {
 // Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
 // ---------------------------------------------------------------------------
 
-/// Wraps an XDR byte type (e.g., `SHA256Hash`, `ContractAddress`) and
-/// serializes it as a `"0x..."` lowercase hex string.
+/// Wraps an XDR byte type (e.g., `SHA256Hash`) and serializes it as a
+/// `"0x..."` lowercase hex string.
 ///
 /// The inner type must implement `AsRef<[u8]>` (for serialization) and
 /// `From<[u8; N]>` (for deserialization). This is true for all

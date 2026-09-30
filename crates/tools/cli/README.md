@@ -483,7 +483,7 @@ receipt status.
 ```bash
 groundhog call my-counter increment 5
 groundhog call my-counter get
-groundhog call 0xabc123... get
+groundhog call CABC123... get
 groundhog call my-counter increment 5 --dry-run
 groundhog call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
 groundhog call my-counter increment 5 --json --force
@@ -515,7 +515,7 @@ contract simulation through `groundhog_view`.
 
 ```bash
 groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
-groundhog storage 0xabc123... 0x4242424242424242424242424242424242424242424242424242424242424242
+groundhog storage CABC123... 0x4242424242424242424242424242424242424242424242424242424242424242
 groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --rpc-url http://<your-rpc-host>:8545
 groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --json
 ```
@@ -719,13 +719,13 @@ default_profile = "local"
 network = "local"
 
 [profile.local.contracts]
-# counter = "0x..."
+# counter = "C..."
 
 [profile.devnet]
 network = "devnet"
 
 [profile.devnet.contracts]
-# counter = "0x..."
+# counter = "C..."
 ```
 
 Active-profile selection uses explicit `--profile`, `GROUNDHOG_PROFILE`, the

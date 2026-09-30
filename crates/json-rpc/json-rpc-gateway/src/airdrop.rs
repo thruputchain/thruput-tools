@@ -1402,7 +1402,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(forwarded).expect("forwarded request should serialize"),
             json!({
-                "recipient": format!("0x{}", "11".repeat(32)),
+                "recipient": "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V",
                 "clientNonce": "0x01",
                 "networkId": "devnet",
                 "networkHash": format!("0x{}", "12".repeat(32)),

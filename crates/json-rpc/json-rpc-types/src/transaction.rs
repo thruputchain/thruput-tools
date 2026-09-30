@@ -149,7 +149,7 @@ impl From<&groundhog_trace::DbConflictDiagnostic> for ConflictDiagnostic {
         let key_bytes = xdrs::txs::encode(&diagnostic.addrkey.key)
             .expect("bug: generated StorageKey should encode");
         Self {
-            address: crate::hex::Hex0x(diagnostic.addrkey.address),
+            address: crate::strkey::StrKey(diagnostic.addrkey.address),
             key: crate::hex::HexBytes(key_bytes),
             code: diagnostic.code.into(),
         }

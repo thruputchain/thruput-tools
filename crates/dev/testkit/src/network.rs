@@ -14,10 +14,11 @@ use groundhog_json_rpc_client::{
 };
 use groundhog_json_rpc_types::block::ChainTip;
 use groundhog_json_rpc_types::events::{EventPage, EventQuery};
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
+use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 use groundhog_json_rpc_types::state::StorageItemRead;
+use groundhog_json_rpc_types::strkey::StrKey;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
 use groundhog_xdr::contract::ContractEntrypointID;
@@ -305,7 +306,7 @@ impl Network {
         key: &[u8],
     ) -> Result<StorageItemRead> {
         self.require_client("getStorageAt")?
-            .get_storage_at(Hex0x(address), HexBytes(key.to_vec()))
+            .get_storage_at(StrKey(address), HexBytes(key.to_vec()))
             .await
             .map_err(|e| TestkitError::rpc("getStorageAt", e))
     }
@@ -322,10 +323,10 @@ impl Network {
         caller: Option<ContractAddress>,
     ) -> Result<ViewResponse> {
         let request = ViewRequest {
-            contract: Hex0x(contract),
+            contract: StrKey(contract),
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
-            caller: caller.map(Hex0x),
+            caller: caller.map(StrKey),
         };
         self.require_client("view")?
             .view(request)
@@ -434,7 +435,7 @@ mod tests {
             classify_pending_status(&TransactionStatus::RecentFailure {
                 attempt_height: 1.into(),
                 conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
-                    address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
+                    address: groundhog_json_rpc_types::strkey::StrKey([0; 32].into()),
                     key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
                     code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
                 },

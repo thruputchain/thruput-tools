@@ -17,8 +17,9 @@ use groundhog_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
 };
-use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
+use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::state::StorageItemInfo;
+use groundhog_json_rpc_types::strkey::StrKey;
 use groundhog_json_rpc_types::transaction::TransactionStatus;
 use xdr_common::VecM;
 
@@ -39,7 +40,7 @@ fn zero_hash() -> groundhog_json_rpc_types::transaction::TxHash {
 }
 
 fn zero_address() -> ContractAddress {
-    Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+    StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 #[tokio::test]
@@ -155,7 +156,7 @@ fn events_for_address(
 ) -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+            contract_addresses: ContractAddressList(VecM(vec![StrKey(
                 groundhog_xdr::types::ContractAddress::from(addr),
             )])),
             topics: EventTopicFilter {

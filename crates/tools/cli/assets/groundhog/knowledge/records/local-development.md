@@ -72,7 +72,7 @@ node just to enable logging: stopping it discards its chain state.
 prompt or piped stdin. It accepts a checksummed Stellar S StrKey or a 32-byte
 hex seed, never a 64-byte stored keypair. Do not put private seeds in command
 arguments. Existing names are not overwritten; `dev-N` names are reserved.
-Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
+Import JSON uses a versioned camelCase report (`data.schemaVersion = 2`).
 Malformed TOML or an invalid `default_key` is rejected before storing the key.
 If the key is stored but selecting the default fails, import succeeds with a
 warning and a recovery
@@ -86,7 +86,10 @@ stdout directly to the receiving CLI's stdin rather than capturing it in logs.
 
 A G StrKey is an Ed25519 public key, not a derived Groundhog account or wallet
 address. Key commands display public keys separately from account addresses.
-C StrKeys and legacy hex are accepted for contract/wallet address inputs,
-including typed contract arguments. Saved wallet owners accept G StrKeys or
-hex public keys. These encodings preserve bytes and do not identify a network.
-Existing key files and public JSON-RPC wire encodings remain unchanged.
+CLI output, `--json` payloads, and JSON-RPC responses render contract, wallet,
+and account addresses as C StrKeys and public keys as G StrKeys; key reports
+also keep the hex public key. Inputs accept those StrKeys or legacy hex,
+including typed contract arguments and saved wallet owners. These encodings
+preserve bytes and do not identify a network. Key files stay hex, and
+`groundhog test --integration` still passes `GROUNDHOG_CONTRACT_ADDRESS` as
+`0x`-prefixed hex.

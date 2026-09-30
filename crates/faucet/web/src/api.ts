@@ -1,3 +1,10 @@
+import {
+  formatWalletAddress,
+  hexWalletAddress,
+  parseWalletAddress,
+  sameWalletAddress,
+} from "@/lib/address"
+
 const API_BASE = normalizeApiBase(
   import.meta.env.VITE_GROUNDHOG_FAUCET_API_BASE,
 )
@@ -51,11 +58,11 @@ export async function fetchNetworkDescriptor() {
 }
 
 export async function requestAirdrop(
-  recipient: string,
+  recipient: Uint8Array,
   descriptor: NetworkDescriptor,
 ) {
   ensureApiBase()
-  const attemptKey = `${descriptor.networkId}:${descriptor.genesisHash}:${recipient}`
+  const attemptKey = `${descriptor.networkId}:${descriptor.genesisHash}:${hexWalletAddress(recipient)}`
   const clientNonce = retainedClientNonce(attemptKey)
   const deadline = Date.now() + AIRDROP_POLL_TIMEOUT_MS
 
@@ -71,7 +78,9 @@ export async function requestAirdrop(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          recipient,
+          // Every faucet release accepts a hex recipient, so the page does not
+          // depend on which faucet version is deployed behind it.
+          recipient: hexWalletAddress(recipient),
           clientNonce,
           networkId: descriptor.networkId,
           networkHash: descriptor.networkHash,
@@ -218,7 +227,7 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
 
 function parseAirdropAttempt(
   payload: unknown,
-  expectedRecipient: string,
+  expectedRecipient: Uint8Array,
   expectedRawAmount: string,
 ):
   | (AirdropSuccess & { attemptStatus: "succeeded" })
@@ -227,9 +236,9 @@ function parseAirdropAttempt(
     throw new Error("The airdrop response had an unexpected shape.")
   }
   const attemptStatus = requireString(payload.attemptStatus, "attemptStatus")
-  const recipient = requireHexHash(payload.recipient, "recipient")
+  const recipient = requireWalletAddress(payload.recipient, "recipient")
   const rawAmount = requireDecimalString(payload.rawAmount, "rawAmount")
-  if (recipient.toLowerCase() !== expectedRecipient.toLowerCase()) {
+  if (!sameWalletAddress(recipient, expectedRecipient)) {
     throw new Error("The airdrop response recipient did not match the request.")
   }
   if (BigInt(rawAmount) !== BigInt(expectedRawAmount)) {
@@ -262,7 +271,7 @@ function parseAirdropAttempt(
   }
   return {
     attemptStatus,
-    recipient,
+    recipient: formatWalletAddress(recipient),
     rawAmount,
     txHash: requireHexHash(payload.txHash, "txHash"),
     height: requireNonNegativeInteger(payload.height, "height"),
@@ -308,6 +317,14 @@ function requireHexHash(value: unknown, field: string) {
     throw new Error(`Field ${field} must be a 0x-prefixed 32-byte hex value.`)
   }
   return text
+}
+
+function requireWalletAddress(value: unknown, field: string) {
+  const address = parseWalletAddress(requireString(value, field))
+  if (!address) {
+    throw new Error(`Field ${field} must be a wallet address.`)
+  }
+  return address
 }
 
 function requireDecimalString(value: unknown, field: string) {

@@ -334,3 +334,48 @@ fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
     );
     assert!(encode_args(&[public_key_strkey], Some(&metadata)).is_err());
 }
+
+#[test]
+fn decoded_addresses_and_public_keys_render_as_strkeys() {
+    let contract_strkey = groundhog_signing::strkey::format_contract_address(&[0x42; 32].into());
+    let public_key_strkey = groundhog_signing::strkey::format_public_key(&[0x42; 32]);
+    let local = |return_type: &str| {
+        CallMetadata::Local(ContractMetadata {
+            interface_name: "test".into(),
+            version: "1".into(),
+            source: std::path::PathBuf::default(),
+            method: MethodMetadata {
+                arg_types: vec![],
+                return_type: Some(return_type.into()),
+            },
+        })
+    };
+    let spec = CallMetadata::Spec(SpecMethodMetadata {
+        interface_name: "test".into(),
+        version: "1".into(),
+        method: ContractSpecMethod {
+            name: spec_string("owner"),
+            args: Vec::<ContractField>::new().try_into().unwrap(),
+            return_type: ContractType::Address,
+        },
+        type_defs: vec![],
+        throws: vec![],
+    });
+
+    assert_eq!(
+        decode_return(&[0x42; 32], Some(&local("ContractAddress"))),
+        Some(contract_strkey.clone().into())
+    );
+    assert_eq!(
+        decode_return(&[0x42; 32], Some(&spec)),
+        Some(contract_strkey.into())
+    );
+    assert_eq!(
+        decode_return(&[0x42; 32], Some(&local("Ed25519PublicKey"))),
+        Some(public_key_strkey.into())
+    );
+    assert_eq!(
+        decode_return(&[0x42; 32], Some(&local("SHA256Hash"))),
+        Some(format!("0x{}", "42".repeat(32)).into())
+    );
+}

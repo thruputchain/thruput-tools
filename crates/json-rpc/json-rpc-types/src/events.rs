@@ -2,8 +2,8 @@
 //! method.
 //!
 //! Request types are RPC-owned JSON projections of the indexer wire
-//! types, so the JSON-RPC surface can use the same `0x`-prefixed
-//! address/topic conventions as the rest of the API while still
+//! types, so the JSON-RPC surface can use the same `StrKey` address and
+//! `0x`-prefixed topic conventions as the rest of the API while still
 //! converting losslessly to the indexer contract at the backend
 //! boundary. Responses use a parsed `IdentifiedEvent` so consumers
 //! receive topics and data already split out, not raw on-wire bytes.

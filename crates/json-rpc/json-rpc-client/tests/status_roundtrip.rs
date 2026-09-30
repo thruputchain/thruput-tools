@@ -15,6 +15,7 @@ use groundhog_json_rpc_types::{
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::StorageItemRead,
+    strkey::StrKey,
     transaction::{
         AddressTransactionQuery, ConflictCode, ConflictDiagnostic, TransactionRefPage,
         TransactionStatus, TxHash,
@@ -62,7 +63,7 @@ fn canned_recent_failure() -> TransactionStatus {
     TransactionStatus::RecentFailure {
         attempt_height: BlockHeight::from(ATTEMPT_HEIGHT),
         conflict: ConflictDiagnostic {
-            address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+            address: StrKey(groundhog_xdr::types::ContractAddress::from(
                 CONFLICT_ADDRESS,
             )),
             key: HexBytes(CONFLICT_KEY.to_vec()),

@@ -504,7 +504,7 @@ mod tests {
     use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_json_rpc_types::{
         events::{EventFilterList, EventQuery},
-        hex::Hex0x,
+        strkey::StrKey,
         transaction::{TransactionStatus, TxHash},
     };
     use groundhog_scheduler::{
@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     fn canned_storage_address() -> groundhog_json_rpc_types::ContractAddress {
-        Hex0x(ContractAddress::from([0u8; 32]))
+        StrKey(ContractAddress::from([0u8; 32]))
     }
 
     fn canned_failure_diagnostic() -> groundhog_trace::TxFailureDiagnostic {

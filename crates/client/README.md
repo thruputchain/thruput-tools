@@ -51,6 +51,6 @@ rejected; errors never include the supplied input. Secret results use
 
 These helpers preserve bytes. G public keys do not become Groundhog account or
 wallet addresses, and none of the encodings identify a network. The spec codec
-accepts C addresses, including nested typed arguments. Its decoded output and
-public RPC JSON remain hex for compatibility. A host that wants C output can
-call the formatter explicitly. Neither CLI needs its own StrKey conversion.
+accepts C addresses, including nested typed arguments. Its decoded output
+renders addresses as C StrKeys and public keys as G StrKeys, matching public
+RPC JSON. Neither CLI needs its own StrKey conversion.

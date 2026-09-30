@@ -29,7 +29,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "7.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "8.0.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -97,7 +97,7 @@ pub trait GroundhogApi {
 
     /// Paginated, filterable contract events. See `EventQuery` /
     /// `EventPage` for the Soroban-shaped filter / cursor / topic
-    /// surface, with RPC-native `0x`-prefixed address and topic
+    /// surface, with RPC-native `StrKey` address and `0x`-prefixed topic
     /// projections at the JSON boundary.
     #[method(name = "getEvents")]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;

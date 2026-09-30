@@ -62,11 +62,16 @@ stream? [Petar, Geoff]
   `ContractAddress`, `Ed25519PublicKey` as lowercase hex strings via
   `serde_arrays::hex`. No `0x` prefix from the XDR layer.
   (`protocol-rs/groundhog-xdr/src/types.rs:345`)
-- **Byte format (Q3):** `0x`-prefixed lowercase hex for all byte values
-  (hashes, addresses, topics, event data). Decimal integers for heights
+- **Byte format (Q3):** `0x`-prefixed lowercase hex for byte values
+  (hashes, topics, event data). Decimal integers for heights
   and counts. Implemented via `Hex0x<T>` wrapper in
   `crates/json-rpc/json-rpc-types/src/hex.rs`
   — wraps XDR byte types at the API boundary without modifying
   `groundhog-xdr`. Bare hex (no prefix) is accepted on input for
   backwards compatibility. (`json-rpc-types/src/hex.rs`,
   `json-rpc-types/src/lib.rs`)
+- **Address format:** addresses are C StrKeys and Ed25519 public keys are
+  G StrKeys, via the `StrKey<T>` wrapper in
+  `crates/json-rpc/json-rpc-types/src/strkey.rs`. Inputs also accept the
+  earlier 32-byte hex form, with or without `0x`, so older clients and
+  hogd-dev runtime manifests keep parsing.

@@ -30,6 +30,7 @@ use groundhog_json_rpc_types::{
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
+    strkey::StrKey,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
@@ -281,7 +282,7 @@ fn test_network_info() -> NetworkInfo {
 fn simple_query() -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+            contract_addresses: ContractAddressList(VecM(vec![StrKey(
                 groundhog_xdr::types::ContractAddress::from([0u8; 32]),
             )])),
             topics: EventTopicFilter {
@@ -477,7 +478,7 @@ async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
 
 #[tokio::test]
 async fn get_storage_at_key_length_validated_for_all_shapes() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]));
+    let address: ContractAddress = StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32]));
     for backend in all_shapes() {
         let storage_calls = backend.get_storage_at_calls.clone();
         let svc = server(backend);
@@ -511,7 +512,7 @@ async fn get_storage_at_key_length_validated_for_all_shapes() {
 async fn get_balance_reads_native_hog_balance_storage_for_all_shapes() {
     for backend in all_shapes() {
         let address: ContractAddress =
-            Hex0x(groundhog_xdr::types::ContractAddress::from([7u8; 32]));
+            StrKey(groundhog_xdr::types::ContractAddress::from([7u8; 32]));
         let backend = ScriptedBackend {
             storage_read: Arc::new(Mutex::new(Some(Ok(StorageItemRead {
                 block_height: BlockHeight::from(123),
@@ -539,7 +540,7 @@ async fn get_balance_reads_native_hog_balance_storage_for_all_shapes() {
 
 #[tokio::test]
 async fn get_balance_returns_zero_for_missing_balance_item() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([8u8; 32]));
+    let address: ContractAddress = StrKey(groundhog_xdr::types::ContractAddress::from([8u8; 32]));
     let backend = ScriptedBackend::with_storage_read(StorageItemRead {
         block_height: BlockHeight::from(456),
         item: None,
@@ -557,7 +558,7 @@ async fn get_balance_returns_zero_for_missing_balance_item() {
 
 #[tokio::test]
 async fn get_balance_errors_for_unexpected_storage_item_kind() {
-    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([9u8; 32]));
+    let address: ContractAddress = StrKey(groundhog_xdr::types::ContractAddress::from([9u8; 32]));
     let backend = ScriptedBackend::with_storage_read(StorageItemRead {
         block_height: BlockHeight::from(789),
         item: Some(StorageItemInfo::AuthData),
@@ -577,7 +578,7 @@ async fn view_entrypoint_length_validated_for_all_shapes() {
         for entrypoint_len in [7, 9] {
             let svc = server(backend.clone());
             let request = ViewRequest {
-                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                contract: StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; entrypoint_len]),
                 calldata: HexBytes(vec![]),
                 caller: None,
@@ -598,7 +599,7 @@ async fn view_calldata_length_validated_for_all_shapes() {
     for backend in all_shapes() {
         let svc = server(backend);
         let request = ViewRequest {
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
             caller: None,
@@ -618,7 +619,7 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
     for backend in all_shapes() {
         let svc = server(backend);
         let request = ViewRequest {
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            contract: StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
@@ -649,7 +650,7 @@ async fn view_success_outputs_round_trip_for_all_shapes() {
         for output in cases.clone() {
             let svc = server_with_view(backend.clone(), ScriptedViewBackend::new(output.clone()));
             let request = ViewRequest {
-                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                contract: StrKey(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),
                 caller: None,

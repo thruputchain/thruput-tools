@@ -463,6 +463,7 @@ mod tests {
         use groundhog_json_rpc_types::{
             BlockHeight,
             hex::{Hex0x, HexBytes},
+            strkey::StrKey,
             transaction::{ConflictCode, ConflictDiagnostic},
         };
 
@@ -473,7 +474,7 @@ mod tests {
                 status: TransactionStatus::RecentFailure {
                     attempt_height: BlockHeight::from(17),
                     conflict: ConflictDiagnostic {
-                        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
+                        address: StrKey(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
                         key: HexBytes(vec![0, 0, 0, 1]),
                         code: ConflictCode::BoundsExceeded,
                     },

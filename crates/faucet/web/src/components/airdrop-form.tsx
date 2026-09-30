@@ -42,7 +42,7 @@ export function AirdropForm(props: {
                   onChange={(event) =>
                     props.onAddressChange(event.target.value)
                   }
-                  placeholder="Wallet address (0x...)"
+                  placeholder="Wallet address (C...)"
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={isInvalid || undefined}

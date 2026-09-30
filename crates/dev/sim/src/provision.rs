@@ -653,7 +653,7 @@ fn parse_hog_amount(input: &str) -> Result<u128, SimError> {
 }
 
 fn format_contract_address(address: &ContractAddress) -> String {
-    format!("0x{}", hex::encode(address.as_ref()))
+    groundhog_json_rpc_types::strkey::StrKey(*address).to_string()
 }
 
 fn exec_status_name(status: &ExecStatus) -> &'static str {

@@ -1,6 +1,6 @@
 //! hog-devnode process adapter.
 
-use groundhog_json_rpc_types::hex::{prefixed_hex, sha256_prefixed_hex};
+use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
 use std::{
     collections::BTreeMap,
     env,
@@ -1243,21 +1243,20 @@ fn validate_dev_account_public_key(
     signer: &LocalSigner,
 ) -> Result<(), NodeSupervisorError> {
     let expected = signer.verifying_key_bytes();
-    let actual = account.public_key.0.as_slice();
-    if actual.len() != expected.len() {
+    let Ok(actual) = <[u8; 32]>::try_from(account.public_key.0.as_slice()) else {
         return Err(NodeSupervisorError::DevAccountPublicKeyLength {
             index,
-            actual: actual.len(),
+            actual: account.public_key.0.len(),
         });
-    }
-    if actual == expected.as_slice() {
+    };
+    if actual == expected {
         return Ok(());
     }
 
     Err(NodeSupervisorError::DevAccountPublicKeyMismatch {
         index,
-        expected: prefixed_hex(expected),
-        actual: prefixed_hex(actual),
+        expected: groundhog_signing::strkey::format_public_key(&expected),
+        actual: groundhog_signing::strkey::format_public_key(&actual),
     })
 }
 
@@ -2597,7 +2596,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(readiness.dev_accounts[0].address)
                 .expect("bug: address serializes"),
-            format!("0x{}", "11".repeat(32)),
+            "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V",
         );
         assert_eq!(
             readiness.dev_accounts[0].public_key.0,

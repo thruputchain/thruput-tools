@@ -480,7 +480,7 @@ fn run_integration_against_node(
 
     let env = integration_test_environment(
         rpc_url,
-        &contract_address,
+        &crate::codec::parse_contract_address(&contract_address)?,
         runtime_manifest.as_deref(),
         default_key,
     );
@@ -636,7 +636,7 @@ fn finish_integration_run(
 
 fn integration_test_environment(
     rpc_url: &str,
-    contract_address: &str,
+    contract_address: &groundhog_xdr::types::ContractAddress,
     runtime_manifest: Option<&std::path::Path>,
     default_key: &str,
 ) -> Vec<(OsString, OsString)> {
@@ -646,9 +646,12 @@ fn integration_test_environment(
             OsString::from("1"),
         ),
         (OsString::from("GROUNDHOG_RPC_URL"), OsString::from(rpc_url)),
+        // Scaffolded integration tests parse this as `0x`-prefixed hex.
         (
             OsString::from("GROUNDHOG_CONTRACT_ADDRESS"),
-            OsString::from(contract_address),
+            OsString::from(groundhog_json_rpc_types::hex::prefixed_hex(
+                contract_address,
+            )),
         ),
         (
             OsString::from("GROUNDHOG_PROFILE"),
@@ -2399,7 +2402,7 @@ mod tests {
     fn integration_test_environment_returns_expected_values() {
         let env = super::integration_test_environment(
             "http://127.0.0.1:1234",
-            &format!("0x{}", "11".repeat(32)),
+            &[0x11; 32].into(),
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
             "dev-4",
         );
@@ -2448,7 +2451,7 @@ mod tests {
         let mut command = Command::new("cargo");
         let env = super::integration_test_environment(
             "http://127.0.0.1:1234",
-            &format!("0x{}", "11".repeat(32)),
+            &[0x11; 32].into(),
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
             "dev-4",
         );

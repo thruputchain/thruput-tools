@@ -235,7 +235,8 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     let sender = format_contract_address(&prepared.sender);
-    let signer_public_key = format!("0x{}", hex::encode(prepared.signer_public_key.as_ref()));
+    let signer_public_key =
+        groundhog_signing::strkey::format_public_key(&prepared.signer_public_key.into_inner());
     let recipient = format_contract_address(&prepared.recipient);
     let token_address = format_contract_address(&prepared.token_address);
     let tx_hash = format_tx_hash(&prepared.tx_hash);

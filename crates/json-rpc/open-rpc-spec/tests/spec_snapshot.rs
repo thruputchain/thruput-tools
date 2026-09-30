@@ -130,6 +130,10 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         "SHA-256 hashes should expose their exact canonical wire length"
     );
     assert_eq!(
+        schemas["StrKey_ContractAddress"]["pattern"], "^C[A-Z2-7]{55}$",
+        "contract addresses should cross the wire as C StrKeys"
+    );
+    assert_eq!(
         network_info["errors"],
         serde_json::json!([]),
         "networkInfo should be infallible after startup validation"

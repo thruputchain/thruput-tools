@@ -5,11 +5,12 @@ use groundhog_json_rpc_types::dev::{
 use groundhog_json_rpc_types::events::EmittedEvent;
 use groundhog_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::strkey::StrKey;
 use groundhog_json_rpc_types::transaction::TxHash;
 use serde_json::Value;
 
 #[test]
-fn transaction_detail_serializes_hex_and_camel_case() {
+fn transaction_detail_serializes_strkeys_hex_and_camel_case() {
     let address = groundhog_xdr::types::ContractAddress::from([0x11; 32]);
     let detail = TransactionDetail {
         receipt: TransactionReceipt {
@@ -17,7 +18,7 @@ fn transaction_detail_serializes_hex_and_camel_case() {
             height: BlockHeight::from(7),
             status: ExecStatus::Ok,
             events: vec![EmittedEvent {
-                contract_address: Hex0x(address),
+                contract_address: StrKey(address),
                 topics: vec![Topic([0x33; 32])],
                 data: HexBytes(vec![0x44]),
             }],
@@ -28,7 +29,7 @@ fn transaction_detail_serializes_hex_and_camel_case() {
         gas_consumed: 12,
         gas_limit: Some(99),
         storage_deltas: vec![StorageDeltaInfo {
-            address: Hex0x(address),
+            address: StrKey(address),
             key: HexBytes(vec![0x66]),
             kind: "bytestringSet".into(),
             summary: "BytestringSet -> 0x77".into(),
@@ -37,7 +38,7 @@ fn transaction_detail_serializes_hex_and_camel_case() {
         }],
         trace: Some(TraceInfo {
             invocation: InvocationInfo {
-                address: Hex0x(address),
+                address: StrKey(address),
                 entrypoint: HexBytes(vec![0x88; 8]),
                 gas_limit: Some(99),
                 calldata: HexBytes(vec![0x99]),
@@ -64,6 +65,10 @@ fn transaction_detail_serializes_hex_and_camel_case() {
     let value: Value = serde_json::to_value(&detail).expect("bug: detail should serialize");
     assert_eq!(value["gasConsumed"], 12);
     assert_eq!(value["gasLimit"], 99);
+    let address = "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V";
+    assert_eq!(value["receipt"]["events"][0]["contractAddress"], address);
+    assert_eq!(value["storageDeltas"][0]["address"], address);
+    assert_eq!(value["trace"]["invocation"]["address"], address);
     assert_eq!(value["storageDeltas"][0]["kind"], "bytestringSet");
     assert_eq!(value["storageDeltas"][0]["key"], "0x66");
     assert_eq!(

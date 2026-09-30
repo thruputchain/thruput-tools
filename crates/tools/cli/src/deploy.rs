@@ -1,4 +1,3 @@
-use groundhog_json_rpc_types::hex::decode_fixed_hex;
 use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_types::hex::HexBytes;
@@ -18,6 +17,7 @@ use xdr_common::VecM;
 
 use crate::account_resolution::resolve_transaction_sender;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
+use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::network_descriptor::resolve_wallet_signing_context;
@@ -30,7 +30,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 4;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeployAddressSource {
@@ -411,7 +411,7 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     prepared: &PreparedDeploy,
 ) -> Result<SubmittedDeploy, CliError> {
     let (tx_hash, receipt) = submit_prepared_deploy(prepared)?;
-    let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
+    let predicted_address = parse_predicted_address(&prepared.predicted_address)?;
     let (contract_address, address_source) = match &receipt.status {
         groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
             let (address, source) =
@@ -575,10 +575,10 @@ fn prepare_deploy_transaction_plan(
         rpc_url: rpc_url.to_owned(),
         profile_name: profile.name.clone(),
         wallet_name: sender.wallet_name,
-        wallet_address: format!("0x{}", hex::encode(wallet_address.as_ref())),
+        wallet_address: format_contract_address(&wallet_address),
         artifact,
         artifact_bytes_len,
-        predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
+        predicted_address: format_contract_address(&predicted_address),
         wallet_entrypoint_id: format!(
             "0x{}",
             hex::encode(wallet_context.entrypoints.deploy.into_inner())
@@ -614,9 +614,9 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
     })
 }
 
-/// Parse a `0x`-prefixed hex string into a 32-byte array.
-fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
-    decode_fixed_hex(hex_str)
+/// Parse the predicted address a deploy plan rendered.
+fn parse_predicted_address(address: &str) -> Result<ContractAddress, CliError> {
+    parse_contract_address(address)
         .map_err(|error| CliError::Other(format!("invalid predicted address: {error}")))
 }
 
@@ -684,9 +684,9 @@ fn resolve_deployed_address(
     predicted_address: &ContractAddress,
 ) -> Result<(String, DeployAddressSource), CliError> {
     if let Some(return_data) = return_data {
-        if return_data.0.len() == 32 {
+        if let Ok(address) = <[u8; 32]>::try_from(return_data.0.as_slice()) {
             return Ok((
-                format!("0x{}", hex::encode(&return_data.0)),
+                format_contract_address(&address.into()),
                 DeployAddressSource::Receipt,
             ));
         }
@@ -697,7 +697,7 @@ fn resolve_deployed_address(
     }
 
     Ok((
-        format!("0x{}", hex::encode(predicted_address.as_ref())),
+        format_contract_address(predicted_address),
         DeployAddressSource::Derived,
     ))
 }
@@ -708,10 +708,11 @@ mod tests {
 
     use super::{
         DeployAddressSource, PreparedDeploy, command_error_for_deploy_receipt,
-        deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, newest_input_mtime,
-        resolve_deployed_address, stale_artifact_warning,
+        deploy_funding_commands, derive_deploy_address, newest_input_mtime,
+        parse_predicted_address, resolve_deployed_address, stale_artifact_warning,
     };
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
+    use crate::codec::format_contract_address;
     use groundhog_json_rpc_types::{
         BlockHeight,
         hex::{Hex0x, HexBytes},
@@ -723,17 +724,27 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn hex_to_32_bytes_parses_prefixed_hex() {
-        let input = format!("0x{}", "ab".repeat(32));
-        let bytes = hex_to_32_bytes(&input).expect("bug: valid prefixed hex should parse");
-        assert_eq!(bytes, [0xab; 32]);
+    fn predicted_address_parses_its_rendered_strkey() {
+        let address = ContractAddress::from([0xab; 32]);
+        let parsed = parse_predicted_address(&format_contract_address(&address))
+            .expect("bug: rendered predicted address should parse");
+        assert_eq!(parsed, address);
     }
 
     #[test]
-    fn hex_to_32_bytes_parses_unprefixed_hex() {
+    fn predicted_address_parses_prefixed_hex() {
+        let input = format!("0x{}", "ab".repeat(32));
+        let address =
+            parse_predicted_address(&input).expect("bug: valid prefixed hex should parse");
+        assert_eq!(address, ContractAddress::from([0xab; 32]));
+    }
+
+    #[test]
+    fn predicted_address_parses_unprefixed_hex() {
         let input = "cd".repeat(32);
-        let bytes = hex_to_32_bytes(&input).expect("bug: valid unprefixed hex should parse");
-        assert_eq!(bytes, [0xcd; 32]);
+        let address =
+            parse_predicted_address(&input).expect("bug: valid unprefixed hex should parse");
+        assert_eq!(address, ContractAddress::from([0xcd; 32]));
     }
 
     #[test]
@@ -783,15 +794,15 @@ mod tests {
     }
 
     #[test]
-    fn hex_to_32_bytes_rejects_wrong_length() {
+    fn predicted_address_rejects_wrong_length() {
         let short = format!("0x{}", "ab".repeat(16));
-        assert!(hex_to_32_bytes(&short).is_err());
+        assert!(parse_predicted_address(&short).is_err());
     }
 
     #[test]
-    fn hex_to_32_bytes_rejects_invalid_hex() {
+    fn predicted_address_rejects_invalid_hex() {
         let bad = format!("0x{}", "zz".repeat(32));
-        assert!(hex_to_32_bytes(&bad).is_err());
+        assert!(parse_predicted_address(&bad).is_err());
     }
 
     #[test]
@@ -799,7 +810,10 @@ mod tests {
         let predicted = ContractAddress::from([0x11; 32]);
         let resolved = resolve_deployed_address(None, &predicted)
             .expect("bug: predicted address fallback should succeed");
-        assert_eq!(resolved.0, format!("0x{}", "11".repeat(32)));
+        assert_eq!(
+            resolved.0,
+            "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V"
+        );
         assert_eq!(resolved.1, DeployAddressSource::Derived);
     }
 
@@ -808,7 +822,10 @@ mod tests {
         let predicted = ContractAddress::from([0x11; 32]);
         let resolved = resolve_deployed_address(Some(&HexBytes(vec![0x22; 32])), &predicted)
             .expect("bug: receipt return_data should be accepted");
-        assert_eq!(resolved.0, format!("0x{}", "22".repeat(32)));
+        assert_eq!(
+            resolved.0,
+            "CARCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEVQO"
+        );
         assert_eq!(resolved.1, DeployAddressSource::Receipt);
     }
 

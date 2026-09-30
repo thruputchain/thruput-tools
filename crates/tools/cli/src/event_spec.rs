@@ -818,7 +818,12 @@ fn decode_known_event(
         .topics
         .iter()
         .zip(&topics[1..])
-        .map(|(field, topic)| Ok((spec_string_text(&field.name)?.to_owned(), *topic)))
+        .map(|(field, topic)| {
+            Ok((
+                spec_string_text(&field.name)?.to_owned(),
+                topic_text(&field.ty, topic),
+            ))
+        })
         .collect::<Result<BTreeMap<_, _>, CliError>>()?;
     let mut reader = xdrs::cxs::buf_reader::BufReader::new(data);
     let mut fields = BTreeMap::new();
@@ -851,6 +856,15 @@ fn decode_known_event(
         topics: named_topics,
         fields,
     })
+}
+
+/// Render an indexed topic: an address as its C `StrKey`, anything else as `0x` hex.
+fn topic_text(ty: &ContractType, topic: &Topic) -> String {
+    if matches!(ty, ContractType::Address) {
+        crate::codec::format_contract_address(&topic.0.into())
+    } else {
+        groundhog_json_rpc_types::hex::prefixed_hex(topic.0)
+    }
 }
 
 fn unknown_event(raw: crate::events_json::RawEventReport) -> EventListItemReport {
@@ -1025,6 +1039,29 @@ mod tests {
         assert_eq!(items[2].decode_status, EventDecodeStatus::Malformed);
         assert!(items[2].decode_error.as_deref().unwrap().contains("unread"));
         assert_eq!(items[2].raw.data.0, trailing);
+    }
+
+    #[test]
+    fn indexed_address_topics_render_as_strkeys_and_others_as_hex() {
+        let mut contract_spec = event_spec(ContractType::U64);
+        contract_spec.events.0[0].topics = VecM(vec![
+            field("owner", ContractType::Address),
+            field("tag", ContractType::U64),
+        ]);
+        let spec = validated(contract_spec);
+        let encoded = xdrs::cxs::encode(&7_u64).unwrap();
+
+        let item = spec
+            .decode_events(vec![identified_event(0x11, 3, encoded)])
+            .remove(0);
+
+        assert_eq!(item.decode_status, EventDecodeStatus::Decoded);
+        let topics = &item.decoded.as_ref().unwrap().topics;
+        assert_eq!(
+            topics["owner"],
+            "CBCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEJ5HZ"
+        );
+        assert_eq!(topics["tag"], format!("0x{}", "44".repeat(32)));
     }
 
     #[test]

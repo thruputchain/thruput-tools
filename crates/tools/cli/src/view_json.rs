@@ -7,7 +7,7 @@ use serde::Serialize;
 ///
 /// Bump this when the shape or semantics of `ViewJsonPayload` change in a
 /// way that could break existing machine consumers.
-pub const VIEW_JSON_SCHEMA_VERSION: u32 = 1;
+pub const VIEW_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Structured machine-readable report for `groundhog view --json`.
 #[derive(Debug, Serialize)]

@@ -1,4 +1,3 @@
-use groundhog_json_rpc_types::hex::prefixed_hex;
 use groundhog_json_rpc_types::{
     ContractAddress, NetworkHashHex,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, RuntimeManifest},
@@ -51,7 +50,7 @@ pub(crate) struct ResolvedTransactionSender {
 }
 
 pub(crate) struct ValidatedSavedWalletBinding {
-    pub(crate) owner_public_key: Vec<u8>,
+    pub(crate) owner_public_key: [u8; 32],
     pub(crate) address: groundhog_xdr::types::ContractAddress,
 }
 
@@ -180,8 +179,8 @@ fn resolve_selected_wallet(
         return Err(CliError::SavedWalletOwnerMismatch {
             wallet_name: wallet_name.to_owned(),
             key_name: key_name.to_owned(),
-            configured: prefixed_hex(&validated.owner_public_key),
-            local: prefixed_hex(local),
+            configured: groundhog_signing::strkey::format_public_key(&validated.owner_public_key),
+            local: groundhog_signing::strkey::format_public_key(&local),
         });
     }
     Ok(validated.address)
@@ -235,9 +234,8 @@ fn resolve_saved_wallet_for_signer(
     ))
 }
 
-fn parse_owner_public_key(key_name: &str, value: &str) -> Result<Vec<u8>, CliError> {
+fn parse_owner_public_key(key_name: &str, value: &str) -> Result<[u8; 32], CliError> {
     groundhog_signing::strkey::parse_public_key(value)
-        .map(|bytes| bytes.to_vec())
         .map_err(|error| saved_wallet_owner_public_key_invalid(key_name, error.to_string()))
 }
 
@@ -261,9 +259,9 @@ fn resolve_dev_wallet_address(
         return Err(dev_account_error(
             key_name,
             format!(
-                "local dev account metadata returned public key {} for dev-{index}, expected 0x{}",
-                prefixed_hex(&account.public_key),
-                hex::encode(expected_public_key),
+                "local dev account metadata returned public key {} for dev-{index}, expected {}",
+                groundhog_signing::strkey::format_public_key(&account.public_key),
+                groundhog_signing::strkey::format_public_key(&expected_public_key),
             ),
         ));
     }
@@ -285,6 +283,13 @@ pub(crate) fn lookup_dev_account_address(
 /// Recognize explicit address prefixes without validating the address itself.
 pub(crate) fn looks_like_address_literal(value: &str) -> bool {
     value.starts_with("0x") || value.starts_with("0X") || value.starts_with('C')
+}
+
+/// Whether `input` spells the rendered `address` as a C `StrKey` or hex literal,
+/// so printing both would repeat one address.
+pub(crate) fn is_literal_of_address(input: &str, address: &str) -> bool {
+    codec::parse_contract_address(input)
+        .is_ok_and(|parsed| codec::format_contract_address(&parsed) == address)
 }
 
 /// Resolve a saved wallet, contract alias, direct address, or local dev account.
@@ -430,7 +435,7 @@ fn resolve_dev_account(
 
 struct ResolvedDevAccount {
     address: groundhog_xdr::types::ContractAddress,
-    public_key: Vec<u8>,
+    public_key: [u8; 32],
 }
 
 fn dev_account_from_manifest(
@@ -465,7 +470,7 @@ fn dev_account_from_manifest(
 
     Ok(ResolvedDevAccount {
         address: account.wallet_address.0,
-        public_key: signer.verifying_key_bytes().to_vec(),
+        public_key: signer.verifying_key_bytes(),
     })
 }
 
@@ -487,7 +492,7 @@ fn signer_for_manifest_account(
             key_name,
             format!(
                 "runtime manifest bootstrap account dev-{index} public key {} does not match derivation seed",
-                prefixed_hex(account.public_key.0.as_ref()),
+                account.public_key,
             ),
         ));
     }
@@ -512,6 +517,8 @@ fn dev_account_error(key_name: &str, message: impl Into<String>) -> CliError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    use groundhog_json_rpc_types::hex::prefixed_hex;
 
     use crate::config::SavedWalletBinding;
 
@@ -558,10 +565,7 @@ mod tests {
             [42; 32].into()
         );
         assert!(resolve_contract_target(&profile, &public).is_err());
-        assert_eq!(
-            parse_owner_public_key("alice", &public).unwrap(),
-            vec![42; 32]
-        );
+        assert_eq!(parse_owner_public_key("alice", &public).unwrap(), [42; 32]);
         assert!(parse_owner_public_key("alice", &address).is_err());
     }
 
@@ -612,7 +616,7 @@ mod tests {
 
         assert_eq!(
             codec::format_contract_address(&resolved),
-            format!("0x{}", "ab".repeat(32))
+            "CCV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XK5LVOV2XMCW"
         );
     }
 

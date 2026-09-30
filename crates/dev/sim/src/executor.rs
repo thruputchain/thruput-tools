@@ -9,10 +9,11 @@ use groundhog_json_rpc_types::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
         EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
     },
-    hex::{Hex0x, HexBytes},
+    hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
     state::{StorageItemInfo, StorageItemRead},
+    strkey::StrKey,
     transaction::TxHash,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
@@ -2362,10 +2363,10 @@ where
     let started_at_unix_ms = unix_ms()?.to_string();
     let started = Instant::now();
     let request = ViewRequest {
-        contract: Hex0x(prepared.view.contract),
+        contract: StrKey(prepared.view.contract),
         entrypoint: HexBytes(prepared.view.entrypoint.clone()),
         calldata: HexBytes(prepared.view.calldata.clone()),
-        caller: Some(Hex0x(prepared.caller)),
+        caller: Some(StrKey(prepared.caller)),
     };
     let response = client.view(request).await;
     let latency_ms = duration_ms(started.elapsed());
@@ -2705,10 +2706,10 @@ where
 {
     let entry = &prepared.entry;
     let request = ViewRequest {
-        contract: Hex0x(entry.contract),
+        contract: StrKey(entry.contract),
         entrypoint: HexBytes(entry.read_entrypoint.clone()),
         calldata: HexBytes(entry.read_calldata.clone()),
-        caller: Some(Hex0x(prepared.caller)),
+        caller: Some(StrKey(prepared.caller)),
     };
     let response = client
         .view(request)
@@ -3253,7 +3254,7 @@ fn contract_call_workload_event(
         view_abort_data: None,
         view_event_count: None,
         contract_call_name: Some(call.name.clone()),
-        contract_call_contract: Some(format!("0x{}", hex::encode(call.contract.as_ref()))),
+        contract_call_contract: Some(StrKey(call.contract).to_string()),
         storage_read_name: None,
         storage_contract: None,
         storage_key: None,
@@ -3288,7 +3289,7 @@ where
     let started = Instant::now();
     let response = client
         .storage_read(
-            Hex0x(prepared.read.contract),
+            StrKey(prepared.read.contract),
             HexBytes(prepared.read.key.clone()),
         )
         .await;
@@ -3432,7 +3433,7 @@ fn storage_read_workload_event(
         contract_call_name: None,
         contract_call_contract: None,
         storage_read_name: Some(read.name.clone()),
-        storage_contract: Some(format!("0x{}", hex::encode(read.contract.as_ref()))),
+        storage_contract: Some(StrKey(read.contract).to_string()),
         storage_key: Some(format!("0x{}", hex::encode(&read.key))),
         storage_item_present: None,
         storage_item_kind: None,
@@ -3507,7 +3508,7 @@ where
 fn event_query_request(query: &PreparedEventQuery) -> EventQuery {
     EventQuery {
         filters: EventFilterList(VecM(vec![EventFilter {
-            contract_addresses: ContractAddressList(VecM(vec![Hex0x(query.contract)])),
+            contract_addresses: ContractAddressList(VecM(vec![StrKey(query.contract)])),
             topics: EventTopicFilter {
                 topic0: TopicList(VecM(Vec::new())),
                 topic1: TopicList(VecM(Vec::new())),
@@ -3645,7 +3646,7 @@ fn events_query_workload_event(
         storage_item_present: None,
         storage_item_kind: None,
         event_query_name: Some(query.name.clone()),
-        event_contract: Some(format!("0x{}", hex::encode(query.contract.as_ref()))),
+        event_contract: Some(StrKey(query.contract).to_string()),
         event_count: None,
         event_cursor: None,
         event_latest_block: None,
@@ -3975,6 +3976,7 @@ mod tests {
         receipt::{ExecStatus, TransactionReceipt},
         runtime_manifest::RuntimeManifest,
         state::StorageItemRead,
+        strkey::StrKey,
         view::{RootInvocationOutput, ViewResponse},
     };
     use groundhog_signing::derive_dev_account_signer;
@@ -4369,7 +4371,7 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn storage_read(
             &self,
-            address: Hex0x<ContractAddress>,
+            address: StrKey<ContractAddress>,
             key: HexBytes,
         ) -> impl Future<Output = Result<StorageItemRead, SimRpcError>> + Send {
             let response = self.response.clone();
@@ -5365,7 +5367,7 @@ mod tests {
         let completed = find_event(&events, "workload-completed");
         assert_eq!(completed["workload"], "contract-call");
         assert_eq!(completed["contractCallName"], "events-store-value");
-        assert_eq!(completed["contractCallContract"], prefixed_hex(0x88));
+        assert_eq!(completed["contractCallContract"], address_strkey(0x88));
         assert_eq!(completed["receiptPresent"], true);
         assert_eq!(completed["receiptStatus"], "ok");
     }
@@ -5646,7 +5648,7 @@ mod tests {
                 assert_eq!(event.storage_read_name.as_deref(), Some("fib-zero-key"));
                 assert_eq!(
                     event.storage_contract.as_deref(),
-                    Some(prefixed_hex(0x88).as_str())
+                    Some(address_strkey(0x88).as_str())
                 );
                 assert_eq!(
                     event.storage_key.as_deref(),
@@ -5809,7 +5811,7 @@ mod tests {
                 assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
                 assert_eq!(
                     event.event_contract.as_deref(),
-                    Some(prefixed_hex(0x88).as_str())
+                    Some(address_strkey(0x88).as_str())
                 );
                 assert_eq!(event.event_count, Some(0));
                 assert_eq!(event.event_cursor.as_deref(), Some("0xab"));
@@ -7253,6 +7255,10 @@ mod tests {
 
     fn prefixed_hex(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))
+    }
+
+    fn address_strkey(byte: u8) -> String {
+        StrKey(ContractAddress::from([byte; 32])).to_string()
     }
 
     fn tx_hash(byte: u8) -> TxHash {

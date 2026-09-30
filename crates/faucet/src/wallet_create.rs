@@ -17,6 +17,7 @@ use groundhog_json_rpc_client::{
 use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::strkey::StrKey;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress as ApiContractAddress, Ed25519PublicKey as ApiEd25519PublicKey,
@@ -790,7 +791,7 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
         )
         .map_err(|error| WalletCreateError::DeriveAddress(error.to_string()))?;
         Ok(PreparedWalletCreate {
-            wallet_address: Hex0x(wallet_address),
+            wallet_address: StrKey(wallet_address),
             prefund_raw_amount: self.prefund_raw_amount.clone(),
             wallet_contract_hash: Hex0x(self.wallet_contract_hash),
         })
@@ -973,7 +974,7 @@ fn response_from_attempt(
             deploy_nonce: request.deploy_nonce,
             client_nonce: request.client_nonce,
             attempt_status: wallet_create_status_name(attempt.status),
-            wallet_address: Hex0x(parse_32_hex(&attempt.wallet_address)),
+            wallet_address: StrKey(parse_32_hex(&attempt.wallet_address)),
             prefund_raw_amount: attempt.prefund_raw_amount,
             wallet_contract_hash: Hex0x(parse_32_hex(&attempt.wallet_contract_hash)),
             prefund_tx_hash: attempt.prefund_tx_hash,

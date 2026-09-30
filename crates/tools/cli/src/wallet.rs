@@ -6,7 +6,6 @@ use getrandom::getrandom;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestStorageCostModel;
-use groundhog_signing::Signer;
 use groundhog_signing::{
     BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner,
     SignTransactionParams, WalletCreateProofV2, build_deploy_transaction,
@@ -14,6 +13,7 @@ use groundhog_signing::{
     dev_wallet_contract, sign_and_encode_transaction_hex, source_address_auth_claim,
     wallet_contract_hash, wallet_create_proof_message_v2,
 };
+use groundhog_signing::{Signer, strkey};
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, NetworkHash, SHA256Hash};
@@ -53,7 +53,7 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print, dev_keys};
 
-pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 4;
+pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 5;
 // The dev wallet funds each deployed contract with 10 HOG. Leave room for
 // wallet creation, transaction gas, and further local development.
 const WALLET_CREATE_PREFUND_HOG: &str = "200";
@@ -564,6 +564,16 @@ fn validate_remote_wallet_prefund_amount(expected: &str, actual: &str) -> Result
     })
 }
 
+/// Render a saved wallet address as its C `StrKey`, or as saved when it does not parse.
+fn saved_address_text(saved: String) -> String {
+    parse_contract_address(&saved).map_or(saved, |address| format_contract_address(&address))
+}
+
+/// Render a saved owner public key as its G `StrKey`, or as saved when it does not parse.
+fn saved_public_key_text(saved: String) -> String {
+    strkey::parse_public_key(&saved).map_or(saved, |key| strkey::format_public_key(&key))
+}
+
 fn validate_remote_create_wallet_address(prepared: &str, created: &str) -> Result<(), CliError> {
     let prepared_wallet_address = parse_contract_address(prepared)?;
     let created_wallet_address = parse_contract_address(created)?;
@@ -684,8 +694,8 @@ pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(
         .map(|(name, wallet)| SavedWallet {
             is_default: default_wallet.as_deref() == Some(&name),
             name,
-            address: wallet.address,
-            owner_public_key: wallet.owner_public_key,
+            address: saved_address_text(wallet.address),
+            owner_public_key: saved_public_key_text(wallet.owner_public_key),
         })
         .collect();
 
@@ -1041,7 +1051,7 @@ fn prepare_local_wallet_create(
         prefund_raw_amount,
     )?;
     let owner = load_local_signer(&key_name)?;
-    let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
+    let owner_public_key = strkey::format_public_key(&owner.verifying_key_bytes());
     let (artifact_path, contract, contract_hash) = load_dev_wallet_contract(
         cwd,
         &manifest_path,
@@ -1054,7 +1064,7 @@ fn prepare_local_wallet_create(
     let wallet_address =
         derive_deploy_address(&faucet.wallet_address, &deploy_nonce, &contract_hash)
             .map_err(|error| CliError::Other(error.to_string()))?;
-    let wallet_address_hex = format_contract_address(&wallet_address);
+    let wallet_address_strkey = format_contract_address(&wallet_address);
     let create_calldata = create_wallet_calldata(
         &deploy_nonce,
         &contract_hash,
@@ -1093,7 +1103,7 @@ fn prepare_local_wallet_create(
         faucet_role: faucet.role,
         owner_public_key,
         artifact_path,
-        wallet_address: wallet_address_hex,
+        wallet_address: wallet_address_strkey,
         prefund_raw_amount,
         faucet_wallet,
         faucet_balance_height,
@@ -1123,7 +1133,7 @@ fn build_remote_wallet_create_plan(
     descriptor: NetworkDescriptor,
 ) -> Result<WalletCreatePlan, CliError> {
     let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
-    let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
+    let owner_public_key = strkey::format_public_key(&owner_public_key_xdr.into_inner());
     Ok(WalletCreatePlan::Remote(Box::new(RemoteWalletCreatePlan {
         faucet_url: profile
             .faucet_url
@@ -1327,8 +1337,20 @@ fn remote_wallet_create_attempt_matches(
         && attempt.wallet_name == wallet_name
         && attempt.network_id == network_id
         && attempt.genesis_hash == genesis_hash
-        && attempt.owner_public_key == owner_public_key
+        && same_public_key(&attempt.owner_public_key, owner_public_key)
         && attempt.wallet_contract_hash == wallet_contract_hash
+}
+
+/// Compare public keys by their bytes, so an attempt saved with a hex key
+/// still matches the same key rendered as a `StrKey`.
+fn same_public_key(saved: &str, current: &str) -> bool {
+    match (
+        strkey::parse_public_key(saved),
+        strkey::parse_public_key(current),
+    ) {
+        (Ok(saved), Ok(current)) => saved == current,
+        _ => false,
+    }
 }
 
 fn lock_remote_wallet_create_attempt(attempt_path: &Path) -> Result<File, CliError> {

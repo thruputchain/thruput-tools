@@ -224,7 +224,7 @@
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/StrKey_ContractAddress"
           },
           "anchor": {
             "$ref": "#/components/schemas/BlockAnchor"
@@ -267,7 +267,7 @@
                 "type": "string"
               },
               "recipient": {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "$ref": "#/components/schemas/StrKey_ContractAddress",
                 "description": "Address receiving the native HOG transfer."
               },
               "retryAfterSeconds": {
@@ -312,7 +312,7 @@
                 "type": "string"
               },
               "recipient": {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress",
+                "$ref": "#/components/schemas/StrKey_ContractAddress",
                 "description": "Address receiving the native HOG transfer."
               },
               "status": {
@@ -345,7 +345,7 @@
             "description": "Caller-selected idempotency key for this recipient and network."
           },
           "recipient": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/StrKey_ContractAddress",
             "description": "Address receiving the native HOG transfer."
           }
         },
@@ -359,7 +359,7 @@
         "description": "Native HOG balance read from committed chain state.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/StrKey_ContractAddress",
             "description": "Address whose native HOG balance was read."
           },
           "height": {
@@ -576,7 +576,7 @@
         "description": "One conflicting storage operation reported by two-phase commit.",
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/StrKey_ContractAddress",
             "description": "Contract whose storage the conflicting operation targeted."
           },
           "code": {
@@ -598,7 +598,7 @@
       "ContractAddressList": {
         "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound.",
         "items": {
-          "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          "$ref": "#/components/schemas/StrKey_ContractAddress"
         },
         "maxItems": 5,
         "minItems": 1,
@@ -608,7 +608,7 @@
         "description": "A single emitted event, as stored by the hogd indexer.\n\nThe gateway parses hogd's `TxEmittedEvent.serialized_event` into\nseparate topics and data. The serialized format is:\n`topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.\n`num_topics` (0–3) determines the split point. Max total 1024 bytes.\n\nSee `docs/gateway/system-design.md` \"Event Parsing\" for details.",
         "properties": {
           "contractAddress": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/StrKey_ContractAddress",
             "description": "Contract that emitted this event."
           },
           "data": {
@@ -836,10 +836,6 @@
             "type": "object"
           }
         ]
-      },
-      "Hex0x_ContractAddress": {
-        "pattern": "^0x[0-9a-f]{64}$",
-        "type": "string"
       },
       "Hex0x_SHA256Hash": {
         "pattern": "^0x[0-9a-f]{64}$",
@@ -1207,6 +1203,10 @@
         ],
         "type": "object"
       },
+      "StrKey_ContractAddress": {
+        "pattern": "^C[A-Z2-7]{55}$",
+        "type": "string"
+      },
       "TimePoint": {
         "description": "uint64_t, Unix time as nanoseconds elapsed since\nJanuary 1, 1970 UTC",
         "format": "uint64",
@@ -1494,7 +1494,7 @@
           "caller": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Hex0x_ContractAddress"
+                "$ref": "#/components/schemas/StrKey_ContractAddress"
               },
               {
                 "type": "null"
@@ -1503,7 +1503,7 @@
             "description": "Optional simulated caller address observed by `get_msg_sender`."
           },
           "contract": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "$ref": "#/components/schemas/StrKey_ContractAddress",
             "description": "Contract address to execute."
           },
           "entrypoint": {
@@ -1548,7 +1548,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "7.0.0"
+    "version": "8.0.0"
   },
   "methods": [
     {
@@ -1887,7 +1887,7 @@
           "$ref": "#/components/schemas/EventPage"
         }
       },
-      "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the Soroban-shaped filter / cursor / topic surface, with RPC-native `0x`-prefixed address and topic projections at the JSON boundary.",
+      "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the Soroban-shaped filter / cursor / topic surface, with RPC-native `StrKey` address and `0x`-prefixed topic projections at the JSON boundary.",
       "tags": [
         {
           "name": "Core API"
@@ -1959,7 +1959,7 @@
           "name": "address",
           "required": true,
           "schema": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/StrKey_ContractAddress"
           }
         },
         {
@@ -2007,7 +2007,7 @@
           "name": "address",
           "required": true,
           "schema": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+            "$ref": "#/components/schemas/StrKey_ContractAddress"
           }
         }
       ],

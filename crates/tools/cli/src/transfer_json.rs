@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress, Ed25519PublicKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 1;
+pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Stable JSON fields shared by every native HOG transfer outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -79,6 +79,7 @@ pub struct TransferUnconfirmedReport {
 #[cfg(test)]
 mod tests {
     use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
+    use groundhog_json_rpc_types::strkey::StrKey;
     use groundhog_json_rpc_types::transaction::TxHash;
     use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 
@@ -149,12 +150,12 @@ mod tests {
             rpc_url: "http://127.0.0.1:9545".into(),
             dry_run: false,
             submitted: true,
-            sender: Hex0x(ContractAddress::from([0x11; 32])),
+            sender: StrKey(ContractAddress::from([0x11; 32])),
             sender_wallet: Some("alice".into()),
-            signer_public_key: Hex0x(Ed25519PublicKey::from([0x22; 32])),
+            signer_public_key: StrKey(Ed25519PublicKey::from([0x22; 32])),
             recipient_input: "alice".into(),
-            recipient: Hex0x(ContractAddress::from([0x33; 32])),
-            token_address: Hex0x(ContractAddress::from([0x44; 32])),
+            recipient: StrKey(ContractAddress::from([0x33; 32])),
+            token_address: StrKey(ContractAddress::from([0x44; 32])),
             amount: "1.5".into(),
             raw_amount: "15000000".into(),
             tx_hash: TxHash(Hex0x(SHA256Hash::from([0x55; 32]))),
@@ -170,12 +171,12 @@ mod tests {
                 rpc_url: "http://127.0.0.1:9545".into(),
                 dry_run: true,
                 submitted: false,
-                sender: Hex0x(ContractAddress::from([0x11; 32])),
+                sender: StrKey(ContractAddress::from([0x11; 32])),
                 sender_wallet: Some("alice".into()),
-                signer_public_key: Hex0x(Ed25519PublicKey::from([0x22; 32])),
+                signer_public_key: StrKey(Ed25519PublicKey::from([0x22; 32])),
                 recipient_input: "alice".into(),
-                recipient: Hex0x(ContractAddress::from([0x33; 32])),
-                token_address: Hex0x(ContractAddress::from([0x44; 32])),
+                recipient: StrKey(ContractAddress::from([0x33; 32])),
+                token_address: StrKey(ContractAddress::from([0x44; 32])),
                 amount: "1.5".into(),
                 raw_amount: "15000000".into(),
                 tx_hash: TxHash(Hex0x(SHA256Hash::from([0x55; 32]))),
@@ -186,7 +187,23 @@ mod tests {
 
         let value = serde_json::to_value(report).expect("bug: report should serialize");
 
-        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["schemaVersion"], 2);
+        assert_eq!(
+            value["sender"],
+            "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V"
+        );
+        assert_eq!(
+            value["signerPublicKey"],
+            "GARCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCFRVX"
+        );
+        assert_eq!(
+            value["recipient"],
+            "CAZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZTGGJH"
+        );
+        assert_eq!(
+            value["tokenAddress"],
+            "CBCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEJ5HZ"
+        );
         assert_eq!(value["dryRun"], true);
         assert_eq!(value["submitted"], false);
         assert_eq!(value["senderWallet"], "alice");

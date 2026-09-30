@@ -30,6 +30,7 @@ use crate::rpc::{
 };
 use crate::util::json_string;
 use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
+use groundhog_json_rpc_types::strkey::StrKey;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
@@ -577,10 +578,7 @@ where
 {
     let (target, amount) = transfer;
     record.collateral = Some(crate::result::NativeDeploymentCollateral {
-        recipient: json_string(
-            &groundhog_json_rpc_types::hex::Hex0x(target),
-            "collateral recipient",
-        )?,
+        recipient: json_string(&StrKey(target), "collateral recipient")?,
         raw_amount: amount.to_string(),
         tx_hash: None,
         returned_tx_hash: None,
@@ -666,19 +664,19 @@ fn resolve_deployed_address(
     predicted_address: &ContractAddress,
 ) -> Result<(String, DeployAddressSource), SimError> {
     if let Some(return_data) = return_data {
-        if return_data.0.len() != 32 {
+        let Ok(address) = <[u8; 32]>::try_from(return_data.0.as_slice()) else {
             return Err(SimError::Executor(format!(
                 "deploy receipt return_data had {} bytes, expected 32-byte contract address",
                 return_data.0.len()
             )));
-        }
+        };
         return Ok((
-            format!("0x{}", hex::encode(&return_data.0)),
+            StrKey(ContractAddress::from(address)).to_string(),
             DeployAddressSource::Receipt,
         ));
     }
     Ok((
-        format!("0x{}", hex::encode(predicted_address.as_ref())),
+        StrKey(*predicted_address).to_string(),
         DeployAddressSource::Derived,
     ))
 }
@@ -839,11 +837,10 @@ fn resolve_entrypoint(entrypoint: &EntrypointSpec) -> Result<Vec<u8>, SimError> 
 }
 
 fn parse_contract_address(value: &str) -> Result<ContractAddress, SimError> {
-    let bytes = parse_hex(value)?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| SimError::Executor("contract address must be 32 bytes".into()))?;
-    Ok(ContractAddress::from(bytes))
+    value
+        .parse::<StrKey<ContractAddress>>()
+        .map(|address| address.0)
+        .map_err(|error| SimError::Executor(error.to_string()))
 }
 
 fn exec_status_name(status: &ExecStatus) -> &'static str {
@@ -1008,7 +1005,14 @@ mod tests {
         let record = &setup.records[0];
         assert_eq!(record.status, ContractDeploymentStatus::Completed);
         assert_eq!(record.tx_hash.as_deref(), Some(prefixed_hex(0x5a).as_str()));
-        assert_eq!(record.address.as_deref(), Some(prefixed_hex(0x77).as_str()));
+        assert_eq!(
+            record.address.as_deref(),
+            Some(
+                StrKey(ContractAddress::from([0x77; 32]))
+                    .to_string()
+                    .as_str()
+            )
+        );
         assert_eq!(record.address_source, Some(DeployAddressSource::Receipt));
         assert_eq!(record.height, Some(42));
         assert_eq!(setup.view_calls.len(), 1);

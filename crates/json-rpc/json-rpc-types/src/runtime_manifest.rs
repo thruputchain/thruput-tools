@@ -325,6 +325,7 @@ mod tests {
     use serde_json::json;
 
     use crate::hex::Hex0x;
+    use crate::strkey::StrKey;
 
     use super::{
         BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, BootstrapAccountDerivation,
@@ -364,8 +365,8 @@ mod tests {
                 "bootstrapAccounts": [{
                     "index": 0,
                     "role": BOOTSTRAP_ACCOUNT_ROLE_FAUCET,
-                    "publicKey": prefixed_hex(0x61),
-                    "walletAddress": prefixed_hex(0x71),
+                    "publicKey": public_key(0x61).to_string(),
+                    "walletAddress": contract_address(0x71).to_string(),
                     "initialStorageTokens": "10000000000000",
                 }],
                 "bootstrap": {
@@ -568,6 +569,21 @@ mod tests {
     }
 
     #[test]
+    fn hex_account_fields_from_hogd_dev_still_parse() {
+        let account = serde_json::from_value::<BootstrapAccount>(json!({
+            "index": 0,
+            "role": "local_user",
+            "publicKey": prefixed_hex(0x61),
+            "walletAddress": prefixed_hex(0x71),
+            "initialStorageTokens": "1000000000",
+        }))
+        .expect("bug: hogd-dev hex account fields should parse");
+
+        assert_eq!(account.public_key, public_key(0x61));
+        assert_eq!(account.wallet_address, contract_address(0x71));
+    }
+
+    #[test]
     fn dev_wallet_do_action_entrypoint_parses_from_manifest() {
         let manifest = full_manifest();
         let entrypoint = manifest
@@ -615,11 +631,11 @@ mod tests {
     }
 
     fn public_key(byte: u8) -> crate::Ed25519PublicKey {
-        Hex0x(Ed25519PublicKey::from([byte; 32]))
+        StrKey(Ed25519PublicKey::from([byte; 32]))
     }
 
     fn contract_address(byte: u8) -> crate::ContractAddress {
-        Hex0x(ContractAddress::from([byte; 32]))
+        StrKey(ContractAddress::from([byte; 32]))
     }
 
     fn prefixed_hex(byte: u8) -> String {

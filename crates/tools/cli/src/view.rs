@@ -77,7 +77,7 @@ pub fn run(
         ViewJsonPayload {
             schema_version: VIEW_JSON_SCHEMA_VERSION,
             rpc_url: &prepared.rpc_url,
-            contract: &prepared.contract_address_hex,
+            contract: &prepared.contract_address_strkey,
             method: &prepared.method,
             entrypoint_id: &prepared.entrypoint_id,
             calldata: &prepared.calldata_hex,
@@ -104,7 +104,7 @@ pub fn run(
 #[derive(Debug, Clone)]
 struct PreparedView {
     rpc_url: String,
-    contract_address_hex: String,
+    contract_address_strkey: String,
     method: String,
     resolved: ResolvedCall,
     entrypoint_id: String,
@@ -134,7 +134,7 @@ fn prepare_view(
 
     let contract_address =
         ContractAddress::from(resolve_contract_target(&resolved_profile, contract)?);
-    let contract_address_hex = format_contract_address(&contract_address);
+    let contract_address_strkey = format_contract_address(&contract_address);
     let resolved = resolve_call(project_start, method, package, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
     let caller = resolve_caller(&resolved_profile, from, rt)?;
@@ -144,7 +144,7 @@ fn prepare_view(
 
     Ok(PreparedView {
         rpc_url: rpc_url.to_owned(),
-        contract_address_hex,
+        contract_address_strkey,
         method: method.to_owned(),
         resolved,
         entrypoint_id,
@@ -233,7 +233,7 @@ fn print_view_response(
             } else {
                 print.detail("entrypoint", &prepared.method);
             }
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("height", *response.height);
             if !return_data.0.is_empty() && decoded_return_value.is_none() {
                 print.detail("return", prefixed_hex(&return_data.0));
@@ -242,7 +242,7 @@ fn print_view_response(
         RootInvocationOutput::Abort { abort_data } => {
             print.warn("View aborted.");
             print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("height", *response.height);
             match decoded_abort {
                 Some(Ok(abort)) => {
@@ -261,13 +261,13 @@ fn print_view_response(
         RootInvocationOutput::Fault => {
             print.warn("View faulted.");
             print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("height", *response.height);
         }
         _ => {
             print.warn("View returned an unsupported output variant.");
             print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("height", *response.height);
         }
     }
@@ -337,7 +337,7 @@ mod tests {
         };
         let prepared = PreparedView {
             rpc_url: "http://127.0.0.1:1".into(),
-            contract_address_hex: format!("0x{}", "11".repeat(32)),
+            contract_address_strkey: format_contract_address(&[0x11; 32].into()),
             method: "get".into(),
             resolved: ResolvedCall {
                 entrypoint: groundhog_xdr::contract::ContractEntrypointID::from([0u8; 8]),

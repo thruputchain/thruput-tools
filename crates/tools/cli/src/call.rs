@@ -37,7 +37,7 @@ use crate::{CliError, Print};
 pub const DEFAULT_CALL_GAS_LIMIT: u64 = 25_000_000;
 
 /// Current schema version for `call --json` data payloads.
-pub const CALL_JSON_SCHEMA_VERSION: u32 = 1;
+pub const CALL_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,8 +50,8 @@ pub(crate) struct ResolvedCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedCall {
     pub(crate) rpc_url: String,
-    pub(crate) contract_address_hex: String,
-    pub(crate) wallet_address_hex: String,
+    pub(crate) contract_address_strkey: String,
+    pub(crate) wallet_address_strkey: String,
     pub(crate) wallet_entrypoint_id: String,
     pub(crate) wallet_entrypoint_source: &'static str,
     pub(crate) method: String,
@@ -65,8 +65,8 @@ pub(crate) struct PreparedCall {
 struct CallPlan {
     rpc_url: String,
     profile_name: String,
-    contract_address_hex: String,
-    wallet_address_hex: String,
+    contract_address_strkey: String,
+    wallet_address_strkey: String,
     wallet_entrypoint_id: String,
     wallet_entrypoint_source: &'static str,
     method: String,
@@ -111,9 +111,9 @@ pub fn run(
         gas_limit,
     )?;
     if !dry_run {
-        print.detail("contract", &plan.contract_address_hex);
+        print.detail("contract", &plan.contract_address_strkey);
         print.detail("method", &plan.method);
-        print.detail("wallet", &plan.wallet_address_hex);
+        print.detail("wallet", &plan.wallet_address_strkey);
         print.detail("profile", &plan.profile_name);
         if !print.confirm(force, "call a contract", "Submit this contract call?")? {
             print.note("Cancelled");
@@ -121,7 +121,7 @@ pub fn run(
         }
         // An underfunded call can be dropped without a receipt; give funding
         // guidance here instead of waiting for a timeout.
-        check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_hex, gas_limit)?;
+        check_call_gas_balance(&plan.rpc_url, &plan.wallet_address_strkey, gas_limit)?;
     }
     let prepared = sign_call_plan(plan)?;
     if dry_run {
@@ -155,7 +155,7 @@ pub fn run(
             } else {
                 print.detail("entrypoint", &prepared.method);
             }
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
             print.detail("gas used", receipt.gas_used);
@@ -169,7 +169,7 @@ pub fn run(
         ExecStatus::Reverted { .. } => {
             print.warn(format_args!("Call {status_summary}"));
             print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
             print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
@@ -178,7 +178,7 @@ pub fn run(
         other => {
             print.warn(format_args!("Call {}", summarize_exec_status(other)));
             print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("contract", &prepared.contract_address_strkey);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
             print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
@@ -193,7 +193,7 @@ pub fn run(
     let mut data = json!({
         "schemaVersion": CALL_JSON_SCHEMA_VERSION,
         "txHash": tx_hash_formatted,
-        "contract": prepared.contract_address_hex,
+        "contract": prepared.contract_address_strkey,
         "method": prepared.method,
         "height": receipt.height,
         "status": receipt.status,
@@ -226,7 +226,7 @@ fn print_failed_call_diagnostics(
         "wallet",
         format_args!(
             "{} entrypoint={} source={}",
-            prepared.wallet_address_hex,
+            prepared.wallet_address_strkey,
             prepared.wallet_entrypoint_id,
             prepared.wallet_entrypoint_source
         ),
@@ -249,12 +249,12 @@ fn call_diagnostics_json(
 ) -> serde_json::Value {
     json!({
         "wallet": {
-            "address": prepared.wallet_address_hex,
+            "address": prepared.wallet_address_strkey,
             "entrypointId": prepared.wallet_entrypoint_id,
             "entrypointSource": prepared.wallet_entrypoint_source,
         },
         "target": {
-            "contract": prepared.contract_address_hex,
+            "contract": prepared.contract_address_strkey,
             "method": prepared.method,
             "entrypointId": format_entrypoint_id(prepared.resolved.entrypoint),
         },
@@ -275,7 +275,7 @@ fn print_dry_run(
 
     print.status(format_args!(
         "Prepared dry-run call {} on {} via {}.",
-        prepared.method, prepared.contract_address_hex, prepared.rpc_url
+        prepared.method, prepared.contract_address_strkey, prepared.rpc_url
     ));
     print.status(format_args!(
         "  selector: {}",
@@ -293,7 +293,7 @@ fn print_dry_run(
             "dryRun": true,
             "submitted": false,
             "rpcUrl": prepared.rpc_url,
-            "contract": prepared.contract_address_hex,
+            "contract": prepared.contract_address_strkey,
             "method": prepared.method,
             "entrypointId": entrypoint_id,
             "walletEntrypointId": prepared.wallet_entrypoint_id,
@@ -406,7 +406,7 @@ fn prepare_call_plan_with_runtime(
         .ok_or(CliError::MissingRpcUrl)?;
 
     let contract_address = resolve_contract_target(&resolved_profile, contract)?;
-    let contract_address_hex = format_contract_address(&contract_address);
+    let contract_address_strkey = format_contract_address(&contract_address);
 
     let sender = resolve_transaction_sender(&resolved_profile, wallet)?;
 
@@ -414,7 +414,7 @@ fn prepare_call_plan_with_runtime(
     let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
     let wallet_address = sender.wallet_address;
-    let wallet_address_hex = format_contract_address(&wallet_address);
+    let wallet_address_strkey = format_contract_address(&wallet_address);
 
     let wallet_context = resolve_wallet_signing_context(
         &resolved_profile,
@@ -444,8 +444,8 @@ fn prepare_call_plan_with_runtime(
     Ok(CallPlan {
         rpc_url: rpc_url.to_owned(),
         profile_name: resolved_profile.name,
-        contract_address_hex,
-        wallet_address_hex,
+        contract_address_strkey,
+        wallet_address_strkey,
         wallet_entrypoint_id,
         wallet_entrypoint_source: wallet_context.entrypoints.source,
         method: method.to_owned(),
@@ -486,8 +486,8 @@ fn sign_call_plan(plan: CallPlan) -> Result<PreparedCall, CliError> {
     let tx_hex = signed.tx_hex().to_owned();
     Ok(PreparedCall {
         rpc_url: plan.rpc_url,
-        contract_address_hex: plan.contract_address_hex,
-        wallet_address_hex: plan.wallet_address_hex,
+        contract_address_strkey: plan.contract_address_strkey,
+        wallet_address_strkey: plan.wallet_address_strkey,
         wallet_entrypoint_id: plan.wallet_entrypoint_id,
         wallet_entrypoint_source: plan.wallet_entrypoint_source,
         method: plan.method,
@@ -1597,6 +1597,7 @@ mod tests {
     #[test]
     fn encodes_and_decodes_embedded_spec_addresses() {
         let address = format!("0x{}", "11".repeat(32));
+        let strkey = "CAIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRDB3V";
         let metadata = sample_single_arg_spec_metadata(ContractType::Address);
         let encoded = encode_calldata(
             std::slice::from_ref(&address),
@@ -1606,12 +1607,12 @@ mod tests {
 
         assert_eq!(
             decode_spec_arguments(&metadata, &encoded),
-            vec![json!(address.clone())]
+            vec![json!(strkey)]
         );
         assert_eq!(
             decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
                 .expect("bug: embedded spec address return should decode"),
-            json!(address)
+            json!(strkey)
         );
     }
 

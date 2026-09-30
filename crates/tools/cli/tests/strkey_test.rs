@@ -45,7 +45,7 @@ fn strkey_import_preserves_legacy_storage_and_public_identity() {
     );
     let value: serde_json::Value = serde_json::from_slice(&imported.stdout).unwrap();
     assert_eq!(value["command"], "keys.import");
-    assert_eq!(value["data"]["schemaVersion"], 1);
+    assert_eq!(value["data"]["schemaVersion"], 2);
     assert_eq!(value["data"]["key"]["isDefault"], true);
     assert_eq!(value["data"]["key"]["keyId"], 0);
     assert_eq!(
@@ -197,7 +197,7 @@ fn assert_imported_with_default_warning(result: &Output, home: &TempDir) {
     );
     let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(value["ok"], true);
-    assert_eq!(value["data"]["schemaVersion"], 1);
+    assert_eq!(value["data"]["schemaVersion"], 2);
     assert_eq!(value["data"]["key"]["isDefault"], false);
     assert_eq!(
         value["warnings"][0]["code"],

@@ -225,8 +225,9 @@ the CLI, gateway, and bench harness discover it from the runtime manifest.
 
 Wire-format conventions:
 
-- `0x`-prefixed lowercase hex for all byte values (hashes, addresses,
-  topics, event data).
+- `0x`-prefixed lowercase hex for byte values (hashes, topics, event data).
+- Stellar StrKeys for addresses (`C...`) and Ed25519 public keys (`G...`).
+  Inputs also accept their legacy `0x`-prefixed hex form.
 - Decimal JSON numbers for heights, counts, and other quantities (no
   Ethereum-style hex quantities).
 - `camelCase` JSON field names.
