@@ -232,7 +232,7 @@ pub struct EventQuery {
     /// `0x` on the initial call. Non-empty to continue where a previous
     /// response left off. `order` and `anchor` remain required request fields,
     /// but the cursor supplies continuation state. Keep the same filters.
-    /// A cursor continues one bounded historical walk, not subsequently added blocks.
+    /// A cursor continues one historical walk, not blocks added after it began.
     pub cursor: PaginationCursor,
     /// Values above the server's per-page cap (default 200) are
     /// rejected as invalid params; `0` means server default (50).
@@ -281,12 +281,9 @@ pub struct IdentifiedEvent {
 
 /// One page of events returned by `getEvents`.
 ///
-/// To fetch the next page, send the same query back with `cursor`
-/// set to the value returned here.  An empty `cursor` means the
-/// walk is exhausted in the requested direction. For a later scan, start at the
-/// last durably stored row's height and deduplicate that block. Save rows and
-/// progress together; do not skip a partially processed block. Cursors are opaque
-/// and subject to backend validity/retention rules, not durable coverage markers.
+/// Opaque cursors continue one historical walk; an empty cursor ends it.
+/// For restart rules, see the
+/// [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {
@@ -301,9 +298,7 @@ pub struct EventPage {
     /// argument.
     pub cursor: PaginationCursor,
 
-    /// Highest block height the indexer has processed at response time.
-    /// This is not proof that the caller has consumed history through that height.
-    /// Never use this field alone as a durable application checkpoint.
+    /// Highest block height indexed at response time, not an application checkpoint.
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at
