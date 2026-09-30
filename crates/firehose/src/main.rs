@@ -9,7 +9,7 @@ use thruput_firehose::{
     Error,
     client::{self, Client, Outcome},
     metrics::Metrics,
-    store::Store,
+    store::{Retention, Store},
 };
 use thruput_indexer::{EventIndexerPullResult, IndexerProgress};
 use thruput_xdr::{PROTOCOL_VERSION, network::ProtocolCommit};
@@ -77,6 +77,15 @@ struct Config {
     /// Optional `SchedGateway` address for independent chain-tip lag sampling.
     #[arg(long)]
     tip_endpoint: Option<String>,
+    /// Maximum retained age in seconds (default seven days).
+    #[arg(long, default_value_t = 604_800)]
+    retain_duration: u64,
+    /// Maximum allocated archive bytes (default 48 GB).
+    #[arg(long, default_value_t = 48_000_000_000)]
+    retain_bytes: u64,
+    /// Minimum retained block count, even when a budget binds.
+    #[arg(long, default_value_t = 1_000)]
+    retain_min_blocks: u64,
 }
 
 #[tokio::main]
@@ -108,10 +117,14 @@ async fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
         Command::Verify { store } => {
             let start = Instant::now();
-            let store = Store::open(&store)?;
+            let store = Store::open_verified(&store)?;
             println!(
                 "{}",
-                serde_json::json!({"blocks": store.blocks, "height": store.height(), "bytes": store.bytes, "recoverySeconds": start.elapsed().as_secs_f64()})
+                serde_json::json!({
+                    "blocks": store.blocks, "height": store.height(), "bytes": store.bytes,
+                    "floorHeight": store.floor_height(), "verifiedBlocks": store.verified_blocks,
+                    "recoverySeconds": start.elapsed().as_secs_f64()
+                })
             );
         }
         Command::Run(config) => run_store(config, protocol, Tail::Off).await?,
@@ -195,7 +208,6 @@ async fn run_store(
     let (result, http_done) = tokio::select! {
         result = ingest(&config, protocol, store, &metrics, tail) => (result.map_err(Into::into), false),
         result = &mut http => (result.map_err(Into::into), true),
-        () = shutdown() => (Ok(()), false),
     };
     metrics.set_healthy(false);
     let _ = stop.send(true);
@@ -297,14 +309,29 @@ async fn ingest(
     metrics: &Metrics,
     tail: Tail,
 ) -> Result<(), Error> {
+    let shutdown = shutdown();
+    tokio::pin!(shutdown);
+    let mut pruning = tokio::time::interval(Duration::from_mins(1));
+    pruning.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let retention = Retention {
+        duration: Duration::from_secs(config.retain_duration),
+        bytes: config.retain_bytes,
+        min_blocks: config.retain_min_blocks,
+    };
     let mut previous = Instant::now();
     let mut parked_total = 0.;
     loop {
-        let connected = tokio::time::timeout(
+        let connecting = tokio::time::timeout(
             Duration::from_secs(5),
             Client::connect(&config.event_endpoint),
-        )
-        .await;
+        );
+        let connected = tokio::select! {
+            result = connecting => result,
+            () = &mut shutdown => {
+                store.clean_shutdown()?;
+                return Ok(());
+            }
+        };
         let client = match connected {
             Ok(Ok(client)) => client,
             other => {
@@ -323,6 +350,14 @@ async fn ingest(
             let result = loop {
                 tokio::select! {
                     result = &mut pull => break result,
+                    () = &mut shutdown => {
+                        store.clean_shutdown()?;
+                        return Ok(());
+                    }
+                    _ = pruning.tick() => {
+                        store.prune(retention)?;
+                        update_store_metrics(metrics, &store);
+                    }
                     _ = ticker.tick(), if parked => { metrics.parked.set(parked_total + start.elapsed().as_secs_f64()); }
                 }
             };
