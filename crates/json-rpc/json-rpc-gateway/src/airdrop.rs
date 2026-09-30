@@ -1085,8 +1085,8 @@ mod tests {
             .await
             .expect("faucet POST should start");
 
-        // Allow scheduling headroom: this proves independence, not probe latency.
-        // The POST stays parked until after the assertions, establishing that independence.
+        // Generous timeout for scheduling headroom; the POST stays parked until
+        // after the assertions.
         let probe = facade.probe(Duration::from_secs(1)).await;
 
         assert!(probe.up);
