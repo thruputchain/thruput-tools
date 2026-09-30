@@ -141,8 +141,8 @@ callers rather than create a competing output API in every module.
 ### Theme, color, and symbols
 
 Define colors, spacing, borders, and symbols once. Neutral views, reviews, guided
-setup, active states, and all card borders use the terminal's cyan accent. Explicit
-success headings use green; warning/partial and error headings use amber and red.
+setup, active states, and all card borders and titles use the terminal's cyan accent.
+Standalone success, warning/partial, and error messages use green, amber, and red.
 Query titles such as Balance stay neutral. Keep muted labels and the terminal background.
 Outcome text is authoritative; color alone never establishes success.
 

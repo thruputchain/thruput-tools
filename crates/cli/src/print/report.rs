@@ -54,7 +54,7 @@ impl Report {
         self.card_with_style(
             &format!("{prefix} {title}"),
             items,
-            self.renderer.theme.outcome_title(outcome),
+            self.renderer.theme.title(),
         );
     }
 
