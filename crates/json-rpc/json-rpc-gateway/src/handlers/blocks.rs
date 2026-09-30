@@ -24,7 +24,7 @@ pub async fn chain_tip(
 /// Block data at a given height.
 ///
 /// **Deferred** — data source is an open question.
-/// See `docs/gateway/system-design.md` question #1.
+/// See `docs/gateway/system-design.md`, "Views and reads".
 #[tracing::instrument(skip_all, fields(height))]
 pub async fn get_block_by_number(
     _ctx: &GatewayContext,
@@ -36,7 +36,7 @@ pub async fn get_block_by_number(
 /// Number of transactions in the mempool.
 ///
 /// **Deferred** — the scheduler-gateway RPC exists, but standalone handler
-/// plumbing remains deferred. See `docs/gateway/open-questions.md`.
+/// plumbing remains deferred. See `docs/gateway/system-design.md`, "Views and reads".
 #[tracing::instrument(skip_all)]
 pub async fn pending_transaction_count(_ctx: &GatewayContext) -> Result<u64, RpcServerError> {
     Err(RpcServerError::NotImplemented(

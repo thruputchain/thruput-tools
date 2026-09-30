@@ -27,7 +27,7 @@ use groundhog_json_rpc_types::{
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
 ///
-/// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
+/// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
 pub const WIRE_FORMAT_VERSION: &str = "7.0.1";
 
