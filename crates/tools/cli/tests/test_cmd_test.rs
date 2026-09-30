@@ -353,7 +353,7 @@ fn test_json_lists_a_build_warning() {
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .env("XDG_CONFIG_HOME", tmp.path().join("config-home"))
-        .args(["--json", "test"])
+        .args(["--json", "test", "-p", "demo-contract"])
         .output()
         .unwrap();
 

@@ -20,8 +20,8 @@ use groundhog_testkit::rpc_types::receipt::ExecStatus;
 use groundhog_testkit::rpc_types::view::RootInvocationOutput;
 use groundhog_testkit::xdr::types::ContractAddress;
 use groundhog_testkit::{
-    Agent, AgentContext, BlockDriverConfig, LocalNetworkConfig, NetworkConfig, Result, Scenario,
-    TestkitError, entrypoint_id,
+    Agent, AgentContext, BlockDriverConfig, DeployOptions, LocalNetworkConfig, NetworkConfig,
+    Result, Scenario, TestkitError, WalletInitCall, entrypoint_id,
 };
 use tokio::sync::Barrier;
 
@@ -67,6 +67,31 @@ async fn bump_counter(ctx: &mut AgentContext, contract: ContractAddress) -> Resu
         receipt.status
     );
     Ok(())
+}
+
+async fn fund_native_accounts(scenario: &Scenario, manual: bool) {
+    let barrier = Arc::new(Barrier::new(2));
+    let agents = (0..2).map(|index| {
+        let barrier = Arc::clone(&barrier);
+        Agent::new(format!("fund-{index}"), move |ctx| async move {
+            let submitted = ctx.submit_fund(1_000_000_000).await?;
+            if manual {
+                submitted.await_pending().await?;
+                barrier.wait().await;
+                if index == 0 {
+                    ctx.network().produce_block().await?;
+                }
+                barrier.wait().await;
+            }
+            let receipt = submitted.await_receipt().await?;
+            assert!(matches!(receipt.status, ExecStatus::Ok));
+            Ok(())
+        })
+    });
+    tokio::time::timeout(Duration::from_mins(1), scenario.run_agents(agents))
+        .await
+        .expect("funding phase does not deadlock")
+        .expect("explicit native funding succeeds");
 }
 
 async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [ContractAddress; 2]) {
@@ -136,6 +161,9 @@ async fn caller_counter_deploy_call_read() {
     if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
+    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
+        config.contract_artifact_directories.push(path.into());
+    }
     if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
         config.hogd_protocol = Some(protocol);
     }
@@ -147,16 +175,35 @@ async fn caller_counter_deploy_call_read() {
         .await
         .expect("local node starts and advertises a runtime manifest");
 
+    fund_native_accounts(&scenario, false).await;
     scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
             // The first deploy carries the binary (registers it) and creates an
             // instance; the harness reports it registered.
-            let instance1 = ctx.deploy_artifact("caller-counter").await?;
+            let instance1 = ctx
+                .deploy_artifact(
+                    "caller-counter",
+                    DeployOptions {
+                        amount: 100_000_000,
+                        initializer: Some(WalletInitCall {
+                            entrypoint: entrypoint_id(INTERFACE, VERSION, "bump"),
+                            gas_limit: 2_000_000,
+                            calldata: &[],
+                        }),
+                    },
+                )
+                .await?;
             assert!(instance1.registered, "first deploy registers the binary");
             assert!(ctx.is_registered("caller-counter")?);
+            assert_eq!(
+                read_counter(&ctx, instance1.address, ctx.address()).await?,
+                1
+            );
 
             // The second deploy is hash-only and yields a distinct instance.
-            let instance2 = ctx.deploy_artifact("caller-counter").await?;
+            let instance2 = ctx
+                .deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
+                .await?;
             assert!(!instance2.registered, "second deploy is hash-only");
             assert_ne!(
                 instance1.address, instance2.address,
@@ -202,6 +249,9 @@ async fn multiple_runs_are_possible() {
     if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
+    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
+        config.contract_artifact_directories.push(path.into());
+    }
     if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
         config.hogd_protocol = Some(protocol);
     }
@@ -213,11 +263,14 @@ async fn multiple_runs_are_possible() {
         .await
         .expect("local node starts and advertises a runtime manifest");
 
+    fund_native_accounts(&scenario, false).await;
     let make_agents = || {
         [Agent::new("alice", |mut ctx| async move {
             // The first deploy carries the binary (registers it) and creates an
             // instance; the harness reports it registered.
-            let caller_counter = ctx.deploy_artifact("caller-counter").await?;
+            let caller_counter = ctx
+                .deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
+                .await?;
 
             bump_counter(&mut ctx, caller_counter.address).await?;
 
@@ -254,6 +307,9 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
     if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
+    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
+        config.contract_artifact_directories.push(path.into());
+    }
     if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
         config.hogd_protocol = Some(protocol);
     }
@@ -265,11 +321,14 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
         .await
         .expect("manual local node starts");
 
+    fund_native_accounts(&scenario, true).await;
     let first_address = Arc::new(Mutex::new(None));
     let stored_address = Arc::clone(&first_address);
     scenario
         .run_agents([Agent::new("alice", move |mut ctx| async move {
-            let registration = ctx.submit_deploy_artifact("caller-counter").await?;
+            let registration = ctx
+                .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
+                .await?;
             registration.await_pending().await?;
             *stored_address
                 .lock()
@@ -285,7 +344,10 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
         .expect("first run records its deployment address");
     scenario
         .run_agents([Agent::new("alice", move |mut ctx| async move {
-            let registration_hash = match ctx.submit_deploy_artifact("caller-counter").await {
+            let registration_hash = match ctx
+                .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
+                .await
+            {
                 Err(TestkitError::ArtifactRegistrationPending { tx_hash, .. }) => tx_hash,
                 other => panic!("expected earlier run's pending registration, got {other:?}"),
             };
@@ -294,7 +356,9 @@ async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
             let registration_receipt = ctx.network().await_receipt(registration_hash).await?;
             assert_eq!(*registration_receipt.height, registration_block.height);
 
-            let deployment = ctx.submit_deploy_artifact("caller-counter").await?;
+            let deployment = ctx
+                .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
+                .await?;
             assert_ne!(
                 deployment.address(),
                 original_address,
@@ -329,6 +393,9 @@ async fn manual_block_production_stages_deploys_and_calls() {
     if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
+    if let Ok(path) = std::env::var("GROUNDHOG_TESTKIT_CONTRACT_ARTIFACTS_ROOT") {
+        config.contract_artifact_directories.push(path.into());
+    }
     if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
         config.hogd_protocol = Some(protocol);
     }
@@ -340,12 +407,15 @@ async fn manual_block_production_stages_deploys_and_calls() {
         .await
         .expect("manual local node starts");
 
+    fund_native_accounts(&scenario, true).await;
     let addresses = Arc::new(Mutex::new(Vec::new()));
     let deployment_addresses = Arc::clone(&addresses);
     scenario
         .run_agents([Agent::new("alice", move |mut ctx| async move {
             let genesis = ctx.network().chain_tip().await?;
-            let registration = ctx.submit_deploy_artifact("caller-counter").await?;
+            let registration = ctx
+                .submit_deploy_artifact("caller-counter", DeployOptions::funded(100_000_000))
+                .await?;
             registration.await_pending().await?;
             assert_eq!(
                 ctx.network().chain_tip().await?.height,
@@ -362,7 +432,9 @@ async fn manual_block_production_stages_deploys_and_calls() {
                 .expect("address mutex is not poisoned")
                 .push(registered.address);
 
-            let second = ctx.submit_deploy_registered("caller-counter").await?;
+            let second = ctx
+                .submit_deploy_registered("caller-counter", DeployOptions::funded(100_000_000))
+                .await?;
             second.await_pending().await?;
             assert_eq!(
                 *ctx.network().chain_tip().await?.height,

@@ -116,6 +116,12 @@ pub struct ProjectContext {
     pub project_default_wallet: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_default_wallet: Option<String>,
+    /// Transaction format of the explicitly selected wallet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_wallet_kind: Option<crate::config::WalletKind>,
+    /// Derivation nonce when the selected wallet is native.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_wallet_account_nonce: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_wallet_source: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -253,6 +259,16 @@ pub fn check_project(
                 profile_name: Some(profile.name),
                 profile_key,
                 project_default_wallet,
+                default_wallet_kind: profile
+                    .default_wallet
+                    .as_ref()
+                    .and_then(|name| profile.wallets.get(name))
+                    .map(|wallet| wallet.kind),
+                default_wallet_account_nonce: profile
+                    .default_wallet
+                    .as_ref()
+                    .and_then(|name| profile.wallets.get(name))
+                    .and_then(|wallet| wallet.account_nonce),
                 effective_default_wallet: profile.default_wallet,
                 default_wallet_source,
                 network: profile.network,
@@ -1505,6 +1521,8 @@ mod tests {
         wallets.insert(
             "trading".into(),
             crate::config::SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: format!("0x{}", "11".repeat(32)),
                 owner_public_key: format!("0x{}", "22".repeat(32)),
             },
@@ -1539,6 +1557,8 @@ mod tests {
         wallets.insert(
             "trading".into(),
             crate::config::SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: format!("0x{}", "11".repeat(32)),
                 owner_public_key: "not-hex".into(),
             },
@@ -1573,6 +1593,8 @@ mod tests {
         wallets.insert(
             "trading".into(),
             crate::config::SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: "not-an-address".into(),
                 owner_public_key: format!("0x{}", "22".repeat(32)),
             },

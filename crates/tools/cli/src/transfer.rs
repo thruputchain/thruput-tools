@@ -9,9 +9,8 @@ use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, encode_signed_transaction_xdr, sign_transaction,
-    transaction_hash,
+    DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams, encode_signed_transaction_xdr,
+    sign_transaction, transaction_hash,
 };
 use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::NetworkHash;
@@ -22,7 +21,7 @@ use crate::account_resolution::{
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::hog;
-use crate::network_descriptor::resolve_wallet_signing_context;
+
 use crate::result::{CommandError, CommandResult};
 use crate::terminal::{render_shell_arg, terminal_safe};
 use crate::transfer_json::{
@@ -154,26 +153,25 @@ fn prepare_plan(
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let resolved_sender = bind_sender_to_network(&profile, sender_account)?;
     let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
-    let wallet_context = resolve_wallet_signing_context(
-        &profile,
-        &resolved_sender.key_name,
-        resolved_sender.network_hash,
-        &rt,
-    )?;
+    let wallet_context = resolved_sender.signing_context(&profile, &rt)?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
 
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address: sender,
-        wallet_entrypoint: wallet_context.entrypoints.do_action,
-        target_address: token_address,
-        target_entrypoint: hog::transfer_entrypoint(),
-        target_calldata: calldata.as_slice(),
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height: expiry_height,
-        nonce: nonce_from_timestamp(),
-    })
-    .map_err(|error| CliError::Other(error.to_string()))?;
+    let tx = groundhog_client::prepare_call(
+        groundhog_client::CallRequest {
+            wallet: resolved_sender.wallet(wallet_context.entrypoints.do_action),
+            target_address: token_address,
+            target_entrypoint: hog::transfer_entrypoint(),
+            target_calldata: calldata.as_slice(),
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: expiry_height,
+            nonce: nonce_from_timestamp(),
+        },
+        wallet_context.network_hash.clone(),
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?
+    .transaction()
+    .clone();
     let tx_hash = TxHash(
         transaction_hash(&tx)
             .map_err(|error| CliError::Other(error.to_string()))?

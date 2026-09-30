@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::CliError;
 
@@ -8,19 +8,6 @@ const FAUCET_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) fn client() -> Result<reqwest::blocking::Client, CliError> {
     crate::http_client::blocking_client(FAUCET_REQUEST_TIMEOUT)
-}
-
-pub(crate) fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    body: &B,
-) -> Result<T, CliError> {
-    let response = client
-        .post(url)
-        .json(body)
-        .send()
-        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?;
-    parse_faucet_response(response, url)
 }
 
 pub(crate) fn get_json<T: for<'de> Deserialize<'de>>(

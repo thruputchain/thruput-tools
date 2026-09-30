@@ -4,7 +4,7 @@ use serde_json::json;
 use std::borrow::Cow;
 use thiserror::Error;
 
-use crate::terminal::{render_shell_arg, terminal_safe};
+use crate::terminal::render_shell_arg;
 
 /// Next step after any cargo invocation that failed without a recognizable
 /// cause.
@@ -54,6 +54,33 @@ const TOOLCHAIN_RETRY_HINT: &str =
 ///   their `camelCase` keys. A variant with no `#[details]` carries none.
 #[derive(Error, Debug, ErrorMeta)]
 pub enum CliError {
+    #[error("invalid wallet `{wallet_name}`: {message}")]
+    #[details]
+    InvalidWalletBinding {
+        wallet_name: String,
+        message: String,
+    },
+    #[error("wallet `{wallet_name}` already names a different account")]
+    #[hint("choose a different --name; existing wallet identities are preserved")]
+    #[details]
+    WalletBindingConflict { wallet_name: String },
+    #[error("wallet create no longer accepts --prefund")]
+    #[hint("create the empty wallet first, then run groundhog airdrop <wallet-name>")]
+    WalletCreatePrefundUnsupported,
+    #[error("native deployment requires an explicit --fund <HOG> amount")]
+    #[hint(
+        "choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate"
+    )]
+    NativeDeploymentFundingRequired,
+    #[error("--fund and --init require a native wallet")]
+    #[hint("existing legacy wallets retain their own deployment funding behavior")]
+    NativeDeploymentOptionsForLegacy,
+    #[error("invalid deployment initializer: {message}")]
+    #[details]
+    InvalidDeploymentInitializer { message: String },
+    #[error("native deployment response could not be verified: {message}")]
+    #[details]
+    NativeDeploymentUnverified { message: String },
     #[error(transparent)]
     #[code("docs_error")]
     Docs(#[from] crate::docs::DocsError),
@@ -637,20 +664,6 @@ pub enum CliError {
         /// Specific derivation failure.
         message: String,
     },
-    #[error(
-        "no wallet saved for key `{}` in profile `{}`; run `groundhog wallet create --key={} --profile={}`",
-        terminal_safe(.key_name.as_str()),
-        terminal_safe(.profile.as_str()),
-        render_shell_arg(.key_name.as_str()),
-        render_shell_arg(.profile.as_str()),
-    )]
-    #[hint(
-        "run `groundhog wallet create --key={} --profile={}` before using this stored key",
-        render_shell_arg(key_name),
-        render_shell_arg(profile)
-    )]
-    #[details]
-    SavedWalletMissing { key_name: String, profile: String },
     #[error(
         "multiple wallets are saved for key `{key_name}` in profile `{profile}`: {wallet_names:?}"
     )]

@@ -351,7 +351,12 @@ groundhog-bench --url http://127.0.0.1:9546 \
   `bug:` prefix for grep-ability).
 - **No `.expect()` on untrusted input.** Return `Result` or log and
   drop instead.
-- **No `dbg!()` or debug prints** in committed code.
+- **No `dbg!()` or temporary debug prints** in committed production code.
+  Tests may retain concise diagnostics that help investigate failures, such as
+  transaction hashes and account or contract addresses. Keep them relevant and
+  free of secrets; do not remove useful test diagnostics solely because they
+  use `println!` or `eprintln!`. Production logging and CLI output must follow
+  the conventions below.
 - **`///` doc comments on public items.**  Lead with a sentence
   describing what the thing is or does for the consumer; follow with
   any non-obvious behavior (edge cases, contracts, drop semantics).
@@ -660,7 +665,8 @@ OpenRPC spec; in future, any wire-format-stable codegen output):
 - [ ] No `.unwrap()` added outside of tests
 - [ ] No `.expect()` on untrusted input
 - [ ] New `.expect()` messages use `bug:` prefix
-- [ ] No `dbg!()` or debug print statements
+- [ ] No temporary debug output in production code; retained test diagnostics
+  are useful for failure investigation and contain no secrets
 - [ ] All new public items have doc comments
 
 ## Before Opening a PR

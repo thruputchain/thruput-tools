@@ -58,16 +58,19 @@ impl SubmittedTransaction {
         }
     }
 
-    /// Canonical transaction hash returned by submission.
+    /// Signed bytes retained for reconciliation of the original attempt.
+    pub fn signed_transaction(&self) -> &str {
+        &self.tx_hex
+    }
+
+    /// Canonical transaction hash computed before submission.
     pub fn tx_hash(&self) -> TxHash {
         self.tx_hash
     }
 
     /// Wait until the scheduler reports this transaction as pending.
     pub async fn await_pending(&self) -> Result<()> {
-        self.network
-            .await_pending_with_resubmission(self.tx_hash, &self.tx_hex)
-            .await
+        self.network.await_pending(self.tx_hash).await
     }
 
     /// Wait until the indexer exposes this transaction's receipt.
@@ -79,7 +82,7 @@ impl SubmittedTransaction {
 struct NetworkInner {
     rpc_url: Option<String>,
     client: Option<HttpClient>,
-    deploy_entrypoint: Option<ContractEntrypointID>,
+    faucet: tokio::sync::Mutex<Option<crate::manifest::TestAccount>>,
     do_action_entrypoint: Option<ContractEntrypointID>,
     manual_block_producer: Option<ManualBlockProducer>,
 }
@@ -98,7 +101,7 @@ impl fmt::Debug for Network {
 }
 
 impl Network {
-    /// Connect to a live target and resolve the dev-wallet entrypoints.
+    /// Connect to a live target and retain its explicit bootstrap faucet adapter.
     pub(crate) fn connect(
         rpc_url: &str,
         manifest: &RuntimeManifest,
@@ -107,14 +110,6 @@ impl Network {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
-        let deploy_entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .deploy_entrypoint_id()
-            .map_err(|source| TestkitError::Manifest {
-                field: "bootstrap.devWallet.deployEntrypoint",
-                detail: source.to_string(),
-            })?;
         let do_action_entrypoint = manifest
             .bootstrap
             .dev_wallet
@@ -127,7 +122,7 @@ impl Network {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
                 client: Some(client),
-                deploy_entrypoint: Some(deploy_entrypoint),
+                faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
                 do_action_entrypoint: Some(do_action_entrypoint),
                 manual_block_producer,
             }),
@@ -140,7 +135,7 @@ impl Network {
             inner: Arc::new(NetworkInner {
                 rpc_url: None,
                 client: None,
-                deploy_entrypoint: None,
+                faucet: tokio::sync::Mutex::new(None),
                 do_action_entrypoint: None,
                 manual_block_producer: None,
             }),
@@ -195,7 +190,8 @@ impl Network {
         )
         .await
         {
-            Ok(receipt) => Ok(receipt),
+            Ok(receipt) if receipt.tx_hash == tx_hash => Ok(receipt),
+            Ok(_) => Err(TestkitError::ReceiptHashMismatch { expected: tx_hash }),
             Err(ReceiptPollError::Lookup { source, .. }) => Err(source),
             Err(_) => Err(TestkitError::ReceiptTimeout {
                 tx_hash: format!("{tx_hash:?}"),
@@ -220,45 +216,16 @@ impl Network {
     /// [`TestkitError::TransactionNotPending`] because the requested nomination
     /// boundary has already passed.
     pub async fn await_pending(&self, tx_hash: TxHash) -> Result<()> {
-        self.await_pending_inner(tx_hash, None).await
+        self.await_pending_inner(tx_hash).await
     }
 
-    pub(crate) async fn await_pending_with_resubmission(
-        &self,
-        tx_hash: TxHash,
-        tx_hex: &str,
-    ) -> Result<()> {
-        self.await_pending_inner(tx_hash, Some(tx_hex)).await
-    }
-
-    async fn await_pending_inner(&self, tx_hash: TxHash, tx_hex: Option<&str>) -> Result<()> {
+    async fn await_pending_inner(&self, tx_hash: TxHash) -> Result<()> {
         let mut last_status = TransactionStatus::Unknown;
-        let mut resubmitted = false;
         for _ in 0..PENDING_POLL_ATTEMPTS {
             let status = self.transaction_status(tx_hash).await?;
             match classify_pending_status(&status) {
                 PendingStatusClassification::Ready => return Ok(()),
                 PendingStatusClassification::Retry => {
-                    last_status = status;
-                    tokio::time::sleep(PENDING_POLL_INTERVAL).await;
-                }
-                PendingStatusClassification::Resubmit => {
-                    let Some(tx_hex) = tx_hex else {
-                        return Err(TestkitError::TransactionNotPending {
-                            tx_hash: format!("{tx_hash:?}"),
-                            status,
-                        });
-                    };
-                    if !resubmitted {
-                        let actual = self.submit_raw(tx_hex.to_owned()).await?;
-                        if actual != tx_hash {
-                            return Err(TestkitError::SubmissionHashMismatch {
-                                expected: format!("{tx_hash:?}"),
-                                actual: format!("{actual:?}"),
-                            });
-                        }
-                        resubmitted = true;
-                    }
                     last_status = status;
                     tokio::time::sleep(PENDING_POLL_INTERVAL).await;
                 }
@@ -341,10 +308,32 @@ impl Network {
             .map_err(|e| TestkitError::rpc("getEvents", e))
     }
 
-    pub(crate) fn deploy_entrypoint(&self) -> Result<ContractEntrypointID> {
-        self.inner.deploy_entrypoint.ok_or(TestkitError::Offline {
-            operation: "deploy",
-        })
+    pub(crate) async fn submit_fund(
+        &self,
+        recipient: ContractAddress,
+        amount: u128,
+    ) -> Result<SubmittedTransaction> {
+        self.require_client("fund")?;
+        let calldata = groundhog_signing::native_hog_transfer_calldata(&recipient, amount)
+            .map_err(TestkitError::signing)?;
+        let faucet = self.inner.faucet.lock().await;
+        let faucet = faucet.as_ref().ok_or(TestkitError::MissingFaucet)?;
+        // The bootstrap faucet is shared across scenarios and processes. Its
+        // funding transactions must not replay a deterministic scenario nonce.
+        let mut nonce = [0; 8];
+        getrandom::getrandom(&mut nonce).map_err(|error| {
+            TestkitError::signing(format!("generate faucet transaction nonce: {error}"))
+        })?;
+        let (tx_hash, tx_hex) = crate::account::prepare_call(
+            faucet,
+            self,
+            groundhog_signing::NATIVE_HOG_ADDRESS,
+            groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            &calldata,
+            u64::from_le_bytes(nonce),
+        )?;
+        crate::account::submit_signed(self, tx_hash, &tx_hex).await?;
+        Ok(SubmittedTransaction::new(self.clone(), tx_hash, tx_hex))
     }
 
     pub(crate) fn do_action_entrypoint(&self) -> Result<ContractEntrypointID> {
@@ -379,7 +368,6 @@ impl ReceiptSource for NetworkReceipts<'_> {
 enum PendingStatusClassification {
     Ready,
     Retry,
-    Resubmit,
     Terminal,
 }
 
@@ -387,7 +375,6 @@ fn classify_pending_status(status: &TransactionStatus) -> PendingStatusClassific
     match status {
         TransactionStatus::Pending => PendingStatusClassification::Ready,
         TransactionStatus::Unknown => PendingStatusClassification::Retry,
-        TransactionStatus::RecentFailure { .. } => PendingStatusClassification::Resubmit,
         _ => PendingStatusClassification::Terminal,
     }
 }
@@ -411,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_status_classification_distinguishes_resubmission() {
+    fn pending_status_classification_never_resubmits() {
         assert_eq!(
             classify_pending_status(&TransactionStatus::Pending),
             PendingStatusClassification::Ready
@@ -439,7 +426,7 @@ mod tests {
                     code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
                 },
             }),
-            PendingStatusClassification::Resubmit
+            PendingStatusClassification::Terminal
         );
     }
 
@@ -497,7 +484,7 @@ pub enum NetworkConfig {
     /// Useful for exercising agent coordination, timing, and messaging logic
     /// without a node. Chain verbs return [`crate::TestkitError::Offline`].
     Offline {
-        /// Number of dev accounts to make available to agents.
+        /// Number of empty native accounts to make available to agents.
         accounts: usize,
     },
 }
@@ -534,6 +521,8 @@ pub struct LocalNetworkConfig {
     /// (the `GROUNDHOG_DEVNODE_BINARY` env var, then a sibling of the current
     /// executable, then `PATH`).
     pub hog_devnode_binary: Option<PathBuf>,
+    /// Artifact directories searched before the selected devnode's defaults.
+    pub contract_artifact_directories: Vec<PathBuf>,
     /// Requested public JSON-RPC port; `0` asks the OS to choose.
     pub rpc_port: u16,
     /// Optional protocol token override for `hog-devnode` intro handshakes.
@@ -562,6 +551,7 @@ impl Default for LocalNetworkConfig {
     fn default() -> Self {
         Self {
             hog_devnode_binary: None,
+            contract_artifact_directories: Vec::new(),
             rpc_port: 0,
             hogd_protocol: None,
             log_level: None,

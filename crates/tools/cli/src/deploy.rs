@@ -20,7 +20,7 @@ use crate::account_resolution::resolve_transaction_sender;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
-use crate::network_descriptor::resolve_wallet_signing_context;
+
 use crate::result::{CommandError, CommandResult};
 use crate::terminal::render_shell_arg;
 use crate::tx_utils::{
@@ -30,7 +30,44 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 4;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
+
+/// Explicit native deployment funding and initialization.
+#[derive(Debug, Default)]
+pub struct DeploymentOptions<'a> {
+    /// Exact HOG transfer, including zero to skip funding.
+    pub fund: Option<&'a str>,
+    /// Method name from the artifact spec, or an explicit eight-byte selector.
+    pub init_method: Option<&'a str>,
+    /// Typed method arguments, or one raw hex argument with an explicit selector.
+    pub init_args: &'a [String],
+    /// Initializer gas budget. Defaults to the ordinary call budget.
+    pub init_gas_limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct InitializerReport {
+    method: String,
+    entrypoint_id: String,
+    gas_limit: u64,
+    calldata: HexBytes,
+}
+
+/// Exact effects and identity of a native deployment.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct NativeDeployment {
+    sender: String,
+    network_hash: String,
+    contract_hash: String,
+    deployment_nonce: String,
+    expiry_height: i64,
+    gas_limit: u64,
+    funding_hog: String,
+    funding_raw_amount: String,
+    initializer: Option<InitializerReport>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeployAddressSource {
@@ -41,6 +78,8 @@ pub(crate) enum DeployAddressSource {
 /// Fully prepared deploy submission inputs shared by live execution and dry-run flows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedDeploy {
+    tx_hash: TxHash,
+    native: Option<NativeDeployment>,
     pub(crate) rpc_url: String,
     pub(crate) profile_name: String,
     pub(crate) wallet_name: Option<String>,
@@ -56,6 +95,8 @@ pub(crate) struct PreparedDeploy {
 
 #[derive(Debug)]
 struct DeployPlan {
+    tx_hash: TxHash,
+    native: Option<NativeDeployment>,
     rpc_url: String,
     profile_name: String,
     wallet_name: Option<String>,
@@ -84,6 +125,7 @@ pub(crate) struct SubmittedDeploy {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run(
     artifact_path: Option<&Path>,
+    options: &DeploymentOptions<'_>,
     package: Option<&str>,
     alias: Option<&str>,
     dry_run: bool,
@@ -104,6 +146,7 @@ pub fn run(
         &cwd,
         &resolved,
         artifact_path,
+        options,
         package,
         artifacts,
         wallet,
@@ -119,6 +162,20 @@ pub fn run(
             plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
         );
         print.detail("profile", &plan.profile_name);
+        if let Some(native) = &plan.native {
+            print.detail("RPC", &plan.rpc_url);
+            print.detail("sender", &native.sender);
+            print.detail("network hash", &native.network_hash);
+            print.detail("contract hash", &native.contract_hash);
+            print.detail("deployment nonce", &native.deployment_nonce);
+            print.detail("predicted address", &plan.predicted_address);
+            print.detail("funding HOG", &native.funding_hog);
+            print_initializer(native.initializer.as_ref(), print);
+            print.detail("expiry height", native.expiry_height);
+            print.detail("gas budget", native.gas_limit);
+            print.detail("tx", format_tx_hash(&plan.tx_hash));
+            print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
+        }
         if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
             print.note("Cancelled");
             return Ok(());
@@ -134,7 +191,14 @@ pub fn run(
         prepared.artifact.kind.as_str()
     ));
 
-    let submitted = submit_prepared_deploy_and_resolve(&prepared)?;
+    let submitted = match submit_prepared_deploy_and_resolve(&prepared) {
+        Ok(submitted) => submitted,
+        Err(error) if prepared.native.is_some() => {
+            task.clear();
+            return report_unverified_native_deploy(&prepared, &error, cmd, print);
+        }
+        Err(error) => return Err(error),
+    };
     task.clear();
     let tx_hash = submitted.tx_hash;
     let receipt = submitted.receipt;
@@ -142,10 +206,13 @@ pub fn run(
     let contract_addr_hex = submitted.contract_address;
     let address_source = submitted.address_source;
 
-    // Print result
-    let cwd = std::env::current_dir()?;
+    // Print result using the invocation directory retained before submission.
     let tx_hash_formatted = format_tx_hash(&tx_hash);
-    let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
+    let decoded_abort = if prepared.native.is_some() {
+        None
+    } else {
+        crate::tx_utils::decode_receipt_abort(&receipt, None)
+    };
     let insufficient_funding = is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref());
     match &receipt.status {
         groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
@@ -199,7 +266,7 @@ pub fn run(
             match alias.or(prepared.package_name.as_deref()) {
                 Some(name) => match crate::config::save_profile_contract_alias(
                     &cwd,
-                    profile,
+                    Some(&prepared.profile_name),
                     name,
                     contract_addr_hex,
                 ) {
@@ -261,6 +328,12 @@ pub fn run(
         "walletEntrypointId": prepared.wallet_entrypoint_id,
         "walletEntrypointSource": prepared.wallet_entrypoint_source,
     });
+    if let Some(native) = &prepared.native {
+        data["nativeDeployment"] =
+            serde_json::to_value(native).map_err(|e| CliError::Other(e.to_string()))?;
+        data["predictedAddress"] = json!(prepared.predicted_address);
+        data["rpcUrl"] = json!(prepared.rpc_url);
+    }
     if command_error.is_some() {
         data["returnData"] = json!(receipt.return_data);
         data["abortData"] = json!(receipt.abort_data);
@@ -375,6 +448,20 @@ fn print_dry_run(
         "  predicted address: {}",
         prepared.predicted_address
     ));
+    if let Some(native) = &prepared.native {
+        print.detail("sender", &native.sender);
+        print.detail("network hash", &native.network_hash);
+        print.detail("contract hash", &native.contract_hash);
+        print.detail("deployment nonce", &native.deployment_nonce);
+        print.detail("funding HOG", &native.funding_hog);
+        print_initializer(native.initializer.as_ref(), print);
+        print.detail("expiry height", native.expiry_height);
+        print.detail("gas budget", native.gas_limit);
+        print.warn(
+            "Funding is the authorized transfer, not a minimum-cost estimate or final balance.",
+        );
+    }
+    print.detail("tx", format_tx_hash(&prepared.tx_hash));
     print.status(format_args!("  signed tx: {}", prepared.tx_hex));
     print.status("  submitted: no (--dry-run)");
 
@@ -392,6 +479,8 @@ fn print_dry_run(
             "walletEntrypointId": prepared.wallet_entrypoint_id,
             "walletEntrypointSource": prepared.wallet_entrypoint_source,
             "signedTx": prepared.tx_hex,
+            "txHash": format_tx_hash(&prepared.tx_hash),
+            "nativeDeployment": prepared.native,
         }),
     ))?;
 
@@ -403,6 +492,12 @@ pub(crate) fn submit_prepared_deploy(
     prepared: &PreparedDeploy,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    if prepared.native.is_some() {
+        return rt.block_on(async {
+            let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
+            submit_native_deploy(prepared, &client, groundhog_client::PollOptions::default()).await
+        });
+    }
     rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
 }
 
@@ -414,8 +509,11 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
     let (contract_address, address_source) = match &receipt.status {
         groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
-            let (address, source) =
-                resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
+            let (address, source) = if prepared.native.is_some() {
+                resolve_native_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
+            } else {
+                resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
+            };
             (Some(address), Some(source))
         }
         _ => (None, None),
@@ -434,6 +532,7 @@ fn prepare_deploy_plan(
     cwd: &Path,
     resolved: &ResolvedProfile,
     artifact_path: Option<&Path>,
+    options: &DeploymentOptions<'_>,
     package: Option<&str>,
     artifacts: &ArtifactOptions,
     wallet: Option<&str>,
@@ -468,7 +567,14 @@ fn prepare_deploy_plan(
     };
     let artifact_bytes = std::fs::read(&artifact.path)?;
 
-    prepare_deploy_transaction_plan(artifact, artifact_bytes, package_name, resolved, wallet)
+    prepare_deploy_transaction_plan(
+        artifact,
+        artifact_bytes,
+        package_name,
+        resolved,
+        wallet,
+        options,
+    )
 }
 
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.
@@ -504,6 +610,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         None,
         &profile,
         None,
+        &DeploymentOptions::default(),
     )?)
 }
 
@@ -514,12 +621,51 @@ fn prepare_deploy_transaction_plan(
     package_name: Option<String>,
     profile: &ResolvedProfile,
     selected_wallet: Option<&str>,
+    options: &DeploymentOptions<'_>,
 ) -> Result<DeployPlan, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    if options.init_method.is_none()
+        && (!options.init_args.is_empty() || options.init_gas_limit.is_some())
+    {
+        return Err(CliError::InvalidDeploymentInitializer {
+            message: "initializer arguments and gas require --init <METHOD>".into(),
+        });
+    }
+    if options.init_gas_limit == Some(0) {
+        return Err(CliError::InvalidDeploymentInitializer {
+            message: "initializer gas must be greater than zero".into(),
+        });
+    }
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let sender = resolve_transaction_sender(profile, selected_wallet)?;
+    let funding = resolve_native_funding(sender.native_account.is_some(), options.fund)?;
+
+    if sender.native_account.is_none() && options.init_method.is_some() {
+        return Err(CliError::NativeDeploymentOptionsForLegacy);
+    }
+    let init_call = options
+        .init_method
+        .map(|method| {
+            let resolved = crate::call::resolve_artifact_call(&artifact.path, method)?;
+            let calldata =
+                crate::codec::encode_args(options.init_args, resolved.metadata.as_ref())?;
+            Ok::<_, CliError>((resolved.entrypoint, calldata))
+        })
+        .transpose()?;
+    let init_gas_limit = options
+        .init_gas_limit
+        .unwrap_or(crate::call::DEFAULT_CALL_GAS_LIMIT);
+    let gas_limit = if init_call.is_some() {
+        DEFAULT_TX_GAS_LIMIT
+            .checked_add(init_gas_limit)
+            .ok_or_else(|| CliError::InvalidDeploymentInitializer {
+                message: "initializer gas plus deployment budget exceeds u64".into(),
+            })?
+    } else {
+        DEFAULT_TX_GAS_LIMIT
+    };
 
     let artifact_bytes_len = artifact_bytes.len();
     let wallet_address = sender.wallet_address;
@@ -546,32 +692,70 @@ fn prepare_deploy_transaction_plan(
     let predicted_address = derive_deploy_address(&wallet_address, &deploy_nonce, &contract_hash)
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    // Calldata = CXS-encoded (nonce, contract_hash) — matches wallet deploy signature.
-    // Must use CXS encoding (not txs) because the #[contract] macro
-    // deserializes calldata with xdrs::cxs::decode.
-    let calldata = xdrs::cxs::encode(&(&deploy_nonce, &contract_hash))
-        .map_err(|e| CliError::Other(format!("failed to encode deploy calldata: {e}")))?;
-
-    // Auth claim: source-address auth data at key slot 0.
-    let auth_claim = source_address_auth_claim();
-
-    let wallet_context =
-        resolve_wallet_signing_context(profile, &sender.key_name, sender.network_hash, &rt)?;
-
+    let wallet_context = sender.signing_context(profile, &rt)?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
-
-    let tx = build_deploy_transaction(BuildDeployTransaction {
-        invoked_address: wallet_address,
-        entrypoint: wallet_context.entrypoints.deploy,
-        calldata,
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height,
-        nonce: deploy_nonce_val,
-        contracts_to_deploy: VecM(vec![contract]),
-        auth_claim,
+    let tx = if let Some(account) = &sender.native_account {
+        groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
+            groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
+                account,
+                deployment_nonce: deploy_nonce,
+                code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+                amount: funding.expect("bug: native funding validated above"),
+                initializer: init_call.as_ref().map(|(entrypoint, calldata)| {
+                    groundhog_signing::default_wallet::WalletInitCall {
+                        entrypoint: *entrypoint,
+                        gas_limit: init_gas_limit,
+                        calldata,
+                    }
+                }),
+                gas_limit,
+                block_expiry_height,
+                nonce: deploy_nonce_val,
+            },
+        )
+        .map_err(|e| CliError::Other(e.to_string()))?
+    } else {
+        let calldata = xdrs::cxs::encode(&(&deploy_nonce, &contract_hash))
+            .map_err(|e| CliError::Other(format!("failed to encode deploy calldata: {e}")))?;
+        build_deploy_transaction(BuildDeployTransaction {
+            invoked_address: wallet_address,
+            entrypoint: wallet_context.entrypoints.deploy,
+            calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height,
+            nonce: deploy_nonce_val,
+            contracts_to_deploy: VecM(vec![contract]),
+            auth_claim: source_address_auth_claim(),
+        })
+    };
+    let tx_hash = TxHash(
+        groundhog_signing::transaction_hash(&tx)
+            .map_err(|e| CliError::Other(e.to_string()))?
+            .into(),
+    );
+    let native = funding.map(|amount| NativeDeployment {
+        sender: crate::codec::format_contract_address(&wallet_address),
+        network_hash: format!("0x{}", hex::encode(wallet_context.network_hash.as_ref())),
+        contract_hash: format!("0x{}", hex::encode(contract_hash.as_ref())),
+        deployment_nonce: format!("0x{}", hex::encode(deploy_nonce.as_ref())),
+        expiry_height: block_expiry_height,
+        gas_limit,
+        funding_hog: crate::hog::format_amount(amount),
+        funding_raw_amount: amount.to_string(),
+        initializer: init_call.map(|(entrypoint, calldata)| InitializerReport {
+            method: options
+                .init_method
+                .expect("bug: initializer was resolved")
+                .to_owned(),
+            entrypoint_id: crate::call::format_entrypoint_id(entrypoint),
+            gas_limit: init_gas_limit,
+            calldata: HexBytes(calldata),
+        }),
     });
 
     Ok(DeployPlan {
+        tx_hash,
+        native,
         rpc_url: rpc_url.to_owned(),
         profile_name: profile.name.clone(),
         wallet_name: sender.wallet_name,
@@ -600,6 +784,8 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
     Ok(PreparedDeploy {
+        tx_hash: plan.tx_hash,
+        native: plan.native,
         rpc_url: plan.rpc_url,
         profile_name: plan.profile_name,
         wallet_name: plan.wallet_name,
@@ -612,6 +798,116 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
         tx_hex,
         package_name: plan.package_name,
     })
+}
+
+fn print_initializer(initializer: Option<&InitializerReport>, print: &Print) {
+    if let Some(initializer) = initializer {
+        print.detail("initializer", &initializer.method);
+        print.detail("initializer entrypoint", &initializer.entrypoint_id);
+        print.detail("initializer gas", initializer.gas_limit);
+        print.detail(
+            "initializer calldata",
+            format!("0x{}", hex::encode(&initializer.calldata.0)),
+        );
+    }
+}
+
+fn resolve_native_funding(native: bool, fund: Option<&str>) -> Result<Option<u128>, CliError> {
+    if !native {
+        if fund.is_some() {
+            return Err(CliError::NativeDeploymentOptionsForLegacy);
+        }
+        return Ok(None);
+    }
+    let amount = fund.ok_or(CliError::NativeDeploymentFundingRequired)?;
+    match groundhog_signing::parse_hog_amount(amount) {
+        Ok(amount) => Ok(Some(amount)),
+        Err(groundhog_signing::ParseHogAmountError::Zero) => Ok(Some(0)),
+        Err(error) => Err(CliError::InvalidHogAmount {
+            input: amount.trim().to_owned(),
+            message: error.to_string(),
+        }),
+    }
+}
+
+async fn submit_native_deploy(
+    prepared: &PreparedDeploy,
+    client: &(impl jsonrpsee::core::client::ClientT + Sync),
+    polling: groundhog_client::PollOptions,
+) -> Result<(TxHash, TransactionReceipt), CliError> {
+    let returned =
+        groundhog_json_rpc_client::submit_transaction_with_client(client, &prepared.tx_hex)
+            .await
+            .map_err(|error| CliError::RpcMethodFailed {
+                method: "sendRawTransaction",
+                message: crate::tx_utils::rpc_error_message(&error),
+            })?;
+    if returned != prepared.tx_hash {
+        return Err(CliError::NativeDeploymentUnverified {
+            message: format!(
+                "endpoint returned {}, expected {}",
+                format_tx_hash(&returned),
+                format_tx_hash(&prepared.tx_hash)
+            ),
+        });
+    }
+    let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+        client,
+        prepared.tx_hash,
+        polling.max_attempts,
+        polling.interval,
+    )
+    .await
+    .map_err(crate::tx_utils::map_poll_receipt_error)?;
+    if receipt.tx_hash != prepared.tx_hash {
+        return Err(CliError::NativeDeploymentUnverified {
+            message: "receipt hash does not match the submitted transaction".into(),
+        });
+    }
+    Ok((prepared.tx_hash, receipt))
+}
+
+fn resolve_native_deployed_address(
+    return_data: Option<&HexBytes>,
+    predicted: &ContractAddress,
+) -> Result<(String, DeployAddressSource), CliError> {
+    match return_data {
+        Some(data) if data.0.as_slice() == predicted.as_ref() => Ok((crate::codec::format_contract_address(predicted), DeployAddressSource::Receipt)),
+        _ => Err(CliError::NativeDeploymentUnverified { message: "successful receipt must return the exact predicted 32-byte contract address; alias was not saved".into() }),
+    }
+}
+
+fn report_unverified_native_deploy(
+    prepared: &PreparedDeploy,
+    error: &CliError,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let tx_hash = format_tx_hash(&prepared.tx_hash);
+    let inspect = format!(
+        "groundhog tx show {tx_hash} {} {}",
+        render_shell_arg(&format!("--profile={}", prepared.profile_name)),
+        render_shell_arg(&format!("--rpc-url={}", prepared.rpc_url))
+    );
+    let hint = format!(
+        "reconcile the original transaction with `{inspect}` before another deployment; rerunning deploy generates a new nonce and address. A timeout or unknown status does not prove failure"
+    );
+    print.warn(error.to_string());
+    print.detail("tx", &tx_hash);
+    print.detail("predicted address", &prepared.predicted_address);
+    print.detail("signed tx", &prepared.tx_hex);
+    print.note(&hint);
+    print.json(&CommandResult::failure_with_error(
+        cmd,
+        json!({
+            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION, "confirmation": "unverified",
+            "txHash": tx_hash, "rpcUrl": prepared.rpc_url, "profile": prepared.profile_name,
+            "predictedAddress": prepared.predicted_address, "signedTx": prepared.tx_hex,
+            "nativeDeployment": prepared.native,
+        }),
+        CommandError::from_cli_error(error).with_hint(hint),
+    ))?;
+    Err(CliError::CommandReportedFailure)
 }
 
 /// Parse a `0x`-prefixed hex string into a 32-byte array.
@@ -721,6 +1017,70 @@ mod tests {
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serial_test::serial;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn native_poll_timeout_does_not_resubmit() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let submissions = Arc::new(AtomicUsize::new(0));
+        let server = jsonrpsee::server::ServerBuilder::default()
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let url = format!("http://{}", server.local_addr().unwrap());
+        let mut module = jsonrpsee::RpcModule::new(submissions.clone());
+        let hash = TxHash(Hex0x(SHA256Hash::from([1; 32])));
+        module
+            .register_method("groundhog_sendRawTransaction", move |_, state, _| {
+                state.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, jsonrpsee::types::ErrorObjectOwned>(hash)
+            })
+            .unwrap();
+        module
+            .register_method("groundhog_getTransactionReceipt", |_, _, _| {
+                None::<TransactionReceipt>
+            })
+            .unwrap();
+        let handle = server.start(module);
+        let client = crate::http_client::rpc_client(&url).unwrap();
+        let prepared = PreparedDeploy {
+            tx_hash: hash,
+            native: None,
+            rpc_url: url,
+            profile_name: "test".into(),
+            wallet_name: None,
+            wallet_address: String::new(),
+            artifact: crate::artifacts::ResolvedArtifact {
+                kind: ArtifactKind::Rv32,
+                path: std::path::PathBuf::new(),
+            },
+            artifact_bytes_len: 0,
+            predicted_address: String::new(),
+            wallet_entrypoint_id: String::new(),
+            wallet_entrypoint_source: "test",
+            tx_hex: "0x00".into(),
+            package_name: None,
+        };
+        let error = super::submit_native_deploy(
+            &prepared,
+            &client,
+            groundhog_client::PollOptions {
+                max_attempts: 1,
+                interval: std::time::Duration::ZERO,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(submissions.load(Ordering::SeqCst), 1);
+        assert!(
+            error
+                .to_string()
+                .contains(&crate::tx_utils::format_tx_hash(&hash))
+        );
+        handle.stop().unwrap();
+    }
 
     #[test]
     fn hex_to_32_bytes_parses_prefixed_hex() {
@@ -866,6 +1226,8 @@ mod tests {
     #[test]
     fn funding_commands_support_option_like_wallet_and_profile_names() {
         let prepared = PreparedDeploy {
+            tx_hash: TxHash(Hex0x(SHA256Hash::from([0; 32]))),
+            native: None,
             rpc_url: String::new(),
             profile_name: "-preview".into(),
             wallet_name: Some("-alice".into()),

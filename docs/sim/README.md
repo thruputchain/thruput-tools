@@ -304,14 +304,14 @@ is part of generator overhead. Refresh failures or regressing heights stop the
 run; signing also rejects observations at least 60 seconds old and height overflow.
 
 Native artifact deployment requires an explicit `accounts.deploymentCollateralRaw`
-budget, transferred from actor zero to each predicted contract address before
-deployment. For example, `"10000000"` transfers one HOG per deployment. Both
-transfer and deployment must commit successfully; deployment records retain the
-collateral amount, recipient, expected transaction hash, returned hash, and committed
-height. The event log checkpoints the signed hash before submission so ambiguous
-transport failures can be reconciled. Choose
-funding for the artifact's deployment/storage cost and the actor's remaining
-balance; the budget is not inferred from a stale cost-model snapshot.
+amount. Actor zero transfers it to the new contract atomically with code deployment
+using the current native wallet ABI (no initializer). For example, `"10000000"`
+transfers one HOG. A deployment record retains the amount and recipient plus one
+transaction hash and commit height. The event log records the canonical hash before
+submission; ambiguous outcomes must be reconciled before another attempt. Successful
+native receipts must match that hash and return the exact predicted address.
+Choose funding for deployment/storage costs and actor capacity; this is not an
+estimate from a stale cost-model snapshot. The runtime must support this deployment ABI.
 
 Without `accounts`, existing local bootstrap scenarios retain their legacy
 wallet addresses, setup, and admission-only smoke semantics. Native settings

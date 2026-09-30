@@ -115,18 +115,6 @@ fn rv32_lower_failed_details_json_keeps_the_message_field() {
 
 #[test]
 fn generated_command_hints_quote_dynamic_arguments() {
-    let error = CliError::SavedWalletMissing {
-        key_name: "-alice;echo bad\n".into(),
-        profile: "-dev&net\u{202e}".into(),
-    };
-    let rendered = error.to_string();
-    assert!(!rendered.contains('\n'));
-    assert!(!rendered.contains('\u{202e}'));
-    assert_eq!(
-        hint(&error),
-        r"run `groundhog wallet create --key='-alice;echo bad\n' --profile='-dev&net\u{202e}'` before using this stored key"
-    );
-
     let error = CliError::NodeSupervisorProtocolIntroRejected {
         message: "rejected".into(),
         expected_protocol: Some("hogp/test;echo bad".into()),

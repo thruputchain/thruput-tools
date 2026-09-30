@@ -26,9 +26,18 @@ pub struct ScenarioBuilder {
     seed: String,
     network: Option<NetworkConfig>,
     artifacts: Vec<ArtifactSpec>,
+    legacy_accounts: bool,
 }
 
 impl ScenarioBuilder {
+    /// Use the manifest's existing legacy dev-N wallet identities explicitly.
+    /// These accounts support calls; deployment requires native accounts.
+    #[must_use]
+    pub fn legacy_bootstrap_accounts(mut self) -> Self {
+        self.legacy_accounts = true;
+        self
+    }
+
     /// Set the network the scenario runs against. Required.
     #[must_use]
     pub fn network(mut self, network: NetworkConfig) -> Self {
@@ -85,7 +94,8 @@ impl ScenarioBuilder {
     pub async fn build(self) -> Result<Scenario> {
         let config = self.network.ok_or(TestkitError::NoNetwork)?;
         let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
-        let (network, accounts, guard) = acquire_network(config).await?;
+        let (network, accounts, guard) =
+            acquire_network(config, &self.seed, self.legacy_accounts).await?;
         Ok(Scenario {
             seed: self.seed,
             network,
@@ -124,6 +134,7 @@ impl Scenario {
             seed: seed.into(),
             network: None,
             artifacts: Vec::new(),
+            legacy_accounts: false,
         }
     }
 
@@ -139,14 +150,14 @@ impl Scenario {
 
     /// Run a set of agents concurrently, returning once all have finished.
     ///
-    /// Each agent is assigned a distinct funded account (by position), its own
+    /// Each agent is assigned a distinct account (by position), its own
     /// deterministic random stream, and a mailbox. After every non-panicking
     /// agent finishes, returned errors are aggregated in
     /// [`TestkitError::AgentsFailed`]. An agent panic (for example a failed
     /// assertion) propagates immediately.
     ///
     /// May be called more than once on the same scenario: each call runs in a
-    /// fresh nonce namespace, so a later run against the same dev accounts does
+    /// fresh nonce namespace, so a later run against the same accounts does
     /// not collide with an earlier run's transactions.
     pub async fn run_agents<I>(&self, agents: I) -> Result<ScenarioReport>
     where
@@ -158,14 +169,14 @@ impl Scenario {
         let names: Vec<Arc<str>> = agents.iter().map(Agent::name_arc).collect();
         validate_unique_agent_names(&names)?;
 
-        let mut dev_accounts = self.accounts.accounts()?;
-        if count > dev_accounts.len() {
+        let mut test_accounts = self.accounts.accounts()?;
+        if count > test_accounts.len() {
             return Err(TestkitError::NotEnoughAccounts {
                 needed: count,
-                available: dev_accounts.len(),
+                available: test_accounts.len(),
             });
         }
-        dev_accounts.truncate(count);
+        test_accounts.truncate(count);
 
         // Each run writes in its own nonce namespace so a rerun against the
         // same accounts does not replay an earlier run's nonces.
@@ -184,7 +195,7 @@ impl Scenario {
         for (index, ((agent, inbox), dev)) in agents
             .into_iter()
             .zip(receivers)
-            .zip(dev_accounts)
+            .zip(test_accounts)
             .enumerate()
         {
             let mut peers = HashMap::with_capacity(count.saturating_sub(1));
@@ -290,7 +301,11 @@ fn validate_unique_agent_names(names: &[Arc<str>]) -> Result<()> {
     Ok(())
 }
 
-async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSource, NetworkGuard)> {
+async fn acquire_network(
+    config: NetworkConfig,
+    seed: &str,
+    legacy_accounts: bool,
+) -> Result<(Network, AccountSource, NetworkGuard)> {
     match config {
         NetworkConfig::Existing {
             rpc_url,
@@ -300,7 +315,7 @@ async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSourc
             let network = Network::connect(&rpc_url, &manifest, None)?;
             Ok((
                 network,
-                AccountSource::Manifest(Box::new(manifest)),
+                account_source(manifest, seed, legacy_accounts),
                 NetworkGuard::Existing,
             ))
         }
@@ -316,15 +331,34 @@ async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSourc
             let network = Network::connect(&rpc_url, &manifest, manual_block_producer)?;
             Ok((
                 network,
-                AccountSource::Manifest(Box::new(manifest)),
+                account_source(manifest, seed, legacy_accounts),
                 NetworkGuard::Local(Box::new(handle)),
             ))
         }
         NetworkConfig::Offline { accounts } => Ok((
             Network::offline(),
-            AccountSource::Offline { count: accounts },
+            AccountSource::Native {
+                count: accounts,
+                seed: seed.to_owned(),
+                network_hash: None,
+            },
             NetworkGuard::Existing,
         )),
+    }
+}
+
+fn account_source(
+    manifest: groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
+    seed: &str,
+    legacy: bool,
+) -> AccountSource {
+    if legacy {
+        AccountSource::Manifest(Box::new(manifest))
+    } else {
+        AccountSource::Native {
+            count: manifest.bootstrap_accounts.iter().filter(|account| account.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER).count(),
+            seed: seed.to_owned(), network_hash: Some(manifest.network_hash.to_network_hash()),
+        }
     }
 }
 
@@ -334,7 +368,8 @@ async fn start_local(config: LocalNetworkConfig) -> Result<NodeSupervisorHandle>
         .with_dev_account_count(config.dev_account_count)
         .with_dev_account_seed(config.dev_account_seed)
         .with_dev_account_tokens(config.dev_account_tokens)
-        .with_startup_timeout(config.startup_timeout);
+        .with_startup_timeout(config.startup_timeout)
+        .with_contract_artifact_directories(config.contract_artifact_directories);
     if let Some(binary) = config.hog_devnode_binary {
         hogd = hogd.with_binary_path(binary);
     }

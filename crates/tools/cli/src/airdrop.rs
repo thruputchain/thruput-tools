@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::account_resolution::{
-    LocalBootstrapRole, lookup_dev_account_address, resolve_address_target_or_default_wallet,
+    LocalBootstrapRole, resolve_address_target, resolve_address_target_or_default_wallet,
     resolve_local_bootstrap_account,
 };
 use crate::balance::{
@@ -27,7 +26,6 @@ use crate::balance::{
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
-use crate::dev_keys;
 use crate::hog;
 use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
 use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
@@ -139,6 +137,12 @@ struct LoadedRemoteAirdropAttempt {
     path: PathBuf,
 }
 
+#[derive(Debug)]
+struct AirdropRecipient {
+    input: String,
+    wallet: String,
+}
+
 #[expect(clippy::too_many_arguments, reason = "CLI command boundary")]
 pub fn run(
     recipient: Option<&str>,
@@ -153,12 +157,18 @@ pub fn run(
     let cwd = std::env::current_dir()?;
     let resolve_profile = || resolve_profile_with_overrides(&cwd, profile_name, overrides);
     // Only a defaulted recipient needs the profile before the confirmation preflight.
-    let (profile, recipient) = if let Some(recipient) = recipient {
-        (None, Cow::Borrowed(recipient))
+    let (profile, default_recipient) = if recipient.is_some() {
+        (None, None)
     } else {
         let profile = resolve_profile()?;
-        let recipient = resolve_address_target_or_default_wallet(&profile, None)?.0;
-        (Some(profile), Cow::Owned(recipient))
+        let (input, address) = resolve_address_target_or_default_wallet(&profile, None)?;
+        (
+            Some(profile),
+            Some(AirdropRecipient {
+                input,
+                wallet: format_contract_address(&address),
+            }),
+        )
     };
     if !dry_run {
         print.require_confirmation_available(force, "request an airdrop")?;
@@ -167,13 +177,20 @@ pub fn run(
         Some(profile) => profile,
         None => resolve_profile()?,
     };
-    if dry_run
-        && let Some(prepared) =
-            prepare_remote_airdrop_dry_run(recipient.as_ref(), amount, &profile)?
+    let recipient = if let Some(recipient) = default_recipient {
+        recipient
+    } else {
+        let input = recipient.expect("bug: explicit or default recipient must exist");
+        AirdropRecipient {
+            input: input.to_owned(),
+            wallet: resolve_airdrop_recipient(&profile, input)?,
+        }
+    };
+    if dry_run && let Some(prepared) = prepare_remote_airdrop_dry_run(&recipient, amount, &profile)?
     {
         return print_remote_dry_run(&prepared, cmd, print);
     }
-    let plan = prepare_airdrop_plan(profile, recipient.as_ref(), amount)?;
+    let plan = prepare_airdrop_plan(profile, &recipient, amount)?;
     if !dry_run {
         print_airdrop_plan(&plan, print);
         if !print.confirm(force, "request an airdrop", "Request this airdrop?")? {
@@ -196,7 +213,7 @@ pub fn run(
 }
 
 fn prepare_remote_airdrop_dry_run(
-    recipient: &str,
+    recipient: &AirdropRecipient,
     amount: Option<&str>,
     profile: &ResolvedProfile,
 ) -> Result<Option<PreparedRemoteAirdropDryRun>, CliError> {
@@ -222,13 +239,12 @@ fn prepare_remote_airdrop_dry_run(
         .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?
         .trim_end_matches('/')
         .to_owned();
-    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
-    parse_contract_address(&recipient_wallet)?;
+    let recipient_wallet = recipient.wallet.clone();
 
     Ok(Some(PreparedRemoteAirdropDryRun {
         faucet_url,
         rpc_url,
-        recipient_input: recipient.to_owned(),
+        recipient_input: recipient.input.clone(),
         recipient_wallet,
     }))
 }
@@ -343,7 +359,7 @@ fn print_airdrop_plan(plan: &AirdropPlan, print: &Print) {
 
 fn prepare_local_airdrop_plan(
     profile: &ResolvedProfile,
-    recipient: &str,
+    recipient: &AirdropRecipient,
     amount: Option<&str>,
 ) -> Result<LocalAirdropPlan, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
@@ -354,8 +370,7 @@ fn prepare_local_airdrop_plan(
         .dev_wallet
         .do_action_entrypoint_id()
         .map_err(|error| CliError::Other(error.to_string()))?;
-    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
-    parse_contract_address(&recipient_wallet)?;
+    let recipient_wallet = recipient.wallet.clone();
     let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
     let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
     let faucet_wallet = format_contract_address(&faucet.wallet_address);
@@ -400,7 +415,7 @@ fn prepare_local_airdrop_plan(
     Ok(LocalAirdropPlan {
         rpc_url: rpc_url.to_owned(),
         profile_name: profile.name.clone(),
-        recipient_input: recipient.to_owned(),
+        recipient_input: recipient.input.clone(),
         recipient_wallet,
         amount_hog: hog::format_amount(raw_amount),
         raw_amount,
@@ -591,7 +606,7 @@ fn print_remote_airdrop_policy(
 
 fn prepare_airdrop_plan(
     profile: ResolvedProfile,
-    recipient: &str,
+    recipient: &AirdropRecipient,
     amount: Option<&str>,
 ) -> Result<AirdropPlan, CliError> {
     match resolve_faucet_backend(&profile, "airdrop")? {
@@ -611,7 +626,7 @@ fn prepare_airdrop_plan(
 
 fn prepare_remote_airdrop_plan(
     profile: ResolvedProfile,
-    recipient: &str,
+    recipient: &AirdropRecipient,
 ) -> Result<AirdropPlan, CliError> {
     let rpc_url = profile
         .rpc_url
@@ -623,13 +638,12 @@ fn prepare_remote_airdrop_plan(
         .as_deref()
         .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?;
     let faucet_url = faucet_url.trim_end_matches('/').to_owned();
-    let recipient_wallet = resolve_airdrop_recipient(&profile, recipient)?;
-    parse_contract_address(&recipient_wallet)?;
+    let recipient_wallet = recipient.wallet.clone();
     let descriptor = fetch_remote_airdrop_descriptor(&profile)?;
     Ok(AirdropPlan::Remote(Box::new(RemoteAirdropPlan {
         profile_name: profile.name.clone(),
         profile,
-        recipient_input: recipient.to_owned(),
+        recipient_input: recipient.input.clone(),
         recipient_wallet,
         faucet_url,
         rpc_url,
@@ -837,24 +851,19 @@ fn resolve_airdrop_recipient(
     profile: &ResolvedProfile,
     recipient: &str,
 ) -> Result<String, CliError> {
-    if let Some(wallet) = profile.resolve_wallet(recipient) {
-        return parse_contract_address(&wallet).map(|address| format_contract_address(&address));
+    match resolve_address_target(profile, recipient) {
+        Ok(address) => Ok(format_contract_address(&address)),
+        Err(CliError::InvalidAddressTarget { .. }) => Err(CliError::Other(
+            "wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
+                .into(),
+        )),
+        Err(CliError::UnknownAddressTarget { .. }) => Err(CliError::Other(format!(
+            "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
+            crate::terminal::terminal_safe(recipient),
+            crate::terminal::render_shell_arg(recipient),
+        ))),
+        Err(error) => Err(error),
     }
-    if crate::account_resolution::looks_like_address_literal(recipient) {
-        let address = parse_contract_address(recipient).map_err(|_| {
-            CliError::Other("wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x".into())
-        })?;
-        return Ok(format_contract_address(&address));
-    }
-    if let Some(index) = dev_keys::dev_key_index(recipient) {
-        let address = lookup_dev_account_address(profile, recipient, index)?;
-        return Ok(format_contract_address(&address.0));
-    }
-    Err(CliError::Other(format!(
-        "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
-        crate::terminal::terminal_safe(recipient),
-        crate::terminal::render_shell_arg(recipient),
-    )))
 }
 
 fn print_dry_run(
@@ -1008,6 +1017,8 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: format!("0x{}", "aB".repeat(32)),
                 owner_public_key: format!("0x{}", "ef".repeat(32)),
             },
@@ -1189,6 +1200,8 @@ mod tests {
         wallets.insert(
             "alice".into(),
             SavedWalletBinding {
+                kind: crate::config::WalletKind::DevWallet,
+                account_nonce: None,
                 address: format!("0x{}", "ab".repeat(32)),
                 owner_public_key: format!("0x{}", "ef".repeat(32)),
             },

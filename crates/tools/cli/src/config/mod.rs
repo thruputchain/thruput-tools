@@ -31,14 +31,16 @@ pub use mutate::{
 };
 pub(crate) use mutate::{prepare_profile_removal, remove_confirmed_profile};
 pub use project::{
-    Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding,
+    Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding, WalletKind,
     active_profile_name, find_project_config, load_project_profiles, parse_contract_alias,
     remove_profile_wallet_address, resolve_default_key, resolve_default_key_for_profile,
     resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
     save_profile_default_wallet, save_profile_wallet_address,
     save_profile_wallet_address_with_default,
 };
-pub(crate) use project::{prepare_profile_wallet_removal, remove_prepared_profile_wallet};
+pub(crate) use project::{
+    prepare_profile_wallet_removal, remove_prepared_profile_wallet, save_native_wallet,
+};
 pub use read::{
     CONFIG_GET_JSON_SCHEMA_VERSION, CONFIG_PROFILES_JSON_SCHEMA_VERSION, ConfigField,
     ConfigFieldValue, ConfigGetReport, ConfigProfileRow, ConfigProfileStatus, ConfigProfilesReport,

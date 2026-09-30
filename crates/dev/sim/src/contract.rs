@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_client::poll_receipt;
 use groundhog_json_rpc_types::{
-    hex::HexBytes, receipt::ExecStatus, runtime_manifest::RuntimeManifest, transaction::TxHash,
+    hex::HexBytes,
+    receipt::{ExecStatus, TransactionReceipt},
+    runtime_manifest::RuntimeManifest,
+    transaction::TxHash,
 };
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
@@ -142,7 +145,7 @@ where
         "contract deploy requires actor 0".into(),
     ))?;
     let deploy_entrypoint = if actor.wallet_kind == WalletKind::NativePubkey {
-        crate::native::DEPLOY
+        groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
     } else {
         runtime_manifest
         .bootstrap
@@ -244,21 +247,12 @@ where
         error: None,
     };
 
-    // Reserve the transfer nonce first so the deployment retains a distinct
-    // nonce/address while its collateral is committed in a preceding transaction.
-    let collateral_nonce = if actor.wallet_kind == WalletKind::NativePubkey {
-        let nonce = actor.current_nonce()?;
-        actor.consume_setup_nonce()?;
-        Some(nonce)
-    } else {
-        None
-    };
-
     let prepared = match prepare_deploy(
         &artifact_path,
         actor,
         input.deploy_entrypoint,
         input.block_expiry_height,
+        input.collateral_raw,
     ) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -270,25 +264,12 @@ where
     record.contract_hash = Some(prepared.contract_hash.clone());
     record.nonce = Some(prepared.tx_nonce.to_string());
     record.deploy_address_nonce = Some(prepared.deploy_address_nonce.clone());
-    if let Some(nonce) = collateral_nonce {
-        let amount = input
-            .collateral_raw
-            .ok_or_else(|| SimError::Executor("native deploy collateral is missing".into()))?
-            .parse::<u128>()
-            .map_err(|_| SimError::Executor("invalid native deploy collateral".into()))?;
-        if let Err(error) = fund_native_deployment(
-            client.clone(),
-            actor,
-            nonce,
-            input.block_expiry_height,
-            (prepared.predicted_address, amount),
-            &mut record,
-            event_writer,
-        )
-        .await
-        {
-            return fail_deployment(record, event_writer, error.to_string()).await;
-        }
+    if let Some(amount) = prepared.native_amount {
+        record.tx_hash = Some(json_string(&prepared.tx_hash, "deployment txHash")?);
+        record.collateral = Some(crate::result::NativeDeploymentCollateral {
+            recipient: format!("0x{}", hex::encode(prepared.predicted_address.as_ref())),
+            raw_amount: amount.to_string(),
+        });
     }
     event_writer
         .write(&ResultEvent::ContractDeployStarted {
@@ -377,6 +358,8 @@ fn resolve_artifact_path(
 }
 
 struct PreparedDeploy {
+    tx_hash: TxHash,
+    native_amount: Option<u128>,
     tx_hex: String,
     tx_nonce: u64,
     predicted_address: ContractAddress,
@@ -390,6 +373,7 @@ fn prepare_deploy(
     actor: &ActorState,
     deploy_entrypoint: ContractEntrypointID,
     block_expiry_height: i64,
+    collateral_raw: Option<&str>,
 ) -> Result<PreparedDeploy, SimError> {
     let artifact_bytes = std::fs::read(artifact_path)?;
     let artifact_sha256 = sha256_prefixed_hex(&artifact_bytes);
@@ -409,20 +393,55 @@ fn prepare_deploy(
     let predicted_address =
         derive_deploy_address(&actor.wallet_address, &deploy_address_nonce, &contract_hash)
             .map_err(|source| SimError::Executor(source.to_string()))?;
-    let calldata =
-        xdrs::cxs::encode(&(&deploy_address_nonce, &contract_hash)).map_err(|error| {
-            SimError::Executor(format!("failed to encode deploy calldata: {error}"))
-        })?;
-    let tx = build_deploy_transaction(BuildDeployTransaction {
-        invoked_address: actor.wallet_address,
-        entrypoint: deploy_entrypoint,
-        calldata,
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height,
-        nonce: tx_nonce,
-        contracts_to_deploy: VecM(vec![contract]),
-        auth_claim: actor.auth_claim(),
-    });
+    let native_amount = if actor.wallet_kind == WalletKind::NativePubkey {
+        Some(
+            collateral_raw
+                .ok_or_else(|| SimError::Executor("native deploy collateral is missing".into()))?
+                .parse::<u128>()
+                .map_err(|_| SimError::Executor("invalid native deploy collateral".into()))?,
+        )
+    } else {
+        None
+    };
+    let tx = if let Some(amount) = native_amount {
+        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+            actor.signer.verifying_key_bytes(),
+            0,
+        );
+        groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
+            groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
+                account: &account,
+                deployment_nonce: deploy_address_nonce,
+                code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+                amount,
+                initializer: None,
+                gas_limit: DEFAULT_TX_GAS_LIMIT,
+                block_expiry_height,
+                nonce: tx_nonce,
+            },
+        )
+        .map_err(|error| SimError::Executor(error.to_string()))?
+    } else {
+        let calldata =
+            xdrs::cxs::encode(&(&deploy_address_nonce, &contract_hash)).map_err(|error| {
+                SimError::Executor(format!("failed to encode deploy calldata: {error}"))
+            })?;
+        build_deploy_transaction(BuildDeployTransaction {
+            invoked_address: actor.wallet_address,
+            entrypoint: deploy_entrypoint,
+            calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height,
+            nonce: tx_nonce,
+            contracts_to_deploy: VecM(vec![contract]),
+            auth_claim: actor.auth_claim(),
+        })
+    };
+    let tx_hash = TxHash(
+        groundhog_signing::transaction_hash(&tx)
+            .map_err(|error| SimError::Executor(error.to_string()))?
+            .into(),
+    );
     let tx_hex = sign_and_encode_transaction_hex(
         tx,
         &actor.signer,
@@ -432,6 +451,8 @@ fn prepare_deploy(
     .map_err(|source| SimError::Executor(source.to_string()))?;
 
     Ok(PreparedDeploy {
+        tx_hash,
+        native_amount,
         tx_hex,
         tx_nonce,
         predicted_address,
@@ -488,12 +509,19 @@ async fn submit_and_resolve_deploy<C>(
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
+    let native = prepared.native_amount.is_some();
     let mut progress = DeployProgress {
-        tx_hash: None,
+        tx_hash: native.then(|| format!("0x{}", hex::encode(prepared.tx_hash.0.0.as_ref()))),
         height: None,
         address: None,
         address_source: None,
     };
+    if native && let Err(error) = actor.consume_setup_nonce() {
+        return DeployAttempt {
+            progress,
+            result: Err(error.into()),
+        };
+    }
     let tx_hash = match client.send_raw_transaction(prepared.tx_hex).await {
         Ok(tx_hash) => tx_hash,
         Err(error) => {
@@ -503,7 +531,18 @@ where
             };
         }
     };
-    if let Err(error) = actor.consume_setup_nonce() {
+    if native && tx_hash != prepared.tx_hash {
+        return DeployAttempt {
+            progress,
+            result: Err(SimError::Executor(format!(
+                "native deployment returned transaction hash 0x{}, expected 0x{}",
+                hex::encode(tx_hash.0.0.as_ref()),
+                hex::encode(prepared.tx_hash.0.0.as_ref())
+            ))
+            .into()),
+        };
+    }
+    if !native && let Err(error) = actor.consume_setup_nonce() {
         return DeployAttempt {
             progress,
             result: Err(error.into()),
@@ -535,129 +574,45 @@ where
             };
         }
     };
-    progress.height = Some(*receipt.height);
-    if !matches!(receipt.status, ExecStatus::Ok) {
-        return DeployAttempt {
-            progress,
-            result: Err(DeployAttemptError::ReceiptStatus {
-                status: exec_status_name(&receipt.status),
-            }),
-        };
-    }
-    let (address, address_source) =
-        match resolve_deployed_address(receipt.return_data.as_ref(), &prepared.predicted_address) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                return DeployAttempt {
-                    progress,
-                    result: Err(error.into()),
-                };
-            }
-        };
-    progress.address = Some(address);
-    progress.address_source = Some(address_source);
-
-    DeployAttempt {
-        progress,
-        result: Ok(()),
-    }
+    let result = resolve_deploy_receipt(
+        native.then_some(prepared.tx_hash),
+        &prepared.predicted_address,
+        &receipt,
+        &mut progress,
+    );
+    DeployAttempt { progress, result }
 }
 
-async fn fund_native_deployment<C>(
-    client: C,
-    actor: &ActorState,
-    nonce: u64,
-    expiry: i64,
-    transfer: (ContractAddress, u128),
-    record: &mut ContractDeploymentRecord,
-    event_writer: &mut EventWriter,
-) -> Result<(), SimError>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    let (target, amount) = transfer;
-    record.collateral = Some(crate::result::NativeDeploymentCollateral {
-        recipient: json_string(
-            &groundhog_json_rpc_types::hex::Hex0x(target),
-            "collateral recipient",
-        )?,
-        raw_amount: amount.to_string(),
-        tx_hash: None,
-        returned_tx_hash: None,
-        height: None,
-    });
-    let calldata = groundhog_signing::native_hog_transfer_calldata(&target, amount)
-        .map_err(|error| SimError::Executor(error.to_string()))?;
-    let tx = crate::native::execute(
-        actor,
-        groundhog_signing::NATIVE_HOG_ADDRESS,
-        groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
-        &calldata,
-        nonce,
-        expiry,
-    )
-    .map_err(|error| SimError::Executor(error.to_string()))?;
-    let expected = groundhog_signing::transaction_hash(&tx)
-        .map_err(|error| SimError::Executor(error.to_string()))?;
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &actor.signer,
-        SignTransactionParams::default(),
-        &actor.network_hash,
-    )
-    .map_err(|error| SimError::Executor(error.to_string()))?;
-    record
-        .collateral
-        .as_mut()
-        .ok_or_else(|| SimError::Executor("collateral record missing".into()))?
-        .tx_hash = Some(json_string(
-        &TxHash(groundhog_json_rpc_types::hex::Hex0x(expected)),
-        "collateral expected txHash",
-    )?);
-    // Persist the locally signed identity before the transport can have an ambiguous outcome.
-    event_writer
-        .write(&ResultEvent::ContractDeployStarted {
-            event: record.clone(),
-        })
-        .await?;
-    let tx_hash = client.send_raw_transaction(tx_hex).await.map_err(|error| {
-        SimError::Executor(format!(
-            "native deployment collateral submit failed: {error}"
-        ))
-    })?;
-    record
-        .collateral
-        .as_mut()
-        .ok_or_else(|| SimError::Executor("collateral record missing".into()))?
-        .returned_tx_hash = Some(json_string(&tx_hash, "collateral returned txHash")?);
-    event_writer
-        .write(&ResultEvent::ContractDeployStarted {
-            event: record.clone(),
-        })
-        .await?;
-    if tx_hash.0.0 != expected {
+fn resolve_deploy_receipt(
+    expected_hash: Option<TxHash>,
+    predicted_address: &ContractAddress,
+    receipt: &TransactionReceipt,
+    progress: &mut DeployProgress,
+) -> Result<(), DeployAttemptError> {
+    if expected_hash.is_some_and(|hash| receipt.tx_hash != hash) {
+        return Err(SimError::Executor("native deployment receipt hash mismatch".into()).into());
+    }
+    progress.height = Some(*receipt.height);
+    if !matches!(receipt.status, ExecStatus::Ok) {
+        return Err(DeployAttemptError::ReceiptStatus {
+            status: exec_status_name(&receipt.status),
+        });
+    }
+    if expected_hash.is_some()
+        && receipt
+            .return_data
+            .as_ref()
+            .is_none_or(|data| data.0.as_slice() != predicted_address.as_ref())
+    {
         return Err(SimError::Executor(
-            "native collateral transaction hash mismatch".into(),
-        ));
+            "native deployment did not return the exact predicted address".into(),
+        )
+        .into());
     }
-    let collateral = record
-        .collateral
-        .as_mut()
-        .ok_or_else(|| SimError::Executor("collateral record missing".into()))?;
-    let receipt = poll_receipt(
-        &SimReceiptSource(&client),
-        tx_hash,
-        receipt_poll_config(DEFAULT_RECEIPT_DRAIN_TIMEOUT),
-    )
-    .await
-    .map_err(|source| ReceiptWaitFailure::step("native deployment collateral", source))?;
-    if receipt.tx_hash != tx_hash || !matches!(receipt.status, ExecStatus::Ok) {
-        return Err(SimError::Executor(format!(
-            "native deployment collateral did not commit successfully: {:?}",
-            receipt.status
-        )));
-    }
-    collateral.height = Some(*receipt.height);
+    let (address, address_source) =
+        resolve_deployed_address(receipt.return_data.as_ref(), predicted_address)?;
+    progress.address = Some(address);
+    progress.address_source = Some(address_source);
     Ok(())
 }
 
@@ -1156,12 +1111,29 @@ mod tests {
         }));
     }
 
+    type NativeDeployCalldata = (
+        SHA256Hash,
+        SHA256Hash,
+        u128,
+        Option<(ContractEntrypointID, u64, Vec<u8>)>,
+    );
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum NativeDeployOutcome {
+        Success,
+        Reverted,
+        SendError,
+        WrongSendHash,
+        WrongReceiptHash,
+        WrongAddress,
+        MissingAddress,
+    }
+
     #[derive(Clone)]
     struct NativeDeployClient {
         submitted: Arc<Mutex<Vec<SignedTransaction>>>,
-        fail_collateral: bool,
-        submit_failure: Option<bool>,
-        event_path: Option<std::path::PathBuf>,
+        outcome: NativeDeployOutcome,
+        event_path: std::path::PathBuf,
     }
     impl SimRpcClient for NativeDeployClient {
         async fn chain_tip(
@@ -1186,50 +1158,73 @@ mod tests {
                 .lock()
                 .expect("submitted tx lock")
                 .push(signed);
-            if let Some(path) = &self.event_path {
-                let events = std::fs::read_to_string(path).expect("pre-submit evidence");
-                assert!(events.contains(&hex::encode(hash.as_ref())));
-            }
-            match self.submit_failure {
-                Some(false) => Err(SimRpcError::detail(
+            let events = std::fs::read_to_string(&self.event_path).expect("pre-submit evidence");
+            assert!(events.contains(&hex::encode(hash.as_ref())));
+            match self.outcome {
+                NativeDeployOutcome::SendError => Err(SimRpcError::detail(
                     "sendRawTransaction",
                     "ambiguous transport failure",
                 )),
-                Some(true) => Ok(TxHash(Hex0x(SHA256Hash::from([7; 32])))),
-                None => Ok(TxHash(Hex0x(hash))),
+                NativeDeployOutcome::WrongSendHash => Ok(TxHash(Hex0x(SHA256Hash::from([7; 32])))),
+                _ => Ok(TxHash(Hex0x(hash))),
             }
         }
         async fn transaction_receipt(
             &self,
             hash: TxHash,
         ) -> Result<Option<TransactionReceipt>, SimRpcError> {
+            let transactions = self.submitted.lock().expect("submitted tx lock");
+            let tx = &transactions[0].tx;
+            let (nonce, code_hash, _, _): NativeDeployCalldata =
+                xdrs::cxs::decode(&tx.invocation.calldata).expect("deploy calldata");
+            let address = derive_deploy_address(&tx.invocation.invoked_address, &nonce, &code_hash)
+                .expect("predicted address");
+            let return_data = match self.outcome {
+                NativeDeployOutcome::MissingAddress => None,
+                NativeDeployOutcome::WrongAddress => Some(vec![8; 32]),
+                _ => Some(address.as_ref().to_vec()),
+            };
             Ok(Some(deploy_receipt(
-                hash,
-                if self.fail_collateral {
+                if self.outcome == NativeDeployOutcome::WrongReceiptHash {
+                    TxHash(Hex0x(SHA256Hash::from([7; 32])))
+                } else {
+                    hash
+                },
+                if self.outcome == NativeDeployOutcome::Reverted {
                     ExecStatus::Reverted { message: None }
                 } else {
                     ExecStatus::Ok
                 },
-                None,
+                return_data,
             )))
         }
     }
 
     #[tokio::test]
-    async fn collateral_ambiguous_submit_retains_expected_and_returned_identity() {
-        for mismatch in [false, true] {
+    async fn native_deploy_unverified_outcomes_preserve_identity_and_consume_nonce() {
+        for outcome in [
+            NativeDeployOutcome::SendError,
+            NativeDeployOutcome::WrongSendHash,
+            NativeDeployOutcome::WrongReceiptHash,
+            NativeDeployOutcome::WrongAddress,
+            NativeDeployOutcome::MissingAddress,
+        ] {
             let artifact = opaque_rv32_artifact();
             let mut manifest = manifest(artifact.path());
-            manifest.accounts = Some(serde_json::from_value(serde_json::json!({"kind":"native","seed":"test","deploymentCollateralRaw":"10000000"})).expect("native config"));
-            let mut actor = actor_states().remove(0);
-            actor.use_native_wallet();
+            manifest.accounts = Some(
+                serde_json::from_value(
+                    json!({"kind":"native","seed":"test","deploymentCollateralRaw":"10000000"}),
+                )
+                .expect("native config"),
+            );
+            let mut actors = actor_states();
+            actors[0].use_native_wallet();
             let file = tempfile::NamedTempFile::new().expect("events");
             let submitted = Arc::new(Mutex::new(Vec::new()));
             let client = NativeDeployClient {
                 submitted: submitted.clone(),
-                fail_collateral: false,
-                submit_failure: Some(mismatch),
-                event_path: Some(file.path().to_path_buf()),
+                outcome,
+                event_path: file.path().to_path_buf(),
             };
             let mut writer = EventWriter::create(file.path()).await.expect("writer");
             let setup = deploy_manifest_contracts(
@@ -1238,24 +1233,31 @@ mod tests {
                 &runtime_manifest(),
                 Path::new("scenario.json"),
                 None,
-                &mut [actor],
+                &mut actors,
                 &mut writer,
             )
             .await
             .expect("recorded failure");
             assert!(setup.failed);
+            assert_eq!(actors[0].next_nonce_sequence, 1);
             let record = &setup.records[0];
-            let collateral = record.collateral.as_ref().expect("collateral");
+            assert_eq!(record.status, ContractDeploymentStatus::Failed);
+            assert!(record.address.is_none());
             let transactions = submitted.lock().expect("transactions");
             assert_eq!(transactions.len(), 1);
             let expected = groundhog_signing::transaction_hash(&transactions[0].tx).expect("hash");
             assert_eq!(
-                collateral.tx_hash.as_deref(),
+                record.tx_hash.as_deref(),
                 Some(format!("0x{}", hex::encode(expected.as_ref())).as_str())
             );
-            assert_eq!(collateral.returned_tx_hash.is_some(), mismatch);
-            if mismatch {
-                assert_ne!(collateral.tx_hash, collateral.returned_tx_hash);
+            if outcome == NativeDeployOutcome::WrongSendHash {
+                assert!(
+                    record
+                        .error
+                        .as_ref()
+                        .expect("error")
+                        .contains(&"07".repeat(32))
+                );
             }
             let events = std::fs::read_to_string(file.path()).expect("events");
             assert!(events.contains("contract-deploy-failed"));
@@ -1263,8 +1265,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_deploy_funds_predicted_address_before_deploy_with_distinct_nonces() {
-        for fail_collateral in [false, true] {
+    async fn native_deploy_submits_one_atomic_transaction_with_configured_amount() {
+        for outcome in [NativeDeployOutcome::Success, NativeDeployOutcome::Reverted] {
             let artifact = opaque_rv32_artifact();
             let mut manifest = manifest(artifact.path());
             manifest.accounts = Some(
@@ -1274,15 +1276,14 @@ mod tests {
                 .expect("native config"),
             );
             let submitted = Arc::new(Mutex::new(Vec::new()));
-            let client = NativeDeployClient {
-                submitted: submitted.clone(),
-                fail_collateral,
-                submit_failure: None,
-                event_path: None,
-            };
             let mut actors = actor_states();
             actors[0].use_native_wallet();
             let file = NamedTempFile::new().expect("events");
+            let client = NativeDeployClient {
+                submitted: submitted.clone(),
+                outcome,
+                event_path: file.path().to_path_buf(),
+            };
             let mut writer = EventWriter::create(file.path()).await.expect("writer");
             let setup = deploy_manifest_contracts(
                 client,
@@ -1294,31 +1295,41 @@ mod tests {
                 &mut writer,
             )
             .await
-            .expect("setup completes with structured outcome");
-            assert_eq!(setup.failed, fail_collateral);
+            .expect("structured outcome");
+            assert_eq!(setup.failed, outcome == NativeDeployOutcome::Reverted);
             let transactions = submitted.lock().expect("tx lock");
-            assert_eq!(transactions.len(), if fail_collateral { 1 } else { 2 });
+            assert_eq!(transactions.len(), 1);
+            let tx = &transactions[0].tx;
             assert_eq!(
-                transactions[0].tx.invocation.entrypoint,
-                crate::native::EXECUTE
+                tx.invocation.entrypoint,
+                groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
             );
-            assert_eq!(transactions[0].tx.auth_claim, actors[0].auth_claim());
+            assert_eq!(tx.auth_claim, actors[0].auth_claim());
+            let (nonce, code_hash, amount, initializer): NativeDeployCalldata =
+                xdrs::cxs::decode(&tx.invocation.calldata).expect("deploy calldata");
+            assert_eq!(amount, 10_000_000);
+            assert!(initializer.is_none());
+            assert_eq!(tx.contracts_to_deploy.len(), 1);
+            let code = xdrs::txs::encode(&tx.contracts_to_deploy[0]).expect("contract XDR");
+            assert_eq!(code_hash.as_ref(), &Sha256::digest(&code)[..]);
+            let predicted = derive_deploy_address(&actors[0].wallet_address, &nonce, &code_hash)
+                .expect("predicted address");
             let record = &setup.records[0];
-            let collateral = record.collateral.as_ref().expect("collateral proof");
+            let collateral = record.collateral.as_ref().expect("funding effects");
             assert_eq!(collateral.raw_amount, "10000000");
-            assert!(collateral.tx_hash.is_some());
-            if !fail_collateral {
-                assert_eq!(
-                    transactions[1].tx.invocation.entrypoint,
-                    crate::native::DEPLOY
-                );
-                assert_eq!(transactions[1].tx.auth_claim, actors[0].auth_claim());
-                assert_ne!(
-                    transactions[0].tx.uniquifier.nonce,
-                    transactions[1].tx.uniquifier.nonce
-                );
+            assert_eq!(
+                collateral.recipient,
+                format!("0x{}", hex::encode(predicted.as_ref()))
+            );
+            assert_eq!(
+                record.contract_hash.as_deref(),
+                Some(format!("0x{}", hex::encode(code_hash.as_ref())).as_str())
+            );
+            assert_eq!(actors[0].next_nonce_sequence, 1);
+            if outcome == NativeDeployOutcome::Success {
                 assert_eq!(record.address.as_ref(), Some(&collateral.recipient));
-                assert_eq!(actors[0].next_nonce_sequence, 2);
+            } else {
+                assert!(record.address.is_none());
             }
         }
     }
@@ -1332,7 +1343,7 @@ mod tests {
         let deploy_entrypoint =
             ContractEntrypointID::from([0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]);
 
-        let prepared = prepare_deploy(rv32.path(), &actors[0], deploy_entrypoint, 42)
+        let prepared = prepare_deploy(rv32.path(), &actors[0], deploy_entrypoint, 42, None)
             .expect("rv32 deploy should prepare");
         let tx_bytes =
             hex::decode(prepared.tx_hex.trim_start_matches("0x")).expect("signed tx should be hex");

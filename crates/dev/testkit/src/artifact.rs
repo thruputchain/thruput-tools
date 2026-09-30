@@ -65,12 +65,13 @@ pub(crate) struct ArtifactEntry {
     pending_registration: Mutex<Option<PendingRegistration>>,
 }
 
-/// A binary-carrying transaction retained for idempotent re-submission.
+/// A binary-carrying transaction retained for observation and recovery.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingRegistration {
     pub(crate) tx_hash: TxHash,
     pub(crate) tx_hex: String,
     pub(crate) owner: RegistrationOwner,
+    pub(crate) effects: Vec<u8>,
     pub(crate) address: ContractAddress,
 }
 
@@ -263,6 +264,7 @@ mod tests {
         *entry.registration_guard().await = Some(super::PendingRegistration {
             tx_hash: pending_hash,
             tx_hex: "0x01".to_owned(),
+            effects: Vec::new(),
             owner: RegistrationOwner {
                 address: [0; 32].into(),
                 namespace: NonceNamespace::for_run("seed", 0),

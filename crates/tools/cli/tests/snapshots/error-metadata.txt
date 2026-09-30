@@ -1,3 +1,32 @@
+InvalidWalletBinding
+  code: invalid_wallet_binding
+  details: walletName, message
+
+WalletBindingConflict
+  code: wallet_binding_conflict
+  hint text: choose a different --name; existing wallet identities are preserved
+  details: walletName
+
+WalletCreatePrefundUnsupported
+  code: wallet_create_prefund_unsupported
+  hint text: create the empty wallet first, then run groundhog airdrop <wallet-name>
+
+NativeDeploymentFundingRequired
+  code: native_deployment_funding_required
+  hint text: choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate
+
+NativeDeploymentOptionsForLegacy
+  code: native_deployment_options_for_legacy
+  hint text: existing legacy wallets retain their own deployment funding behavior
+
+InvalidDeploymentInitializer
+  code: invalid_deployment_initializer
+  details: message
+
+NativeDeploymentUnverified
+  code: native_deployment_unverified
+  details: message
+
 Docs
   code: docs_error
 
@@ -391,11 +420,6 @@ NetworkDescriptorMismatch
 WalletAddressDerivationFailed
   code: wallet_address_derivation_failed
   hint text: check the stored public key material, or regenerate the key
-
-SavedWalletMissing
-  code: saved_wallet_missing
-  hint format: run `groundhog wallet create --key={} --profile={}` before using this stored key
-  details: keyName, profile
 
 SavedWalletAmbiguous
   code: saved_wallet_ambiguous

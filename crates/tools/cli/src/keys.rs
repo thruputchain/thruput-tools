@@ -405,22 +405,7 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
     let path = key_path(name)?;
     let keyfile = read_keyfile(name)?;
 
-    if keyfile.scheme != "ed25519" {
-        return Err(CliError::Other(format!(
-            "unsupported key scheme: {}",
-            keyfile.scheme
-        )));
-    }
-
-    let public_key = if let Some(ref pk_hex) = keyfile.public_key_hex {
-        parse_stored_hex::<32>(pk_hex)?
-    } else {
-        // Legacy key without public_key_hex — must load keypair.
-        let keypair_bytes = zeroize::Zeroizing::new(parse_stored_hex::<64>(&keyfile.keypair_hex)?);
-        let signing_key = LocalSigner::from_keypair_bytes(*keypair_bytes)
-            .map_err(|error| signing_error(&error))?;
-        signing_key.verifying_key_bytes()
-    };
+    let public_key = keyfile_public_key(&keyfile)?;
 
     let address = derive_pubkey_account_address(public_key);
     let default_key = crate::config::load_default_key()?;
@@ -434,6 +419,41 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
         address: prefixed_hex(address),
         path,
     })
+}
+
+/// Load a named key's public metadata, returning `None` for an absent or invalid name.
+/// Legacy files without cached public metadata derive it from their stored keypair.
+pub(crate) fn load_local_public_key(name: &str) -> Result<Option<[u8; 32]>, CliError> {
+    if validate_key_name(name).is_err() {
+        return Ok(None);
+    }
+    let keyfile = match read_keyfile(name) {
+        Ok(keyfile) => keyfile,
+        Err(CliError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    keyfile_public_key(&keyfile).map(Some)
+}
+
+fn keyfile_public_key(keyfile: &KeyFile) -> Result<[u8; 32], CliError> {
+    if keyfile.scheme != "ed25519" {
+        return Err(CliError::Other(format!(
+            "unsupported key scheme: {}",
+            keyfile.scheme
+        )));
+    }
+
+    if let Some(ref pk_hex) = keyfile.public_key_hex {
+        parse_stored_hex::<32>(pk_hex)
+    } else {
+        // Legacy key without public_key_hex — must load keypair.
+        let keypair_bytes = zeroize::Zeroizing::new(parse_stored_hex::<64>(&keyfile.keypair_hex)?);
+        let signing_key = LocalSigner::from_keypair_bytes(*keypair_bytes)
+            .map_err(|error| signing_error(&error))?;
+        Ok(signing_key.verifying_key_bytes())
+    }
 }
 
 /// Load a stored signing key as a [`LocalSigner`].

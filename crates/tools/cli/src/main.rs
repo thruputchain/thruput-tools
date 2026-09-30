@@ -553,6 +553,23 @@ impl TestArgs {
 
 #[derive(Args)]
 struct DeployArgs {
+    /// Exact HOG to transfer atomically with native deployment; zero skips funding
+    #[arg(long, value_name = "HOG")]
+    fund: Option<String>,
+    /// Initialize the new contract atomically using a method name or 0x entrypoint
+    #[arg(long, value_name = "METHOD")]
+    init: Option<String>,
+    /// Initializer argument; repeat for each argument (explicit entrypoints take raw hex)
+    #[arg(
+        long,
+        value_name = "VALUE",
+        requires = "init",
+        allow_hyphen_values = true
+    )]
+    init_arg: Vec<String>,
+    /// Gas budget for the initializer (default: 25000000)
+    #[arg(long, requires = "init", value_parser = clap::value_parser!(u64).range(1..))]
+    init_gas_limit: Option<u64>,
     /// Package to deploy (required at a workspace root)
     #[arg(short, long, conflicts_with = "artifact")]
     package: Option<String>,
@@ -586,6 +603,12 @@ impl DeployArgs {
         let cwd = invocation_cwd()?;
         groundhog_cli::deploy::run(
             self.artifact.as_deref(),
+            &groundhog_cli::deploy::DeploymentOptions {
+                fund: self.fund.as_deref(),
+                init_method: self.init.as_deref(),
+                init_args: &self.init_arg,
+                init_gas_limit: self.init_gas_limit,
+            },
             self.package.as_deref(),
             self.alias.as_deref(),
             self.dry_run,
@@ -693,7 +716,7 @@ impl TransferArgs {
 
 #[derive(Args)]
 struct AirdropArgs {
-    /// Wallet name, dev-N wallet, or direct address (default: effective wallet)
+    /// Wallet name, key name, contract alias, or direct address (default: effective wallet)
     recipient: Option<String>,
     /// Amount in HOG, with up to 7 decimal places
     #[arg(long)]
@@ -1313,7 +1336,7 @@ enum WalletCommand {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
-    /// Prefund and create a wallet for a stored signing key
+    /// Save an empty native wallet for a stored signing key
     Create {
         /// Existing key name that should own the new wallet
         #[arg(long)]
@@ -1321,10 +1344,10 @@ enum WalletCommand {
         /// Saved wallet name; defaults to the resolved key name
         #[arg(long)]
         name: Option<String>,
-        /// Build and sign the wallet create transaction without submitting it
+        /// Derive the native wallet without saving it or contacting the network
         #[arg(long)]
         dry_run: bool,
-        /// Exact local wallet prefund in HOG; remote faucets control this amount
+        /// Removed: use groundhog airdrop after creating the wallet
         #[arg(long)]
         prefund: Option<String>,
         #[command(flatten)]
