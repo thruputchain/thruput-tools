@@ -10,8 +10,8 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
             &"12".repeat(32),
             "--listen",
             "not-a-socket-address",
-            "--indexer-pool-size",
-            "32",
+            "--x23-multiplex-connections",
+            "2",
             "--scheduler-lookup-pool-size",
             "8",
             "--trace-spans",
@@ -23,7 +23,7 @@ fn configuration_dump_is_only_json_with_default_or_verbose_logging() {
         let output = command.output().unwrap();
         assert!(output.status.success(), "{output:?}");
         let config: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(config["indexer_pool_size"], 32);
+        assert_eq!(config["x23_multiplex_connections"], 2);
         assert_eq!(config["scheduler_lookup_pool_size"], 8);
         assert_eq!(config["listen_address"], "not-a-socket-address");
     }

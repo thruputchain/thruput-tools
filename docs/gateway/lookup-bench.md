@@ -8,9 +8,8 @@ On the indexer-first gateway, a successful `Unknown` answer follows this path:
 
 1. Indexer miss.
 2. Scheduler `schedgateway_lookup_tx` miss.
-3. Indexer recheck miss.
 
-This tests the whole status-miss path, including two indexer reads. It is not a
+This tests the whole status-miss path, including the indexer read. It is not a
 pure scheduler microbenchmark. Random hash absence is not an authoritative
 backend assertion; every successful response must be `Unknown`. A pending or
 committed response is a semantic mismatch, not successful miss traffic.

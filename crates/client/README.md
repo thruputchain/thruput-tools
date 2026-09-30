@@ -6,8 +6,9 @@ identity resolution, confirmation, runtime and output.
 
 ## Invocation phases
 
-1. Resolve the trusted network hash, wallet address and `doAction` entrypoint,
-   contract address/entrypoint, calldata, gas limits, expiry height and nonce.
+1. Resolve the trusted network hash and wallet identity: `Wallet::Native` for a
+   pubkey account, or `Wallet::Legacy` for an existing deployed wallet and its
+   configured entrypoint. Supply the target, calldata, gas limits, expiry and nonce.
 2. Use `validate_network` to compare the endpoint with the trusted network identity.
    `resolve_block_expiry_height` can derive expiry from the current chain tip.
 3. `prepare_call(CallRequest, NetworkHash)` returns `UnsignedCall` for inspection.
@@ -18,8 +19,10 @@ identity resolution, confirmation, runtime and output.
 6. `SubmittedCall::wait(&client, PollOptions)` returns a typed receipt, including
    unsuccessful execution. The caller interprets execution status and formats it.
 
-These phases use the existing dev-wallet `doAction` transaction/signing protocol.
-They do not support arbitrary wallet protocols. Network validation is explicit;
+Native calls use `DefaultWallet.execute`; legacy calls use `doAction`. After
+checking receipt success, `SignedCall::decode_return` extracts the single child
+return for the selected wallet. Native accounts supply pubkey authentication;
+legacy addresses remain explicit and are never rederived. Network validation is explicit;
 `prepare_call` and `sign` do not contact the network. Submission is not retried
 by this library. After an ambiguous submission error or receipt timeout, reconcile
 by the retained hash before deciding what to do next.

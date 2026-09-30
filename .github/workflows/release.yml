@@ -155,7 +155,7 @@ jobs:
         run: |
           cargo run --locked -p groundhog-agent-knowledge -- check
           target/release/groundhog --skill > agent-guide.md
-          cmp agent-guide.md crates/tools/cli/assets/groundhog/knowledge/generated/agent-guide.md
+          cmp agent-guide.md crates/cli/assets/groundhog/knowledge/generated/agent-guide.md
 
       - name: Verify macOS CLI portability
         if: matrix.platform == 'macos'

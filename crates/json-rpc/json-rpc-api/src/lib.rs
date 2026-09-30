@@ -27,9 +27,9 @@ use groundhog_json_rpc_types::{
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
 ///
-/// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
+/// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "6.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "7.0.1";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]

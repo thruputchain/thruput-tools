@@ -6,7 +6,8 @@
 #   -> dev-1/dev-2 transfer with recipient and sender balance validation
 #   -> transaction show and bounded sender-history pagination
 #   -> raw/spec-decoded counter events and canonical token transfer history
-#   -> key generate -> wallet create -> airdrop -> saved-wallet deploy/call
+#   -> ordinary native key -> explicit airdrop -> atomic deploy/init -> save identity
+#   -> empty wallet create -> explicit airdrop -> atomic deploy/init/call/transfer
 #   -> stop -> dump/restore -> restart -> verify state and continued progress
 #
 # Required environment:
@@ -1012,87 +1013,113 @@ if [[ -n "$GATEWAY_RPC_URL" ]]; then
     update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
 
-UNDERFUNDED_KEY="smoke-underfunded"
-log "Generating non-dev signing key: $UNDERFUNDED_KEY"
-"$CLI" keys generate "$UNDERFUNDED_KEY"
-UNDERFUNDED_WALLET_JSON="$(run_json "wallet create with a 1 HOG override" "$CLI" --json wallet create --force --key "$UNDERFUNDED_KEY" --prefund 1)"
-[[ "$(json_field data.prefund_raw_amount "$UNDERFUNDED_WALLET_JSON")" == "10000000" ]] \
-    || die "underfunded wallet create did not use the 1 HOG override"
-"$CLI" keys use "$UNDERFUNDED_KEY"
-# 1 HOG leaves less than the tx gas limit; add 1 HOG so deploy reaches
-# execution and exercises the receipt-level funding guidance.
-SCHEDULABLE_AIRDROP_JSON="$(run_json "fund saved wallet above scheduler gas floor" "$CLI" --json airdrop --force "$UNDERFUNDED_KEY" --amount 1)"
-[[ "$(json_field data.status.result "$SCHEDULABLE_AIRDROP_JSON")" == "ok" ]] \
-    || die "scheduler-floor airdrop did not commit successfully"
-UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy --force)"
-UNDERFUNDED_CODE="$(json_field error.code "$UNDERFUNDED_DEPLOY_JSON")"
-case "$UNDERFUNDED_CODE" in
-    transaction_insufficient_funds)
-        [[ "$(json_field error.details.reason "$UNDERFUNDED_DEPLOY_JSON")" == "nativeHogTransferOverdraft" ]] \
-            || die "underfunded deploy did not report a native HOG transfer overdraft"
-        ;;
-    transaction_recent_failure)
-        [[ "$(json_field error.details.conflict.code "$UNDERFUNDED_DEPLOY_JSON")" == "boundsExceeded" ]] \
-            || die "underfunded deploy did not report boundsExceeded"
-        ;;
-    *) die "underfunded deploy returned non-actionable error code: $UNDERFUNDED_CODE" ;;
-esac
-UNDERFUNDED_HINT="$(json_field error.hint "$UNDERFUNDED_DEPLOY_JSON")"
-[[ "$UNDERFUNDED_HINT" == *"groundhog airdrop"* ]] \
-    || die "underfunded deploy did not provide airdrop guidance"
-log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDERFUNDED_CODE"
-
-WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$UNDERFUNDED_KEY")"
-WALLET_BALANCE_BEFORE="$(json_field data.rawBalance "$WALLET_BALANCE_BEFORE_JSON")"
-AIRDROP_JSON="$(run_json "fund saved wallet for one deploy" "$CLI" --json airdrop --force "$UNDERFUNDED_KEY" --amount 10)"
-[[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
-    || die "saved-wallet airdrop did not commit successfully"
-[[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" ]] \
-    || die "saved-wallet airdrop JSON did not identify faucet key dev-0"
-[[ "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
-    || die "saved-wallet airdrop JSON did not identify role faucet"
-WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$UNDERFUNDED_KEY")"
-WALLET_BALANCE_AFTER="$(json_field data.rawBalance "$WALLET_BALANCE_AFTER_JSON")"
-AIRDROP_RAW_AMOUNT="$(json_field data.rawAmount "$AIRDROP_JSON")"
-assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
-log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.txHash "$AIRDROP_JSON")"
-
-RECOVERED_DEPLOY_JSON="$(run_json "saved-wallet deploy after airdrop" "$CLI" --json deploy --force)"
-[[ "$(json_field data.address "$RECOVERED_DEPLOY_JSON")" != "null" ]] \
-    || die "saved-wallet deploy after airdrop did not return a contract address"
+# An ordinary key without a saved binding already resolves to its empty native
+# account. Saving it later must preserve its funded identity without a transaction.
+UNSAVED_KEY="smoke-unsaved"
+"$CLI" keys generate "$UNSAVED_KEY"
+"$CLI" keys use "$UNSAVED_KEY"
+UNSAVED_EMPTY_JSON="$(run_json "unsaved native account balance" "$CLI" --json balance)"
+UNSAVED_ADDRESS="$(json_field data.address "$UNSAVED_EMPTY_JSON")"
+[[ "$(json_field data.rawBalance "$UNSAVED_EMPTY_JSON")" == "0" ]] \
+    || die "new ordinary key did not resolve to an empty native account"
+UNSAVED_AIRDROP_JSON="$(run_json "explicitly fund unsaved native account" "$CLI" --json airdrop --force --amount 100)"
+[[ "$(json_field data.status.result "$UNSAVED_AIRDROP_JSON")" == "ok" ]] \
+    || die "unsaved native account airdrop did not commit"
+UNSAVED_DEPLOY_JSON="$(run_json "unsaved native atomic deploy and initialize" "$CLI" --json deploy --force --fund 10 --init initialize --init-arg 21)"
+[[ "$(json_field data.nativeDeployment.sender "$UNSAVED_DEPLOY_JSON")" == "$UNSAVED_ADDRESS" ]] \
+    || die "unsaved native deploy used a different account"
+UNSAVED_GET_JSON="$(run_json "unsaved native call" "$CLI" --json call --force "$PROJECT_NAME" get)"
+assert_call_succeeded "unsaved native get" "$UNSAVED_GET_JSON"
+[[ "$(json_field data.returnValue "$UNSAVED_GET_JSON")" == "21" ]] \
+    || die "atomic initializer did not set the unsaved account's contract value"
+UNSAVED_BALANCE_BEFORE_JSON="$(run_json "unsaved balance before saving" "$CLI" --json balance)"
+UNSAVED_WALLET_JSON="$(run_json "save funded native identity" "$CLI" --json wallet create --force --key "$UNSAVED_KEY")"
+[[ "$(json_field data.wallet "$UNSAVED_WALLET_JSON")" == "$UNSAVED_ADDRESS" ]] \
+    || die "saving a wallet changed the unsaved account identity"
+UNSAVED_BALANCE_AFTER_JSON="$(run_json "saved native identity balance" "$CLI" --json balance "$UNSAVED_KEY")"
+[[ "$(json_field data.rawBalance "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.rawBalance "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
+    || die "saving the native binding changed its balance"
+[[ "$(json_field data.height "$UNSAVED_BALANCE_AFTER_JSON")" == "$(json_field data.height "$UNSAVED_BALANCE_BEFORE_JSON")" ]] \
+    || die "saving the native binding advanced the chain"
 
 USER_KEY="smoke-user"
 log "Generating non-dev signing key: $USER_KEY"
 "$CLI" keys generate "$USER_KEY"
-WALLET_JSON="$(run_json "wallet create with default prefund" "$CLI" --json wallet create --force --key "$USER_KEY")"
-WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
-[[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
-    || die "wallet create did not return a wallet address"
-WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
-[[ "$WALLET_PREFUND" == "2000000000" ]] \
-    || die "wallet create prefund was $WALLET_PREFUND, expected 2000000000"
-[[ "$(json_field data.prefund_tx_hash "$WALLET_JSON")" != "null" ]] \
-    || die "wallet create did not return a prefund transaction hash"
-[[ "$(json_field data.create_tx_hash "$WALLET_JSON")" != "null" ]] \
-    || die "wallet create did not return a create transaction hash"
-log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
+# Dry-run derives the address without selecting or saving it.
+WALLET_DRY_RUN_JSON="$(run_json "derive empty native wallet" "$CLI" --json wallet create --key "$USER_KEY" --dry-run)"
+WALLET_ADDRESS="$(json_field data.wallet "$WALLET_DRY_RUN_JSON")"
+WALLET_BEFORE_JSON="$(run_json "empty wallet balance before saving" "$CLI" --json balance "$WALLET_ADDRESS")"
+WALLET_JSON="$(run_json "save empty native wallet" "$CLI" --json wallet create --force --key "$USER_KEY")"
+[[ "$(json_field data.wallet "$WALLET_JSON")" == "$WALLET_ADDRESS" ]] \
+    || die "wallet creation changed the dry-run address"
+[[ "$(json_field data.kind "$WALLET_JSON")" == "native" && "$(json_field data.accountNonce "$WALLET_JSON")" == "0" ]] \
+    || die "wallet create did not save a nonce-zero native binding"
+[[ "$(json_field data.saved "$WALLET_JSON")" == "true" && "$(json_field data.created "$WALLET_JSON")" == "true" ]] \
+    || die "wallet create did not insert the new binding"
+for field in prefund_tx_hash create_tx_hash txHash; do
+    [[ "$(json_field "data.$field" "$WALLET_JSON")" == "null" ]] \
+        || die "offline wallet creation reported a transaction: $field"
+done
+WALLET_EMPTY_JSON="$(run_json "empty saved wallet balance" "$CLI" --json balance "$USER_KEY")"
+[[ "$(json_field data.rawBalance "$WALLET_EMPTY_JSON")" == "0" ]] \
+    || die "wallet creation implicitly funded the account"
+[[ "$(json_field data.height "$WALLET_EMPTY_JSON")" == "$(json_field data.height "$WALLET_BEFORE_JSON")" ]] \
+    || die "wallet creation advanced the chain"
 
 "$CLI" keys use "$USER_KEY"
 "$CLI" wallet use --profile "$SMOKE_PROFILE" "$USER_KEY"
-USER_DEPLOY_JSON="$(run_json "saved-wallet first deploy without airdrop" "$CLI" --json deploy --force)"
+AIRDROP_JSON="$(run_json "explicitly fund empty native wallet" "$CLI" --json airdrop --force "$USER_KEY" --amount 100)"
+[[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
+    || die "saved-wallet airdrop did not commit successfully"
+[[ "$(json_field data.faucet.key "$AIRDROP_JSON")" == "dev-0" && "$(json_field data.faucet.role "$AIRDROP_JSON")" == "faucet" ]] \
+    || die "saved-wallet airdrop did not identify the local faucet"
+WALLET_FUNDED_JSON="$(run_json "explicitly funded native balance" "$CLI" --json balance "$USER_KEY")"
+# A first transfer creates storage, so free balance can be below the exact
+# transfer amount. Check the returned raw amount separately from free balance.
+[[ "$(json_field data.rawAmount "$AIRDROP_JSON")" == "1000000000" ]] \
+    || die "airdrop did not transfer the requested 100 HOG"
+python3 - "$(json_field data.rawBalance "$WALLET_FUNDED_JSON")" <<'BALANCE'
+import sys
+balance = int(sys.argv[1])
+if not 0 < balance <= 1_000_000_000:
+    raise SystemExit(f"explicit funding returned an invalid free balance: {balance}")
+BALANCE
+
+USER_DEPLOY_JSON="$(run_json "saved native atomic deploy and initialize" "$CLI" --json deploy --force --fund 10 --init initialize --init-arg 11)"
 USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"
-log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.txHash "$USER_DEPLOY_JSON")"
+[[ "$(json_field data.nativeDeployment.sender "$USER_DEPLOY_JSON")" == "$WALLET_ADDRESS" ]] \
+    || die "native deployment changed the wallet identity"
+[[ "$(json_field data.nativeDeployment.fundingRawAmount "$USER_DEPLOY_JSON")" == "100000000" ]] \
+    || die "native deployment did not record the exact 10 HOG funding"
 SAVED_ALIAS="$(toml_field groundhog.toml "profile.$SMOKE_PROFILE.contracts.$PROJECT_NAME")"
 [[ "$SAVED_ALIAS" == "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy alias was $SAVED_ALIAS, expected $USER_CONTRACT_ADDRESS"
-
-USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call --force "$PROJECT_NAME" initialize 11)"
-assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
-USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call --force "$PROJECT_NAME" increment 2)"
+USER_GET_JSON="$(run_json "read atomic initializer value" "$CLI" --json call --force "$PROJECT_NAME" get)"
+assert_call_succeeded "native initialized get" "$USER_GET_JSON"
+[[ "$(json_field data.returnValue "$USER_GET_JSON")" == "11" ]] \
+    || die "atomic initializer did not set the saved wallet's contract value"
+USER_INCREMENT_JSON="$(run_json "saved native increment" "$CLI" --json call --force "$PROJECT_NAME" increment 2)"
 assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
-log "saved-wallet call result: status=$(json_field data.statusSummary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.txHash "$USER_INCREMENT_JSON")"
+
+NATIVE_SENDER_BEFORE_JSON="$(run_json "native transfer sender before" "$CLI" --json balance "$USER_KEY")"
+NATIVE_RECIPIENT_BEFORE_JSON="$(run_json "native transfer recipient before" "$CLI" --json balance dev-2)"
+NATIVE_TRANSFER_JSON="$(run_json "native transfer to legacy dev account" "$CLI" --json transfer --force dev-2 1)"
+[[ "$(json_field data.status.result "$NATIVE_TRANSFER_JSON")" == "ok" ]] \
+    || die "native transfer did not commit"
+[[ "$(json_field data.sender "$NATIVE_TRANSFER_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.recipient "$NATIVE_TRANSFER_JSON")" == "$RECIPIENT_ADDRESS" ]] \
+    || die "native transfer changed a native or legacy identity"
+NATIVE_SENDER_AFTER_JSON="$(run_json "native transfer sender after" "$CLI" --json balance "$USER_KEY")"
+NATIVE_RECIPIENT_AFTER_JSON="$(run_json "native transfer recipient after" "$CLI" --json balance dev-2)"
+assert_transfer_balance_deltas \
+    "$(json_field data.rawBalance "$NATIVE_SENDER_BEFORE_JSON")" \
+    "$(json_field data.rawBalance "$NATIVE_SENDER_AFTER_JSON")" \
+    "$(json_field data.rawBalance "$NATIVE_RECIPIENT_BEFORE_JSON")" \
+    "$(json_field data.rawBalance "$NATIVE_RECIPIENT_AFTER_JSON")" \
+    "10000000" >/dev/null
+WALLET_BALANCE_BEFORE_RESTART="$(json_field data.rawBalance "$NATIVE_SENDER_AFTER_JSON")"
+log "native wallet flow passed: address=$WALLET_ADDRESS contract=$USER_CONTRACT_ADDRESS"
 
 unset GROUNDHOG_RUNTIME_MANIFEST
 VIEW_FROM="dev-1"
@@ -1159,6 +1186,16 @@ RUNTIME_JSON="$(<"$RUNTIME_MANIFEST")"
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
 fi
+
+WALLET_AFTER_RESTART_JSON="$(run_json "native wallet balance after restart" "$CLI" --json balance "$USER_KEY")"
+[[ "$(json_field data.address "$WALLET_AFTER_RESTART_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.rawBalance "$WALLET_AFTER_RESTART_JSON")" == "$WALLET_BALANCE_BEFORE_RESTART" ]] \
+    || die "native wallet identity or balance changed across restart"
+REPEATED_WALLET_JSON="$(run_json "repeat native wallet creation after restart" "$CLI" --json wallet create --force --key "$USER_KEY")"
+[[ "$(json_field data.wallet "$REPEATED_WALLET_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.created "$REPEATED_WALLET_JSON")" == "false" ]] \
+    || die "repeated creation did not retain the saved native identity"
+DEV_RECIPIENT_RESTART_JSON="$(run_json "legacy dev identity after restart" "$CLI" --json balance dev-2)"
+[[ "$(json_field data.address "$DEV_RECIPIENT_RESTART_JSON")" == "$RECIPIENT_ADDRESS" ]] \
+    || die "manifest-backed dev-2 changed identity across restart"
 
 PERSISTED_VIEW_AFTER="$(run_view_json "view after persistent restart" "$PROJECT_NAME" get)"
 PERSISTED_VALUE_AFTER="$(json_field data.returnValue "$PERSISTED_VIEW_AFTER")"

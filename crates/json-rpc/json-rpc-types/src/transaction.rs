@@ -178,8 +178,9 @@ pub struct AddressTransactionQuery {
     pub order: IterationOrder,
     pub anchor: BlockAnchor,
     /// `0x` on the initial call. Non-empty to continue where a previous
-    /// response left off; `order` and `anchor` in the request are
-    /// ignored when a cursor is supplied — the cursor carries them.
+    /// response left off. `order` and `anchor` remain required request fields,
+    /// but the cursor supplies continuation state. Keep the same address.
+    /// A cursor continues one historical walk, not blocks added after it began.
     pub cursor: PaginationCursor,
     /// Values above the server's per-page cap (default 200) are
     /// rejected as invalid params; `0` means server default (50).
@@ -197,6 +198,10 @@ pub struct TransactionRef {
 
 /// `getTransactionsByAddress` response: transaction refs in the
 /// requested order.
+///
+/// Opaque cursors continue one historical walk; an empty cursor ends it.
+/// For restart rules, see the
+/// [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRefPage {
@@ -209,7 +214,7 @@ pub struct TransactionRefPage {
     /// argument.
     pub cursor: PaginationCursor,
 
-    /// Highest block height the indexer has processed at response time.
+    /// Highest block height indexed at response time, not an application checkpoint.
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at

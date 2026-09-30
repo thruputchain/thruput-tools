@@ -5,7 +5,7 @@
 //! gateway and the local hogd-dev supervisor.
 //!
 //! Real backend adapters live in `crates/json-rpc/json-rpc-gateway` and
-//! `crates/dev/node-supervisor`, both of which depend on this crate.
+//! `crates/node-supervisor`, both of which depend on this crate.
 //! To stay within the public surface
 //! and avoid circular deps, these tests use a programmable mock that can
 //! be configured to mimic each backend shape.
@@ -413,6 +413,35 @@ async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes
         assert!(submitted.lock().await.is_empty());
         assert_eq!(*event_calls.lock().await, 0);
         assert!(storage_calls.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn event_filters_require_a_named_contract_for_all_shapes() {
+    for backend in all_shapes() {
+        let calls = backend.contract_events_calls.clone();
+        let svc = server(backend);
+        let mut empty = simple_query();
+        empty.filters.0.0.clear();
+        let mut no_contracts = simple_query();
+        no_contracts.filters.0.0[0].contract_addresses.0.0.clear();
+        let mut mixed = simple_query();
+        mixed.filters.0.0.push(no_contracts.filters.0.0[0].clone());
+        for query in [empty, no_contracts, mixed] {
+            let error = svc
+                .get_events(query)
+                .await
+                .expect_err("bug: empty event filters must be rejected");
+            assert_eq!(error.code(), codes::INVALID_PARAMS);
+        }
+        assert_eq!(*calls.lock().await, 0);
+        // No topic constraints is a valid wildcard within a named contract.
+        let page = svc
+            .get_events(simple_query())
+            .await
+            .expect("bug: a named contract with wildcard topics must be accepted");
+        assert!(page.events.is_empty());
+        assert_eq!(*calls.lock().await, 1);
     }
 }
 

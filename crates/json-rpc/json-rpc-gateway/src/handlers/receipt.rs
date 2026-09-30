@@ -357,7 +357,7 @@ mod tests {
 
     use super::*;
 
-    use crate::config::GatewayConfig;
+    use crate::config::{GatewayConfig, X23MultiplexConnections};
     use crate::context::{
         BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SCHEDULER_LOOKUP_MAX_OUTSTANDING,
         SchedulerClient, connect_optional_scheduler,
@@ -648,11 +648,14 @@ mod tests {
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => {
-                connect_optional_scheduler(&addr.to_string(), 1, 4, PROTOCOL_VERSION, None)
-                    .await
-                    .expect("bug: test scheduler should connect")
-            }
+            Some(addr) => connect_optional_scheduler(
+                X23MultiplexConnections::default(),
+                &addr.to_string(),
+                PROTOCOL_VERSION,
+                None,
+            )
+            .await
+            .expect("bug: test scheduler should connect"),
             None => None,
         };
         let indexer = try_connect(
@@ -1134,9 +1137,8 @@ mod tests {
         ));
         poll_pending(lookup.as_mut());
         let replacement = watchdog(connect_optional_scheduler(
+            X23MultiplexConnections::default(),
             &new_addr.to_string(),
-            1,
-            4,
             PROTOCOL_VERSION,
             None,
         ))
@@ -1628,6 +1630,8 @@ mod tests {
         );
     }
 
+    /// A canceled lookup keeps its connection in service; the scheduler
+    /// generation stays valid and lookup capacity recovers.
     #[tokio::test]
     async fn canceled_lookups_preserve_scheduler_and_recover_capacity() {
         let started = Arc::new(Notify::new());
