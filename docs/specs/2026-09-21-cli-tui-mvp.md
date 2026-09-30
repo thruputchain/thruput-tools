@@ -49,7 +49,7 @@ require restarting the TUI.
 ## 2. Audit of the current CLI surface
 
 The audit covered all 43 leaf commands through recursive `--help` inspection and
-the argument/dispatch definitions in `crates/tools/cli/src/main.rs`. The table
+the argument/dispatch definitions in `crates/cli/src/main.rs`. The table
 records the complete surface and its v1 disposition.
 
 **Included** means a native TUI action or view. **Read-only** means existing data
@@ -572,16 +572,16 @@ bundle, and run its required tests. Do not hand-edit generated guidance.
 Paths below are relative to the repository root. Current code takes precedence
 over this dated inventory if the CLI changes before implementation.
 
-- Command definitions, options, and dispatch: `crates/tools/cli/src/main.rs`.
-- Human output and current width fallbacks: `crates/tools/cli/src/{print,terminal,init}.rs`.
-- Cargo output/process handling: `crates/tools/cli/src/{lib,build,test_cmd}.rs`.
-- Status and config: `crates/tools/cli/src/checks.rs`, `config_cmd.rs`, and `config/`.
-- Invocation and results: `crates/tools/cli/src/{call,deploy,view,tx,balance}.rs`.
-- Existing test/report types: `crates/tools/cli/src/{test_json,tx_json,view_json,result}.rs`.
-- Metadata/codec adapters: `crates/tools/cli/src/contract_spec.rs` and `codec/`.
+- Command definitions, options, and dispatch: `crates/cli/src/main.rs`.
+- Human output and current width fallbacks: `crates/cli/src/{print,terminal,init}.rs`.
+- Cargo output/process handling: `crates/cli/src/{lib,build,test_cmd}.rs`.
+- Status and config: `crates/cli/src/checks.rs`, `config_cmd.rs`, and `config/`.
+- Invocation and results: `crates/cli/src/{call,deploy,view,tx,balance}.rs`.
+- Existing test/report types: `crates/cli/src/{test_json,tx_json,view_json,result}.rs`.
+- Metadata/codec adapters: `crates/cli/src/contract_spec.rs` and `codec/`.
 - Embeddable invocation operations: `crates/client/src/lib.rs`.
-- Node lifecycle/publication: `crates/tools/cli/src/node.rs` and `crates/dev/node-supervisor/`.
-- Existing process-level CLI tests: `crates/tools/cli/tests/cli_integration_test.rs`.
+- Node lifecycle/publication: `crates/cli/src/node.rs` and `crates/node-supervisor/`.
+- Existing process-level CLI tests: `crates/cli/tests/cli_integration_test.rs`.
 - [Ratatui](https://ratatui.rs/), [Crossterm](https://github.com/crossterm-rs/crossterm),
   [Rat-Widget/Rat-Focus](https://github.com/thscharler/rat-salsa), and
   [Ratcn](https://github.com/kristoferlund/ratcn).

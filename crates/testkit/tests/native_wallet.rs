@@ -135,7 +135,7 @@ impl Fixture {
         let server = server.start(module);
         let manifest = tempfile::NamedTempFile::new().unwrap();
         let mut document: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
+            "../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
         ))
         .unwrap();
         for index in 0..2 {

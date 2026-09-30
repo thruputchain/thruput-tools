@@ -245,7 +245,7 @@ jobs:
     permissions:
       contents: read
     env:
-      FIXTURES: crates/tools/cli/fixtures/codegen
+      FIXTURES: crates/cli/fixtures/codegen
       # Matches the version client-ts builds with, so the bindings are checked
       # by the compiler that actually consumes them.
       TYPESCRIPT_VERSION: 6.0.3
@@ -299,7 +299,7 @@ jobs:
       # A clean tsc says nothing, so print the version first: a green log then
       # shows the compiler ran rather than leaving that to be assumed.
       - name: Type-check the generated bindings
-        working-directory: crates/tools/cli/fixtures/codegen/typecheck
+        working-directory: crates/cli/fixtures/codegen/typecheck
         run: |
           set -euo pipefail
           npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc --version
@@ -309,7 +309,7 @@ jobs:
       # A binding can type-check and still fail when it runs, so compile the
       # bindings and call every event decoder they generate.
       - name: Run the generated event decoders
-        working-directory: crates/tools/cli/fixtures/codegen/typecheck
+        working-directory: crates/cli/fixtures/codegen/typecheck
         run: |
           set -euo pipefail
           out="${RUNNER_TEMP:?}/codegen-js"

@@ -63,10 +63,10 @@ capacity.
 | Shared public server | [json-rpc-server](../crates/json-rpc/json-rpc-server/src/server.rs) |
 | Backend response mapping | [hogd-backend](../crates/x23/hogd-backend/src/lib.rs) |
 | Production service wiring | [gateway](../crates/json-rpc/json-rpc-gateway/src/main.rs) |
-| Local runtime lifecycle | [node-supervisor](../crates/dev/node-supervisor/src/lib.rs) |
-| CLI entrypoints | [CLI](../crates/tools/cli/src/main.rs) |
+| Local runtime lifecycle | [node-supervisor](../crates/node-supervisor/src/lib.rs) |
+| CLI entrypoints | [CLI](../crates/cli/src/main.rs) |
 | Embeddable invocation | [client](../crates/client/src/lib.rs) |
-| Signing and wallet transactions | [signing](../crates/tools/signing/src/lib.rs) |
+| Signing and wallet transactions | [signing](../crates/signing/src/lib.rs) |
 
 [Cargo.toml](../Cargo.toml) lists the complete workspace. The
 [OpenRPC artifact](../crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json)

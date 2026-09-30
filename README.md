@@ -31,7 +31,7 @@ groundhog --version
 Or, from the root of this checkout:
 
 ```sh
-cargo install --path crates/tools/cli --locked --force
+cargo install --path crates/cli --locked --force
 ```
 
 Cargo installs `groundhog` under `~/.cargo/bin`; make sure it is on your
@@ -72,11 +72,11 @@ integration tests.
 
 For a runtime built in `hogd`, set
 `GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode` before starting the node.
-See the [toolchain reference](crates/tools/cli/README.md#groundhog-toolchain)
+See the [toolchain reference](crates/cli/README.md#groundhog-toolchain)
 for supported hosts, version selection, and local overrides.
 
 For managed runtime installation, wallets, hosted Devnet, container networking,
-and the full command reference, see the [CLI guide](crates/tools/cli/README.md).
+and the full command reference, see the [CLI guide](crates/cli/README.md).
 Use `groundhog <command> --help` for the installed version's options.
 `groundhog docs` serves the bundled developer documentation locally.
 
@@ -126,10 +126,11 @@ workspace test command does not run ignored live-node tests.
 [CI](.github/workflows/ci.yml) also checks generated projects and TypeScript
 bindings.
 
-The main source areas are `crates/json-rpc` (public API and gateway),
-`crates/x23` (hogd adapters), `crates/tools` (CLI and supporting libraries),
-`crates/rv32` (artifact format and lowering), and `crates/dev` (local node and
-test harnesses). [Cargo.toml](Cargo.toml) lists every workspace crate.
+Crates are grouped by subsystem: `crates/json-rpc` (public API and gateway),
+`crates/x23` (hogd adapters), and `crates/rv32` (artifact format and lowering).
+Other crates, including `cli`, `client`, `node-supervisor`, and `testkit`, live
+directly under `crates/`. See the [crate layout](crates/README.md);
+[Cargo.toml](Cargo.toml) lists every workspace crate.
 
 Use feature branches and pull requests. Follow existing Rust conventions:
 typed `thiserror` errors, no `.unwrap()` outside tests, and documented public

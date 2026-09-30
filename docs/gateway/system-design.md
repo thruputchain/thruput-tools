@@ -41,7 +41,7 @@ The shared server's pre-checks improve error reporting for transactions the
 executor would reject. They are advisory: the executor remains authoritative.
 They use the chain's network configuration and protocol-defined defaults,
 not a second set of locally invented limits. See
-[transaction validation](../../crates/tools/tx-validation/src/lib.rs) and the
+[transaction validation](../../crates/tx-validation/src/lib.rs) and the
 [RPC error catalog](../../crates/json-rpc/json-rpc-types/src/error.rs).
 
 The gateway is the public admission-policy boundary. Transaction validity and
@@ -95,7 +95,7 @@ admission outcome. Public array concurrency, backend batch size, admission limit
 and socket count are separate controls. Timeout or cancellation cannot undo a
 transaction already admitted by the scheduler. See the gateway
 [submitter](../../crates/json-rpc/json-rpc-gateway/src/submitter.rs) and local
-[submit batcher](../../crates/dev/node-supervisor/src/submit_batcher.rs).
+[submit batcher](../../crates/node-supervisor/src/submit_batcher.rs).
 
 ## Views and reads
 

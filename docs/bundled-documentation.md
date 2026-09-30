@@ -10,7 +10,7 @@ new snapshot.
    CI run. It contains `snapshot.tar.gz` and `snapshot-lock.json`.
 2. Run `python3 scripts/import-docs-snapshot.py /path/to/artifact` here. This
    validates the archive's checksum, size, clean source identity and contents,
-   then copies both files into `crates/tools/cli/assets/docs/`.
+   then copies both files into `crates/cli/assets/docs/`.
 3. Review the source revision, documentation/version notes, and archive pin;
    commit both files with the CLI change. Never select the latest docs implicitly.
 4. Run the snapshot checks and CLI tests. Normal CLI packaging embeds those exact
