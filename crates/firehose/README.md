@@ -148,15 +148,16 @@ No rollback, block rewrite, or repair mode exists.
 
 ## Retention and verified restart
 
-Store prunes once per minute, including while a pull is parked. Defaults are
-`--retain-duration 604800` (seconds, seven days), `--retain-bytes 48000000000`
-(48 GB allocated), and `--retain-min-blocks 1000`. Either age or allocation can
-bind; the minimum overrides both budgets and always preserves at least one block.
-Age uses record modification time. Allocated bytes include filesystem block rounding,
-so small idle records consume their actual disk allocation rather than logical length.
-The budget includes the origin and floor, but excludes directory metadata and the
-shutdown watermark; leave
-volume headroom for those and for bursts between scans.
+Store prunes once per minute, including while disconnected or a pull is parked.
+Defaults are `--retain-duration 604800` (seconds, seven days),
+`--retain-bytes 48000000000` (48 GB allocated), and `--retain-min-blocks 1000`.
+Either age or allocation can bind; the minimum overrides both budgets and always
+preserves at least one block.
+Age uses record modification time. Allocated bytes include filesystem block
+rounding, so small idle records consume their actual disk allocation rather than
+logical length. The budget includes the origin and floor, but excludes directory
+metadata and the shutdown watermark; leave volume headroom for those and for
+bursts between scans.
 
 Pruning publishes `floor.xdr`, an XDR `IndexerInitializedProgress` for the first
 retained block's predecessor, including that block's epoch origin. Metadata uses

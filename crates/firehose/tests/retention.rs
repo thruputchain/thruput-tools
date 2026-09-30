@@ -117,7 +117,6 @@ fn duration_and_allocation_each_bind_but_minimum_never_removes_everything() {
             })
             .unwrap();
         assert!((2..4).contains(&store.blocks));
-        assert!(store.allocated_bytes < before || store.blocks == 2);
         assert!(store.allocated_bytes < before);
         store.prune(budget(0)).unwrap();
         assert_eq!(store.blocks, 1);
