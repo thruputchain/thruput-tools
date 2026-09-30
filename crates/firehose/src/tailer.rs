@@ -127,6 +127,7 @@ impl Tailer {
         loop {
             ticker.tick().await;
             let result = self.poll_with_health(&hub, Some((&metrics, stale))).await;
+            hub.refresh_request_window().await;
             self.update_health(&metrics, stale);
             if let Err(error) = result {
                 metrics.set_healthy(false);
@@ -230,6 +231,7 @@ mod tests {
             live_timeout_ms: 5000,
             catchup_timeout_ms: 10000,
             catchup_progress_ms: 30000,
+            request_window: 42_428,
         };
         let hub = Hub::new(dir.path().to_owned(), -1, config);
         let block = test_records::fixture();
