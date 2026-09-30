@@ -101,7 +101,7 @@ impl Config {
     }
 }
 
-fn record_from_bytes(block: &EventIndexerPulledBlock, bytes: Vec<u8>) -> Record {
+pub(crate) fn record_from_bytes(block: &EventIndexerPulledBlock, bytes: Vec<u8>) -> Record {
     Record {
         height: crate::block_height(block),
         consensus_hash: HexBytes::from(block.block.identity.consensus_hash.as_ref().to_vec()),
@@ -198,8 +198,7 @@ impl Hub {
     }
 
     /// Publish only after successful durable append. No subscriber I/O occurs here.
-    pub(crate) fn publish(&self, block: &EventIndexerPulledBlock, bytes: Vec<u8>) {
-        let mut record = record_from_bytes(block, bytes);
+    pub(crate) fn publish(&self, mut record: Record) {
         record.ingested_at_unix_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()

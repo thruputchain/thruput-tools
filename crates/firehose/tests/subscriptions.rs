@@ -98,12 +98,13 @@ async fn public_profile_refuses_second_subscription_and_first_keeps_delivering()
         store.height(),
         cli_config(&["--allow-remote"]),
     );
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let mut first = subscribe(&client, Cursor::Tip).await;
     let current = fixture();
     store.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
     block(&client, &mut first, 1).await;
     assert_connection_limit(client.follow_blocks(Cursor::Tip).await.unwrap_err(), 1);
     assert_eq!(hub.stats()["currentSubscribers"], 1);
@@ -111,6 +112,7 @@ async fn public_profile_refuses_second_subscription_and_first_keeps_delivering()
     let other = connect(address).await;
     let mut second = subscribe(&other, Cursor::Tip).await;
     store.append(&next(&current)).unwrap();
+    tailer.poll(&hub).await.unwrap();
     block(&client, &mut first, 2).await;
     block(&other, &mut second, 2).await;
     server.stop().unwrap();
@@ -127,7 +129,7 @@ async fn public_profile_concurrent_subscriptions_admit_exactly_one() {
         store.height(),
         cli_config(&["--allow-remote"]),
     );
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let attempt = || {
@@ -146,8 +148,10 @@ async fn public_profile_concurrent_subscriptions_admit_exactly_one() {
     assert_eq!(hub.stats()["currentSubscribers"], 1);
     let current = fixture();
     store.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
     block(&client, &mut accepted, 1).await;
     store.append(&next(&current)).unwrap();
+    tailer.poll(&hub).await.unwrap();
     block(&client, &mut accepted, 2).await;
     server.stop().unwrap();
     drop((accepted, client));
@@ -165,7 +169,7 @@ async fn loopback_default_and_explicit_remote_override_allow_multiple_cursors() 
         let current = fixture();
         store.append(&current).unwrap();
         let hub = Hub::new(dir.path().to_owned(), store.height(), cli_config(&args));
-        store.subscribe_with(hub.clone());
+        let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
         let (address, server) = hub.serve().await.unwrap();
         let client = connect(address).await;
         let mut tip = subscribe(&client, Cursor::Tip).await;
@@ -174,6 +178,7 @@ async fn loopback_default_and_explicit_remote_override_allow_multiple_cursors() 
         assert_eq!(hub.stats()["currentSubscribers"], 3);
         block(&client, &mut backfill, 1).await;
         store.append(&next(&current)).unwrap();
+        tailer.poll(&hub).await.unwrap();
         block(&client, &mut tip, 2).await;
         block(&client, &mut backfill, 2).await;
         block(&client, &mut another, 2).await;
@@ -189,6 +194,20 @@ async fn connect(address: std::net::SocketAddr) -> WsClient {
         .build(format!("ws://{address}"))
         .await
         .unwrap()
+}
+
+async fn wait_for_serve(address: std::net::SocketAddr, child: &mut tokio::process::Child) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            assert!(child.try_wait().unwrap().is_none());
+            if tokio::net::TcpStream::connect(address).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 async fn subscribe(client: &WsClient, cursor: Cursor) -> Subscription<Value> {
@@ -270,7 +289,7 @@ async fn archive_boundary_resume_and_bytes_are_exact() {
         current = next(&current);
     }
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
@@ -283,6 +302,7 @@ async fn archive_boundary_resume_and_bytes_are_exact() {
     assert_eq!(last["block"]["height"], 10);
     verify_received(&mut received_store, &last);
     store.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
     ack(&client, &last).await;
     let delivered = block(&client, &mut sub, 11).await;
     verify_received(&mut received_store, &delivered);
@@ -299,6 +319,7 @@ async fn archive_boundary_resume_and_bytes_are_exact() {
     );
     current = next(&current);
     store.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
     let interrupted = receive(&mut sub).await;
     assert_eq!(interrupted["block"]["height"], 12);
     drop(sub);
@@ -308,6 +329,7 @@ async fn archive_boundary_resume_and_bytes_are_exact() {
     block(&client, &mut sub, 12).await; // Unacknowledged record is the documented repeat.
     current = next(&current);
     store.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
     block(&client, &mut sub, 13).await;
     server.stop().unwrap();
     drop(sub);
@@ -334,7 +356,7 @@ async fn slow_subscriber_demotes_and_disconnects_without_harming_fast_subscriber
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let fast = connect(address).await;
     let slow = connect(address).await;
@@ -342,11 +364,13 @@ async fn slow_subscriber_demotes_and_disconnects_without_harming_fast_subscriber
     let mut slow_sub = subscribe(&slow, Cursor::Tip).await;
     let mut current = fixture();
     store.append(&current).unwrap();
+    tailer.poll(&hub).await.unwrap();
     block(&fast, &mut fast_sub, 1).await;
     let unacked = receive(&mut slow_sub).await;
     for height in 2..=8 {
         current = next(&current);
         store.append(&current).unwrap();
+        tailer.poll(&hub).await.unwrap();
         block(&fast, &mut fast_sub, height).await;
     }
     let stats = hub.stats();
@@ -372,6 +396,7 @@ async fn slow_subscriber_demotes_and_disconnects_without_harming_fast_subscriber
     for height in 9..=12 {
         current = next(&current);
         store.append(&current).unwrap();
+        tailer.poll(&hub).await.unwrap();
         block(&fast, &mut fast_sub, height).await;
     }
     assert_eq!(store.height(), 12);
@@ -522,7 +547,7 @@ async fn measure_fanout_and_catchup() {
         let address = listener.local_addr().unwrap();
         drop(listener);
         let dir = tempfile::tempdir().unwrap();
-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose"))
+        let mut writer = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose-store"))
             .args([
                 "run",
                 "--protocol",
@@ -533,8 +558,6 @@ async fn measure_fanout_and_catchup() {
                 dir.path().to_str().unwrap(),
                 "--listen",
                 "127.0.0.1:0",
-                "--ws-listen",
-                &address.to_string(),
             ])
             .env("RUST_LOG", "error")
             .stdout(std::process::Stdio::null())
@@ -543,6 +566,28 @@ async fn measure_fanout_and_catchup() {
             .spawn()
             .unwrap();
         wait_until(|| upstream.calls.load(Ordering::SeqCst) == 2).await;
+        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose-serve"))
+            .args([
+                "--store",
+                dir.path().to_str().unwrap(),
+                "--listen",
+                "127.0.0.1:0",
+                "--ws-listen",
+                &address.to_string(),
+                "--poll-interval-ms",
+                "10",
+                "--subscriber-queue",
+                "2",
+                "--live-timeout-ms",
+                "1000",
+                "--catchup-timeout-ms",
+                "1000",
+            ])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        wait_for_serve(address, &mut child).await;
+
         let pid = child.id().unwrap();
         let mut readers = Vec::new();
         for _ in 0..count {
@@ -617,6 +662,8 @@ async fn measure_fanout_and_catchup() {
         );
         child.kill().await.unwrap();
         child.wait().await.unwrap();
+        writer.kill().await.unwrap();
+        writer.wait().await.unwrap();
         task.abort();
     }
 }
@@ -633,7 +680,7 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
     let address = ws_listener.local_addr().unwrap();
     drop(ws_listener);
     let dir = tempfile::tempdir().unwrap();
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose"))
+    let mut writer = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose-store"))
         .args([
             "run",
             "--protocol",
@@ -644,14 +691,6 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
             dir.path().to_str().unwrap(),
             "--listen",
             "127.0.0.1:0",
-            "--ws-listen",
-            &address.to_string(),
-            "--subscriber-queue",
-            "2",
-            "--live-timeout-ms",
-            "1000",
-            "--catchup-timeout-ms",
-            "1000",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
@@ -659,6 +698,28 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
         .spawn()
         .unwrap();
     wait_until(|| upstream.calls.load(Ordering::SeqCst) == 2).await;
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose-serve"))
+        .args([
+            "--store",
+            dir.path().to_str().unwrap(),
+            "--listen",
+            "127.0.0.1:0",
+            "--ws-listen",
+            &address.to_string(),
+            "--poll-interval-ms",
+            "10",
+            "--subscriber-queue",
+            "2",
+            "--live-timeout-ms",
+            "1000",
+            "--catchup-timeout-ms",
+            "1000",
+        ])
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    wait_for_serve(address, &mut child).await;
+
     assert_eq!(upstream.active.load(Ordering::SeqCst), 1);
     let mut clients = Vec::new();
     let mut subs = Vec::new();
@@ -693,6 +754,8 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
     assert_slow_client_isolated(address, &upstream, &mut current, &clients, &mut subs).await;
     child.kill().await.unwrap();
     child.wait().await.unwrap();
+    writer.kill().await.unwrap();
+    writer.wait().await.unwrap();
     upstream_task.abort();
 }
 
@@ -750,7 +813,7 @@ async fn bounds_connection_scoped_acks_and_cleanup() {
     config.max_subscribers = 2;
     config.subscriber_queue_bytes = 1;
     let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let other = connect(address).await;
@@ -767,6 +830,7 @@ async fn bounds_connection_scoped_acks_and_cleanup() {
             .is_err()
     );
     store.append(&fixture()).unwrap();
+    tailer.poll(&hub).await.unwrap();
     let message = receive(&mut sub).await;
     assert_eq!(
         hub.stats()["totals"]["demotions"],
@@ -810,11 +874,12 @@ async fn stalled_live_and_oversize_records_return_resumable_close_reasons() {
             config.max_record_bytes = 100;
         }
         let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-        store.subscribe_with(hub.clone());
+        let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
         let (address, server) = hub.serve().await.unwrap();
         let client = connect(address).await;
         let mut sub = subscribe(&client, Cursor::Tip).await;
         store.append(&fixture()).unwrap();
+        tailer.poll(&hub).await.unwrap();
         if !oversized {
             assert_eq!(receive(&mut sub).await["type"], "block");
         }
@@ -861,7 +926,7 @@ async fn growing_archive_lag_disconnects_even_when_individual_acks_meet_deadline
     let mut config = config();
     config.catchup_progress_ms = 50;
     let hub = Hub::new(dir.path().to_owned(), store.height(), config);
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
@@ -869,6 +934,7 @@ async fn growing_archive_lag_disconnects_even_when_individual_acks_meet_deadline
     assert_eq!(message["block"]["height"], 1);
     for _ in 0..5 {
         store.append(&current).unwrap();
+        tailer.poll(&hub).await.unwrap();
         current = next(&current);
     }
     tokio::time::sleep(Duration::from_millis(60)).await;
@@ -890,7 +956,7 @@ async fn typed_client_future_cursor_and_invalid_cursor() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path()).unwrap();
     let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-    store.subscribe_with(hub.clone());
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
     let (address, server) = hub.serve().await.unwrap();
     let client = connect(address).await;
     assert!(
@@ -906,6 +972,7 @@ async fn typed_client_future_cursor_and_invalid_cursor() {
     let mut current = fixture();
     for _ in 0..3 {
         store.append(&current).unwrap();
+        tailer.poll(&hub).await.unwrap();
         current = next(&current);
     }
     let message = tokio::time::timeout(Duration::from_secs(1), sub.next())

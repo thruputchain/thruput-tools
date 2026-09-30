@@ -12,7 +12,7 @@ client's resolved binding version.
 | `hundred-transactions.hex` | `0.1.29-rc.3` | `hogp/edeb6e904647bf4` | `0.42.0` |
 
 Hex is the unmodified XDR `EventIndexerPulledBlock`, read using procedure 10
-only and archived by `hog-firehose tail` with commitment verification enabled.
+only and archived by `hog-firehose-store tail` with commitment verification enabled.
 
 - `bootstrap.hex`: height 1, default dev-wallet profile, two local users;
   one bootstrap transaction, five emitted events.
@@ -27,7 +27,7 @@ development seed.
 
 To recapture, install the catalog node with `thruput toolchain install`,
 start `hog-devnode --dev-accounts 2`, discover its event endpoint, and run
-`hog-firehose tail` into a fresh archive. Capture height 1, run
+`hog-firehose-store tail` into a fresh archive. Capture height 1, run
 `examples/drive_blocks.rs` for 30 empty blocks, submit 100 calls with
 `examples/submit_traffic.rs` and nonce start 100000, then drive one more block.
 Hex-encode the archived height-1 and height-32 records without altering their

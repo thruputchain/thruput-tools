@@ -1,29 +1,32 @@
-# hog-firehose (experimental)
+# Firehose store and serve (experimental)
 
-A standalone committed-block archive and WebSocket subscription service. One
-serial `EventIndexer1` connection and one outstanding pull serve every subscriber.
+Two independent processes share an immutable archive directory. The sole writer,
+`hog-firehose-store`, uses one `EventIndexer1` connection and one outstanding pull
+regardless of subscriber count. `hog-firehose-serve` owns WebSocket subscribers.
 The gateway remains a separate process with its existing surface. Experimental wire
 types and generated jsonrpsee client/server traits live in this unpublished crate.
 
 ```sh
 cargo build -p thruput-firehose
-hog-firehose discover localhost:9001 localhost:9002 localhost:9003
-hog-firehose tail --event-endpoint localhost:9002 --store ./archive \
-  --tip-endpoint localhost:9004 --listen 127.0.0.1:9550 --ws-listen 127.0.0.1:9551
-hog-firehose verify --store ./archive
+hog-firehose-store discover localhost:9001 localhost:9002 localhost:9003
+hog-firehose-store tail --event-endpoint localhost:9002 --store ./archive \
+  --tip-endpoint localhost:9004 --listen 127.0.0.1:9550
+hog-firehose-serve --store ./archive --listen 127.0.0.1:9552 \
+  --ws-listen 127.0.0.1:9551 --poll-interval-ms 200 --tip-stale-seconds 60
+hog-firehose-store verify --store ./archive
 ```
 
 See [the subscription protocol and backpressure policy](subscriptions.md) for
 subscribe/ack/resume, bounded queues, limits and metrics, and
 [Brief 09 measurements](subscription-measurement-2026-09-18.md) for fanout evidence.
-Both listeners default to loopback. Non-loopback binding requires
+Serve listeners default to loopback. Non-loopback binding requires
 `--allow-remote` and emits an unauthenticated-service startup warning.
 It also defaults to one subscription per connection and logs that choice;
 `--max-subscriptions-per-connection` explicitly overrides the limit. Local use
 without `--allow-remote` retains the global subscriber cap as its per-connection
 default. Pass `--allow-remote` for public proxy deployments even on loopback.
 
-`run` is the same service without block summaries. `tail` emits height, emitted
+Store `run` ingests without block summaries. `tail` emits height, emitted
 event count, transaction count, XDR payload bytes, and elapsed time since the
 previous newly stored block. Its first interval starts when ingestion begins.
 `--json` produces JSON lines for tail and a single discovery report; JSON tail also includes the
@@ -33,6 +36,28 @@ CLI flags shown above; `RUST_LOG` controls tracing. The required event address
 is never inferred. Both DNS hostnames and numeric socket addresses are accepted.
 `--protocol` can override the compiled, exact-width protocol token; it cannot
 make incompatible XDR schemas compatible.
+
+## Directory interface and failure isolation
+
+Store exclusively holds `LOCK`. Serve never locks or writes the directory and never
+opens a `Store`. It discovers the maximum fixed-width height filename at startup
+without reading record contents, then polls the next height every 200 ms.
+If initially empty, it rescans until records appear and starts publication at the
+minimum height. Existing history at startup is served from disk without republication.
+Each new record is decoded and verified once before publication to the existing
+bounded fanout. Atomic publication means readers see a complete record or no file.
+There is no IPC or dependency on writer reachability.
+
+Stopping store leaves subscribers connected with their cursors intact; restarting
+store resumes publication through the directory. Restarting serve does not interrupt
+ingestion. Tail read or verification failures do not advance its tip.
+
+Serve exposes health and metrics on `127.0.0.1:9552`, separately from store's
+`127.0.0.1:9550`. Health uses the latest record's modification time, including at
+restart. Above `--tip-stale-seconds` (default 60), `/health` returns 503 and
+`firehose_healthy` is zero. `firehose_tip_age_seconds` reports age; it is NaN before
+any record. An empty archive is healthy startup until a first record arrives.
+Store health continues to describe its upstream connection.
 
 ## Discovery and protocol safety
 
@@ -147,9 +172,9 @@ without a second content-addressed file layout or deduplication layer.
 
 ## Observability
 
-`/health` returns 200 for a working ingester, including when parked, and 503
+Store `/health` returns 200 for a working ingester, including when parked, and 503
 before its first successful response or while retrying backend failures.
-An unexpected WebSocket server stop shuts down the process with an error.
+An unexpected WebSocket server stop shuts down serve with an error.
 `/metrics` uses a private Prometheus registry:
 
 | Metric | Meaning |
@@ -159,6 +184,8 @@ An unexpected WebSocket server stop shuts down the process with an error.
 | `firehose_events_per_block` | Emitted-event histogram |
 | `firehose_current_height` | Durable contiguous height, or -1 before an origin |
 | `firehose_tip_lag_blocks` | Sampled scheduler tip minus archive height |
+| `firehose_tip_age_seconds` | Serve tip age; NaN before its first record |
+| `firehose_healthy` | Process health, including stale-tip degradation on serve |
 | `firehose_pull_seconds` | Pull duration histogram, including parking |
 | `firehose_parked_seconds_total` | Gauge of accumulated parked seconds, including the current pull |
 | `firehose_store_bytes` | Logical durable record bytes, including recovered records |

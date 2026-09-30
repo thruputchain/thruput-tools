@@ -1,7 +1,7 @@
 # Experimental WebSocket firehose
 
-`hog-firehose run` and `tail` start the subscription listener at
-`ws://127.0.0.1:9551`; health and Prometheus remain at `http://127.0.0.1:9550`.
+`hog-firehose-serve` starts the subscription listener at
+`ws://127.0.0.1:9551`; serve health and Prometheus use `http://127.0.0.1:9552`.
 There is no authentication. `--allow-remote` is required if **either** listener
 binds outside loopback, and logs a startup warning. No gateway changes or
 additional event-service connections are involved.
