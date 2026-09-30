@@ -24,7 +24,7 @@ pub struct Metrics {
     pub lag: Gauge,
     /// Age of serve's latest record; NaN before the first record.
     pub tip_age: Gauge,
-    health: IntGauge,
+    health_gauge: IntGauge,
     /// End-to-end pull duration, including parked time.
     pub pull: Histogram,
     /// Accumulated parked seconds including the currently outstanding pull.
@@ -35,8 +35,8 @@ pub struct Metrics {
     pub allocated: IntGauge,
     /// Every returned protocol outcome, including errors.
     pub outcomes: IntCounterVec,
-    /// Whether ingestion has a healthy backend connection.
-    healthy: Arc<AtomicBool>,
+    /// Authoritative process health, shared with the HTTP handler.
+    health_state: Arc<AtomicBool>,
 }
 
 impl Metrics {
@@ -60,7 +60,7 @@ impl Metrics {
             "Age of the latest archive record",
         )?;
         tip_age.set(f64::NAN);
-        let health = IntGauge::new("firehose_healthy", "Whether this process is healthy")?;
+        let health_gauge = IntGauge::new("firehose_healthy", "Whether this process is healthy")?;
         let pull = Histogram::with_opts(
             HistogramOpts::new("firehose_pull_seconds", "Pull latency including parking")
                 .buckets(vec![0.001, 0.01, 0.1, 1., 5., 30., 60., 300.]),
@@ -101,7 +101,7 @@ impl Metrics {
             Box::new(height.clone()),
             Box::new(lag.clone()),
             Box::new(tip_age.clone()),
-            Box::new(health.clone()),
+            Box::new(health_gauge.clone()),
             Box::new(pull.clone()),
             Box::new(parked.clone()),
             Box::new(store.clone()),
@@ -118,13 +118,13 @@ impl Metrics {
             height,
             lag,
             tip_age,
-            health,
+            health_gauge,
             pull,
             parked,
             store,
             allocated,
             outcomes,
-            healthy: Arc::new(AtomicBool::new(false)),
+            health_state: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -135,14 +135,14 @@ impl Metrics {
         Ok(output)
     }
 
-    /// Mark the ingest connection healthy or degraded.
+    /// Mark this process healthy or degraded.
     pub fn set_healthy(&self, healthy: bool) {
-        self.health.set(i64::from(healthy));
-        self.healthy.store(healthy, Ordering::Relaxed);
+        self.health_gauge.set(i64::from(healthy));
+        self.health_state.store(healthy, Ordering::Relaxed);
     }
 
-    /// Whether ingestion currently has a working backend connection.
+    /// Whether this process is currently healthy.
     pub fn is_healthy(&self) -> bool {
-        self.healthy.load(Ordering::Relaxed)
+        self.health_state.load(Ordering::Relaxed)
     }
 }

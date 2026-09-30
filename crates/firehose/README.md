@@ -37,7 +37,7 @@ make incompatible XDR schemas compatible.
 
 Store exclusively holds `LOCK`. Serve never locks or writes the directory and never
 opens a `Store`. It discovers the maximum fixed-width height filename at startup
-without reading record contents, then polls the next height every 200 ms.
+and verifies only that record, then polls the next height every 200 ms.
 If initially empty, it rescans until records appear and starts publication at the
 minimum height. Existing history at startup is served from disk without republication.
 Each new record is decoded and verified once before publication to the existing
@@ -52,7 +52,7 @@ Serve exposes health and metrics on `127.0.0.1:9552`, separately from store's
 `127.0.0.1:9550`. Health uses the latest record's modification time, including at
 restart. Above `--tip-stale-seconds` (default 60), `/health` returns 503 and
 `firehose_healthy` is zero. `firehose_tip_age_seconds` reports age; it is NaN before
-any record. An empty archive is healthy startup until a first record arrives.
+any record. An empty archive is healthy only within the same startup grace threshold.
 Store health continues to describe its upstream connection.
 
 ## Discovery and protocol safety

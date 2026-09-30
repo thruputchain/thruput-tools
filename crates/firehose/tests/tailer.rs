@@ -34,21 +34,35 @@ fn config() -> Config {
 }
 
 #[test]
-fn discovery_is_name_only_read_only_and_empty_is_healthy() {
+fn discovery_verifies_only_the_tip_and_empty_has_startup_grace() {
     let dir = tempfile::tempdir().unwrap();
     let absent = dir.path().join("absent");
     let metrics = Metrics::new().unwrap();
     let tailer = Tailer::new(absent.clone()).unwrap();
-    tailer.update_health(&metrics, Duration::ZERO);
+    tailer.update_health(&metrics, Duration::from_mins(1));
     assert_eq!(tailer.tip(), -1);
     assert!(metrics.is_healthy());
     assert!(metrics.tip_age.get().is_nan());
+    tailer.update_health(&metrics, Duration::ZERO);
+    assert!(!metrics.is_healthy());
     assert!(!absent.exists());
     fs::write(dir.path().join("pending"), b"not a record").unwrap();
     fs::write(dir.path().join("origin.xdr"), b"not decoded").unwrap();
     for height in [2, 9, 10] {
         fs::write(dir.path().join(format!("{height:020}.xdr")), b"not decoded").unwrap();
     }
+    let mut tip = fixture();
+    tip.block
+        .payload
+        .consensus_value
+        .proposal_header
+        .block_height = 10.into();
+    common::rehash(&mut tip);
+    fs::write(
+        dir.path().join(format!("{:020}.xdr", 10)),
+        xdrs::txs::encode(&tip).unwrap(),
+    )
+    .unwrap();
     assert_eq!(Tailer::new(dir.path().to_owned()).unwrap().tip(), 10);
     assert!(!dir.path().join("LOCK").exists());
 }
@@ -271,8 +285,10 @@ async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() 
     })
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(health_status(address).await.contains("200"));
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(health_status(address).await.contains("503"));
     assert!(
         !archive.exists(),
         "serve must not create its archive or LOCK"
@@ -300,4 +316,37 @@ async fn serve_http_health_is_starting_then_healthy_then_stale_without_writer() 
     assert!(health_status(address).await.contains("200"));
     process.kill().await.unwrap();
     process.wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_startup_tip_is_unhealthy_and_retried_without_reading_history() {
+    for bytes in [
+        b"truncated".to_vec(),
+        {
+            let mut block = fixture();
+            block.block.identity.consensus_hash = next(&block).block.identity.consensus_hash;
+            xdrs::txs::encode(&block).unwrap()
+        },
+        xdrs::txs::encode(&next(&fixture())).unwrap(),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{:020}.xdr", 1));
+        fs::write(&path, bytes).unwrap();
+        let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+        let metrics = Metrics::new().unwrap();
+        tailer.update_health(&metrics, Duration::from_mins(1));
+        assert_eq!(tailer.tip(), -1);
+        assert!(!metrics.is_healthy());
+        assert_eq!(metrics.height.get(), -1);
+        let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+        assert!(tailer.poll(&hub).await.is_err());
+        assert_eq!(tailer.tip(), -1);
+        // Retry the maximum name even when earlier history is corrupt.
+        fs::write(dir.path().join(format!("{:020}.xdr", 0)), b"bad history").unwrap();
+        fs::write(path, xdrs::txs::encode(&fixture()).unwrap()).unwrap();
+        tailer.poll(&hub).await.unwrap();
+        tailer.update_health(&metrics, Duration::from_mins(1));
+        assert_eq!(tailer.tip(), 1);
+        assert!(metrics.is_healthy());
+    }
 }

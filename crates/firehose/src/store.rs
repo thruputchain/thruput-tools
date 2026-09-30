@@ -12,10 +12,13 @@ use groundhog_indexer::{
 
 use crate::{Error, block_height, decode, encode, invalid, verify::verify};
 
+/// Decimal height width shared by record writers and directory discovery.
+pub(crate) const RECORD_HEIGHT_WIDTH: usize = 20;
+
 /// The directory is the height index, so the writer and every archive reader
 /// must agree on this name.
 pub(crate) fn record_path(directory: &Path, height: i64) -> PathBuf {
-    directory.join(format!("{height:020}.xdr"))
+    directory.join(format!("{height:0RECORD_HEIGHT_WIDTH$}.xdr"))
 }
 
 /// An exclusively locked, verified local archive.
