@@ -28,21 +28,26 @@ Guest memory defaults to 64 KiB. Set `initial_memory_bytes` in
 Build/test use it for linker layout and artifact metadata. `--stack-size` sets a
 reserve within that memory, not a larger total allowance.
 
-Methods/types live under interface and compatibility major:
-`ERC20.v0_1.transfer`, `ERC20.v0_1.TransferArgs`. Descriptors provide invocation,
-call, view/viewOutcome, decodeArgs, decodeReturn/decodeException, and root
-decodeReceipt/decodeReceiptOutcome. Select a known method before decoding;
-decodeArgs checks the complete buffer, not the deployed contract's behavior.
-No-argument decoding returns undefined. The runtime adds decodeArgs without new
+Methods and types use interface/version paths: `ERC20.v0_1.transfer` and
+`ERC20.v0_1.TransferArgs`. Descriptors provide:
+
+- `invocation` and `call` to prepare calls;
+- `view` and `viewOutcome` for simulation;
+- `decodeArgs`, `decodeReturn`, and `decodeException` for known method data;
+- `decodeReceipt` and `decodeReceiptOutcome` for a known root method's receipt.
+
+`decodeArgs` consumes the complete input and returns undefined for no arguments.
+It verifies byte shape, not contract behavior. This runtime addition needs no new
 metadata; the separate spec/namespace migration requires regenerated bindings.
 
 Generated event descriptors such as `my_token.v1.events.Transfer` provide
-decode, filter, allFromReceipt, and singleFromReceipt. Named types, enums, and
+`decode`, `filter`, `allFromReceipt`, and `singleFromReceipt`. Types, enums, and
 events follow the spec id: crate, major, module, declaration. Value objects and
 type namespaces share paths, preserving erasable TypeScript and Node type
 stripping. Reserved path names, globalThis, and crate/interface names spec or
 decodeEvent take a leading `$`. Use generated codecs rather than manual XDR.
 
-Address/fixed 32-byte topics and u32/u64/u128/i32/i64/i128/U256/I256/bool topics
-are directly filterable. Integers are 32-byte big-endian, zero/sign-extended,
-not CXS scalars. Strings/byte slices expose only a hash, not their preimage.
+Addresses, fixed 32-byte values, `u32`, `u64`, `u128`, `i32`, `i64`, `i128`,
+`U256`, `I256`, and `bool` are directly filterable topics. Integers use 32-byte
+big-endian values with zero/sign extension, not CXS scalar encoding. Strings
+and byte slices expose only a hash, not their preimage.

@@ -9,9 +9,10 @@ bootstrap_order = 60
 +++
 ## Local Development
 
-For scripted setup, use `groundhog init --non-interactive --json`. Exit 1 means
-Cargo, the profile, or a selected stored key is unavailable. Add `--generate-key`
-only when authorized; existing keys/selections are preserved. `--quiet` does not
+For scripted setup, use `groundhog init --non-interactive --json`. Incomplete
+setup returns exit 1; check Cargo, the profile, and the selected stored key.
+Add `--generate-key` only when authorized; existing keys and selections are
+preserved. `--quiet` does not
 accept wizard defaults. `init` changes setup; `status --json` is read-only.
 Create projects separately with `groundhog new`.
 
@@ -56,8 +57,7 @@ node just to enable logging: stopping it discards its chain state.
 `events list`, `tx list`, and `token transfers` inspect one page at a time.
 Continue with the returned opaque cursor and the same target/filters. `tx list`
 matches root invocation targets, not every address touched by a transaction.
-An exhausted walk is not a durable checkpoint for later blocks. Apply the
-event-page restart rules above when building an indexer.
+See [Event pages and restart](#event-pages-and-restart) for cursor rules.
 
 ### Key and address interoperability
 

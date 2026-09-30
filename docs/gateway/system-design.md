@@ -449,12 +449,9 @@ and leaves the generation alone.
 
 ## Event Query Bounds
 
-Cursor continuation and durable application checkpoints are distinct. A cursor
-continues one historical walk; new blocks require a new walk. Raw requests still
-include order/anchor even when the cursor supplies continuation state. Preserve
-the query filters, continue through empty pages with non-empty cursors, and do
-not treat response-time latestBlock as proof of consumed history. See the
-[application restart walkthrough](https://docs.groundhog.dev/tutorials/add-events-to-a-contract/#resume-without-missing-events).
+Cursors continue one historical scan; they are not application checkpoints.
+See the [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract)
+for continuation and restart rules.
 
 `get_events` is paginated server-side (the indexer clamps page size to
 its own cap), but the gateway adds a defensive pre-XDR check before
