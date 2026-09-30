@@ -77,9 +77,11 @@ requests; abort cancels an in-flight read.
   historical scan, not future blocks. Raw requests still require order and anchor.
 - Wire `"0x"` is an empty `Uint8Array` in the client. Stop on an empty returned
   cursor, not an empty page.
-- For later scans, reread the last stored row's height and deduplicate by
-  transaction hash plus event sequence number (hash alone for transaction refs).
-  Save rows and progress together; never skip a partially processed block.
+- For ascending ingestion, start a new ascending scan with an empty cursor at
+  the last stored row's height. Deduplicate by transaction hash and event sequence
+  number (hash alone for refs). Save rows and progress together.
+- Refresh descending history with an empty cursor and client `anchor: "end"`
+  (raw RPC `atEnd`). Its last row is the oldest seen, not a forward checkpoint.
 - `latestBlock` is the indexer head, not an application checkpoint. Check
   `oldestBlock` for lost history. Current indexers do not reliably reject corrupt
   cursors; do not silently restart.

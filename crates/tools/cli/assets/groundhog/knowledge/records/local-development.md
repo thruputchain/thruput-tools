@@ -54,7 +54,8 @@ absent. For detailed local backend logs, start `groundhog node --verbose`;
 output goes to that terminal unless redirected. Do not restart an ephemeral
 node just to enable logging: stopping it discards its chain state.
 
-`events list`, `tx list`, and `token transfers` inspect one page at a time.
+`events list`, `tx list`, and `token transfers` read newest-first pages.
+Omit `--cursor` to refresh from the head; a continuation goes toward older rows.
 Continue with the returned opaque cursor and the same target/filters. `tx list`
 matches root invocation targets, not every address touched by a transaction.
 See [Event pages and restart](#event-pages-and-restart) for cursor rules.
