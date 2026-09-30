@@ -59,7 +59,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path, nargs="?", help="selected downloaded CI artifact directory")
     args = parser.parse_args()
-    target = Path(__file__).resolve().parent.parent / "crates/tools/cli/assets/docs"
+    target = Path(__file__).resolve().parent.parent / "crates/cli/assets/docs"
     source = args.artifact if args.artifact else target
     pin = verify(source)
     if args.artifact:

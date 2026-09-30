@@ -107,8 +107,6 @@ fn workspace_root() -> std::path::PathBuf {
         .parent()
         .expect("bug: cli crate has parent")
         .parent()
-        .expect("bug: tools dir has parent")
-        .parent()
         .expect("bug: crates dir has workspace parent")
         .to_path_buf()
 }

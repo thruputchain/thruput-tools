@@ -3,7 +3,7 @@ use std::process::Command;
 #[test]
 fn validate_accepts_rv32_and_rejects_legacy_wasm_artifacts() {
     let scenario = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples/sim/local-fibonacci-view-smoke.json");
+        .join("../../examples/sim/local-fibonacci-view-smoke.json");
     let accepted = Command::new(env!("CARGO_BIN_EXE_hogsim"))
         .arg("validate")
         .arg(&scenario)

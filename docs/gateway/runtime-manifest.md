@@ -57,7 +57,7 @@ The node writes its endpoint and manifest path into global `local_runtime_state`
 Profiles with `network = "local"` consume that state; startup does not rewrite
 the selected profile. Scripts can pass an explicit runtime manifest or use
 `GROUNDHOG_RUNTIME_MANIFEST`. Resolution and override precedence live in
-[CLI configuration](../../crates/tools/cli/src/config/project.rs).
+[CLI configuration](../../crates/cli/src/config/project.rs).
 
 ## Readiness and trust
 
@@ -86,7 +86,7 @@ Schema definitions and parsing are in
 [runtime_manifest.rs](../../crates/json-rpc/json-rpc-types/src/runtime_manifest.rs)
 and [bootstrap_manifest.rs](../../crates/json-rpc/json-rpc-types/src/bootstrap_manifest.rs).
 The supervisor's validation and process protocol are in
-[hogd_dev.rs](../../crates/dev/node-supervisor/src/hogd_dev.rs).
+[hogd_dev.rs](../../crates/node-supervisor/src/hogd_dev.rs).
 
 ## State and shutdown
 
@@ -97,7 +97,7 @@ only when the child group does not exit. Dropping a handle is not equivalent to
 awaiting shutdown. An interrupted shutdown must not release ownership as though
 all descendants were confirmed stopped.
 
-Use the [CLI node reference](../../crates/tools/cli/README.md#groundhog-node) for
+Use the [CLI node reference](../../crates/cli/README.md#groundhog-node) for
 runtime selection, logging, persistence, and supported overrides. The lifecycle
-implementation is in [process.rs](../../crates/dev/node-supervisor/src/process.rs)
-and [pid_file.rs](../../crates/dev/node-supervisor/src/pid_file.rs).
+implementation is in [process.rs](../../crates/node-supervisor/src/process.rs)
+and [pid_file.rs](../../crates/node-supervisor/src/pid_file.rs).

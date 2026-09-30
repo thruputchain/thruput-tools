@@ -114,7 +114,7 @@ fn rejects_empty_or_padded_contract_fields() {
 #[test]
 fn checked_in_catalog_validates() {
     let catalog_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+        .join("../..")
         .join("examples/sim/catalog.json");
     let bytes = std::fs::read(&catalog_path).expect("catalog should read");
     let catalog: ScenarioCatalog = serde_json::from_slice(&bytes).expect("catalog should parse");

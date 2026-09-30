@@ -27,7 +27,7 @@ As of CLI 0.18.0:
 - Both create a single Rust contract with native, RV32, and integration-test files.
 - The command creates a new directory and rejects an existing destination.
 - Template selection is hard-coded in `src/main.rs` and `src/scaffold.rs` under
-  `crates/tools/cli/`.
+  `crates/cli/`.
 - Templates contain no TypeScript application or connected browser workflow.
 - There is no template catalog command or prompt-driven creation mode.
 

@@ -6,7 +6,7 @@ deploy, and test workflow into a single binary.
 ## Install
 
 ```bash
-cargo install --path crates/tools/cli
+cargo install --path crates/cli
 cargo install --path crates/rv32/lower         # optional, for standalone `rv32-lower`
 ```
 
@@ -902,4 +902,4 @@ resolved path, source identity, and guide/CLI version matching. No node, wallet,
 or project setup is required. External API references and network services still
 need access; page version notes remain authoritative for their examples.
 
-For snapshot updates, see [Bundled documentation maintenance](../../../docs/bundled-documentation.md).
+For snapshot updates, see [Bundled documentation maintenance](../../docs/bundled-documentation.md).

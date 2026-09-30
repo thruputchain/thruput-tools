@@ -7,7 +7,6 @@ fn main() {
     let repo_root = manifest_dir
         .parent()
         .and_then(Path::parent)
-        .and_then(Path::parent)
         .unwrap_or(manifest_dir);
     watch_git_head(repo_root);
 

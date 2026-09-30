@@ -1198,45 +1198,45 @@ mod tests {
         for (name, manifest_json) in [
             (
                 "local-fibonacci-view-smoke",
-                include_str!("../../../../examples/sim/local-fibonacci-view-smoke.json"),
+                include_str!("../../../examples/sim/local-fibonacci-view-smoke.json"),
             ),
             (
                 "local-fibonacci-contract-call-events-smoke",
                 include_str!(
-                    "../../../../examples/sim/local-fibonacci-contract-call-events-smoke.json"
+                    "../../../examples/sim/local-fibonacci-contract-call-events-smoke.json"
                 ),
             ),
             (
                 "local-fibonacci-compute-heavy",
-                include_str!("../../../../examples/sim/local-fibonacci-compute-heavy.json"),
+                include_str!("../../../examples/sim/local-fibonacci-compute-heavy.json"),
             ),
             (
                 "local-fibonacci-event-heavy",
-                include_str!("../../../../examples/sim/local-fibonacci-event-heavy.json"),
+                include_str!("../../../examples/sim/local-fibonacci-event-heavy.json"),
             ),
             (
                 "local-calldata-heavy",
-                include_str!("../../../../examples/sim/local-calldata-heavy.json"),
+                include_str!("../../../examples/sim/local-calldata-heavy.json"),
             ),
             (
                 "local-nnint-heavy",
-                include_str!("../../../../examples/sim/local-nnint-heavy.json"),
+                include_str!("../../../examples/sim/local-nnint-heavy.json"),
             ),
             (
                 "local-counter-read-after-write-smoke",
-                include_str!("../../../../examples/sim/local-counter-read-after-write-smoke.json"),
+                include_str!("../../../examples/sim/local-counter-read-after-write-smoke.json"),
             ),
             (
                 "local-multi-contract-soak",
-                include_str!("../../../../examples/sim/local-multi-contract-soak.json"),
+                include_str!("../../../examples/sim/local-multi-contract-soak.json"),
             ),
             (
                 "local-realistic-soak",
-                include_str!("../../../../examples/sim/local-realistic-soak.json"),
+                include_str!("../../../examples/sim/local-realistic-soak.json"),
             ),
             (
                 "local-realistic-soak-short",
-                include_str!("../../../../examples/sim/local-realistic-soak-short.json"),
+                include_str!("../../../examples/sim/local-realistic-soak-short.json"),
             ),
         ] {
             let manifest: SimulationManifest = serde_json::from_str(manifest_json)

@@ -67,12 +67,12 @@ establish capacity for a different topology.
 
 | Concern | Source |
 | --- | --- |
-| Scenario types and validation | [manifest.rs](../../crates/dev/sim/src/manifest.rs), [validation.rs](../../crates/dev/sim/src/validation.rs) |
-| Intended schedule | [scheduler.rs](../../crates/dev/sim/src/scheduler.rs) |
-| Actor state and execution | [actor.rs](../../crates/dev/sim/src/actor.rs), [executor.rs](../../crates/dev/sim/src/executor.rs) |
-| Target lifecycle and orphan cleanup | [target.rs](../../crates/dev/sim/src/target.rs), [sweep.rs](../../crates/dev/sim/src/sweep.rs) |
-| Results and comparison | [result.rs](../../crates/dev/sim/src/result.rs), [compare.rs](../../crates/dev/sim/src/compare.rs) |
-| Resource observations | [resource.rs](../../crates/dev/sim/src/resource.rs) |
+| Scenario types and validation | [manifest.rs](../../crates/sim/src/manifest.rs), [validation.rs](../../crates/sim/src/validation.rs) |
+| Intended schedule | [scheduler.rs](../../crates/sim/src/scheduler.rs) |
+| Actor state and execution | [actor.rs](../../crates/sim/src/actor.rs), [executor.rs](../../crates/sim/src/executor.rs) |
+| Target lifecycle and orphan cleanup | [target.rs](../../crates/sim/src/target.rs), [sweep.rs](../../crates/sim/src/sweep.rs) |
+| Results and comparison | [result.rs](../../crates/sim/src/result.rs), [compare.rs](../../crates/sim/src/compare.rs) |
+| Resource observations | [resource.rs](../../crates/sim/src/resource.rs) |
 | Executable scenarios | [examples/sim](../../examples/sim/) |
 
 Use those types, tests, and scenario files for supported fields and exact

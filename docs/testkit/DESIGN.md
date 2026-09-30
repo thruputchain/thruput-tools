@@ -45,12 +45,12 @@ Scenario completion propagates actor errors to the ordinary Rust test result.
 
 ## Where to read next
 
-Start with the [crate Rustdoc](../../crates/dev/testkit/src/lib.rs) and
-[tests](../../crates/dev/testkit/tests/) for API usage. The main ownership points
-are [scenario.rs](../../crates/dev/testkit/src/scenario.rs),
-[network.rs](../../crates/dev/testkit/src/network.rs),
-[agent.rs](../../crates/dev/testkit/src/agent.rs), and
-[clock.rs](../../crates/dev/testkit/src/clock.rs).
+Start with the [crate Rustdoc](../../crates/testkit/src/lib.rs) and
+[tests](../../crates/testkit/tests/) for API usage. The main ownership points
+are [scenario.rs](../../crates/testkit/src/scenario.rs),
+[network.rs](../../crates/testkit/src/network.rs),
+[agent.rs](../../crates/testkit/src/agent.rs), and
+[clock.rs](../../crates/testkit/src/clock.rs).
 
 For a real local contract smoke, use
 [scripts/smoke-testkit-local.sh](../../scripts/smoke-testkit-local.sh) with

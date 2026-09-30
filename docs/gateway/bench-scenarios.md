@@ -79,7 +79,7 @@ settings, logging policy, and relevant gateway configuration. Binary hashes and
 observed versions identify what ran; runner-supplied labels remain declarations.
 Missing metadata is unknown, not verified equality. A caller can supply
 `--target-info` when the public RPC cannot describe the deployed environment.
-See the [benchmark source](../../crates/dev/bench/src/) for artifact types.
+See the [benchmark source](../../crates/bench/src/) for artifact types.
 
 ```sh
 groundhog-bench compare \

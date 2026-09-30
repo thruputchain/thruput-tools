@@ -188,7 +188,7 @@ version:
 		fi; \
 	done
 
-# cargo install --path crates/tools/cli is the other way to get the CLI on PATH;
+# cargo install --path crates/cli is the other way to get the CLI on PATH;
 # it rebuilds into ~/.cargo/bin. This copies what is already built, so the
 # binary installed is the one just tested.
 # Every binary in BINS has to be there. Skipping the missing ones and still

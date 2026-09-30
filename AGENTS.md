@@ -30,13 +30,13 @@ for setup and [docs/README.md](docs/README.md) for focused documentation.
 | RPC payloads and errors | `crates/json-rpc/json-rpc-types`: JSON projections, hex wrappers, error catalog, bootstrap/runtime manifests |
 | Public server behavior | `crates/json-rpc/json-rpc-server`: shared validation, canonical transaction hashing, and backend traits |
 | Production gateway | `crates/json-rpc/json-rpc-gateway`: backend connections, timeouts, metrics, and degraded-mode policy |
-| Local node | `crates/dev/node-supervisor`: supervises `hog-devnode`, verifies its manifest, embeds the shared RPC server |
+| Local node | `crates/node-supervisor`: supervises `hog-devnode`, verifies its manifest, embeds the shared RPC server |
 | hogd result mapping | `crates/x23/hogd-backend`: shared decoding, submit packing, and transaction-status probe ordering; no connections, timeout/retry policy, or metrics |
 | Internal transport | `crates/x23/x23-transport`: x23 pool and connection helpers; not a public SDK API |
 | Embeddable client | `crates/client`: supplied-spec codecs and contract invocation with resolved inputs and caller-owned RPC clients; no CLI config, discovery, terminal output, compiler, or node supervision |
-| CLI | `crates/tools/cli`: command logic in the library; `main.rs` dispatches |
-| Transaction bounds | `crates/tools/tx-validation`: off-chain mirror of executor checks |
-| Runtime acquisition | `crates/tools/toolchain`: trusted catalog, acquisition, and cache; lookup is local and non-mutating, acquisition is explicit |
+| CLI | `crates/cli`: command logic in the library; `main.rs` dispatches |
+| Transaction bounds | `crates/tx-validation`: off-chain mirror of executor checks |
+| Runtime acquisition | `crates/toolchain`: trusted catalog, acquisition, and cache; lookup is local and non-mutating, acquisition is explicit |
 | RV32 format/build | `crates/rv32/artifact` owns the format and validation; `crates/rv32/lower` lowers ELF to `.rv32a` |
 
 Use `Cargo.toml` for the complete crate list. The `hogd` repository owns the
@@ -175,7 +175,7 @@ Report checks actually run and any environment blockers.
 For Groundhog programming-model or developer-workflow changes, load the
 checkout's bundled guidance with `cargo run -p groundhog-cli -- --skill`.
 If building is unavailable, read
-`crates/tools/cli/assets/groundhog/knowledge/generated/agent-guide.md`.
+`crates/cli/assets/groundhog/knowledge/generated/agent-guide.md`.
 Editable sources are `knowledge/bundle.toml` and its records; generated files
 must be assembled, not edited. Review the bundle on workspace/CLI version
 bumps and changes to CLI, scaffold, SDK, bindings, client, wallets, or public

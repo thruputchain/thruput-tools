@@ -14,8 +14,7 @@ fn existing_target_chain_tip_smoke() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .and_then(|path| path.parent())
-        .expect("sim crate should be three levels below repo root")
+        .expect("sim crate should be two levels below repo root")
         .to_path_buf();
     let scenario = repo_root.join("examples/sim/chain-tip-smoke.json");
     let (run_dir, _temp_guard) = existing_smoke_run_dir("chain-tip-smoke");
@@ -47,8 +46,7 @@ fn existing_target_chain_tip_baseline_smoke() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .and_then(|path| path.parent())
-        .expect("sim crate should be three levels below repo root")
+        .expect("sim crate should be two levels below repo root")
         .to_path_buf();
     let scenario = repo_root.join("examples/sim/chain-tip-smoke-baseline.json");
     let (run_dir, _temp_guard) = existing_smoke_run_dir("chain-tip-smoke-baseline");

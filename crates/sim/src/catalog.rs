@@ -72,7 +72,7 @@ pub fn default_catalog_path() -> PathBuf {
         return repo_relative;
     }
     let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+        .join("../..")
         .join("examples/sim/catalog.json");
     fallback.canonicalize().unwrap_or(fallback)
 }

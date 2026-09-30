@@ -70,7 +70,7 @@ do not blindly rerun them to retry network writes.
 Scenarios without `accounts` retain their legacy bootstrap-wallet behavior.
 Native accounts currently use the existing provider. Do not silently reinterpret
 legacy addresses when changing scenario defaults. Exact account and funding
-rules live in [native.rs](../../crates/dev/sim/src/native.rs) and scenario
+rules live in [native.rs](../../crates/sim/src/native.rs) and scenario
 validation.
 
 ## Local faults and cleanup
@@ -111,7 +111,7 @@ Inspect workload failures, skipped ticks, unresolved receipts, and assertion
 results together. Empty receipt polls during warmup differ from receipts still
 missing at shutdown. Admission-only workloads do not prove successful contract
 execution. Missing or unsupported resource measurements are not zero values.
-The [result types](../../crates/dev/sim/src/result.rs) define exact fields.
+The [result types](../../crates/sim/src/result.rs) define exact fields.
 
 ```sh
 cargo run -p groundhog-sim --bin hogsim -- compare /path/to/run-a /path/to/run-b --json
@@ -127,5 +127,5 @@ diffs are diagnostic and do not automatically change the run outcome; explicit
 assertions provide gates. A missing or invalid baseline fails finalization while
 target cleanup still runs. Calibrate resource-growth thresholds for the target
 class before making them CI gates; unsupported measurements cannot establish a
-pass. See [compare.rs](../../crates/dev/sim/src/compare.rs) and
-[assertions.rs](../../crates/dev/sim/src/assertions.rs).
+pass. See [compare.rs](../../crates/sim/src/compare.rs) and
+[assertions.rs](../../crates/sim/src/assertions.rs).
