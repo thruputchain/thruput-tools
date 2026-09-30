@@ -46,7 +46,7 @@ impl Drop for ReflowSignals {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Stream {
     Stdout,
     Stderr,
@@ -437,7 +437,7 @@ struct Worker {
     stdout: LogBuffer,
     stderr: LogBuffer,
     invalidated: Arc<std::sync::atomic::AtomicBool>,
-    line_open: bool,
+    line_open: Option<Stream>,
 }
 
 impl Worker {
@@ -452,7 +452,7 @@ impl Worker {
             stdout: LogBuffer::default(),
             stderr: LogBuffer::default(),
             invalidated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            line_open: false,
+            line_open: None,
         }
     }
 
@@ -522,11 +522,7 @@ impl Worker {
                     self.flush();
                     break;
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if self.flush_partial().is_err() {
-                        break;
-                    }
-                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             if !self.attempted && self.started.elapsed() >= DELAY {
                 self.attempted = true;
@@ -564,9 +560,10 @@ impl Worker {
         if lines.is_empty() {
             return Ok(());
         }
+        self.separate_stream(stream)?;
         if let Some(terminal) = &mut self.terminal {
             if terminal.lines(stream, lines, self.policy).is_ok() {
-                self.line_open = false;
+                self.line_open = None;
                 return Ok(());
             }
             self.fallback(false);
@@ -574,7 +571,7 @@ impl Worker {
         for line in lines {
             stream.write(super::log::append_line(line, Theme(self.policy)).as_bytes())?;
         }
-        self.line_open = false;
+        self.line_open = None;
         Ok(())
     }
 
@@ -584,9 +581,9 @@ impl Worker {
     }
 
     fn end_line(&mut self) -> io::Result<()> {
-        if self.line_open {
+        if self.line_open.is_some() {
             Stream::Stderr.write(b"\n")?;
-            self.line_open = false;
+            self.line_open = None;
         }
         Ok(())
     }
@@ -595,8 +592,18 @@ impl Worker {
         // An unfinished line owns the cursor until the child completes it. Stop
         // animation rather than insert a newline or repaint over that output.
         self.fallback(false);
+        self.separate_stream(stream)?;
         stream.write(text.as_bytes())?;
-        self.line_open = true;
+        self.line_open = Some(stream);
+        Ok(())
+    }
+
+    fn separate_stream(&mut self, stream: Stream) -> io::Result<()> {
+        // Overlong lines are streamed to keep memory bounded. If another stream
+        // interrupts one, separate the display instead of joining unrelated logs.
+        if self.line_open.is_some_and(|open| open != stream) {
+            self.end_line()?;
+        }
         Ok(())
     }
 
@@ -611,13 +618,6 @@ impl Worker {
             } else {
                 self.fragment(stream, &chunk.text)?;
             }
-        }
-        Ok(())
-    }
-
-    fn flush_partial(&mut self) -> io::Result<()> {
-        for stream in [Stream::Stdout, Stream::Stderr] {
-            self.partial(stream)?;
         }
         Ok(())
     }
@@ -647,7 +647,8 @@ impl Worker {
     }
 }
 
-/// Bounded line assembly; terminal controls become visible text, not cursor commands.
+/// Assemble each stream until a terminator, explicit message boundary, or buffer
+/// limit. Idle time is not a line boundary. Escape controls before display.
 #[derive(Default)]
 struct LogBuffer {
     pending: Vec<u8>,

@@ -22,6 +22,29 @@ use tempfile::TempDir;
 mod queries;
 mod support;
 
+const INTERLEAVED_OUTPUT: &str = r#"
+if [ "$BUILD_UI_MODE" = interleaved ]; then
+  printf 'stdout-prefix-\342'
+  sleep 0.3
+  printf 'independent-stderr-line\n' >&2
+  sleep 0.3
+  printf '\234\223suffix\n'
+  printf 'stderr-prefix-' >&2
+  sleep 0.3
+  printf 'independent-stdout-line\n'
+  sleep 0.3
+  printf 'suffix\n' >&2
+fi
+if [ "$BUILD_UI_MODE" = interleaved-long ]; then
+  i=0
+  while [ "$i" -lt 9000 ]; do printf x; i=$((i+1)); done
+  sleep 0.3
+  printf 'independent-stderr-line\n' >&2
+  sleep 0.3
+  printf 'long-line-suffix\n'
+fi
+"#;
+
 struct Fixture {
     _temp: TempDir,
     root: PathBuf,
@@ -110,9 +133,7 @@ if [ "$BUILD_UI_MODE" = diagnostics ] || [ "$BUILD_UI_MODE" = diagnostic-fail ];
 fi
 printf 'compiler-stdout-first\n'
 printf 'compiler-stderr-first\n' >&2
-if [ "$BUILD_UI_MODE" = hang ]; then
-  while :; do sleep 1; done
-fi
+if [ "$BUILD_UI_MODE" = hang ]; then while :; do sleep 1; done; fi
 if [ "$BUILD_UI_MODE" != fast ]; then sleep 0.5; fi
 if [ "$BUILD_UI_MODE" = styled ]; then
   printf '   Compiling style-fixture v1.0.0\n' >&2
@@ -142,6 +163,7 @@ if [ "$BUILD_UI_MODE" = continued ]; then
   sleep 0.3
   printf 'suffix\n' >&2
 fi
+{INTERLEAVED_OUTPUT}
 if [ "$BUILD_UI_MODE" = fail ]; then
   printf 'compiler-failure-detail\n' >&2
   exit 42
@@ -671,10 +693,45 @@ fn delayed_child_fragments_keep_their_line_boundaries() {
     let history = pty.history();
     assert!(history.contains("stdout-prefix-✓suffix"), "{history}");
     assert!(history.contains("stderr-prefix-suffix"), "{history}");
-    assert_eq!(
-        pty.progress_rows, rows,
-        "partial output switches to append-only mode"
+}
+
+#[test]
+fn interleaved_child_streams_keep_complete_lines_separate() {
+    let fixture = Fixture::new();
+    let mut pty = Pty::spawn(fixture.verbose_command("interleaved"));
+    pty.until(|pty| {
+        pty.parser
+            .screen()
+            .contents()
+            .contains("independent-stderr-line")
+    });
+    assert!(!String::from_utf8_lossy(&pty.raw).contains("stdout-prefix-"));
+    assert!(pty.finish().success());
+    let history = pty.history();
+    for line in [
+        "stdout-prefix-✓suffix",
+        "stderr-prefix-suffix",
+        "independent-stderr-line",
+        "independent-stdout-line",
+    ] {
+        assert!(
+            history.lines().any(|row| row.trim_end() == line),
+            "missing separate line {line}: {history}"
+        );
+    }
+}
+
+#[test]
+fn another_stream_does_not_join_an_overlong_streamed_fragment() {
+    let fixture = Fixture::new();
+    let mut pty = Pty::spawn(fixture.verbose_command("interleaved-long"));
+    assert!(pty.finish().success());
+    let history = pty.history();
+    assert!(
+        history.lines().any(|row| row == "independent-stderr-line"),
+        "{history}"
     );
+    assert!(history.contains("long-line-suffix"), "{history}");
 }
 
 #[test]
