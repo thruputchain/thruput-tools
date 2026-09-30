@@ -1700,6 +1700,7 @@ dependencies = [
  "axum",
  "clap",
  "fs2",
+ "futures-util",
  "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-x23-transport",

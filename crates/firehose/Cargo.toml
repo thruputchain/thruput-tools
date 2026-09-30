@@ -41,6 +41,7 @@ xdrs.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+futures-util.workspace = true
 groundhog-signing.workspace = true
 hex.workspace = true
 tempfile.workspace = true

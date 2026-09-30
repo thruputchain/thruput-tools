@@ -536,13 +536,28 @@ mod tests {
         let config = config(&endpoint, dir.path());
         let metrics = Metrics::new().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        let result = tokio::time::timeout(
-            Duration::from_millis(2300),
-            ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off),
-        )
-        .await;
-        assert!(result.is_err(), "the final pull must remain parked");
-        assert_eq!(*states.lock().unwrap(), [0, 0, 0, 1, 2]);
+        let expected = [0, 0, 0, 1, 2];
+        // Two transient outcomes sleep a second each, so a fixed budget leaves
+        // almost no headroom and fails on a loaded runner. Wait for the state
+        // the assertions describe, with a ceiling that only trips on a hang.
+        let settled = async {
+            loop {
+                let pulls = states.lock().unwrap().len();
+                if pulls >= expected.len() && metrics.parked.get() > 0. {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        let result = tokio::select! {
+            outcome = ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off) => Some(outcome),
+            () = settled => None,
+            () = tokio::time::sleep(Duration::from_mins(1)) => {
+                panic!("bug: ingest never reached the parked final pull")
+            }
+        };
+        assert!(result.is_none(), "the final pull must remain parked");
+        assert_eq!(*states.lock().unwrap(), expected);
         for label in ["not_ready", "internal_failure", "block", "caught_up"] {
             assert_eq!(metrics.outcomes.with_label_values(&[label]).get(), 1);
         }
