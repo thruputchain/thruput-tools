@@ -56,7 +56,7 @@ pub fn run(
             ("RPC URL".into(), rpc_url.clone()),
         ]);
         print.outcome_report(
-            crate::print::Outcome::Success,
+            crate::print::Outcome::Information,
             "Balance",
             &fields,
             &warnings,

@@ -102,8 +102,8 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 - Interactive `init` may clear the visible display between steps. This explicit
   guided-input behavior does not apply to ordinary result/log output. It never
   purges scrollback, and keeps final results and scaffold warnings visible.
-- Neutral, review, dry-run, and active/ready panels use the terminal accent.
-  Success is green; warning and error borders match their semantic headings.
+- All card borders and neutral titles use the terminal accent. Explicit success
+  headings are green; warning/partial and error headings use amber and red.
 - Neutral card titles have no decorative dot. Progress text is dim; the spinner
   keeps the terminal accent.
 - Approved confirmations clear only their preview and question on supported

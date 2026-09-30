@@ -48,7 +48,7 @@ pub fn run(
             .map_err(|error| CliError::Other(format!("failed to render storage item: {error}")))?;
         print.outcome_card(
             if item.is_some() {
-                crate::print::Outcome::Success
+                crate::print::Outcome::Information
             } else {
                 crate::print::Outcome::Empty
             },

@@ -97,7 +97,7 @@ fn card_uses_ratatui_theme_cells_and_crossterm_styling() {
 }
 
 #[test]
-fn outcome_cards_use_matching_semantic_titles_and_borders() {
+fn outcome_cards_use_semantic_titles_and_theme_accent_borders() {
     for (outcome, label, color) in [
         (Outcome::Error, "✗ error:", "38;2;248;113;113m"),
         (Outcome::Success, "✓", "38;2;79;232;143m"),
@@ -119,7 +119,7 @@ fn outcome_cards_use_matching_semantic_titles_and_borders() {
         let lines = report.into_lines();
         assert!(plain(&lines[0]).contains(label));
         assert!(lines[0].contains(color));
-        assert!(lines.last().unwrap().contains(color));
+        assert!(lines.last().unwrap().contains("38;5;6m"));
     }
 }
 

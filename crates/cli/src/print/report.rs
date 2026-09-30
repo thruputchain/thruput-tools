@@ -23,7 +23,6 @@ use crate::{
 pub(super) struct Report {
     pub(super) renderer: Renderer,
     summary_width: Option<u16>,
-    border_style: Style,
 }
 
 impl Report {
@@ -31,7 +30,6 @@ impl Report {
         Self {
             renderer: Renderer::new(policy),
             summary_width: None,
-            border_style: super::theme::Theme(policy).border(),
         }
     }
 
@@ -44,12 +42,10 @@ impl Report {
     }
 
     pub fn card(&mut self, title: &str, items: &[(String, String)]) {
-        self.border_style = self.renderer.theme.border();
         self.card_with_style(title, items, self.renderer.theme.title());
     }
 
     pub fn outcome_card(&mut self, outcome: Outcome, title: &str, items: &[(String, String)]) {
-        self.border_style = self.renderer.theme.outcome(outcome);
         if outcome == Outcome::Information {
             self.card_with_style(title, items, self.renderer.theme.title());
             return;
@@ -157,7 +153,7 @@ impl Report {
         let block = Block::default()
             .borders(borders)
             .border_type(BorderType::Rounded)
-            .border_style(self.border_style);
+            .border_style(self.renderer.theme.border());
         if self.renderer.policy.unicode {
             block
         } else {
@@ -436,7 +432,6 @@ impl Report {
 
     /// Readable records at narrow widths; Ratatui tables when every column has room.
     pub fn table(&mut self, title: &str, headers: &[String], records: &[Vec<String>]) {
-        self.border_style = self.renderer.theme.border();
         let columns = records
             .iter()
             .map(Vec::len)
