@@ -116,3 +116,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use clap::Parser;
+
+    #[test]
+    fn request_window_is_a_positive_block_count() {
+        let config = Config::try_parse_from(["hog-firehose-serve", "--store", "archive"]).unwrap();
+        assert_eq!(config.subscriptions.request_window, 42_428);
+        let config = Config::try_parse_from([
+            "hog-firehose-serve",
+            "--store",
+            "archive",
+            "--request-window",
+            "100",
+        ])
+        .unwrap();
+        assert_eq!(config.subscriptions.request_window, 100);
+        for value in ["0", "-1", "9223372036854775808"] {
+            assert!(
+                Config::try_parse_from([
+                    "hog-firehose-serve",
+                    "--store",
+                    "archive",
+                    "--request-window",
+                    value,
+                ])
+                .is_err()
+            );
+        }
+    }
+}

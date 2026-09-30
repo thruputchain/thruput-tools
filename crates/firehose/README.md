@@ -59,6 +59,13 @@ restart. Above `--tip-stale-seconds` (default 60), `/health` returns 503 and
 any record. An empty archive is healthy only within the same startup grace threshold.
 Store health continues to describe its upstream connection.
 
+Serve's `--request-window` defaults to 42,428 blocks, about 24 hours at the measured
+cadence. New height subscriptions below `max(0, tip - window)` are rejected with
+`below_window` even if the archive still holds their records. Already accepted
+subscriptions may finish catch-up under the existing deadlines as the window moves.
+`firehose_request_window_blocks` reports available archive depth capped by the policy
+window, in blocks rather than elapsed seconds.
+
 ## Discovery and protocol safety
 
 Bindings use the workspace's pinned protocol-rs release.

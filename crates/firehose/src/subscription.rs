@@ -29,6 +29,9 @@ use tokio::sync::Notify;
 #[derive(Clone, Debug, clap::Args)]
 #[group(id = "SubscriptionConfig")]
 pub struct Config {
+    /// Maximum requested depth in blocks (42,428 is about 24 hours at measured cadence).
+    #[arg(long, default_value_t = 42_428, value_parser = clap::value_parser!(i64).range(1..))]
+    pub request_window: i64,
     /// WebSocket subscription listener.
     #[arg(long, default_value = "127.0.0.1:9551")]
     pub ws_listen: SocketAddr,
@@ -75,7 +78,8 @@ impl Config {
 
     /// Reject invalid bounds and accidental public exposure before binding.
     pub fn validate(&self, metrics_address: SocketAddr) -> Result<(), crate::Error> {
-        if self.max_subscribers == 0
+        if self.request_window <= 0
+            || self.max_subscribers == 0
             || self.subscription_limit_per_connection() == 0
             || self.subscriber_queue == 0
             || self.subscriber_queue_bytes == 0
@@ -249,6 +253,13 @@ impl Hub {
             Cursor::Height { height } if (0..i64::MAX).contains(height) => *height,
             Cursor::Height { .. } => return Err(error("invalid height")),
         };
+        // Admission policy only: accepted catch-up streams keep their exact cursor
+        // as the tip advances. Never fast-forward a subscriber to this boundary.
+        if matches!(cursor, Cursor::Height { .. })
+            && next < state.tip.saturating_sub(self.config.request_window).max(0)
+        {
+            return Err(error("below_window"));
+        }
         let id = state.next_id;
         state.next_id = state
             .next_id
@@ -318,11 +329,41 @@ impl Hub {
             "totals": totals, "subscribers": subscribers})
     }
 
+    // Retention removes a prefix of immutable consecutive height files. Locate its
+    // boundary within the admission window in O(log window) metadata probes, without
+    // enumerating the archive on every scrape. This observation never affects cursors.
+    fn realised_window(&self, tip: i64) -> std::io::Result<i64> {
+        if tip < 0 {
+            return Ok(0);
+        }
+        let present = |height| crate::store::record_path(&self.directory, height).try_exists();
+        if !present(tip)? {
+            return Ok(0);
+        }
+        let mut low = tip.saturating_sub(self.config.request_window).max(0);
+        let mut high = tip;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if present(mid)? {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        Ok(tip - low)
+    }
+
     /// Prometheus exposition with active-only subscriber labels and retained totals.
     pub fn render_metrics(&self) -> String {
         use std::fmt::Write;
         let stats = self.stats();
         let mut output = format!("firehose_subscribers {}\n", stats["currentSubscribers"]);
+        let tip = stats["tip"].as_i64().unwrap_or(-1);
+        let window = self
+            .realised_window(tip)
+            .map_or_else(|_| "NaN".to_owned(), |span| span.to_string());
+        let _ = writeln!(output, "# TYPE firehose_request_window_blocks gauge");
+        let _ = writeln!(output, "firehose_request_window_blocks {window}");
         let _ = writeln!(output, "# TYPE firehose_connections gauge");
         let _ = writeln!(
             output,
