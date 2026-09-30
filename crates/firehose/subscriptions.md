@@ -61,6 +61,16 @@ archive/live transitions. Future heights are allowed and wait for publication.
 Missing historical heights terminate with `archive_error`; the server never
 silently skips unavailable history. Height must be nonnegative and below `i64::MAX`.
 
+Serve rejects a height below `max(0, tip - request_window)` at subscription attach
+with JSON-RPC error code `-32009` and message `below_window`, before accepting the
+subscription or delivering any records. This policy applies even when the record
+is still on disk. `--request-window` is in blocks, default 42,428 (about 24 hours
+at the measured 2.036-second cadence). Blocks give an exact height boundary without
+estimating a changing cadence. The boundary itself and future heights are accepted;
+`Cursor::Tip` is unaffected. Accepted subscribers keep their exact cursors when the
+window advances and may finish catch-up under the existing deadlines. Missing or
+unreadable records still terminate with `archive_error`; no history is skipped.
+
 A server-initiated termination sends this final **subscription close notification**:
 
 ```json
@@ -80,6 +90,7 @@ handle the generated `Notification::Closed` variant.
 
 | Flag | Default | Meaning |
 | --- | ---: | --- |
+| `--request-window` | 42428 | Maximum depth below tip for new height requests, in blocks |
 | `--max-subscribers` | 64 | Global active subscription cap; also bounds connections |
 | `--subscriber-queue` | 8 | Maximum queued live records per subscriber |
 | `--subscriber-queue-bytes` | 2097152 | Maximum raw bytes in each live queue (2 MiB) |
@@ -135,6 +146,11 @@ survive subscriber removal. Subscriber detail is bounded by the active cap.
 
 Prometheus `/metrics` exposes:
 
+- `firehose_request_window_blocks`: available depth below tip capped by the request window.
+  A fresh archive has depth zero even when bootstrapped at a high height. Scrapes locate
+  the retained prefix boundary with logarithmic metadata probes, assuming the archive's
+  consecutive-height contract. I/O probe failures report NaN. This observation never
+  changes admission or cursors, and does not measure elapsed time or detect interior holes.
 - `firehose_connections` counts WebSocket sessions, including peers without subscriptions.
 - `firehose_subscribers` and `firehose_subscription_lag_blocks` (sum of active lag).
 - `firehose_subscription_{demotions_total,blocks_sent_total,bytes_sent_total,catchup_seconds_total}`.

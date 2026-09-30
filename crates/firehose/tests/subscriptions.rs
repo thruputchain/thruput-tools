@@ -27,6 +27,7 @@ use common::{fixture, next, rehash};
 
 fn config() -> Config {
     Config {
+        request_window: 42_428,
         ws_listen: "127.0.0.1:0".parse().unwrap(),
         allow_remote: false,
         max_subscribers: 64,
@@ -126,6 +127,124 @@ async fn block(client: &WsClient, sub: &mut Subscription<Value>, height: i64) ->
     );
     ack(client, &message).await;
     message
+}
+
+#[tokio::test]
+async fn request_window_refuses_retained_history_and_preserves_attached_cursors() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    let mut current = fixture();
+    for _ in 0..5 {
+        store.append(&current).unwrap();
+        current = next(&current);
+    }
+    let mut config = config();
+    config.request_window = 2;
+    let hub = Hub::new(dir.path().to_owned(), store.height(), config);
+    let mut tailer = groundhog_firehose::tailer::Tailer::new(dir.path().to_owned()).unwrap();
+    let (address, server) = hub.serve().await.unwrap();
+    let client = connect(address).await;
+    assert!(dir.path().join("00000000000000000002.xdr").is_file());
+    let rejected = client
+        .subscribe::<Value, _>(
+            "firehose_subscribe",
+            rpc_params![Cursor::Height { height: 2 }],
+            "firehose_unsubscribe",
+        )
+        .await;
+    let Err(jsonrpsee::core::ClientError::Call(error)) = rejected else {
+        panic!("below-window request must be rejected before subscription acceptance");
+    };
+    assert_eq!(error.message(), "below_window");
+    assert_eq!(hub.stats()["currentSubscribers"], 0);
+    assert_eq!(
+        hub.stats()["totals"]["blocksSent"],
+        0,
+        "no records delivered"
+    );
+    assert!(
+        hub.render_metrics()
+            .contains("firehose_request_window_blocks 2\n")
+    );
+
+    // The inclusive boundary is unchanged. Hold its first ACK while the window moves.
+    let mut catchup = subscribe(&client, Cursor::Height { height: 3 }).await;
+    let first = receive(&mut catchup).await;
+    assert_eq!(first["block"]["height"], 3);
+    let mut live = subscribe(&client, Cursor::Tip).await;
+    for height in 6..=8 {
+        store.append(&current).unwrap();
+        tailer.poll(&hub).await.unwrap();
+        block(&client, &mut live, height).await;
+        current = next(&current);
+    }
+    ack(&client, &first).await;
+    for height in 4..=8 {
+        block(&client, &mut catchup, height).await;
+    }
+    server.stop().unwrap();
+    drop(catchup);
+    drop(live);
+    drop(client);
+    server.stopped().await;
+}
+
+#[tokio::test]
+async fn in_window_missing_record_remains_an_archive_io_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    store.append(&fixture()).unwrap();
+    let hub = Hub::new(dir.path().to_owned(), store.height(), config());
+    std::fs::remove_file(dir.path().join("00000000000000000001.xdr")).unwrap();
+    let (address, server) = hub.serve().await.unwrap();
+    let client = connect(address).await;
+    let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
+    assert_eq!(
+        receive(&mut sub).await,
+        serde_json::json!({"type": "closed", "reason": "archive_error", "nextHeight": 1})
+    );
+    assert_eq!(hub.stats()["totals"]["blocksSent"], 0);
+    assert_eq!(hub.stats()["totals"]["disconnects"]["archive_error"], 1);
+    server.stop().unwrap();
+    drop(sub);
+    drop(client);
+    server.stopped().await;
+}
+
+#[test]
+fn request_window_metric_tracks_available_depth_within_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    for tip in [-1, 0, 50_000] {
+        let hub = Hub::new(dir.path().to_owned(), tip, config());
+        assert!(
+            hub.render_metrics()
+                .contains("firehose_request_window_blocks 0\n")
+        );
+    }
+    // A fresh archive bootstrapped at a high tip has depth zero, not a full window.
+    let hub = Hub::new(dir.path().to_owned(), 50_000, config());
+    for (height, span) in [(50_000, 0), (49_999, 1), (49_998, 2)] {
+        std::fs::write(dir.path().join(format!("{height:020}.xdr")), []).unwrap();
+        assert!(
+            hub.render_metrics()
+                .contains(&format!("firehose_request_window_blocks {span}\n"))
+        );
+    }
+    let mut config = config();
+    config.request_window = 1;
+    let hub = Hub::new(dir.path().to_owned(), 50_000, config.clone());
+    assert!(
+        hub.render_metrics()
+            .contains("firehose_request_window_blocks 1\n")
+    );
+    std::fs::remove_file(dir.path().join("00000000000000049998.xdr")).unwrap();
+    std::fs::remove_file(dir.path().join("00000000000000049999.xdr")).unwrap();
+    assert!(
+        hub.render_metrics()
+            .contains("firehose_request_window_blocks 0\n")
+    );
+    config.request_window = 0;
+    assert!(config.validate("127.0.0.1:9552".parse().unwrap()).is_err());
 }
 
 #[tokio::test]

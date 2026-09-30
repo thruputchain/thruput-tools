@@ -21,6 +21,7 @@ use common::{fixture, next};
 
 fn config() -> Config {
     Config {
+        request_window: 42_428,
         ws_listen: "127.0.0.1:0".parse().unwrap(),
         allow_remote: false,
         max_subscribers: 64,
