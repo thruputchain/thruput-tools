@@ -14725,3 +14725,124 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
         },
     })
 }
+
+fn issuer_event_fixture() -> Vec<serde_json::Value> {
+    serde_json::from_str(include_str!("fixtures/issuer-events.json")).unwrap()
+}
+
+fn run_issuer_event_command(
+    fixture: &[serde_json::Value],
+    command: [&str; 2],
+    filters: &serde_json::Value,
+) -> serde_json::Value {
+    let tmp = TempDir::new().unwrap();
+    let token = fixture[0]["event"]["contractAddress"].as_str().unwrap();
+    let events: Vec<_> = fixture
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            serde_json::json!({
+                "txHash": format!("0x{:064x}", index + 1),
+                "blockHeight": 20 - index,
+                "sequenceNumber": 0,
+                "event": record["event"],
+            })
+        })
+        .collect();
+    let (rpc_url, server) = spawn_events_rpc(
+        serde_json::json!({
+            "filters": filters,
+            "order": "descending",
+            "anchor": { "kind": "atEnd" },
+            "cursor": "0x",
+            "limit": 50,
+        }),
+        EventRpcResponse::Result(serde_json::json!({
+            "events": events,
+            "cursor": "0x",
+            "latestBlock": 20,
+            "oldestBlock": 0,
+        })),
+    );
+    let output = groundhog()
+        .arg("--json")
+        .args(command)
+        .args([token, "--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn issuer_raw_events_survive_the_cli_http_boundary() {
+    let fixture = issuer_event_fixture();
+    let token = fixture[0]["event"]["contractAddress"].as_str().unwrap();
+    let report = run_issuer_event_command(
+        &fixture,
+        ["events", "list"],
+        &serde_json::json!([{
+            "contractAddresses": [token],
+            "topics": {
+                "topic0": [],
+                "topic1": [],
+                "topic2": [],
+            },
+        }]),
+    );
+    let events = report["data"]["events"].as_array().unwrap();
+    assert_eq!(fixture.len(), 9);
+    assert_eq!(events.len(), fixture.len());
+    for (event, original) in events.iter().zip(&fixture) {
+        for field in ["contractAddress", "topics", "data"] {
+            assert_eq!(event[field], original["event"][field]);
+        }
+        assert_eq!(event["decodeStatus"], "notRequested");
+    }
+}
+
+#[test]
+fn issuer_token_movements_count_clawback_once() {
+    let movements: Vec<_> = issuer_event_fixture()
+        .into_iter()
+        .filter(|record| {
+            [transfer_signature(), mint_signature(), burn_signature()]
+                .iter()
+                .any(|signature| record["event"]["topics"][0] == *signature)
+        })
+        .collect();
+    let token = movements[0]["event"]["contractAddress"].as_str().unwrap();
+    let report = run_issuer_event_command(
+        &movements,
+        ["token", "transfers"],
+        &all_token_event_filters(token),
+    );
+    let records = report["data"]["records"].as_array().unwrap();
+    assert_eq!(movements.len(), 4);
+    assert_eq!(records.len(), movements.len());
+    assert_eq!(report["data"]["schemaVersion"], 2);
+    for ((record, original), amount) in records.iter().zip(&movements).zip(["100", "25", "5", "7"])
+    {
+        for field in ["contractAddress", "topics", "data"] {
+            assert_eq!(record[field], original["event"][field]);
+        }
+        assert_eq!(record["decodeStatus"], "decoded");
+        let expected = if original["operation"] == "clawback" {
+            "burn"
+        } else {
+            original["operation"].as_str().unwrap()
+        };
+        assert_eq!(record["transfer"]["kind"], expected);
+        assert_eq!(record["transfer"]["rawAmount"], amount);
+    }
+    let clawback_burn = &records[3];
+    let alice = format!("0x{}", "13".repeat(32));
+    assert_eq!(clawback_burn["transfer"]["from"], alice);
+    assert!(clawback_burn["transfer"]["to"].is_null());
+}
