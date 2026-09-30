@@ -350,3 +350,52 @@ async fn invalid_startup_tip_is_unhealthy_and_retried_without_reading_history() 
         assert!(metrics.is_healthy());
     }
 }
+
+#[tokio::test]
+async fn pruned_archive_restarts_serves_retained_history_and_tails_new_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = fixture();
+    let second = next(&first);
+    let third = next(&second);
+    let mut store = Store::open(dir.path()).unwrap();
+    store.adopt(&first.origin).unwrap();
+    for block in [&first, &second, &third] {
+        store.append(block).unwrap();
+    }
+    store
+        .prune(groundhog_firehose::store::Retention {
+            duration: Duration::MAX,
+            bytes: 0,
+            min_blocks: 2,
+        })
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    let mut tailer = Tailer::new(dir.path().to_owned()).unwrap();
+    let hub = Hub::new(dir.path().to_owned(), tailer.tip(), config());
+    let (address, server) = hub.serve().await.unwrap();
+    let client = WsClientBuilder::default()
+        .build(format!("ws://{address}"))
+        .await
+        .unwrap();
+    let mut sub = client
+        .subscribe::<Value, _>(
+            "firehose_subscribe",
+            rpc_params![Cursor::Height { height: 2 }],
+            "firehose_unsubscribe",
+        )
+        .await
+        .unwrap();
+    let retained = tokio::time::timeout(Duration::from_secs(3), sub.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained["block"]["height"], 2);
+    let fourth = next(&third);
+    store.append(&fourth).unwrap();
+    tailer.poll(&hub).await.unwrap();
+    assert_eq!(tailer.tip(), 4);
+    server.stop().unwrap();
+    server.stopped().await;
+}

@@ -124,7 +124,54 @@ stops ingestion. SIGKILL may leave one unpublished temporary record; recovery
 ignores it. A published block is already the cursor, so replay cannot create an
 extra height. An identical serialized repeat is a no-op. Conflicting content,
 height gaps, parent-hash mismatches, and discontinuous epoch origins are errors.
-No rollback, rewrite, pruning, or repair mode exists.
+No rollback, block rewrite, or repair mode exists.
+
+## Retention and verified restart
+
+Store prunes once per minute, including while a pull is parked. Defaults are
+`--retain-duration 604800` (seconds, seven days), `--retain-bytes 48000000000`
+(48 GB allocated), and `--retain-min-blocks 1000`. Either age or allocation can
+bind; the minimum overrides both budgets and always preserves at least one block.
+Age uses record modification time. Allocated bytes include filesystem block rounding,
+so small idle records consume their actual disk allocation rather than logical length.
+The budget includes the origin and floor, but excludes directory metadata and the
+shutdown watermark; leave
+volume headroom for those and for bursts between scans.
+
+Pruning publishes `floor.xdr`, an XDR `IndexerInitializedProgress` for the first
+retained block's predecessor, including that block's epoch origin. Metadata uses
+the same atomic publication path into a staging name, then atomic rename and
+directory fsync. Only after that durable floor is published are older records
+unlinked. Restart seeds from the floor and removes leftover older records, so
+interruption before or during deletion is safe. The tip progress and upstream
+cursor are unchanged. The verification report includes `floorHeight` as the base.
+
+Clean SIGINT/SIGTERM shutdown writes `verified.xdr` containing the verified tip
+progress, using the same durable metadata publication. Opening consumes this
+watermark and fsyncs its removal before ingestion can begin. SIGKILL, a crash,
+or an ingestion error therefore leaves no reusable watermark and the next open
+fully verifies. A kill during final checkpoint publication can leave a valid
+watermark only for the already verified, durable tip. Pruning runs while no durable
+watermark is present and retains the tip; the subsequent shutdown checkpoint
+therefore always refers to retained records above the current floor.
+
+Warm recovery still reads and decodes retained blocks, validating filenames and
+chain/epoch continuity, but skips commitment re-hashing at or below the watermark.
+**Content corruption below the watermark can go undetected at startup.**
+`hog-firehose-store verify` always performs a full audit. A periodic background
+scrubber is a named follow-up; it is not implemented here. Watermark consumption
+means a second open without another clean shutdown performs full verification.
+
+A local Apple-silicon debug-build measurement on 2026-09-30 used 10,000 chained
+100-transaction fixture records (284,000,068 logical bytes) and warm filesystem
+caches: full restart took **25.352 s**, watermark restart **6.999 s** (3.62×).
+This isolates avoided hashing, not cold gp3 I/O; warm recovery still reads every
+record. Reproduce with:
+
+```sh
+cargo test -p groundhog-firehose --test retention measure_restart_watermark \
+  -- --ignored --nocapture
+```
 
 ## Storage choice and audit
 
@@ -144,12 +191,12 @@ filesystem supporting hard links, directory fsync and advisory file locks.
 This is simpler than a database or segment journal for this experimental slice:
 one atomic record contains both data and cursor, with no separate index to
 repair. The tradeoff is one inode and filesystem allocation unit per block,
-plus an O(N) directory scan and full verification at startup. The measurements
+plus an O(N) directory scan and record decoding at startup. The measurements
 below quantify that cost. A segment format is the next storage optimisation if
 file count/allocation or recovery duration becomes material. There is no claim
 that this layout has been qualified for millions of files.
 
-Recovery verifies every consensus hash and recomputes both `events_hash` and
+Full recovery verifies every consensus hash and recomputes both `events_hash` and
 `txs_hash` using hogd's prefix Patricia-trie encoding, including transaction/event
 pairing, nondeterministic proposal data, and duplicate-key rejection. Hashing the
 whole serialized batch would be wrong. Live-node fixtures cover both one and
@@ -194,7 +241,7 @@ scheduler client negotiates its intro and samples the tip every 250 ms; it never
 adds an event-service connection. Without this source, or during sampler errors,
 lag is **NaN**, not a misleading zero. The sampled gauge can miss short spikes
 and reflects observations from two independently moving services. Allocation
-metrics exclude directory metadata and the lock/temporary file.
+metrics exclude directory metadata, the shutdown watermark and lock/temporary files.
 
 ## Reproducible local measurements
 
