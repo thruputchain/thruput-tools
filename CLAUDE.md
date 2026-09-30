@@ -225,8 +225,8 @@ Do not manually push `v*` tags and do not run `release.yml` directly.
 
 Keep the workspace version, internal `=X.Y.Z` dependency pins, git tag, and
 GitHub Release tag aligned. Linux release assets are per-app/per-target archives
-for `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, and
-`groundhog-faucet`. macOS ARM64 release assets contain `groundhog`, which links
+for `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, `groundhog-faucet`, and
+`hog-firehose`. macOS ARM64 release assets contain `groundhog`, which links
 the RV32 lowerer in-process. Releases also include aggregate `SHA256SUMS`.
 
 ### Runtime Manifest Smoke

@@ -203,11 +203,12 @@ groundhog-vX.Y.Z-aarch64-apple-darwin.tar.gz
 SHA256SUMS
 ```
 
-Linux apps are `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, and
-`groundhog-faucet`. Each archive contains one app binary plus `README.md` and
-`LICENSE`. `hog-gateway`, `hogsim`, and `groundhog-faucet` are binary release
-artifacts only; `groundhog-rv32-lower` is also a published crate/library. macOS
-releases currently target Apple Silicon and include only the `groundhog` CLI,
+Linux apps are `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`,
+`groundhog-faucet`, and `hog-firehose`. Each archive contains one app binary plus
+`README.md` and `LICENSE`. `hog-gateway`, `hogsim`, `groundhog-faucet`, and
+`hog-firehose` are binary release artifacts only; `groundhog-rv32-lower` is also
+a published crate/library. macOS releases currently target Apple Silicon and
+include only the `groundhog` CLI,
 which links the RV32 lowerer in-process. The macOS binary is ad-hoc signed but
 not notarized, so macOS may require explicit approval after download.
 
