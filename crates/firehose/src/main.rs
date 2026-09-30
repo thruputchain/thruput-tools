@@ -11,7 +11,7 @@ use groundhog_firehose::{
     metrics::Metrics,
     store::Store,
 };
-use groundhog_indexer::EventIndexerPullResult;
+use groundhog_indexer::{EventIndexerPullResult, IndexerProgress};
 use groundhog_xdr::{PROTOCOL_VERSION, network::ProtocolCommit};
 use tokio::sync::watch;
 
@@ -340,10 +340,7 @@ async fn ingest(
                 Outcome::Block => {
                     // Only CaughtUp may establish a fresh archive's start point.
                     // NotReady already covers an outbox awaiting initialization.
-                    if matches!(
-                        store.cursor(false),
-                        groundhog_indexer::IndexerProgress::Default { .. }
-                    ) {
+                    if matches!(store.cursor(false), IndexerProgress::Default { .. }) {
                         return Err(Error::Invalid(
                             "block received before caught-up origin; tip-only bootstrap required"
                                 .into(),
