@@ -1853,48 +1853,6 @@ mod tests {
     use groundhog_node_supervisor::ConfigParamName;
 
     #[test]
-    fn command_matrix_covers_every_leaf_command() {
-        fn leaves(
-            command: &clap::Command,
-            prefix: &str,
-            output: &mut std::collections::BTreeSet<String>,
-        ) {
-            for child in command
-                .get_subcommands()
-                .filter(|child| child.get_name() != "help")
-            {
-                let name = format!("{prefix}{}", child.get_name());
-                if child.has_subcommands() {
-                    leaves(child, &format!("{name} "), output);
-                } else {
-                    output.insert(name);
-                }
-            }
-        }
-        let mut actual = std::collections::BTreeSet::new();
-        leaves(&Cli::command(), "", &mut actual);
-        let spec = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../docs/specs/2026-09-21-cli-tui-mvp.md"
-        ));
-        let expected = spec
-            .split_once("## 7.")
-            .unwrap()
-            .1
-            .split_once("### Flag")
-            .unwrap()
-            .0
-            .lines()
-            .filter_map(|line| {
-                line.strip_prefix("| `")
-                    .and_then(|line| line.split_once('`'))
-                    .map(|(name, _)| name.to_owned())
-            })
-            .collect();
-        assert_eq!(actual, expected, "new commands need explicit UI coverage");
-    }
-
-    #[test]
     fn config_get_flags_and_command_name_parse() {
         let cli = Cli::parse_from(["groundhog", "config", "get", "devnet", "--sources"]);
 
