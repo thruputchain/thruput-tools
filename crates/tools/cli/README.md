@@ -476,7 +476,7 @@ is inferred and `-p` may be omitted.
 
 Submit a transaction that calls a deployed contract method using either a
 literal address or a contract alias from the active profile. The CLI resolves
-entrypoints from embedded contract specs and local metadata when available,
+named entrypoints from the contract spec produced by `groundhog build`,
 signs and submits the invocation transaction, and prints returned values plus
 receipt status.
 
@@ -489,8 +489,15 @@ groundhog call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
 groundhog call my-counter increment 5 --json --force
 ```
 
-Embedded contract specs now drive selector resolution plus first-pass
-typed argument encoding / return decoding. The spec-driven path supports
+Named methods in `call` and `view` require a current `.spec.xdr` sidecar next
+to the selected package's built artifact. If it is missing or older than the
+artifact, the CLI asks you to run `groundhog build` with the same package and
+target directory. It does not infer interface names, versions, or method types
+from Rust source. An explicit `0x`-prefixed 8-byte entrypoint ID remains usable
+without a build spec, with raw calldata.
+
+Build specs drive selector resolution and typed argument encoding / return
+decoding. The spec-driven path supports
 scalars, structs, enums, unions, options, tuples, vectors, arrays, and
 byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
 fits the underlying type.
@@ -501,9 +508,8 @@ the prepared invocation without submitting it. A dry run therefore still
 needs a signing key and a reachable RPC endpoint; a later follow-up can
 split payload assembly from signing if we want a no-key-required dry run.
 
-Remaining follow-up: cache repeated embedded-spec loads, tighten the
-union/structured CLI UX, and remove the remaining local-source fallback
-once the spec-driven path has soaked.
+Remaining follow-up: cache repeated spec loads and tighten the
+union/structured CLI UX.
 
 ### `groundhog storage`
 

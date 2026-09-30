@@ -770,6 +770,21 @@ pub enum CliError {
     },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,
+    #[error("cannot resolve named method `{method}` without a current build spec")]
+    #[hint(
+        "run `groundhog build` in the contract project (use `-p <package>` for a workspace \
+         member), then retry with the same package and target directory; or pass an explicit \
+         0x-prefixed 8-byte entrypoint ID"
+    )]
+    #[details]
+    CallSpecRequired { method: String },
+    #[error("method `{method}` is not exported by the build spec for package `{package}`")]
+    #[hint(
+        "check the method name and selected package; if the contract changed, run \
+         `groundhog build` with the same package and target directory"
+    )]
+    #[details]
+    CallMethodNotFound { method: String, package: String },
     #[error("{path}: {message}")]
     #[hint(
         "check the reported argument path and use structured JSON for composite contract values"

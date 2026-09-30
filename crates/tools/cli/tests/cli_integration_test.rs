@@ -7878,6 +7878,46 @@ fn view_json_fails_without_config() {
 }
 
 #[test]
+fn named_call_and_view_require_a_build_spec() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"counter\"\nversion = \"0.2.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/lib.rs"),
+        "#[contract]\nimpl Counter { pub fn get() -> u64 { 42 } }\n",
+    )
+    .unwrap();
+    write_project_config_with_alice_wallet(&project, "http://127.0.0.1:1", &config_home);
+    let address = format!("0x{}", "11".repeat(32));
+
+    for command in ["call", "view"] {
+        let mut invocation = groundhog();
+        invocation.args(["--json", command, &address, "get"]);
+        if command == "call" {
+            invocation.args(["--dry-run", "--wallet", "alice"]);
+        }
+        let output = invocation
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "{command} should require a build");
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["command"], command);
+        assert_eq!(error["error"]["code"], "call_spec_required", "{error}");
+        assert_eq!(error["error"]["details"]["method"], "get");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("groundhog build"));
+    }
+}
+
+#[test]
 fn view_json_returns_raw_output() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

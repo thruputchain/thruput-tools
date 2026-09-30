@@ -13,17 +13,13 @@ use serde_json::json;
 use crate::account_resolution::{resolve_contract_target, resolve_transaction_sender};
 use crate::artifacts::ArtifactOptions;
 use crate::balance::fetch_balance_blocking;
-use crate::build::{CargoMetadata, cargo_metadata_with_artifacts, resolve_package};
+use crate::build::{cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
-    CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
-    format_contract_address, parse_contract_address,
+    CallMetadata, SpecMethodMetadata, decode_return, encode_args, format_contract_address,
+    parse_contract_address,
 };
-use crate::config::{
-    ProfileOverrides, ResolvedProfile, find_project_config, resolve_profile_with_overrides,
-};
-use crate::contract_spec::{
-    InterfaceSpec, load_built_contract_spec, load_built_registered_interfaces,
-};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
+use crate::contract_spec::load_built_contract_spec;
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::network_descriptor::resolve_wallet_signing_context;
 use crate::result::CommandResult;
@@ -557,24 +553,11 @@ pub(crate) fn resolve_call(
             metadata: None,
         });
     }
-    if let Some(metadata) = resolve_spec_method(cwd, method, package, artifacts)? {
-        return Ok(ResolvedCall {
-            entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
-            metadata: Some(CallMetadata::Spec(metadata)),
-        });
-    }
-    match resolve_local_contract_metadata(cwd, method, package, artifacts)? {
-        Some(metadata) => Ok(ResolvedCall {
-            entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
-            metadata: Some(CallMetadata::Local(metadata)),
-        }),
-        None => Err(CliError::Other(
-            "cannot resolve the contract method from the local project or contract spec. \
-             Run `groundhog build` from inside the project that defines the contract, or pass an \
-             explicit 0x-prefixed 8-byte entrypoint ID."
-                .into(),
-        )),
-    }
+    let metadata = resolve_spec_method(cwd, method, package, artifacts)?;
+    Ok(ResolvedCall {
+        entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
+        metadata: Some(CallMetadata::Spec(metadata)),
+    })
 }
 
 fn resolve_spec_method(
@@ -582,103 +565,34 @@ fn resolve_spec_method(
     method: &str,
     package: Option<&str>,
     artifacts: &ArtifactOptions,
-) -> Result<Option<SpecMethodMetadata>, CliError> {
-    let Some(selected) = select_package(cwd, package, artifacts)? else {
-        return Ok(None);
+) -> Result<SpecMethodMetadata, CliError> {
+    let missing_spec = || CliError::CallSpecRequired {
+        method: method.to_owned(),
     };
-    let Some(spec) = load_built_contract_spec(&selected.target_directory, &selected.name)? else {
-        return Ok(None);
-    };
+    let selected = select_package(cwd, package, artifacts)?.ok_or_else(missing_spec)?;
+    let spec = load_built_contract_spec(&selected.target_directory, &selected.name)?
+        .ok_or_else(missing_spec)?;
 
-    Ok(groundhog_client::codec::resolve_spec_method(&spec, method)?)
+    groundhog_client::codec::resolve_spec_method(&spec, method)?.ok_or_else(|| {
+        CliError::CallMethodNotFound {
+            method: method.to_owned(),
+            package: selected.name,
+        }
+    })
 }
 
-fn resolve_local_contract_metadata(
-    cwd: &Path,
-    method: &str,
-    package: Option<&str>,
-    artifacts: &ArtifactOptions,
-) -> Result<Option<ContractMetadata>, CliError> {
-    // Only a project has local sources worth scanning; outside one the caller
-    // reports that the method is unresolvable instead.
-    if find_project_config(cwd).is_none() {
-        return Ok(None);
-    }
-    // Selected from the invocation directory, matching the spec path above, so
-    // one invocation cannot resolve two different packages.  A workspace root
-    // is contained by no member, which is what leaves `-p` to settle it.
-    let metadata = cargo_metadata_with_artifacts(artifacts)?;
-    let pkg_name = resolve_package(&metadata, package, cwd)?;
-    let selected = package_context(&metadata, pkg_name);
-    let interface_specs =
-        load_built_registered_interfaces(&selected.target_directory, &selected.name)?;
-    resolve_local_contract_metadata_in_package(&selected, method, interface_specs.as_deref())
-}
-
-fn resolve_local_contract_metadata_in_package(
-    selected: &SelectedPackage,
-    method: &str,
-    interface_specs: Option<&[InterfaceSpec]>,
-) -> Result<Option<ContractMetadata>, CliError> {
-    let package_version = selected.version.as_str();
-    let src_root = selected.root.join("src");
-    if !src_root.exists() {
-        return Ok(None);
-    }
-
-    let mut candidates = Vec::new();
-    collect_contract_metadata(&src_root, method, package_version, &mut candidates)?;
-    candidates = filter_candidates_by_interfaces(candidates, interface_specs);
-
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-
-    candidates.sort_by(|a, b| {
-        (&a.interface_name, &a.version, &a.source).cmp(&(&b.interface_name, &b.version, &b.source))
-    });
-    candidates.dedup();
-
-    if candidates.len() == 1 {
-        return Ok(candidates.into_iter().next());
-    }
-
-    let descriptions = candidates
-        .iter()
-        .map(|candidate| {
-            format!(
-                "{} v{} ({})",
-                candidate.interface_name,
-                candidate.version,
-                candidate.source.display()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Err(CliError::Other(format!(
-        "method `{method}` matches multiple local contracts: {descriptions}"
-    )))
-}
-
-/// Workspace package whose sources and build output describe the contract.
+/// Workspace package whose build output describes the contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SelectedPackage {
-    /// Package directory, used as the root for local source scanning.
-    root: PathBuf,
     name: String,
-    /// Fallback interface version for contracts that declare none.
-    version: String,
     /// Cargo target directory holding the built contract spec sidecar.
     target_directory: PathBuf,
 }
 
-/// Select the package that backs metadata-driven method resolution.
+/// Select the package whose built spec resolves named methods.
 ///
-/// An explicit `-p` name is validated against workspace members and any
-/// failure is reported.  Without one the package is inferred from `cwd`, and a
-/// directory cargo cannot place in a package yields `Ok(None)` so the caller
-/// falls through to the remaining resolution paths.
+/// Outside a Cargo project, return `None` so the caller can request a build.
+/// Within a workspace, require an unambiguous package selection.
 fn select_package(
     cwd: &Path,
     package: Option<&str>,
@@ -689,311 +603,11 @@ fn select_package(
         Err(err) if package.is_some() => return Err(err),
         Err(_) => return Ok(None),
     };
-    let pkg_name = match resolve_package(&metadata, package, cwd) {
-        Ok(name) => name,
-        Err(err) if package.is_some() => return Err(err),
-        Err(_) => return Ok(None),
-    };
-    Ok(Some(package_context(&metadata, pkg_name)))
-}
-
-/// Pair a resolved package name with the paths and version cargo reported for
-/// it.  Falls back to the workspace root for a package cargo listed without a
-/// manifest directory.
-fn package_context(metadata: &CargoMetadata, pkg_name: &str) -> SelectedPackage {
-    let package = metadata
-        .packages
-        .iter()
-        .find(|candidate| candidate.name == pkg_name);
-    let root = package
-        .and_then(|candidate| candidate.manifest_path.parent())
-        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
-    SelectedPackage {
-        root,
+    let pkg_name = resolve_package(&metadata, package, cwd)?;
+    Ok(Some(SelectedPackage {
         name: pkg_name.to_owned(),
-        version: package.map_or_else(String::new, |candidate| candidate.version.clone()),
-        target_directory: metadata.target_directory.clone(),
-    }
-}
-
-fn filter_candidates_by_interfaces(
-    mut candidates: Vec<ContractMetadata>,
-    interface_specs: Option<&[crate::contract_spec::InterfaceSpec]>,
-) -> Vec<ContractMetadata> {
-    let Some(interface_specs) = interface_specs else {
-        return candidates;
-    };
-    if interface_specs.is_empty() {
-        return candidates;
-    }
-
-    candidates.retain(|candidate| {
-        interface_specs.iter().any(|interface| {
-            interface.interface_name == candidate.interface_name
-                && interface.interface_version == candidate.version
-        })
-    });
-    candidates
-}
-
-fn collect_contract_metadata(
-    dir: &Path,
-    method: &str,
-    package_version: &str,
-    out: &mut Vec<ContractMetadata>,
-) -> Result<(), CliError> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            collect_contract_metadata(&path, method, package_version, out)?;
-            continue;
-        }
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        let contents = std::fs::read_to_string(&path)?;
-        out.extend(contract_metadata_from_source(
-            &contents,
-            &path,
-            method,
-            package_version,
-        ));
-    }
-    Ok(())
-}
-
-fn contract_metadata_from_source(
-    source: &str,
-    path: &Path,
-    method: &str,
-    package_version: &str,
-) -> Vec<ContractMetadata> {
-    let mut out = Vec::new();
-    let mut offset = 0;
-
-    while let Some(attr_start_rel) = find_next_contract_attr(source, offset) {
-        let attr_start = attr_start_rel;
-        let Some(attr_end_rel) = source[attr_start..].find(']') else {
-            break;
-        };
-        let attr_end = attr_start + attr_end_rel;
-        let attr = &source[attr_start..=attr_end];
-        let item_start = attr_end + 1;
-        let Some((header_start, brace_idx)) = find_item_header(source, item_start) else {
-            break;
-        };
-        let Some(block_end) = find_matching_brace(source, brace_idx) else {
-            break;
-        };
-
-        let header = &source[header_start..brace_idx];
-        let body = &source[brace_idx + 1..block_end];
-        if !body.contains(&format!("fn {method}")) {
-            offset = block_end + 1;
-            continue;
-        }
-
-        let version = parse_contract_attr_value(attr, "version")
-            .unwrap_or_else(|| package_version.to_string());
-        if let Some(interface_name) =
-            parse_contract_attr_value(attr, "interface").or_else(|| infer_interface_name(header))
-            && let Some(method_metadata) = parse_method_metadata(body, method)
-        {
-            out.push(ContractMetadata {
-                interface_name,
-                version,
-                source: path.to_path_buf(),
-                method: method_metadata,
-            });
-        }
-
-        offset = block_end + 1;
-    }
-
-    out
-}
-
-fn find_next_contract_attr(source: &str, start: usize) -> Option<usize> {
-    let mut search = start;
-    while let Some(rel) = source[search..].find("#[contract") {
-        let idx = search + rel;
-        match source.as_bytes().get(idx + "#[contract".len()) {
-            Some(b'(' | b']') => return Some(idx),
-            _ => search = idx + "#[contract".len(),
-        }
-    }
-    None
-}
-
-fn find_item_header(source: &str, start: usize) -> Option<(usize, usize)> {
-    let remainder = &source[start..];
-    let impl_idx = remainder.find("impl ");
-    let trait_idx = remainder.find("trait ");
-    let header_rel = match (impl_idx, trait_idx) {
-        (Some(i), Some(t)) => i.min(t),
-        (Some(i), None) => i,
-        (None, Some(t)) => t,
-        (None, None) => return None,
-    };
-    let header_start = start + header_rel;
-    let brace_rel = source[header_start..].find('{')?;
-    Some((header_start, header_start + brace_rel))
-}
-
-fn find_matching_brace(source: &str, open_idx: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (idx, ch) in source[open_idx..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return Some(open_idx + idx);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn parse_contract_attr_value(attr: &str, key: &str) -> Option<String> {
-    let needle = format!("{key} = \"");
-    let start = attr.find(&needle)? + needle.len();
-    let rest = &attr[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
-fn parse_method_metadata(body: &str, method: &str) -> Option<MethodMetadata> {
-    let target = format!("fn {method}");
-    let mut search_offset = 0;
-    let fn_start = loop {
-        let rel = body[search_offset..].find(&target)?;
-        let abs = search_offset + rel;
-        let after = abs + target.len();
-        match body.as_bytes().get(after) {
-            Some(b) if b.is_ascii_alphanumeric() || *b == b'_' => {
-                search_offset = after;
-            }
-            _ => break abs,
-        }
-    };
-    let signature = &body[fn_start..];
-    let open_paren = signature.find('(')?;
-    let close_paren = find_matching_delimiter(signature, open_paren, '(', ')')?;
-    let args_src = &signature[open_paren + 1..close_paren];
-
-    let after_args = &signature[close_paren + 1..];
-    let signature_end = after_args.find('{').or_else(|| after_args.find(';'))?;
-    let header_tail = after_args[..signature_end].trim();
-    let return_type = header_tail
-        .strip_prefix("->")
-        .map(str::trim)
-        .filter(|ty| !ty.is_empty())
-        .map(ToOwned::to_owned);
-
-    let mut arg_types = Vec::new();
-    for arg in split_top_level(args_src, ',') {
-        let arg = arg.trim();
-        if arg.is_empty()
-            || arg == "&self"
-            || arg == "&mut self"
-            || arg == "self"
-            || arg == "mut self"
-        {
-            continue;
-        }
-        let (_, ty) = arg.split_once(':')?;
-        arg_types.push(ty.trim().to_string());
-    }
-
-    Some(MethodMetadata {
-        arg_types,
-        return_type,
-    })
-}
-
-fn find_matching_delimiter(
-    source: &str,
-    open_idx: usize,
-    open: char,
-    close: char,
-) -> Option<usize> {
-    let mut depth = 0usize;
-    for (idx, ch) in source[open_idx..].char_indices() {
-        match ch {
-            c if c == open => depth += 1,
-            c if c == close => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return Some(open_idx + idx);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn split_top_level(source: &str, delimiter: char) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut paren = 0usize;
-    let mut bracket = 0usize;
-    let mut angle = 0usize;
-
-    for (idx, ch) in source.char_indices() {
-        match ch {
-            '(' => paren += 1,
-            ')' => paren = paren.saturating_sub(1),
-            '[' => bracket += 1,
-            ']' => bracket = bracket.saturating_sub(1),
-            '<' => angle += 1,
-            '>' => angle = angle.saturating_sub(1),
-            _ if ch == delimiter && paren == 0 && bracket == 0 && angle == 0 => {
-                parts.push(source[start..idx].trim());
-                start = idx + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-    parts.push(source[start..].trim());
-    parts
-}
-
-fn infer_interface_name(header: &str) -> Option<String> {
-    let header = header.trim();
-    if let Some(rest) = header.strip_prefix("trait ") {
-        return parse_rust_ident(rest);
-    }
-    if let Some(rest) = header.strip_prefix("pub trait ") {
-        return parse_rust_ident(rest);
-    }
-    if let Some(rest) = header.strip_prefix("impl ") {
-        if let Some((lhs, _rhs)) = rest.split_once(" for ") {
-            return last_ident(lhs);
-        }
-        return parse_rust_ident(rest);
-    }
-    None
-}
-
-fn parse_rust_ident(input: &str) -> Option<String> {
-    let ident: String = input
-        .chars()
-        .skip_while(|ch| ch.is_whitespace())
-        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-        .collect();
-    (!ident.is_empty()).then_some(ident)
-}
-
-fn last_ident(input: &str) -> Option<String> {
-    input
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-        .rfind(|part| !part.is_empty())
-        .map(str::to_string)
+        target_directory: metadata.target_directory,
+    }))
 }
 
 #[cfg(test)]
@@ -1001,11 +615,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
-        filter_candidates_by_interfaces, format_entrypoint_id, method_entrypoint_id,
-        parse_contract_attr_value, parse_method_metadata, resolve_call,
-        resolve_local_contract_metadata, resolve_spec_method, select_package, selector_json,
-        selector_summary,
+        ResolvedCall, explicit_entrypoint_id, format_entrypoint_id, method_entrypoint_id,
+        resolve_call, resolve_spec_method, select_package, selector_json, selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -1026,93 +637,6 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use tempfile::TempDir;
-
-    #[test]
-    fn parses_contract_attr_values() {
-        let attr = r#"#[contract(interface = "Interface1", version = "1.2.3")]"#;
-        assert_eq!(
-            parse_contract_attr_value(attr, "interface").as_deref(),
-            Some("Interface1")
-        );
-        assert_eq!(
-            parse_contract_attr_value(attr, "version").as_deref(),
-            Some("1.2.3")
-        );
-    }
-
-    #[test]
-    fn extracts_metadata_from_bare_impl() {
-        let source = r"
-            #[contract(throws = Error, client = CounterClient)]
-            impl Counter {
-                pub fn get(&self) -> u64 { 0 }
-            }
-        ";
-        let metadata = contract_metadata_from_source(
-            source,
-            Path::new("/tmp/implementation.rs"),
-            "get",
-            "0.1.0",
-        );
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[0].interface_name, "Counter");
-        assert_eq!(metadata[0].version, "0.1.0");
-        assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
-        assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
-    }
-
-    #[test]
-    fn extracts_qualified_native_256_type_names() {
-        let metadata = parse_method_metadata(
-            "fn convert(value: sdk::U256) -> groundhog_sdk::I256 { todo!() }",
-            "convert",
-        )
-        .expect("bug: qualified method signature should parse");
-
-        assert_eq!(metadata.arg_types, vec!["sdk::U256"]);
-        assert_eq!(metadata.return_type.as_deref(), Some("groundhog_sdk::I256"));
-    }
-
-    #[test]
-    fn method_metadata_does_not_match_prefix_methods() {
-        let source = r"
-            #[contract(throws = Error, client = CounterClient)]
-            impl Counter {
-                pub fn get_all(&self, count: u64) -> Vec<u64> { vec![] }
-                pub fn get(&self) -> u64 { 0 }
-            }
-        ";
-        let metadata = contract_metadata_from_source(
-            source,
-            Path::new("/tmp/implementation.rs"),
-            "get",
-            "0.1.0",
-        );
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
-        assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
-    }
-
-    #[test]
-    fn extracts_metadata_from_trait_impl_with_explicit_interface_and_version() {
-        let source = r#"
-            #[contract(interface = "Interface1", version = "1.2.3")]
-            impl Interface for Stateless {
-                fn perform_task() -> u32 { 1 }
-            }
-        "#;
-        let metadata = contract_metadata_from_source(
-            source,
-            Path::new("/tmp/interface.rs"),
-            "perform_task",
-            "0.1.0",
-        );
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(metadata[0].interface_name, "Interface1");
-        assert_eq!(metadata[0].version, "1.2.3");
-        assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
-        assert_eq!(metadata[0].method.return_type.as_deref(), Some("u32"));
-    }
 
     #[test]
     fn formats_entrypoint_ids_as_prefixed_hex() {
@@ -1282,15 +806,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiple_raw_arguments_without_local_metadata() {
+    fn rejects_multiple_raw_arguments_without_spec_metadata() {
         let err = encode_calldata(&["0x01".into(), "0x02".into()], None)
             .expect_err("bug: multiple raw arguments should fail without metadata");
         assert_call_encode_error(
             err,
             "arguments",
-            "multiple call arguments require local contract metadata — run `groundhog call` from \
-             inside the project that defines the contract, or pass a single hex-encoded calldata \
-             argument",
+            "multiple call arguments require a built contract spec — run `groundhog build` and \
+             select a method by name, or pass a single hex-encoded calldata argument",
         );
     }
 
@@ -1773,35 +1296,139 @@ mod tests {
     }
 
     #[test]
-    fn filters_candidates_by_interfaces() {
-        let candidates = vec![
-            ContractMetadata {
-                interface_name: "Counter".into(),
-                version: "0.1.0".into(),
-                source: Path::new("/tmp/a.rs").to_path_buf(),
-                method: MethodMetadata {
-                    arg_types: vec![],
-                    return_type: Some("u64".into()),
-                },
-            },
-            ContractMetadata {
-                interface_name: "Other".into(),
-                version: "0.1.0".into(),
-                source: Path::new("/tmp/b.rs").to_path_buf(),
-                method: MethodMetadata {
-                    arg_types: vec![],
-                    return_type: Some("u64".into()),
-                },
-            },
-        ];
-        let interfaces = vec![InterfaceSpec {
-            interface_name: "Counter".into(),
-            interface_version: "0.1.0".into(),
-        }];
+    #[serial]
+    fn named_calls_require_a_current_build_spec_even_when_source_matches() {
+        let project = create_temp_project("demo-contract");
+        let project_root = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::write(project_root.join("groundhog.toml"), "").unwrap();
+        std::fs::write(
+            project_root.join("src/lib.rs"),
+            "#[contract]\nimpl Counter { pub fn get() -> u64 { 42 } }\n",
+        )
+        .unwrap();
+        let target = project_root.join("target");
+        let artifacts = ArtifactOptions::new(Some(target.clone()));
+        let _cwd = CurrentDirGuard::enter(&project_root);
 
-        let filtered = filter_candidates_by_interfaces(candidates, Some(&interfaces));
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].interface_name, "Counter");
+        for state in ["unbuilt", "missing sidecar", "stale sidecar"] {
+            if state != "unbuilt" {
+                let rv32 = write_built_spec(&target, "demo-contract", &sample_contract_spec());
+                let sidecar = rv32.with_extension("spec.xdr");
+                if state == "missing sidecar" {
+                    std::fs::remove_file(sidecar).unwrap();
+                } else {
+                    std::fs::File::open(sidecar)
+                        .unwrap()
+                        .set_modified(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap();
+                }
+            }
+
+            let err = resolve_call(&project_root, "get", None, &artifacts).unwrap_err();
+            assert!(
+                matches!(&err, CliError::CallSpecRequired { method } if method == "get"),
+                "{state}: {err:?}"
+            );
+            assert!(err.hint().unwrap().contains("groundhog build"));
+            assert_eq!(err.code(), "call_spec_required");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn named_calls_use_the_specs_interface_name_and_version() {
+        let project = create_temp_project("versioned-impl");
+        let project_root = std::fs::canonicalize(project.path()).unwrap();
+        let manifest = project_root.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            std::fs::read_to_string(&manifest)
+                .unwrap()
+                .replace("0.1.0", "0.2.0"),
+        )
+        .unwrap();
+        // Cargo metadata needs a source target, but the resolver must not read
+        // this alias or signature to infer the exported interface or codec.
+        std::fs::write(
+            project_root.join("src/lib.rs"),
+            "use interfaces::VersionedCallee as Alias;\n\
+             #[contract]\nimpl Alias for Contract { fn get() -> u32 { 42 } }\n",
+        )
+        .unwrap();
+        let target = project_root.join("target");
+        let artifacts = ArtifactOptions::new(Some(target.clone()));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+
+        for version in ["0.1.0", "1.2.3"] {
+            let mut spec = sample_contract_spec();
+            spec.interfaces[0].name = spec_string_bytes("VersionedCallee");
+            spec.interfaces[0].vers = spec_string_bytes(version);
+            write_built_spec(&target, "versioned-impl", &spec);
+
+            let resolved = resolve_call(&project_root, "get", None, &artifacts).unwrap();
+            assert_eq!(
+                resolved.entrypoint,
+                method_entrypoint_id("VersionedCallee", version, "get")
+            );
+            assert_ne!(
+                resolved.entrypoint,
+                method_entrypoint_id("VersionedCallee", "0.2.0", "get")
+            );
+            assert_ne!(
+                resolved.entrypoint,
+                method_entrypoint_id("Alias", version, "get")
+            );
+            assert_eq!(
+                selector_json(&resolved)["interface"],
+                json!({ "name": "VersionedCallee", "version": version })
+            );
+            let value = xdrs::cxs::encode(&42_u64).unwrap();
+            assert_eq!(
+                decode_return_value(&value, resolved.metadata.as_ref()),
+                Some(json!(42))
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn methods_absent_from_the_spec_do_not_resolve_from_source() {
+        let project = create_temp_project("demo-contract");
+        let project_root = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::write(project_root.join("groundhog.toml"), "").unwrap();
+        std::fs::write(
+            project_root.join("src/lib.rs"),
+            "#[contract]\nimpl Counter { pub fn source_only() {} }\n",
+        )
+        .unwrap();
+        let target = project_root.join("target");
+        write_built_spec(&target, "demo-contract", &sample_contract_spec());
+        let artifacts = ArtifactOptions::new(Some(target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+
+        let err = resolve_call(&project_root, "source_only", None, &artifacts).unwrap_err();
+        assert!(matches!(
+            err,
+            CliError::CallMethodNotFound { method, package }
+                if method == "source_only" && package == "demo-contract"
+        ));
+    }
+
+    #[test]
+    #[serial]
+    fn explicit_entrypoints_work_without_a_project_but_named_calls_request_a_build() {
+        let directory = tempfile::tempdir().unwrap();
+        let _cwd = CurrentDirGuard::enter(directory.path());
+        let artifacts = ArtifactOptions::default();
+        let resolved =
+            resolve_call(directory.path(), "0x0102030405060708", None, &artifacts).unwrap();
+        assert_eq!(
+            format_entrypoint_id(resolved.entrypoint),
+            "0x0102030405060708"
+        );
+        assert_eq!(resolved.metadata, None);
+        let err = resolve_call(directory.path(), "get", None, &artifacts).unwrap_err();
+        assert!(matches!(err, CliError::CallSpecRequired { .. }));
     }
 
     #[test]
@@ -1917,24 +1544,22 @@ mod tests {
 
     #[test]
     #[serial]
-    fn workspace_package_selects_its_own_sources_and_inherited_version() {
+    fn workspace_package_selects_its_own_built_spec() {
         let workspace = create_temp_workspace();
         let workspace_root = std::fs::canonicalize(workspace.path())
             .expect("bug: workspace path should canonicalize");
 
         let _cwd = CurrentDirGuard::enter(&workspace_root);
-        let metadata = resolve_local_contract_metadata(
+        let metadata = resolve_spec_method(
             &workspace_root,
             "mint",
             Some("erc20"),
-            &ArtifactOptions::default(),
+            &ArtifactOptions::new(Some(workspace_root.join("target"))),
         )
-        .expect("bug: an explicit package should resolve at the workspace root")
-        .expect("bug: mint should resolve from the erc20 member sources");
+        .expect("bug: mint should resolve from the erc20 member spec");
 
-        assert_eq!(metadata.interface_name, "Erc20");
-        assert_eq!(metadata.version, "9.9.9");
-        assert_eq!(metadata.source, workspace_root.join("erc20/src/lib.rs"));
+        assert_eq!(metadata.interface_name, "ERC20");
+        assert_eq!(metadata.version, "0.1.9");
     }
 
     #[test]
@@ -1946,17 +1571,16 @@ mod tests {
         let member_root = workspace_root.join("erc20");
 
         let _cwd = CurrentDirGuard::enter(&member_root);
-        let metadata = resolve_local_contract_metadata(
+        let metadata = resolve_spec_method(
             &member_root,
             "mint",
             None,
-            &ArtifactOptions::default(),
+            &ArtifactOptions::new(Some(workspace_root.join("target"))),
         )
-        .expect("bug: a member directory should select its own package")
-        .expect("bug: mint should resolve from the surrounding member");
+        .expect("bug: mint should resolve from the surrounding member spec");
 
-        assert_eq!(metadata.interface_name, "Erc20");
-        assert_eq!(metadata.source, member_root.join("src/lib.rs"));
+        assert_eq!(metadata.interface_name, "ERC20");
+        assert_eq!(metadata.version, "0.1.9");
     }
 
     #[test]
@@ -1967,13 +1591,8 @@ mod tests {
             .expect("bug: workspace path should canonicalize");
 
         let _cwd = CurrentDirGuard::enter(&workspace_root);
-        let err = resolve_local_contract_metadata(
-            &workspace_root,
-            "mint",
-            None,
-            &ArtifactOptions::default(),
-        )
-        .expect_err("bug: a workspace root should not resolve a package on its own");
+        let err = resolve_spec_method(&workspace_root, "mint", None, &ArtifactOptions::default())
+            .expect_err("bug: a workspace root should not resolve a package on its own");
 
         assert!(matches!(err, CliError::PackageRequired), "got {err:?}");
     }
@@ -2069,7 +1688,29 @@ mod tests {
             )
             .expect("bug: member sources should be written");
         }
+        write_built_spec(
+            &workspace.path().join("target"),
+            "erc20",
+            &sample_erc20_contract_spec(),
+        );
+        write_built_spec(
+            &workspace.path().join("target"),
+            "counter",
+            &sample_contract_spec(),
+        );
         workspace
+    }
+
+    fn write_built_spec(target: &Path, package: &str, spec: &ContractSpec) -> std::path::PathBuf {
+        let artifact = crate::artifacts::groundhog_rv32_output_path(target, package);
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(&artifact, b"rv32 fixture").unwrap();
+        std::fs::write(
+            artifact.with_extension("spec.xdr"),
+            xdrs::txs::encode(spec).unwrap(),
+        )
+        .unwrap();
+        artifact
     }
 
     fn write_project_manifest(project_root: &Path, package_name: &str) {

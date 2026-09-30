@@ -454,6 +454,16 @@ TransactionRecentFailure
 ReceiptPollingExhausted
   code: receipt_polling_exhausted
 
+CallSpecRequired
+  code: call_spec_required
+  hint text: run `groundhog build` in the contract project (use `-p <package>` for a workspace member), then retry with the same package and target directory; or pass an explicit 0x-prefixed 8-byte entrypoint ID
+  details: method
+
+CallMethodNotFound
+  code: call_method_not_found
+  hint text: check the method name and selected package; if the contract changed, run `groundhog build` with the same package and target directory
+  details: method, package
+
 CallEncode
   code: call_encode
   hint text: check the reported argument path and use structured JSON for composite contract values
@@ -539,4 +549,3 @@ ToolchainNotInstalled
 
 Other
   code: other
-

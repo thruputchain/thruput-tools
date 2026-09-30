@@ -7,12 +7,12 @@ use groundhog_xdr::types::ContractAddress;
 use serde_json::Value;
 
 pub(crate) use groundhog_client::codec::{
-    AbortDecodeError, CallMetadata, ContractMetadata, DecodedAbort, MethodMetadata,
-    SpecMethodMetadata, TypeDefIndex, decode_return, format_contract_address, is_erc20_too_large,
+    AbortDecodeError, CallMetadata, DecodedAbort, SpecMethodMetadata, TypeDefIndex, decode_return,
+    format_contract_address, is_erc20_too_large,
 };
 
 #[cfg(test)]
-pub(crate) use groundhog_client::codec::normalize_type_name;
+pub(crate) use groundhog_client::codec::{ContractMetadata, MethodMetadata, normalize_type_name};
 
 pub(crate) fn encode_args(
     args: &[String],
@@ -21,9 +21,10 @@ pub(crate) fn encode_args(
     if metadata.is_none() && args.len() > 1 {
         return Err(CliError::CallEncode {
             path: "arguments".into(),
-            message: "multiple call arguments require local contract metadata — run `groundhog call` from \
-         inside the project that defines the contract, or pass a single hex-encoded calldata \
-         argument".into(),
+            message:
+                "multiple call arguments require a built contract spec — run `groundhog build` and \
+         select a method by name, or pass a single hex-encoded calldata argument"
+                    .into(),
         });
     }
     groundhog_client::codec::encode_args(args, metadata).map_err(Into::into)

@@ -57,10 +57,11 @@ Implementation status:
   global/project targeting, and versioned JSON reports are shipped. Config
   writes preserve comments and unrelated state under shared sidecar locks.
 - Phase 1 is effectively complete: deploy/call work, `--json` works, and
-  contract-spec-aware invocation is in place through embedded contract specs
-  plus local metadata. The CLI now emits `.spec.json` as an inspection/export
+  contract-spec-aware invocation uses the build's `.spec.xdr` sidecar.
+  Named calls require a current spec; there is no Rust-source fallback.
+  The CLI emits `.spec.json` as an inspection/export
   artifact, not as runtime input.
-- Embedded specs now drive first-pass typed invocation too: scalars,
+- Build specs drive typed invocation too: scalars,
   structs, enums, unions, options, tuples, vectors, arrays, and byte
   blobs all round-trip without relying on the old JSON sidecar shape.
 - `groundhog call --dry-run` now exists as a signed, RPC-backed first
@@ -75,10 +76,8 @@ Implementation status:
   the CLI split explicit: `call` signs and submits transactions, `storage`
   reads committed storage, and `view` executes the contract under
   sandboxed simulation.
-- Remaining Phase 1 follow-up: cache repeated embedded-spec parsing,
-  tighten union/structured CLI ergonomics and diagnostics, and keep
-  proving out the spec-driven path so the remaining local-source fallback
-  can eventually be removed.
+- Remaining Phase 1 follow-up: cache repeated spec parsing and
+  tighten union/structured CLI ergonomics and diagnostics.
 - Phase 2 is complete for the current local-dev scope: `groundhog node`
   ships, shares execution semantics with the SDK/native executor, retains
   transaction detail, exposes events, and supports latest-state storage

@@ -32,6 +32,13 @@ RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
 
+Named methods in `groundhog call` and `groundhog view` resolve exclusively
+from the selected package's built `.spec.xdr` sidecar. If it is missing or
+older than the artifact, run `groundhog build` with the same package and target
+directory, then retry. The CLI does not infer interface names, versions, or
+method types from Rust source. Explicit `0x`-prefixed 8-byte entrypoint IDs
+can still be used without a spec, with raw calldata.
+
 That self dev-dependency puts the project name in the extern prelude of every
 test target, so `groundhog new` refuses names that would shadow something the
 generated project needs: Rust's built-in crates (`test`, `core`, `std`,
