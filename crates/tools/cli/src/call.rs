@@ -1361,8 +1361,10 @@ mod tests {
 
         for version in ["0.1.0", "1.2.3"] {
             let mut spec = sample_contract_spec();
-            spec.interfaces[0].name = spec_string_bytes("VersionedCallee");
-            spec.interfaces[0].vers = spec_string_bytes(version);
+            let mut interface = spec.interfaces[0].clone();
+            interface.name = spec_string_bytes("VersionedCallee");
+            interface.vers = spec_string_bytes(version);
+            spec.interfaces = vec![interface].try_into().unwrap();
             write_built_spec(&target, "versioned-impl", &spec);
 
             let resolved = resolve_call(&project_root, "get", None, &artifacts).unwrap();
