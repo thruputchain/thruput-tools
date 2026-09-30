@@ -50,8 +50,12 @@ impl Print {
     }
 
     pub(crate) fn defer_warning(&self, text: String) {
+        self.defer_diagnostic(Outcome::Warning, text);
+    }
+
+    pub(super) fn defer_diagnostic(&self, outcome: Outcome, text: String) {
         self.collect_diagnostic(Diagnostic {
-            outcome: Outcome::Warning,
+            outcome,
             code: None,
             text,
             source: None,

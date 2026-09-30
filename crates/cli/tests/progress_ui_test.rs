@@ -927,6 +927,139 @@ fn active_build_phase_is_muted_but_spinner_keeps_the_accent() {
     assert_eq!(spinner.fgcolor(), vt100::Color::Idx(6));
 }
 
+#[path = "support/devnode.rs"]
+mod devnode;
+
+fn node_command(root: &TempDir, binary: &std::path::Path, mode: &str) -> Command {
+    let wrapper = root.path().join("hog-devnode");
+    std::fs::write(&wrapper, r#"#!/bin/sh
+if [ "$1" = "--version" ]; then exec "$GROUNDHOG_UI_REAL_DEVNODE" "$@"; fi
+printf '%s\n' '{"level":"warn","message":"startup warning fixture","timestamp_ms":123,"target":"ramdb","fields":{"file":"fixture.cc","line":43}}' >&2
+sleep 0.5
+exec "$GROUNDHOG_UI_REAL_DEVNODE" "$@"
+"#).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command
+        .args(["node", "--port", "0", "--hog-devnode-binary"])
+        .arg(&wrapper)
+        .current_dir(root.path())
+        .env("XDG_CONFIG_HOME", root.path().join("config"))
+        .env("XDG_CACHE_HOME", root.path().join("cache"))
+        .env("GROUNDHOG_UI_REAL_DEVNODE", binary)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env(
+            "GROUNDHOG_FAKE_HOGD_DEV_UI_TRIGGER",
+            root.path().join("log-now"),
+        )
+        .env("TERM", "xterm-256color")
+        .env("LC_ALL", "C.UTF-8")
+        .env_remove("NO_COLOR")
+        .env_remove("RUST_LOG");
+    match mode {
+        "failure" => {
+            command.args(["--hogd-protocol", "hogp/wrong"]);
+        }
+        "verbose" => {
+            command.arg("--verbose");
+        }
+        "plain" => {
+            command.arg("--no-ui");
+        }
+        _ => {}
+    }
+    command
+}
+
+#[test]
+fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
+    let binary = devnode::binary();
+    for mode in ["normal", "failure", "verbose", "plain"] {
+        let root = TempDir::new().unwrap();
+        let mut pty = Pty::spawn(node_command(&root, &binary, mode));
+        if matches!(mode, "normal" | "failure") {
+            pty.until(|pty| {
+                pty.parser
+                    .screen()
+                    .contents()
+                    .contains("Starting Groundhog local node")
+            });
+            assert!(!String::from_utf8_lossy(&pty.raw).contains("startup warning fixture"));
+        }
+        if mode != "failure" {
+            pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("dev-key manifest"));
+            std::fs::write(root.path().join("log-now"), "").unwrap();
+            pty.until(|pty| {
+                pty.parser
+                    .screen()
+                    .contents()
+                    .contains("live warning fixture")
+            });
+            if mode == "normal" {
+                let row = pty
+                    .parser
+                    .screen()
+                    .rows(0, 80)
+                    .position(|line| line.contains("WARN live warning fixture"))
+                    .unwrap();
+                assert!(
+                    pty.parser
+                        .screen()
+                        .cell(u16::try_from(row).unwrap(), 5)
+                        .unwrap()
+                        .dim()
+                );
+            }
+            pty.master.write_all(b"\x03").unwrap();
+            if mode == "normal" {
+                pty.until(|pty| {
+                    pty.parser
+                        .screen()
+                        .contents()
+                        .contains("Stopping Groundhog local node")
+                });
+            }
+        }
+        assert_eq!(pty.finish().success(), mode != "failure");
+        let history = pty.history();
+        let warning = history.find("startup warning fixture").unwrap();
+        if mode == "failure" {
+            assert!(
+                history.find("node_supervisor_error").unwrap() < warning,
+                "{history}"
+            );
+        } else {
+            assert!(history.contains("Local node stopped."), "{history}");
+            if mode == "normal" {
+                assert!(
+                    history.find("Local node stopped.").unwrap()
+                        < history.find("shutdown warning fixture").unwrap(),
+                    "{history}"
+                );
+                assert!(
+                    !history.contains("Stopping Groundhog local node"),
+                    "{history}"
+                );
+                assert!(
+                    history.find("Ready: Local node").unwrap() < warning,
+                    "{history}"
+                );
+                assert!(
+                    !history.contains("Shutting down") && !history.contains("Starting Groundhog"),
+                    "{history}"
+                );
+                assert!(!history.contains("hogd_timestamp_ms"), "{history}");
+            } else {
+                assert!(
+                    warning < history.find("local node ready").unwrap(),
+                    "{history}"
+                );
+                assert!(history.contains("hogd_timestamp_ms"), "{history}");
+            }
+        }
+    }
+}
+
 #[test]
 fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
     let fixture = Fixture::new();

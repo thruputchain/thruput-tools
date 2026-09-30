@@ -10,6 +10,7 @@ mod policy;
 pub(crate) mod progress;
 mod render;
 mod report;
+pub(crate) mod service;
 mod theme;
 mod wizard;
 pub use theme::Outcome;

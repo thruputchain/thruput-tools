@@ -39,10 +39,23 @@ pub fn run_with_options(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    init_node_tracing(verbose, print);
+    let logs = if !verbose && std::env::var_os("RUST_LOG").is_none() && print.can_refresh_screen() {
+        use tracing_subscriber::prelude::*;
+        let logs = crate::print::service::ServiceLogs::new(print);
+        let installed = tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new(default_tracing_filter(
+                false,
+            )))
+            .with(logs.clone())
+            .try_init();
+        installed.ok().map(|()| logs)
+    } else {
+        init_node_tracing(verbose, print);
+        None
+    };
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    rt.block_on(async { run_hogd_dev(options, cmd, print).await })
+    rt.block_on(async { run_hogd_dev(options, cmd, print, logs.as_ref()).await })
 }
 
 /// Parse one `NAME=VALUE` genesis parameter override.
@@ -283,8 +296,9 @@ async fn run_hogd_dev(
     options: LocalNodeOptions,
     cmd: &'static str,
     print: &Print,
+    logs: Option<&crate::print::service::ServiceLogs>,
 ) -> Result<(), CliError> {
-    use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
+    use groundhog_node_supervisor::NodeSupervisorError;
 
     let shutdown_signal = prepare_stop_signal()
         .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
@@ -297,7 +311,10 @@ async fn run_hogd_dev(
         }
     };
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
-    print.phase("Starting Groundhog local node");
+    let startup = logs.map(|logs| logs.start("Starting Groundhog local node"));
+    if startup.is_none() {
+        print.phase("Starting Groundhog local node");
+    }
     let started = start_resolved_local_node(options, lease).await?;
     let local_runtime_state_path = match write_started_local_runtime_state(
         &started,
@@ -306,9 +323,13 @@ async fn run_hogd_dev(
         Ok(path) => path,
         Err(error) => {
             if !print.is_json() {
-                print.warn(format_args!(
-                    "local runtime state was not updated; stopping local node: {error}"
-                ));
+                let message =
+                    format!("local runtime state was not updated; stopping local node: {error}");
+                if startup.is_some() {
+                    print.defer_warning(message);
+                } else {
+                    print.warn(message);
+                }
             }
             if let Err(stop_error) = started.stop().await {
                 return Err(CliError::NodeSupervisor(format!(
@@ -342,31 +363,49 @@ async fn run_hogd_dev(
             }
             return Err(error);
         }
+    } else if let Some(startup) = startup {
+        startup.finish(|| print_started_local_node(&started, &local_runtime_state_result, print));
     } else {
         print_started_local_node(&started, &local_runtime_state_result, print);
     }
 
+    let mut shutdown = None;
     let stop_signal = async {
         shutdown_signal
             .await
             .map_err(|source| NodeSupervisorError::StopSignal { source })?;
         if !print.is_json() {
             print.status("");
-            print.note("Shutting down");
+            shutdown = logs.map(|logs| logs.start("Stopping Groundhog local node"));
+            if shutdown.is_none() {
+                print.note("Shutting down");
+            }
         }
         Ok(())
     };
 
     let outcome = started.run_until(stop_signal).await;
-    cleanup_written_local_runtime_state(cleanup_local_runtime_state, print);
-    let outcome = outcome?;
+    cleanup_written_local_runtime_state(
+        cleanup_local_runtime_state,
+        shutdown.as_ref().map_or(print, |phase| phase.print()),
+    );
+    let message = stopped_message(outcome?)?;
+    if let Some(shutdown) = shutdown {
+        shutdown.finish(|| print.service_stopped(&message));
+    } else {
+        print.service_stopped(&message);
+    }
+    Ok(())
+}
+
+fn stopped_message(outcome: groundhog_node_supervisor::SupervisorStop) -> Result<String, CliError> {
+    use groundhog_node_supervisor::SupervisorStop;
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if status.success() {
-                print.service_stopped(&format!(
+                Ok(format!(
                     "Local node stopped (hog-devnode exited with status {status})."
-                ));
-                Ok(())
+                ))
             } else {
                 Err(CliError::NodeSupervisor(format!(
                     "hog-devnode exited with status {status}"
@@ -374,8 +413,7 @@ async fn run_hogd_dev(
             }
         }
         SupervisorStop::RpcStopped(_) | SupervisorStop::StopRequested(_) => {
-            print.service_stopped("Local node stopped.");
-            Ok(())
+            Ok("Local node stopped.".into())
         }
         other => Err(CliError::NodeSupervisor(format!(
             "unexpected supervisor stop state: {other:?}"

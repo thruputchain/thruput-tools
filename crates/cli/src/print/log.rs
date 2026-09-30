@@ -33,7 +33,14 @@ pub(super) fn line(text: &str, theme: Theme) -> Line<'_> {
                 return Line::from(vec![
                     Span::raw(&text[..indent]),
                     Span::styled(&text[indent..end], theme.outcome(outcome)),
-                    Span::raw(&text[end..]),
+                    Span::styled(
+                        &text[end..],
+                        if matches!(label, "WARN" | "ERROR") {
+                            theme.routine_log()
+                        } else {
+                            ratatui::style::Style::default()
+                        },
+                    ),
                 ]);
             }
         }
@@ -181,7 +188,14 @@ mod tests {
             let rendered = line(text, theme(true));
             assert_eq!(rendered.to_string(), text);
             assert_eq!(rendered.spans[1].style.fg, Some(color));
-            assert_eq!(rendered.spans[2].style, Style::default());
+            assert_eq!(
+                rendered.spans[2].style,
+                if text.trim_start().starts_with("WARN ") || text.starts_with("ERROR ") {
+                    theme(true).routine_log()
+                } else {
+                    Style::default()
+                }
+            );
             assert!(!rendered.spans[1].style.add_modifier.contains(Modifier::DIM));
         }
     }

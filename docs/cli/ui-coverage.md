@@ -16,7 +16,7 @@ rules, and raw payloads remain command contracts.
 | GH-396 | new, init | Shared guided stepper, theme-accented active view, canonical prompts, and final results; explicit foreground screen refresh | Guided step/state/resize/interrupt PTYs; short-terminal and automation fallbacks; existing authorization and schema coverage |
 | GH-393 | deploy, call, transfer, airdrop, wallet create | Shared review/dry-run/live/error/unconfirmed results; prepared hashes and prefund progress retained; explicit wallet binding partial outcome | Workspace suite; live call/deploy/transfer success, rejection and uncertainty PTYs; wallet prefund/creation partial failure; remote dry runs without service contact |
 | GH-392 | test: single/workspace/watch/integration | Shared per-run/workspace summaries and outcomes; foreground default runs collect passing logs and retain failed output; `--show-output`, no-capture, passthrough, and integration supervisors use append-only child output | Workspace suite, existing watch/JSONL/workspace/integration tests, and compact/failure/full-output PTYs passed |
-| GH-395 | node, docs | Shared Ready cards and one-line stop messages; docs startup progress; node uses append-only phases/tracing to avoid competing supervisor writers; `--verbose` expands logs | Workspace suite and service PTYs passed, including ready-but-still-running and signal-driven cleanup; logs use shared semantic colors |
+| GH-395 | node, docs | Shared Ready cards and one-line stop messages; startup progress; node coordinates tracing with startup/shutdown spinners and deferred diagnostics | Service PTYs cover ready/running, startup failure, live warnings, slow shutdown, verbose and plain output |
 | GH-394 | recursive command/mode audit, raw/framework output | Complete command audit and platform smoke workflow | Linux workspace, tmux, and macOS terminal checks passed; awaiting user UX review |
 | GH-438 | pre-dispatch version warnings and argument errors | Audit gap fixed with shared warnings and RGB error styles | Argument-error paths checked in a terminal, including no UI; version/NO_COLOR/raw-payload tests |
 | GH-439 | key import and updated non-interactive setup | Integrated current main's input authorization, StrKey fields, and versioned init report; shared public import results | Secret-input, import, and non-interactive regressions |
@@ -113,9 +113,13 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 - Missing local endpoints identify the selected profile and explain how to start
   a node or select another network. Registered runtime endpoints and explicit RPC
   overrides are resolved first; this does not add network probes.
-- Node uses shared append-only startup phases instead of animation: asynchronous
-  supervisor logs must not compete with cursor updates. Normal logs show warnings
-  and errors; `--verbose` or `RUST_LOG` gives fuller detail.
+- Foreground node startup/shutdown uses temporary spinners. Phase diagnostics follow
+  the Ready/stop result or main error; live logs appear immediately after readiness.
+  Log bodies are dim, with warning/error labels in their semantic colors. Default
+  terminal logs omit hogd source metadata; `--verbose` and `RUST_LOG` retain it and
+  stream immediately without animation. Plain, JSON, and redirected modes retain
+  their existing output. A bounded diagnostic buffer streams overflow through the
+  progress worker so noisy startup cannot exhaust memory or discard messages.
 - Test integration/no-capture/show-output/passthrough modes retain child output.
   Default exclusive foreground test runs collect passing logs and retain failures.
 - The sole direct `main` error write is the last-resort report of a failed diagnostic
