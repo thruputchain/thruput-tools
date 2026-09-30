@@ -309,25 +309,35 @@ async fn ingest(
     let mut previous = Instant::now();
     let mut parked_total = 0.;
     loop {
-        let connecting = tokio::time::timeout(
-            Duration::from_secs(5),
-            Client::connect(&config.event_endpoint),
-        );
-        let connected = tokio::select! {
-            result = connecting => result,
-            () = &mut shutdown => {
-                store.clean_shutdown()?;
-                return Ok(());
+        let connecting = async {
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                Client::connect(&config.event_endpoint),
+            )
+            .await;
+            if !matches!(&result, Ok(Ok(_))) {
+                metrics.set_healthy(false);
+                tracing::warn!(?result, "event connection failed; retrying");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            result
+        };
+        tokio::pin!(connecting);
+        let connected = loop {
+            tokio::select! {
+                result = &mut connecting => break result,
+                () = &mut shutdown => {
+                    store.clean_shutdown()?;
+                    return Ok(());
+                }
+                _ = pruning.tick() => {
+                    store.prune(retention)?;
+                    update_store_metrics(metrics, &store);
+                }
             }
         };
-        let client = match connected {
-            Ok(Ok(client)) => client,
-            other => {
-                metrics.set_healthy(false);
-                tracing::warn!(?other, "event connection failed; retrying");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
-            }
+        let Ok(Ok(client)) = connected else {
+            continue;
         };
         let mut parked = false;
         loop {
@@ -548,6 +558,83 @@ mod tests {
         }));
         let task = RpcServer::new(listener, services).start().await;
         (endpoint, states, task)
+    }
+
+    #[tokio::test]
+    async fn disconnected_retention_preserves_the_cursor_sent_after_reconnect() {
+        use sha2::{Digest, Sha256};
+
+        struct Capture(Arc<Mutex<Option<Vec<u8>>>>);
+        #[async_trait::async_trait]
+        impl RpcHandler for Capture {
+            fn prog_vers(&self) -> ProgVers {
+                ProgVers::new(0x4321_aaac, 1)
+            }
+            async fn dispatch(&self, procedure: u32, data: &[u8]) -> Result<Vec<u8>, RpcError> {
+                assert_eq!(procedure, 10);
+                let request: EventIndexerPullRequest = xdrs::txs::decode(data).unwrap();
+                *self.0.lock().unwrap() = Some(xdrs::txs::encode(&request.progress).unwrap());
+                std::future::pending().await
+            }
+        }
+
+        let hex: String = include_str!("../tests/fixtures/bootstrap.hex")
+            .split_whitespace()
+            .collect();
+        let first: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
+        let mut second = first.clone();
+        second.block.payload.consensus_value.prev_hash =
+            first.block.identity.consensus_hash.clone();
+        second
+            .block
+            .payload
+            .consensus_value
+            .proposal_header
+            .block_height += 1;
+        let bytes = xdrs::txs::encode(&second.block.payload.consensus_value).unwrap();
+        second.block.identity.consensus_hash = groundhog_xdr::types::ConsensusValueHash::new(
+            <[u8; 32]>::from(Sha256::digest(bytes)).into(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        store.append(&first).unwrap();
+        store.append(&second).unwrap();
+        let expected = xdrs::txs::encode(&store.cursor(false)).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        drop(listener);
+        assert!(Client::connect(&endpoint.to_string()).await.is_err());
+        let mut config = config(&endpoint.to_string(), dir.path());
+        config.retain_bytes = 0;
+        config.retain_min_blocks = 1;
+        let metrics = Metrics::new().unwrap();
+        let run = ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off);
+        tokio::pin!(run);
+        tokio::select! {
+            result = &mut run => panic!("unexpected exit: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(5), async {
+                while dir.path().join("00000000000000000001.xdr").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => result.unwrap(),
+        }
+        assert!(dir.path().join("floor.xdr").exists());
+        assert!(dir.path().join("00000000000000000002.xdr").exists());
+        let captured = Arc::new(Mutex::new(None));
+        let listener = tokio::net::TcpListener::bind(endpoint).await.unwrap();
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(Capture(captured.clone())));
+        let task = RpcServer::new(listener, services).start().await;
+        tokio::select! {
+            result = &mut run => panic!("unexpected exit: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(5), async {
+                while captured.lock().unwrap().is_none() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => result.unwrap(),
+        }
+        assert_eq!(captured.lock().unwrap().as_ref(), Some(&expected));
+        task.abort();
     }
 
     #[tokio::test]
