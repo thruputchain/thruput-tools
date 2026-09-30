@@ -1,7 +1,7 @@
 # Crate layout
 
-Group crates when the directory names a subsystem. Other crates live directly
-under `crates/`, using their existing names.
+Crates are grouped by subsystem. Other crates live directly under `crates/`,
+using their existing names.
 
 - `json-rpc/` contains the public JSON-RPC stack: API types, traits, shared
   server, gateway, typed client, and OpenRPC generation.
