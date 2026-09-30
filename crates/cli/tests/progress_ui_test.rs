@@ -134,6 +134,14 @@ if [ "$BUILD_UI_MODE" = split ]; then
   sleep 0.2
   printf '\n' >&2
 fi
+if [ "$BUILD_UI_MODE" = continued ]; then
+  printf 'stdout-prefix-\342'
+  sleep 0.3
+  printf '\234\223suffix\n'
+  printf 'stderr-prefix-' >&2
+  sleep 0.3
+  printf 'suffix\n' >&2
+fi
 if [ "$BUILD_UI_MODE" = fail ]; then
   printf 'compiler-failure-detail\n' >&2
   exit 42
@@ -646,6 +654,26 @@ fn partial_diagnostics_precede_later_status_lines() {
     assert!(
         history.find("compiler-stderr-last").unwrap() < history.find("Wrote").unwrap(),
         "{history}"
+    );
+}
+
+#[test]
+fn delayed_child_fragments_keep_their_line_boundaries() {
+    let fixture = Fixture::new();
+    let mut pty = Pty::spawn(fixture.verbose_command("continued"));
+    pty.until(|pty| pty.parser.screen().contents().contains("stdout-prefix-"));
+    let rows = pty.progress_rows;
+    assert!(
+        rows > 0,
+        "fixture must start live progress before partial output"
+    );
+    assert!(pty.finish().success());
+    let history = pty.history();
+    assert!(history.contains("stdout-prefix-✓suffix"), "{history}");
+    assert!(history.contains("stderr-prefix-suffix"), "{history}");
+    assert_eq!(
+        pty.progress_rows, rows,
+        "partial output switches to append-only mode"
     );
 }
 

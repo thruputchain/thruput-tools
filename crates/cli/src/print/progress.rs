@@ -55,8 +55,16 @@ pub(crate) enum Stream {
 impl Stream {
     fn write(self, bytes: &[u8]) -> io::Result<()> {
         match self {
-            Self::Stdout => io::stdout().lock().write_all(bytes),
-            Self::Stderr => io::stderr().lock().write_all(bytes),
+            Self::Stdout => {
+                let mut output = io::stdout().lock();
+                output.write_all(bytes)?;
+                output.flush()
+            }
+            Self::Stderr => {
+                let mut output = io::stderr().lock();
+                output.write_all(bytes)?;
+                output.flush()
+            }
         }
     }
 }
@@ -348,7 +356,7 @@ impl Inline {
         stderr.flush()
     }
 
-    fn lines(&mut self, lines: &[String], policy: Policy) -> io::Result<()> {
+    fn lines(&mut self, stream: Stream, lines: &[String], policy: Policy) -> io::Result<()> {
         self.check_size()?;
         let mut renderer = super::render::Renderer::new(policy);
         renderer.text(
@@ -360,12 +368,13 @@ impl Inline {
             ),
             0,
         );
-        let mut stderr = io::stderr().lock();
-        self.clear_row(&mut stderr)?;
-        for line in renderer.lines {
-            writeln!(stderr, "{line}")?;
-        }
-        stderr.flush()
+        self.check_size()?;
+        commit_log_lines(
+            stream,
+            &renderer.lines,
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        )
     }
 
     fn check_size(&self) -> io::Result<()> {
@@ -400,6 +409,24 @@ impl Drop for Inline {
     }
 }
 
+fn commit_log_lines(
+    stream: Stream,
+    lines: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> io::Result<()> {
+    queue!(stderr, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+    stderr.flush()?;
+    let output: &mut dyn Write = match stream {
+        Stream::Stdout => stdout,
+        Stream::Stderr => stderr,
+    };
+    for line in lines {
+        writeln!(output, "{line}")?;
+    }
+    output.flush()
+}
+
 struct Worker {
     policy: Policy,
     phase: String,
@@ -410,6 +437,7 @@ struct Worker {
     stdout: LogBuffer,
     stderr: LogBuffer,
     invalidated: Arc<std::sync::atomic::AtomicBool>,
+    line_open: bool,
 }
 
 impl Worker {
@@ -424,6 +452,7 @@ impl Worker {
             stdout: LogBuffer::default(),
             stderr: LogBuffer::default(),
             invalidated: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            line_open: false,
         }
     }
 
@@ -465,7 +494,7 @@ impl Worker {
                     self.phase = phase;
                     if self.attempted
                         && self.terminal.is_none()
-                        && self.lines(Stream::Stderr, &[self.phase.clone()]).is_err()
+                        && self.message(Stream::Stderr, &self.phase.clone()).is_err()
                     {
                         break;
                     }
@@ -474,7 +503,7 @@ impl Worker {
                     if self.partial(stream).is_err() {
                         break;
                     }
-                    if self.lines(stream, &[line]).is_err() {
+                    if self.message(stream, &line).is_err() {
                         break;
                     }
                 }
@@ -536,7 +565,8 @@ impl Worker {
             return Ok(());
         }
         if let Some(terminal) = &mut self.terminal {
-            if terminal.lines(lines, self.policy).is_ok() {
+            if terminal.lines(stream, lines, self.policy).is_ok() {
+                self.line_open = false;
                 return Ok(());
             }
             self.fallback(false);
@@ -544,6 +574,29 @@ impl Worker {
         for line in lines {
             stream.write(super::log::append_line(line, Theme(self.policy)).as_bytes())?;
         }
+        self.line_open = false;
+        Ok(())
+    }
+
+    fn message(&mut self, stream: Stream, text: &str) -> io::Result<()> {
+        self.end_line()?;
+        self.lines(stream, &[text.to_owned()])
+    }
+
+    fn end_line(&mut self) -> io::Result<()> {
+        if self.line_open {
+            Stream::Stderr.write(b"\n")?;
+            self.line_open = false;
+        }
+        Ok(())
+    }
+
+    fn fragment(&mut self, stream: Stream, text: &str) -> io::Result<()> {
+        // An unfinished line owns the cursor until the child completes it. Stop
+        // animation rather than insert a newline or repaint over that output.
+        self.fallback(false);
+        stream.write(text.as_bytes())?;
+        self.line_open = true;
         Ok(())
     }
 
@@ -552,8 +605,14 @@ impl Worker {
             Stream::Stdout => &mut self.stdout,
             Stream::Stderr => &mut self.stderr,
         };
-        let lines = log.push(bytes);
-        self.lines(stream, &lines)
+        for chunk in log.push(bytes) {
+            if chunk.complete {
+                self.lines(stream, &[chunk.text])?;
+            } else {
+                self.fragment(stream, &chunk.text)?;
+            }
+        }
+        Ok(())
     }
 
     fn flush_partial(&mut self) -> io::Result<()> {
@@ -569,7 +628,7 @@ impl Worker {
             Stream::Stderr => &mut self.stderr,
         };
         if let Some(line) = log.partial() {
-            self.lines(stream, &[line])?;
+            self.fragment(stream, &line)?;
         }
         Ok(())
     }
@@ -581,9 +640,10 @@ impl Worker {
                 Stream::Stderr => std::mem::take(&mut self.stderr.pending),
             };
             if !bytes.is_empty() {
-                let _ = self.lines(stream, &[terminal_safe(&String::from_utf8_lossy(&bytes))]);
+                let _ = self.fragment(stream, &terminal_safe(&String::from_utf8_lossy(&bytes)));
             }
         }
+        let _ = self.end_line();
     }
 }
 
@@ -594,8 +654,14 @@ struct LogBuffer {
     after_cr: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LogChunk {
+    text: String,
+    complete: bool,
+}
+
 impl LogBuffer {
-    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+    fn push(&mut self, bytes: &[u8]) -> Vec<LogChunk> {
         let mut lines = Vec::new();
         for byte in bytes {
             if *byte == b'\n' && self.after_cr {
@@ -604,16 +670,20 @@ impl LogBuffer {
             }
             self.after_cr = *byte == b'\r';
             if matches!(byte, b'\n' | b'\r') {
-                if !self.pending.is_empty() || *byte == b'\n' {
-                    lines.push(terminal_safe(&String::from_utf8_lossy(&self.pending)));
-                    self.pending.clear();
-                }
+                lines.push(LogChunk {
+                    text: terminal_safe(&String::from_utf8_lossy(&self.pending)),
+                    complete: true,
+                });
+                self.pending.clear();
             } else {
                 self.pending.push(*byte);
                 if self.pending.len() >= CHUNK
                     && let Some(line) = self.partial()
                 {
-                    lines.push(line);
+                    lines.push(LogChunk {
+                        text: line,
+                        complete: false,
+                    });
                 }
             }
         }
@@ -643,18 +713,75 @@ mod tests {
         let mut log = LogBuffer::default();
         assert!(log.push(&[0xe2]).is_empty());
         assert!(log.partial().is_none());
-        assert_eq!(log.push(&[0x9c, 0x93, b'\r']), ["✓"]);
-        assert_eq!(log.push(b"\nnext\n\x1b[2J\n"), ["next", r"\u{1b}[2J"]);
+        assert_eq!(
+            log.push(&[0x9c, 0x93, b'\r']),
+            [LogChunk {
+                text: "✓".into(),
+                complete: true
+            }]
+        );
+        assert_eq!(
+            log.push(b"\nnext\n\x1b[2J\n"),
+            ["next", r"\u{1b}[2J"].map(|text| LogChunk {
+                text: text.into(),
+                complete: true
+            })
+        );
     }
 
     #[test]
     fn long_unterminated_output_is_bounded_and_complete() {
         let value = "x".repeat(CHUNK * 4 + 13);
         let mut log = LogBuffer::default();
-        let mut lines = log.push(value.as_bytes());
+        let chunks = log.push(value.as_bytes());
         assert!(log.pending.len() < CHUNK);
+        assert!(chunks.iter().all(|chunk| !chunk.complete));
+        let mut lines = chunks
+            .into_iter()
+            .map(|chunk| chunk.text)
+            .collect::<Vec<_>>();
         lines.extend(log.partial());
         assert_eq!(lines.concat(), value);
+    }
+
+    #[test]
+    fn live_log_commit_keeps_child_streams_separate_from_cursor_control() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        commit_log_lines(
+            Stream::Stdout,
+            &["child stdout".into()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(stdout, b"child stdout\n");
+        assert!(!String::from_utf8_lossy(&stderr).contains("child stdout"));
+        assert!(stderr.starts_with(b"\x1b["));
+        commit_log_lines(
+            Stream::Stderr,
+            &["child stderr".into()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(stdout, b"child stdout\n");
+        assert!(stderr.ends_with(b"child stderr\n"));
+    }
+
+    #[test]
+    fn partial_flush_preserves_a_later_crlf_terminator() {
+        let mut log = LogBuffer::default();
+        assert!(log.push(b"prefix").is_empty());
+        assert_eq!(log.partial().as_deref(), Some("prefix"));
+        assert_eq!(
+            log.push(b"\r"),
+            [LogChunk {
+                text: String::new(),
+                complete: true
+            }]
+        );
+        assert!(log.push(b"\n").is_empty());
     }
 
     #[test]

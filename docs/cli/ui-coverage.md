@@ -133,6 +133,9 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 - Progress renders Ratatui cell buffers on a reserved output row. It never queries
   the cursor or changes input mode. PTYs withhold cursor replies and verify Ctrl-C,
   SIGTERM, and terminal attributes during progress initialization.
+- Relayed child output keeps its original stream. An unfinished line switches
+  progress to append-only output without adding a newline; delayed continuation
+  and split UTF-8 tests verify that fragments stay joined.
 - An isolated tmux server ran a slow local balance RPC: progress completed, the
   complete result remained in scrollback, and the command exited successfully.
 - `.github/workflows/cli-ui.yml` runs shared components, progress/listing PTYs, and
