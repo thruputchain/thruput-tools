@@ -708,6 +708,12 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
             &address.to_string(),
             "--poll-interval-ms",
             "10",
+            // These stay tight because `slow_sub` below is demoted by missing
+            // the live deadline, and the test asserts exactly one demotion.
+            // The healthy subscribers are serviced concurrently instead of in
+            // sequence so they stay inside the same deadline on a loaded
+            // runner; servicing fifty of them one at a time is what made this
+            // test flaky.
             "--subscriber-queue",
             "2",
             "--live-timeout-ms",
@@ -771,9 +777,13 @@ async fn assert_slow_client_isolated(
     for height in 4..=8 {
         upstream.blocks.lock().unwrap().push(current.clone());
         upstream.published.notify_waiters();
-        for (client, sub) in clients.iter().zip(subs.iter_mut()) {
-            block(client, sub, height).await;
-        }
+        futures_util::future::join_all(
+            clients
+                .iter()
+                .zip(subs.iter_mut())
+                .map(|(client, sub)| block(client, sub, height)),
+        )
+        .await;
         *current = next(current);
     }
     let first = receive(&mut slow_sub).await;
@@ -786,9 +796,13 @@ async fn assert_slow_client_isolated(
     for height in 9..=12 {
         upstream.blocks.lock().unwrap().push(current.clone());
         upstream.published.notify_waiters();
-        for (client, sub) in clients.iter().zip(subs.iter_mut()) {
-            block(client, sub, height).await;
-        }
+        futures_util::future::join_all(
+            clients
+                .iter()
+                .zip(subs.iter_mut())
+                .map(|(client, sub)| block(client, sub, height)),
+        )
+        .await;
         *current = next(current);
     }
     let closed = receive(&mut slow_sub).await;

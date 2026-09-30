@@ -41,6 +41,7 @@ xdrs.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+futures-util.workspace = true
 # The subscription tests drive the server over WebSocket; nothing else does.
 jsonrpsee = { workspace = true, features = ["ws-client"] }
 thruput-signing.workspace = true
