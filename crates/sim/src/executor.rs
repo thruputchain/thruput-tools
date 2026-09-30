@@ -11,7 +11,6 @@ use groundhog_json_rpc_types::{
     },
     hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
-    runtime_manifest::RuntimeManifest,
     state::{StorageItemInfo, StorageItemRead},
     transaction::TxHash,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
@@ -48,7 +47,6 @@ use crate::scheduler::{
 use crate::target::ChaosController;
 use crate::transaction::{
     BuiltSubmitTransaction, build_contract_call_transaction, build_wallet_submit_smoke_transaction,
-    runtime_dev_wallet_action_entrypoint,
 };
 use crate::util::{duration_ms, json_string, unix_ms, workload_name};
 use xdr_common::VecM;
@@ -68,7 +66,6 @@ const READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_INTERVAL: Duration = Duration::fro
 /// Inputs for executing a generated schedule.
 pub struct ScheduleExecution<'a> {
     pub manifest: &'a SimulationManifest,
-    pub runtime_manifest: &'a RuntimeManifest,
     pub schedule: &'a [ScheduledSimulationEvent],
     pub phase_starts: &'a [PhaseStart],
     pub actor_states: &'a mut [ActorState],
@@ -85,7 +82,6 @@ pub struct ScheduleExecution<'a> {
 /// Inputs for executing a generated schedule stream.
 pub struct StreamingScheduleExecution<'a> {
     pub manifest: &'a SimulationManifest,
-    pub runtime_manifest: &'a RuntimeManifest,
     pub phase_starts: &'a [PhaseStart],
     pub actor_states: &'a mut [ActorState],
     pub event_writer: &'a mut EventWriter,
@@ -132,7 +128,6 @@ where
 {
     let ScheduleExecution {
         manifest,
-        runtime_manifest,
         schedule,
         phase_starts,
         actor_states,
@@ -148,7 +143,6 @@ where
     run_schedule_events_with_chaos(
         client,
         manifest,
-        runtime_manifest,
         schedule.iter().cloned(),
         phase_starts,
         actor_states,
@@ -177,7 +171,6 @@ where
 {
     let StreamingScheduleExecution {
         manifest,
-        runtime_manifest,
         phase_starts,
         actor_states,
         event_writer,
@@ -193,7 +186,6 @@ where
     run_schedule_events_with_chaos(
         client,
         manifest,
-        runtime_manifest,
         cursor,
         phase_starts,
         actor_states,
@@ -242,9 +234,7 @@ async fn refresh_native_chain_tip<C: SimRpcClient>(
     }
     *cached = Some(tip);
     for actor in actors {
-        if actor.wallet_kind == crate::actor::WalletKind::NativePubkey {
-            actor.native_chain_tip = Some(tip);
-        }
+        actor.native_chain_tip = Some(tip);
     }
     Ok(())
 }
@@ -253,7 +243,6 @@ async fn refresh_native_chain_tip<C: SimRpcClient>(
 async fn run_schedule_events_with_chaos<C, I>(
     client: C,
     manifest: &SimulationManifest,
-    runtime_manifest: &RuntimeManifest,
     events: I,
     phase_starts: &[PhaseStart],
     actor_states: &mut [ActorState],
@@ -272,11 +261,6 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
     I: IntoIterator<Item = ScheduledSimulationEvent>,
 {
-    let wallet_entrypoint = if manifest.accounts.is_some() {
-        crate::native::EXECUTE
-    } else {
-        runtime_dev_wallet_action_entrypoint(runtime_manifest)?
-    };
     let run_start = Instant::now();
     let mut next_phase = phase_starts.iter().peekable();
     let mut tasks = JoinSet::new();
@@ -341,15 +325,13 @@ where
                 if actor_states.get(actor_index).is_none() {
                     return Err(SimError::Executor("actor state missing".into()));
                 }
-                if actor_states[actor_index].wallet_kind == crate::actor::WalletKind::NativePubkey
-                    && matches!(
-                        workload,
-                        WorkloadKind::WalletSubmitSmoke
-                            | WorkloadKind::ContractCall
-                            | WorkloadKind::ReadAfterWrite
-                    )
-                    && let Err(error) =
-                        refresh_native_chain_tip(&client, &mut native_tip, actor_states).await
+                if matches!(
+                    workload,
+                    WorkloadKind::WalletSubmitSmoke
+                        | WorkloadKind::ContractCall
+                        | WorkloadKind::ReadAfterWrite
+                ) && let Err(error) =
+                    refresh_native_chain_tip(&client, &mut native_tip, actor_states).await
                 {
                     let reason = error.to_string();
                     let completion = stopped_workload_completion(
@@ -396,7 +378,6 @@ where
                         .get_mut(actor_index)
                         .ok_or(SimError::Executor("actor state missing".into()))?,
                     workload,
-                    wallet_entrypoint,
                     view_calls,
                     contract_calls,
                     storage_reads,
@@ -449,6 +430,11 @@ where
                 .await?;
                 if chaos_failed {
                     break;
+                }
+                // An owned restart permits a reset chain; observe its new tip before signing.
+                native_tip = None;
+                for actor in actor_states.iter_mut() {
+                    actor.native_chain_tip = None;
                 }
             }
             ScheduledSimulationEvent::ResourceSample(sample) => {
@@ -701,7 +687,6 @@ fn prepare_workload(
     tick: &ScheduledActorTick,
     actor: &mut ActorState,
     workload: WorkloadKind,
-    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     view_calls: &[PreparedViewCall],
     contract_calls: &[PreparedContractCall],
     storage_reads: &[PreparedStorageRead],
@@ -711,7 +696,7 @@ fn prepare_workload(
     match workload {
         WorkloadKind::ChainTip => Ok(PreparedWorkload::ChainTip),
         WorkloadKind::WalletSubmitSmoke => Ok(PreparedWorkload::WalletSubmitSmoke(
-            build_wallet_submit_smoke_transaction(actor, wallet_entrypoint)?,
+            build_wallet_submit_smoke_transaction(actor)?,
         )),
         WorkloadKind::ReceiptPoll => Ok(PreparedWorkload::ReceiptPoll(PreparedReceiptPoll {
             target: actor.reserve_receipt_poll_target(),
@@ -737,8 +722,7 @@ fn prepare_workload(
                 contract_calls,
                 "contract-call workload requires at least one prepared contract call",
             )?;
-            prepare_contract_call_workload(actor, wallet_entrypoint, call)
-                .map(PreparedWorkload::ContractCall)
+            prepare_contract_call_workload(actor, call).map(PreparedWorkload::ContractCall)
         }
         WorkloadKind::StorageRead => {
             let read = select_weighted_target(
@@ -772,8 +756,7 @@ fn prepare_workload(
                 read_after_write,
                 "read-after-write workload requires at least one prepared entry",
             )?;
-            prepare_read_after_write_workload(actor, wallet_entrypoint, entry)
-                .map(PreparedWorkload::ReadAfterWrite)
+            prepare_read_after_write_workload(actor, entry).map(PreparedWorkload::ReadAfterWrite)
         }
         WorkloadKind::StatusPoll => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
@@ -783,7 +766,6 @@ fn prepare_workload(
 
 fn prepare_contract_call_workload(
     actor: &mut ActorState,
-    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     call: &PreparedContractCall,
 ) -> Result<PreparedContractCallWorkload, SimError> {
     let entrypoint: [u8; 8] = call.entrypoint.as_slice().try_into().map_err(|_| {
@@ -793,7 +775,6 @@ fn prepare_contract_call_workload(
         call: call.clone(),
         tx: build_contract_call_transaction(
             actor,
-            wallet_entrypoint,
             call.contract,
             groundhog_xdr::contract::ContractEntrypointID::from(entrypoint),
             &call.calldata,
@@ -803,7 +784,6 @@ fn prepare_contract_call_workload(
 
 fn prepare_read_after_write_workload(
     actor: &mut ActorState,
-    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     entry: &PreparedReadAfterWrite,
 ) -> Result<PreparedReadAfterWriteWorkload, SimError> {
     let write_entrypoint: [u8; 8] = entry.write_entrypoint.as_slice().try_into().map_err(|_| {
@@ -813,7 +793,6 @@ fn prepare_read_after_write_workload(
         entry: entry.clone(),
         tx: build_contract_call_transaction(
             actor,
-            wallet_entrypoint,
             entry.contract,
             groundhog_xdr::contract::ContractEntrypointID::from(write_entrypoint),
             &entry.write_calldata,
@@ -1084,8 +1063,7 @@ async fn record_completion(
         let actor = actor_states
             .get_mut(observed.actor_id as usize)
             .ok_or(SimError::Executor("actor state missing".into()))?;
-        if actor.wallet_kind == crate::actor::WalletKind::NativePubkey
-            && completion.workload == WorkloadKind::ReceiptPoll
+        if completion.workload == WorkloadKind::ReceiptPoll
             && !matches!(observed.receipt.status, ExecStatus::Ok)
         {
             completion.error_class = Some("native-receipt-status".into());
@@ -3885,7 +3863,7 @@ struct PreparedEventQueryWorkload {
 #[derive(Debug, Clone)]
 struct PreparedReadAfterWriteWorkload {
     entry: PreparedReadAfterWrite,
-    /// The signed dev-wallet `doAction` write transaction (e.g. `bump()`).
+    /// The signed native-wallet `execute` write transaction (e.g. `bump()`).
     tx: BuiltSubmitTransaction,
     /// Caller identity for the `get()` read-back; matches the write's effective
     /// `msg.sender` (the actor wallet).
@@ -3973,7 +3951,6 @@ mod tests {
         block::ChainTip,
         hex::Hex0x,
         receipt::{ExecStatus, TransactionReceipt},
-        runtime_manifest::RuntimeManifest,
         state::StorageItemRead,
         view::{RootInvocationOutput, ViewResponse},
     };
@@ -4143,7 +4120,6 @@ mod tests {
             client.clone(),
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -4452,10 +4428,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4479,10 +4455,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4506,10 +4482,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4549,10 +4525,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4594,10 +4570,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4635,10 +4611,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4675,10 +4651,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4724,10 +4700,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4767,10 +4743,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -4829,7 +4805,6 @@ mod tests {
             DelayedClient,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -4975,7 +4950,6 @@ mod tests {
             PanickingClient,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5040,7 +5014,6 @@ mod tests {
             DelayedClient,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &phase_starts,
                 actor_states: &mut actors,
@@ -5097,7 +5070,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5161,7 +5133,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5314,7 +5285,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5437,7 +5407,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5491,7 +5460,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5721,7 +5689,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -5978,7 +5945,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6043,7 +6009,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6112,7 +6077,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6194,7 +6158,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6319,7 +6282,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6370,7 +6332,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6597,7 +6558,6 @@ mod tests {
             DelayedClient,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6675,7 +6635,6 @@ mod tests {
             DelayedClient,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6808,7 +6767,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6870,7 +6828,6 @@ mod tests {
             },
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6925,7 +6882,6 @@ mod tests {
             DelayedClient,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -6954,7 +6910,7 @@ mod tests {
 
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-test",
             "seed": "seed",
@@ -6967,7 +6923,7 @@ mod tests {
 
     fn wallet_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-wallet-test",
             "seed": "seed",
@@ -6980,7 +6936,7 @@ mod tests {
 
     fn receipt_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-receipt-test",
             "seed": "seed",
@@ -6993,7 +6949,7 @@ mod tests {
 
     fn storage_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-storage-test",
             "seed": "seed",
@@ -7013,7 +6969,7 @@ mod tests {
 
     fn contract_call_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-contract-call-test",
             "seed": "seed",
@@ -7033,7 +6989,7 @@ mod tests {
 
     fn events_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-events-test",
             "seed": "seed",
@@ -7056,7 +7012,7 @@ mod tests {
 
     fn chaos_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-chaos-test",
             "seed": "seed",
@@ -7070,7 +7026,7 @@ mod tests {
 
     fn receipt_chaos_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-receipt-chaos-test",
             "seed": "seed",
@@ -7084,7 +7040,7 @@ mod tests {
 
     fn wallet_chaos_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-wallet-chaos-test",
             "seed": "seed",
@@ -7117,7 +7073,7 @@ mod tests {
     }
 
     fn actor_states() -> Vec<ActorState> {
-        vec![ActorState::new(
+        let mut actors = vec![ActorState::new(
             0,
             SimAccount {
                 index: 0,
@@ -7128,7 +7084,13 @@ mod tests {
                 ),
             },
             NonceNamespace::new(1).expect("namespace should fit"),
-        )]
+        )];
+        actors[0].use_native_wallet();
+        actors[0].native_chain_tip = Some(crate::actor::NativeChainTip {
+            height: 42,
+            observed_at: Instant::now(),
+        });
+        actors
     }
 
     fn prepared_view(expect_return_data: Option<Vec<u8>>) -> PreparedViewWorkload {
@@ -7206,51 +7168,6 @@ mod tests {
         }
     }
 
-    fn runtime_manifest() -> RuntimeManifest {
-        serde_json::from_value(json!({
-            "schemaVersion": 2,
-            "kind": "hogd-dev-runtime",
-            "chainState": "fresh",
-            "networkHash": "00".repeat(32),
-            "protocol": "hogp/test00000000000",
-            "producer": {
-                "binary": "hog-devnode",
-                "version": "0.1.0"
-            },
-            "endpoints": {
-                "scheduler": "127.0.0.1:1000",
-                "indexer": "127.0.0.1:1001"
-            },
-            "bootstrapAccountDerivation": {
-                "scheme": "groundhog-bootstrap-account-v1",
-                "seed": "seed"
-            },
-            "bootstrapAccounts": [],
-            "bootstrap": {
-                "devWallet": {
-                    "contentHash": prefixed_hex(0x33),
-                    "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
-                "storageCostModel": {
-                    "hash": prefixed_hex(0x55),
-                    "baseDataItemCost": "1",
-                    "bytestringCostPerByte": "1",
-                    "baseContractDeploymentCost": "1",
-                    "contractDeploymentCostPerByte": "1",
-                    "authPerKeyCost": "1",
-                    "rcqCostPerEntry": "1",
-                    "replayCacheCostPerEntry": "1",
-                    "balanceCost": "1"
-                }
-            }
-        }))
-        .expect("runtime manifest fixture should parse")
-    }
-
     fn prefixed_hex(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))
     }
@@ -7290,10 +7207,10 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, SimRpcError>> + Send {
             async {
-                Err(SimRpcError::detail(
-                    "chainTip",
-                    "chain tip should not be called",
-                ))
+                Ok(ChainTip {
+                    height: 42.into(),
+                    block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::new([0; 32])),
+                })
             }
         }
 
@@ -7364,7 +7281,7 @@ mod tests {
 
     fn read_after_write_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "executor-read-after-write-test",
             "seed": "seed",
@@ -7415,7 +7332,6 @@ mod tests {
             client,
             ScheduleExecution {
                 manifest: &manifest,
-                runtime_manifest: &runtime_manifest(),
                 schedule: &schedule,
                 phase_starts: &starts,
                 actor_states: &mut actors,
@@ -7571,14 +7487,12 @@ mod tests {
         );
         assert_eq!(actors[0].next_nonce_sequence, 1);
         let expected_nonce = actors[0].current_nonce().expect("nonce should build");
-        let runtime = runtime_manifest();
         let manifest = read_after_write_manifest();
         let prepared = prepare_workload(
             &manifest,
             &tick,
             &mut actors[0],
             WorkloadKind::ReadAfterWrite,
-            runtime_dev_wallet_action_entrypoint(&runtime).expect("wallet entrypoint should parse"),
             &[],
             &[],
             &[],

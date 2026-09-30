@@ -1985,7 +1985,7 @@ while :; do sleep 1; done
 
     fn manifest(target: &serde_json::Value) -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "target-test",
             "seed": "seed",

@@ -26,15 +26,14 @@ pub struct ScenarioBuilder {
     seed: String,
     network: Option<NetworkConfig>,
     artifacts: Vec<ArtifactSpec>,
-    legacy_accounts: bool,
+    use_bootstrap_accounts: bool,
 }
 
 impl ScenarioBuilder {
-    /// Use the manifest's existing legacy dev-N wallet identities explicitly.
-    /// These accounts support calls; deployment requires native accounts.
+    /// Use the manifest's funded native bootstrap account identities explicitly.
     #[must_use]
-    pub fn legacy_bootstrap_accounts(mut self) -> Self {
-        self.legacy_accounts = true;
+    pub fn bootstrap_accounts(mut self) -> Self {
+        self.use_bootstrap_accounts = true;
         self
     }
 
@@ -95,7 +94,7 @@ impl ScenarioBuilder {
         let config = self.network.ok_or(TestkitError::NoNetwork)?;
         let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
         let (network, accounts, guard) =
-            acquire_network(config, &self.seed, self.legacy_accounts).await?;
+            acquire_network(config, &self.seed, self.use_bootstrap_accounts).await?;
         Ok(Scenario {
             seed: self.seed,
             network,
@@ -134,7 +133,7 @@ impl Scenario {
             seed: seed.into(),
             network: None,
             artifacts: Vec::new(),
-            legacy_accounts: false,
+            use_bootstrap_accounts: false,
         }
     }
 
@@ -304,7 +303,7 @@ fn validate_unique_agent_names(names: &[Arc<str>]) -> Result<()> {
 async fn acquire_network(
     config: NetworkConfig,
     seed: &str,
-    legacy_accounts: bool,
+    use_bootstrap_accounts: bool,
 ) -> Result<(Network, AccountSource, NetworkGuard)> {
     match config {
         NetworkConfig::Existing {
@@ -315,7 +314,7 @@ async fn acquire_network(
             let network = Network::connect(&rpc_url, &manifest, None)?;
             Ok((
                 network,
-                account_source(manifest, seed, legacy_accounts),
+                account_source(manifest, seed, use_bootstrap_accounts),
                 NetworkGuard::Existing,
             ))
         }
@@ -331,7 +330,7 @@ async fn acquire_network(
             let network = Network::connect(&rpc_url, &manifest, manual_block_producer)?;
             Ok((
                 network,
-                account_source(manifest, seed, legacy_accounts),
+                account_source(manifest, seed, use_bootstrap_accounts),
                 NetworkGuard::Local(Box::new(handle)),
             ))
         }
@@ -350,9 +349,9 @@ async fn acquire_network(
 fn account_source(
     manifest: groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
     seed: &str,
-    legacy: bool,
+    use_bootstrap: bool,
 ) -> AccountSource {
-    if legacy {
+    if use_bootstrap {
         AccountSource::Manifest(Box::new(manifest))
     } else {
         AccountSource::Native {

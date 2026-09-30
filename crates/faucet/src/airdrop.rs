@@ -18,9 +18,12 @@ use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
+use groundhog_signing::default_wallet::{
+    BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
+};
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
+    DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
+    sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -773,8 +776,7 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
             "airdrop_already_pending",
             "airdrop attempt is already in progress",
         ),
-        PolicyStoreError::AttemptNotFound
-        | PolicyStoreError::InvalidWalletCreateTransition { .. } => error_response(
+        PolicyStoreError::AttemptNotFound => error_response(
             StatusCode::CONFLICT,
             "airdrop_attempt_conflict",
             "airdrop attempt state changed while processing",
@@ -912,8 +914,6 @@ impl AirdropSubmitError {
 pub struct AirdropRuntimeConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: u128,
-    /// Faucet wallet `doAction` entrypoint.
-    pub wallet_do_action_entrypoint: ContractEntrypointID,
     /// 32-byte faucet signing secret key.
     pub faucet_secret_key: Zeroizing<[u8; 32]>,
 }
@@ -922,10 +922,6 @@ impl std::fmt::Debug for AirdropRuntimeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AirdropRuntimeConfig")
             .field("raw_amount", &self.raw_amount)
-            .field(
-                "wallet_do_action_entrypoint",
-                &self.wallet_do_action_entrypoint,
-            )
             .field("faucet_secret_key", &format_args!("<redacted>"))
             .finish()
     }
@@ -937,16 +933,18 @@ pub enum AirdropRuntimeConfigError {
     /// The configured raw airdrop amount was missing, invalid, or zero.
     #[error("airdrop raw amount must be greater than zero")]
     EmptyAmount,
-    /// The configured wallet `doAction` entrypoint was not 8 bytes.
-    #[error("airdrop wallet doAction entrypoint must be 8 bytes, got {0}")]
-    InvalidDoActionEntrypoint(usize),
+    /// The native HOG transfer selector must be eight bytes.
+    #[error("native HOG transfer entrypoint must be 8 bytes, got {0}")]
+    InvalidTransferEntrypoint(usize),
+    /// The signing key must control the advertised native faucet account.
+    #[error("faucet wallet address does not match the signing key nonce-zero pubkey account")]
+    FaucetAddressMismatch,
 }
 
 impl AirdropRuntimeConfig {
     /// Validate wire-format config values into runtime airdrop config.
     pub fn from_wire(
         raw_amount: &str,
-        wallet_do_action_entrypoint: HexBytes,
         faucet_secret_key: Zeroizing<[u8; 32]>,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         let raw_amount = raw_amount
@@ -954,14 +952,8 @@ impl AirdropRuntimeConfig {
             .ok()
             .filter(|amount| *amount > 0)
             .ok_or(AirdropRuntimeConfigError::EmptyAmount)?;
-        let entrypoint_len = wallet_do_action_entrypoint.0.len();
-        let wallet_do_action_entrypoint: [u8; 8] = wallet_do_action_entrypoint
-            .0
-            .try_into()
-            .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(entrypoint_len))?;
         Ok(Self {
             raw_amount,
-            wallet_do_action_entrypoint: ContractEntrypointID::from(wallet_do_action_entrypoint),
             faucet_secret_key,
         })
     }
@@ -971,9 +963,8 @@ pub struct RpcAirdropSubmitter {
     rpc_url: String,
     raw_amount: u128,
     network_hash: groundhog_xdr::types::NetworkHash,
-    faucet_wallet_address: groundhog_xdr::types::ContractAddress,
+    faucet_account: PubkeyAccount,
     faucet_signer: LocalSigner,
-    wallet_do_action_entrypoint: ContractEntrypointID,
     hog_token_address: groundhog_xdr::types::ContractAddress,
     hog_transfer_entrypoint: ContractEntrypointID,
 }
@@ -985,13 +976,18 @@ impl RpcAirdropSubmitter {
         config: &AirdropRuntimeConfig,
         network_hash: groundhog_xdr::types::NetworkHash,
     ) -> Result<Self, AirdropRuntimeConfigError> {
+        let faucet_signer = LocalSigner::from_secret_key(*config.faucet_secret_key);
+        let faucet_account =
+            PubkeyAccount::from_public_key_bytes(faucet_signer.verifying_key_bytes(), 0);
+        if faucet_account.address() != descriptor.faucet.wallet_address.0 {
+            return Err(AirdropRuntimeConfigError::FaucetAddressMismatch);
+        }
         Ok(Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
             raw_amount: config.raw_amount,
             network_hash,
-            faucet_wallet_address: descriptor.faucet.wallet_address.0,
-            faucet_signer: LocalSigner::from_secret_key(*config.faucet_secret_key),
-            wallet_do_action_entrypoint: config.wallet_do_action_entrypoint,
+            faucet_account,
+            faucet_signer,
             hog_token_address: descriptor.native_hog.token_address.0,
             hog_transfer_entrypoint: ContractEntrypointID::from(entrypoint_bytes(
                 &descriptor.native_hog.transfer_entrypoint,
@@ -1025,9 +1021,8 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
         let nonce = next_nonce()
             .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
-        let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-            wallet_address: self.faucet_wallet_address,
-            wallet_entrypoint: self.wallet_do_action_entrypoint,
+        let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+            account: &self.faucet_account,
             target_address: self.hog_token_address,
             target_entrypoint: self.hog_transfer_entrypoint,
             target_calldata: transfer_calldata.as_slice(),
@@ -1069,7 +1064,7 @@ fn entrypoint_bytes(entrypoint: &HexBytes) -> Result<[u8; 8], AirdropRuntimeConf
         .0
         .as_slice()
         .try_into()
-        .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(len))
+        .map_err(|_| AirdropRuntimeConfigError::InvalidTransferEntrypoint(len))
 }
 
 fn encode_transfer_calldata(
@@ -1084,7 +1079,6 @@ fn encode_transfer_calldata(
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use groundhog_json_rpc_types::hex::HexBytes;
     use serde_json::json;
     use zeroize::Zeroizing;
 
@@ -1106,12 +1100,8 @@ mod tests {
 
     #[test]
     fn airdrop_runtime_config_debug_redacts_faucet_secret_key() {
-        let config = AirdropRuntimeConfig::from_wire(
-            "100000000",
-            HexBytes(vec![0x64; 8]),
-            Zeroizing::new([0xAB; 32]),
-        )
-        .expect("bug: runtime config should validate");
+        let config = AirdropRuntimeConfig::from_wire("100000000", Zeroizing::new([0xAB; 32]))
+            .expect("bug: runtime config should validate");
 
         let debug = format!("{config:?}");
 

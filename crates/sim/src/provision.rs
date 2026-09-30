@@ -1,8 +1,13 @@
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+//! Derive missing native actor accounts and explicitly fund them from the bootstrap faucet.
+use crate::util::json_string;
+use crate::{
+    actor::{ActorState, required_actor_count},
+    error::SimError,
+    event::{ActorProvisionEvent, EventWriter, ResultEvent},
+    manifest::SimulationManifest,
+    rpc::{ReceiptWaitFailure, SimReceiptSource, SimRpcClient, receipt_poll_config},
+    runtime::{SimAccount, derive_provisioned_account_signer},
+};
 use groundhog_json_rpc_client::poll_receipt;
 use groundhog_json_rpc_types::{
     receipt::{ExecStatus, TransactionReceipt},
@@ -10,43 +15,21 @@ use groundhog_json_rpc_types::{
     transaction::TxHash,
 };
 use groundhog_signing::{
-    BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT,
-    SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
-    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
+    DEFAULT_TX_GAS_LIMIT, PubkeyAccount, SignTransactionParams, sign_and_encode_transaction_hex,
 };
-use groundhog_xdr::{
-    contract::{Contract, ContractBlob, ContractEntrypointID},
-    types::{ContractAddress, Ed25519PublicKey, SHA256Hash},
-};
-use sha2::{Digest, Sha256};
-use xdr_common::{BytesM, VecM};
-
-use crate::{
-    actor::{ActorState, required_actor_count},
-    error::SimError,
-    event::{ActorProvisionEvent, EventWriter, ResultEvent},
-    manifest::{ActorProvisioningSpec, ContractArtifactKind, SimulationManifest},
-    rpc::{ReceiptWaitFailure, SimReceiptSource, SimRpcClient, receipt_poll_config},
-    runtime::{SimAccount, derive_provisioned_account_signer},
-    util::json_string,
-};
-use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
-
+use groundhog_xdr::types::ContractAddress;
+use std::collections::HashSet;
+use std::time::Duration;
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
-const HOG_TOKEN_ADDRESS: [u8; 32] = {
-    let mut bytes = [0_u8; 32];
-    bytes[31] = 1;
-    bytes
-};
 const PROVISION_RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct ActorProvisionInputs<'a> {
     pub(crate) manifest: &'a SimulationManifest,
     pub(crate) runtime_manifest: &'a RuntimeManifest,
-    pub(crate) runtime_manifest_path: &'a Path,
-    pub(crate) scenario_path: &'a Path,
-    pub(crate) contract_artifact_root: Option<&'a Path>,
 }
-
+struct ProvisionPlan {
+    airdrop_raw_amount: Option<u128>,
+    airdrop_hog: Option<String>,
+}
 pub(crate) async fn provision_missing_actor_accounts<C>(
     client: C,
     inputs: ActorProvisionInputs<'_>,
@@ -76,7 +59,14 @@ where
         )
     })?;
 
-    let plan = prepare_provision_plan(&inputs, spec)?;
+    let plan = ProvisionPlan {
+        airdrop_raw_amount: spec
+            .airdrop_hog
+            .as_deref()
+            .map(parse_hog_amount)
+            .transpose()?,
+        airdrop_hog: spec.airdrop_hog.clone(),
+    };
     while actor_states.len() < required {
         provision_one_actor(
             client.clone(),
@@ -90,68 +80,6 @@ where
     }
 
     Ok(())
-}
-
-fn prepare_provision_plan(
-    inputs: &ActorProvisionInputs<'_>,
-    spec: &ActorProvisioningSpec,
-) -> Result<ProvisionPlan, SimError> {
-    let artifact_path = resolve_dev_wallet_artifact(
-        spec,
-        inputs.runtime_manifest,
-        inputs.runtime_manifest_path,
-        inputs.scenario_path,
-        inputs.contract_artifact_root,
-    )?;
-    validate_dev_wallet_artifact_extension(spec.dev_wallet_artifact_kind, &artifact_path)?;
-    let expected_artifact_sha256 = json_string(
-        &inputs.runtime_manifest.bootstrap.dev_wallet.content_hash,
-        "bootstrap.devWallet.contentHash",
-    )?;
-    let wallet_contract = load_dev_wallet_contract(&artifact_path, &expected_artifact_sha256)?;
-    let wallet_contract_hash = contract_hash(&wallet_contract)?;
-    let create_wallet_entrypoint = inputs
-        .runtime_manifest
-        .bootstrap
-        .dev_wallet
-        .create_wallet_entrypoint_id()
-        .map_err(|source| {
-            SimError::Executor(format!(
-                "failed to parse runtime manifest bootstrap.devWallet.createWalletEntrypoint: {source}"
-            ))
-        })?;
-    let wallet_action_entrypoint = inputs
-        .runtime_manifest
-        .bootstrap
-        .dev_wallet
-        .do_action_entrypoint_id()
-        .map_err(|source| {
-            SimError::Executor(format!(
-                "failed to parse runtime manifest bootstrap.devWallet.doActionEntrypoint: {source}"
-            ))
-        })?;
-    let airdrop_raw_amount = spec
-        .airdrop_hog
-        .as_deref()
-        .map(parse_hog_amount)
-        .transpose()?;
-    Ok(ProvisionPlan {
-        wallet_contract,
-        wallet_contract_hash,
-        create_wallet_entrypoint,
-        wallet_action_entrypoint,
-        airdrop_raw_amount,
-        airdrop_hog: spec.airdrop_hog.clone(),
-    })
-}
-
-struct ProvisionPlan {
-    wallet_contract: Contract,
-    wallet_contract_hash: SHA256Hash,
-    create_wallet_entrypoint: ContractEntrypointID,
-    wallet_action_entrypoint: ContractEntrypointID,
-    airdrop_raw_amount: Option<u128>,
-    airdrop_hog: Option<String>,
 }
 
 async fn provision_one_actor<C>(
@@ -169,28 +97,19 @@ where
         .map_err(|_| SimError::Executor("provisioned actor id does not fit in u32".into()))?;
     let account_index = next_unused_account_index(actor_states, sponsor.account_index)?;
     let signer = derive_provisioned_account_signer(inputs.runtime_manifest, account_index)?;
-    let owner_public_key = Ed25519PublicKey::from(signer.verifying_key_bytes());
-    let prepared = prepare_wallet_create(
-        sponsor,
-        plan.create_wallet_entrypoint,
-        &plan.wallet_contract,
-        plan.wallet_contract_hash,
-        owner_public_key,
-        resolve_block_expiry_height(client.clone()).await?,
-    )?;
+    let wallet_address =
+        PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address();
     let mut event = actor_provision_event(
         actor_id,
         account_index,
         sponsor.account_index,
         plan,
-        prepared.wallet_address,
+        wallet_address,
     );
     event_writer
         .write(&ResultEvent::ActorProvisionStarted {
             event: event.clone(),
         })
-        .await?;
-    submit_wallet_create_or_fail(client.clone(), sponsor, &prepared, &mut event, event_writer)
         .await?;
     let nonce_namespace = sponsor.nonce_namespace;
     actor_states.push(ActorState::new(
@@ -198,7 +117,7 @@ where
         SimAccount {
             index: account_index,
             signer,
-            wallet_address: prepared.wallet_address,
+            wallet_address,
             network_hash: sponsor.network_hash.clone(),
         },
         nonce_namespace,
@@ -207,7 +126,7 @@ where
         client,
         sponsor,
         plan,
-        prepared.wallet_address,
+        wallet_address,
         &mut event,
         event_writer,
     )
@@ -261,39 +180,6 @@ fn actor_provision_event(
     }
 }
 
-async fn submit_wallet_create_or_fail<C>(
-    client: C,
-    sponsor: &mut ActorState,
-    prepared: &PreparedWalletCreate,
-    event: &mut ActorProvisionEvent,
-    event_writer: &mut EventWriter,
-) -> Result<(), SimError>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    match submit_create_wallet(client, sponsor, prepared).await {
-        Ok((tx_hash, receipt)) => {
-            event.create_tx_hash = Some(json_string(&tx_hash, "txHash")?);
-            event.create_height = Some(*receipt.height);
-            Ok(())
-        }
-        Err(error) => {
-            if let Some(tx_hash) = error.tx_hash {
-                event.create_tx_hash = Some(json_string(&tx_hash, "txHash")?);
-            }
-            event.error = Some(error.message);
-            event_writer
-                .write(&ResultEvent::ActorProvisionFailed {
-                    event: event.clone(),
-                })
-                .await?;
-            Err(SimError::Executor(
-                "actor provisioning wallet create failed".into(),
-            ))
-        }
-    }
-}
-
 async fn submit_airdrop_if_configured<C>(
     client: C,
     sponsor: &mut ActorState,
@@ -308,15 +194,7 @@ where
     let Some(raw_amount) = plan.airdrop_raw_amount else {
         return Ok(());
     };
-    match submit_airdrop(
-        client,
-        sponsor,
-        plan.wallet_action_entrypoint,
-        wallet_address,
-        raw_amount,
-    )
-    .await
-    {
+    match submit_airdrop(client, sponsor, wallet_address, raw_amount).await {
         Ok((tx_hash, receipt)) => {
             event.airdrop_tx_hash = Some(json_string(&tx_hash, "txHash")?);
             event.airdrop_height = Some(*receipt.height);
@@ -347,95 +225,9 @@ pub fn actor_provisioning_enabled(manifest: &SimulationManifest) -> bool {
         .is_some_and(|spec| spec.enabled)
 }
 
-struct PreparedWalletCreate {
-    tx_hex: String,
-    wallet_address: ContractAddress,
-}
-
-fn prepare_wallet_create(
-    sponsor: &ActorState,
-    create_wallet_entrypoint: ContractEntrypointID,
-    wallet_contract: &Contract,
-    wallet_contract_hash: SHA256Hash,
-    owner_public_key: Ed25519PublicKey,
-    block_expiry_height: i64,
-) -> Result<PreparedWalletCreate, SimError> {
-    let nonce = sponsor.current_nonce()?;
-    let deploy_nonce = deploy_nonce_from_u64(nonce);
-    let wallet_address = derive_deploy_address(
-        &sponsor.wallet_address,
-        &deploy_nonce,
-        &wallet_contract_hash,
-    )
-    .map_err(|source| SimError::Executor(source.to_string()))?;
-    let calldata = xdrs::cxs::encode(&(&deploy_nonce, &wallet_contract_hash, &owner_public_key))
-        .map_err(|error| {
-            SimError::Executor(format!("failed to encode wallet create calldata: {error}"))
-        })?;
-    let tx = build_deploy_transaction(BuildDeployTransaction {
-        invoked_address: sponsor.wallet_address,
-        entrypoint: create_wallet_entrypoint,
-        calldata,
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height,
-        nonce,
-        contracts_to_deploy: VecM(vec![wallet_contract.clone()]),
-        auth_claim: source_address_auth_claim(),
-    });
-    let tx_hex = sign_and_encode_transaction_hex(
-        tx,
-        &sponsor.signer,
-        SignTransactionParams::default(),
-        &sponsor.network_hash,
-    )
-    .map_err(|source| SimError::Executor(source.to_string()))?;
-    Ok(PreparedWalletCreate {
-        tx_hex,
-        wallet_address,
-    })
-}
-
-async fn submit_create_wallet<C>(
-    client: C,
-    sponsor: &mut ActorState,
-    prepared: &PreparedWalletCreate,
-) -> Result<(TxHash, TransactionReceipt), ProvisionTxError>
-where
-    C: SimRpcClient + Clone + Send + Sync + 'static,
-{
-    let tx_hash = client
-        .send_raw_transaction(prepared.tx_hex.clone())
-        .await
-        .map_err(|error| {
-            ProvisionTxError::without_hash(format!("wallet create submit failed: {error}"))
-        })?;
-    sponsor
-        .consume_setup_nonce()
-        .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    let receipt = poll_receipt(
-        &SimReceiptSource(&client),
-        tx_hash,
-        receipt_poll_config(PROVISION_RECEIPT_TIMEOUT),
-    )
-    .await
-    .map_err(|source| ReceiptWaitFailure::step("wallet create", source))
-    .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
-    if !matches!(receipt.status, ExecStatus::Ok) {
-        return Err(ProvisionTxError::with_hash(
-            tx_hash,
-            format!(
-                "wallet create receipt status {}",
-                exec_status_name(&receipt.status)
-            ),
-        ));
-    }
-    Ok((tx_hash, receipt))
-}
-
 async fn submit_airdrop<C>(
     client: C,
     sponsor: &mut ActorState,
-    wallet_entrypoint: ContractEntrypointID,
     recipient: ContractAddress,
     raw_amount: u128,
 ) -> Result<(TxHash, TransactionReceipt), ProvisionTxError>
@@ -451,20 +243,26 @@ where
     let calldata = xdrs::cxs::encode(&(&recipient, raw_amount)).map_err(|error| {
         ProvisionTxError::without_hash(format!("failed to encode airdrop calldata: {error}"))
     })?;
-    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address: sponsor.wallet_address,
-        wallet_entrypoint,
-        target_address: ContractAddress::from(HOG_TOKEN_ADDRESS),
-        target_entrypoint: hog_transfer_entrypoint(),
-        target_calldata: &calldata,
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height,
-        nonce,
-    })
+    let account = PubkeyAccount::from_public_key_bytes(sponsor.signer.verifying_key_bytes(), 0);
+    let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+            account: &account,
+            target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+            target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_calldata: &calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
+            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height,
+            nonce,
+        },
+    )
     .map_err(|error| {
         ProvisionTxError::without_hash(format!("failed to build airdrop transaction: {error}"))
     })?;
+    let tx_hash = TxHash(groundhog_json_rpc_types::hex::Hex0x(
+        groundhog_signing::transaction_hash(&tx)
+            .map_err(|error| ProvisionTxError::without_hash(error.to_string()))?,
+    ));
     let tx_hex = sign_and_encode_transaction_hex(
         tx,
         &sponsor.signer,
@@ -474,12 +272,18 @@ where
     .map_err(|error| {
         ProvisionTxError::without_hash(format!("failed to sign airdrop transaction: {error}"))
     })?;
-    let tx_hash = client.send_raw_transaction(tx_hex).await.map_err(|error| {
-        ProvisionTxError::without_hash(format!("airdrop submit failed: {error}"))
-    })?;
     sponsor
         .consume_setup_nonce()
         .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
+    let returned_hash = client.send_raw_transaction(tx_hex).await.map_err(|error| {
+        ProvisionTxError::with_hash(tx_hash, format!("airdrop submit failed: {error}"))
+    })?;
+    if returned_hash != tx_hash {
+        return Err(ProvisionTxError::with_hash(
+            tx_hash,
+            "airdrop submit returned a different transaction hash".into(),
+        ));
+    }
     let receipt = poll_receipt(
         &SimReceiptSource(&client),
         tx_hash,
@@ -488,6 +292,12 @@ where
     .await
     .map_err(|source| ReceiptWaitFailure::step("airdrop", source))
     .map_err(|error| ProvisionTxError::with_hash(tx_hash, error.to_string()))?;
+    if receipt.tx_hash != tx_hash {
+        return Err(ProvisionTxError::with_hash(
+            tx_hash,
+            "airdrop receipt returned a different transaction hash".into(),
+        ));
+    }
     if !matches!(receipt.status, ExecStatus::Ok) {
         return Err(ProvisionTxError::with_hash(
             tx_hash,
@@ -498,19 +308,6 @@ where
         ));
     }
     Ok((tx_hash, receipt))
-}
-
-fn hog_transfer_entrypoint() -> ContractEntrypointID {
-    let selector = contract_entrypoint_id(
-        Some("ERC20"),
-        "0.1.0",
-        &NormalizedMethodSignature::new("transfer"),
-    );
-    let bytes: [u8; 8] = selector
-        .as_ref()
-        .try_into()
-        .expect("bug: contract entrypoint selectors are always eight bytes");
-    ContractEntrypointID::from(bytes)
 }
 
 struct ProvisionTxError {
@@ -544,105 +341,6 @@ where
     Ok((*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET))
 }
 
-fn resolve_dev_wallet_artifact(
-    spec: &ActorProvisioningSpec,
-    runtime_manifest: &RuntimeManifest,
-    runtime_manifest_path: &Path,
-    scenario_path: &Path,
-    contract_artifact_root: Option<&Path>,
-) -> Result<PathBuf, SimError> {
-    let explicit_hint = spec.dev_wallet_artifact.as_deref();
-    let hint = explicit_hint
-        .unwrap_or_else(|| Path::new(&runtime_manifest.bootstrap.dev_wallet.artifact_hint));
-    let mut candidates = Vec::new();
-    if hint.is_absolute() {
-        push_candidate(&mut candidates, hint.to_path_buf());
-    } else {
-        if let Some(root) = contract_artifact_root {
-            push_candidate(&mut candidates, root.join(hint));
-            if let Some(file_name) = hint.file_name() {
-                push_candidate(&mut candidates, root.join(file_name));
-            }
-        }
-        if explicit_hint.is_some() {
-            if let Some(parent) = scenario_path.parent() {
-                push_candidate(&mut candidates, parent.join(hint));
-            }
-            if let Some(parent) = runtime_manifest_path.parent() {
-                push_candidate(&mut candidates, parent.join(hint));
-            }
-        } else {
-            if let Some(parent) = runtime_manifest_path.parent() {
-                push_candidate(&mut candidates, parent.join(hint));
-            }
-            if let Some(parent) = scenario_path.parent() {
-                push_candidate(&mut candidates, parent.join(hint));
-            }
-        }
-    }
-
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.is_file())
-        .ok_or_else(|| {
-            SimError::Executor(format!(
-                "dev-wallet artifact `{}` was not found for actor provisioning",
-                hint.display()
-            ))
-        })
-}
-
-fn push_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if !candidates.iter().any(|existing| existing == &candidate) {
-        candidates.push(candidate);
-    }
-}
-
-fn load_dev_wallet_contract(path: &Path, expected_sha256: &str) -> Result<Contract, SimError> {
-    let bytes = std::fs::read(path)?;
-    let actual_sha256 = sha256_prefixed_hex(&bytes);
-    if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
-        return Err(SimError::Executor(format!(
-            "dev-wallet artifact `{}` SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}",
-            path.display()
-        )));
-    }
-    let blob = ContractBlob {
-        data: BytesM(bytes),
-    };
-    Ok(Contract::kRv32 {
-        rv32_contract: blob,
-    })
-}
-
-fn validate_dev_wallet_artifact_extension(
-    explicit_kind: Option<ContractArtifactKind>,
-    path: &Path,
-) -> Result<(), SimError> {
-    if explicit_kind.is_some() {
-        return Ok(());
-    }
-    match path.extension().and_then(|extension| extension.to_str()) {
-        Some("rv32a") => Ok(()),
-        _ => Err(SimError::UnsupportedContractArtifactExtension {
-            path: path.to_path_buf(),
-        }),
-    }
-}
-
-fn contract_hash(contract: &Contract) -> Result<SHA256Hash, SimError> {
-    let encoded = xdrs::txs::encode(contract).map_err(|error| {
-        SimError::Executor(format!("failed to encode wallet contract: {error}"))
-    })?;
-    let bytes: [u8; 32] = Sha256::digest(encoded).into();
-    Ok(SHA256Hash::from(bytes))
-}
-
-fn deploy_nonce_from_u64(nonce: u64) -> SHA256Hash {
-    let bytes: [u8; 32] = Sha256::digest(nonce.to_le_bytes()).into();
-    SHA256Hash::from(bytes)
-}
-
 fn parse_hog_amount(input: &str) -> Result<u128, SimError> {
     groundhog_signing::parse_hog_amount(input).map_err(|error| {
         SimError::Executor(format!(
@@ -670,259 +368,184 @@ fn exec_status_name(status: &ExecStatus) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
-    use groundhog_signing::derive_dev_account_signer;
-    use groundhog_xdr::contract::{Contract, ContractBlob};
-    use groundhog_xdr::types::ContractAddress;
-    use serde_json::json;
-    use xdr_common::BytesM;
-
-    use super::{
-        ProvisionPlan, actor_provision_event, hog_transfer_entrypoint, load_dev_wallet_contract,
-        next_unused_account_index, parse_hog_amount, resolve_dev_wallet_artifact,
-        validate_dev_wallet_artifact_extension,
-    };
-    use crate::actor::ActorState;
-    use crate::error::SimError;
-    use crate::manifest::{ActorProvisioningSpec, ContractArtifactKind};
-    use crate::nonce::NonceNamespace;
-    use crate::runtime::SimAccount;
-    use groundhog_json_rpc_types::hex::sha256_prefixed_hex;
-
-    #[test]
-    fn parses_airdrop_hog_amounts() {
-        assert_eq!(parse_hog_amount("1").unwrap(), 10_000_000);
-        assert_eq!(parse_hog_amount("1.25").unwrap(), 12_500_000);
-        assert!(parse_hog_amount("0").is_err());
-        assert!(parse_hog_amount("1.12345678").is_err());
+    use super::*;
+    #[derive(Clone, Default)]
+    struct RecordingClient(
+        std::sync::Arc<std::sync::Mutex<Vec<groundhog_xdr::transaction::SignedTransaction>>>,
+        SubmissionOutcome,
+    );
+    #[derive(Clone, Copy, Default)]
+    enum SubmissionOutcome {
+        #[default]
+        Success,
+        TransportError,
+        WrongSubmitHash,
+        WrongReceiptHash,
     }
-
-    #[test]
-    fn hog_transfer_entrypoint_uses_canonical_erc20_identity() {
-        assert_eq!(
-            hog_transfer_entrypoint().as_ref(),
-            &0x6328_5b35_23f9_dc3f_u64.to_be_bytes()
-        );
+    impl SimRpcClient for RecordingClient {
+        async fn chain_tip(
+            &self,
+        ) -> Result<groundhog_json_rpc_types::block::ChainTip, crate::rpc::SimRpcError> {
+            Ok(groundhog_json_rpc_types::block::ChainTip {
+                height: 42.into(),
+                block_hash: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
+            })
+        }
+        async fn send_raw_transaction(
+            &self,
+            tx_hex: String,
+        ) -> Result<TxHash, crate::rpc::SimRpcError> {
+            let signed: groundhog_xdr::transaction::SignedTransaction =
+                xdrs::txs::decode(&hex::decode(tx_hex.trim_start_matches("0x")).unwrap()).unwrap();
+            let hash = groundhog_signing::transaction_hash(&signed.tx).unwrap();
+            self.0.lock().unwrap().push(signed);
+            match self.1 {
+                SubmissionOutcome::TransportError => Err(crate::rpc::SimRpcError::Rpc {
+                    method: "sendRawTransaction",
+                    source: jsonrpsee::core::client::Error::RequestTimeout,
+                }),
+                SubmissionOutcome::WrongSubmitHash => Ok(TxHash(
+                    groundhog_json_rpc_types::hex::Hex0x([0xaa; 32].into()),
+                )),
+                _ => Ok(TxHash(groundhog_json_rpc_types::hex::Hex0x(hash))),
+            }
+        }
+        async fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> Result<Option<TransactionReceipt>, crate::rpc::SimRpcError> {
+            let tx_hash = if matches!(self.1, SubmissionOutcome::WrongReceiptHash) {
+                TxHash(groundhog_json_rpc_types::hex::Hex0x([0xaa; 32].into()))
+            } else {
+                tx_hash
+            };
+            Ok(Some(TransactionReceipt {
+                tx_hash,
+                height: 43.into(),
+                status: ExecStatus::Ok,
+                events: vec![],
+                return_data: None,
+                abort_data: None,
+                gas_used: 100,
+            }))
+        }
     }
-
-    #[test]
-    fn resolves_default_artifact_hint_relative_to_runtime_manifest() {
-        let temp = tempfile::tempdir().expect("tempdir should create");
-        let runtime_dir = temp.path().join("runtime");
-        let scenario_dir = temp.path().join("scenarios");
-        std::fs::create_dir_all(runtime_dir.join("contracts")).expect("runtime dirs should create");
-        std::fs::create_dir_all(&scenario_dir).expect("scenario dir should create");
-        let artifact = runtime_dir.join("contracts/dev_wallet.rv32a");
-        std::fs::write(&artifact, b"wallet").expect("artifact should write");
-
-        let resolved = resolve_dev_wallet_artifact(
-            &ActorProvisioningSpec {
-                enabled: true,
-                dev_wallet_artifact: None,
-                dev_wallet_artifact_kind: None,
-                airdrop_hog: None,
+    fn actor(index: u32) -> ActorState {
+        let signer = groundhog_signing::derive_default_dev_account_signer(index as usize);
+        let wallet_address =
+            PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address();
+        ActorState::new(
+            0,
+            SimAccount {
+                index,
+                signer,
+                wallet_address,
+                network_hash: groundhog_xdr::types::NetworkHash::new([0; 32].into()),
             },
-            &runtime_manifest("contracts/dev_wallet.rv32a"),
-            &runtime_dir.join("runtime-manifest.json"),
-            &scenario_dir.join("scenario.json"),
-            None,
+            crate::nonce::NonceNamespace::new(1).unwrap(),
         )
-        .expect("runtime-relative artifact should resolve");
-
-        assert_eq!(resolved, artifact);
     }
-
-    #[test]
-    fn resolves_explicit_artifact_hint_relative_to_scenario() {
-        let temp = tempfile::tempdir().expect("tempdir should create");
-        let runtime_dir = temp.path().join("runtime");
-        let scenario_dir = temp.path().join("scenarios");
-        std::fs::create_dir_all(&runtime_dir).expect("runtime dir should create");
-        std::fs::create_dir_all(&scenario_dir).expect("scenario dir should create");
-        let artifact = scenario_dir.join("dev_wallet.rv32a");
-        std::fs::write(&artifact, b"wallet").expect("artifact should write");
-
-        let resolved = resolve_dev_wallet_artifact(
-            &ActorProvisioningSpec {
-                enabled: true,
-                dev_wallet_artifact: Some("dev_wallet.rv32a".into()),
-                dev_wallet_artifact_kind: None,
-                airdrop_hog: None,
-            },
-            &runtime_manifest("missing-runtime-wallet.rv32a"),
-            &runtime_dir.join("runtime-manifest.json"),
-            &scenario_dir.join("scenario.json"),
-            None,
-        )
-        .expect("scenario-relative artifact should resolve");
-
-        assert_eq!(resolved, artifact);
-    }
-
-    #[test]
-    fn loads_rv32_dev_wallet_contract() {
-        let temp = tempfile::tempdir().expect("tempdir should create");
-        let artifact = temp.path().join("dev_wallet.rv32a");
-        std::fs::write(&artifact, b"rv32 wallet").expect("artifact should write");
-        let expected_sha256 = sha256_prefixed_hex(b"rv32 wallet");
-
-        let contract = load_dev_wallet_contract(&artifact, &expected_sha256)
-            .expect("rv32 artifact should load");
-
-        assert!(matches!(contract, Contract::kRv32 { .. }));
-    }
-
-    #[test]
-    fn dev_wallet_artifact_inference_requires_rv32_extension() {
-        assert!(
-            validate_dev_wallet_artifact_extension(None, std::path::Path::new("dev_wallet.rv32a"))
-                .is_ok()
-        );
-
-        for path in [
-            std::path::Path::new("dev_wallet.bin"),
-            std::path::Path::new("dev_wallet"),
+    #[tokio::test]
+    async fn funding_reserves_nonce_and_preserves_local_hash_for_uncertain_or_mismatched_results() {
+        for outcome in [
+            SubmissionOutcome::TransportError,
+            SubmissionOutcome::WrongSubmitHash,
+            SubmissionOutcome::WrongReceiptHash,
         ] {
-            let error = validate_dev_wallet_artifact_extension(None, path).unwrap_err();
-            assert!(matches!(
-                error,
-                SimError::UnsupportedContractArtifactExtension { path: error_path }
-                    if error_path == path
+            let client = RecordingClient(std::sync::Arc::default(), outcome);
+            let mut sponsor = actor(0);
+            let error =
+                submit_airdrop(client.clone(), &mut sponsor, actor(1).wallet_address, 12345)
+                    .await
+                    .unwrap_err();
+            let submitted = client.0.lock().unwrap();
+            assert_eq!(submitted.len(), 1);
+            let local_hash = TxHash(groundhog_json_rpc_types::hex::Hex0x(
+                groundhog_signing::transaction_hash(&submitted[0].tx).unwrap(),
             ));
+            assert_eq!(error.tx_hash, Some(local_hash));
+            assert_eq!(sponsor.next_nonce_sequence, 1);
+        }
+    }
+    #[tokio::test]
+    async fn provisioning_derives_native_accounts_and_only_submits_explicit_funding() {
+        type Call = (
+            ContractAddress,
+            groundhog_xdr::contract::ContractEntrypointID,
+            u64,
+            Vec<u8>,
+        );
+
+        for funding in [None, Some("1.0000001")] {
+            let mut manifest: SimulationManifest = serde_json::from_str(include_str!(
+                "../../../examples/sim/local-wallet-submit-smoke.json"
+            ))
+            .unwrap();
+            manifest.load_shape[0].users = 3;
+            manifest.bootstrap = Some(serde_json::from_value(serde_json::json!({
+                "accounts":1,"accountSeed":"groundhog-dev-accounts","initialStorageTokens":"1000000000","storageCostProfile":"hog-devnode-default",
+                "actorProvisioning":{"enabled":true,"airdropHog":funding}
+            })).unwrap());
+            let runtime: RuntimeManifest = serde_json::from_str(include_str!(
+                "../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
+            ))
+            .unwrap();
+            let client = RecordingClient::default();
+            let mut sponsor = actor(0);
+            let mut actors = vec![actor(1)];
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let mut writer = EventWriter::create(file.path()).await.unwrap();
+            provision_missing_actor_accounts(
+                client.clone(),
+                ActorProvisionInputs {
+                    manifest: &manifest,
+                    runtime_manifest: &runtime,
+                },
+                Some(&mut sponsor),
+                &mut actors,
+                &mut writer,
+            )
+            .await
+            .unwrap();
+            assert_eq!(actors.len(), 3);
+            for (index, actor) in actors.iter().enumerate() {
+                assert_eq!(actor.account_index, u32::try_from(index + 1).unwrap());
+                assert_eq!(
+                    actor.wallet_address,
+                    PubkeyAccount::from_public_key_bytes(actor.signer.verifying_key_bytes(), 0)
+                        .address()
+                );
+            }
+            let submitted = client.0.lock().unwrap();
+            assert_eq!(submitted.len(), if funding.is_some() { 2 } else { 0 });
+            assert_eq!(sponsor.next_nonce_sequence as usize, submitted.len());
+            for (index, signed) in submitted.iter().enumerate() {
+                assert_eq!(signed.tx.invocation.invoked_address, sponsor.wallet_address);
+                assert_eq!(
+                    signed.tx.invocation.entrypoint,
+                    groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+                );
+                let calls: Vec<Call> = xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].0, groundhog_signing::NATIVE_HOG_ADDRESS);
+                assert_eq!(
+                    calls[0].1,
+                    groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT
+                );
+                let (recipient, amount): (ContractAddress, u128) =
+                    xdrs::cxs::decode(&calls[0].3).unwrap();
+                assert_eq!(recipient, actors[index + 1].wallet_address);
+                assert_eq!(amount, 10_000_001);
+            }
+            let events = std::fs::read_to_string(file.path()).unwrap();
+            assert_eq!(events.matches("actor-provision-completed").count(), 2);
+            assert!(!events.contains("createTxHash"));
         }
     }
 
     #[test]
-    fn explicit_rv32_dev_wallet_kind_overrides_filename_extension() {
-        assert!(
-            validate_dev_wallet_artifact_extension(
-                Some(ContractArtifactKind::Rv32),
-                std::path::Path::new("dev_wallet.bin")
-            )
-            .is_ok()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn inferred_dev_wallet_rejects_non_utf8_extension() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let path =
-            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"dev_wallet.\xff".to_vec()));
-        assert!(validate_dev_wallet_artifact_extension(None, &path).is_err());
-    }
-
-    #[test]
-    fn rejects_dev_wallet_artifact_that_does_not_match_runtime_manifest() {
-        let temp = tempfile::tempdir().expect("tempdir should create");
-        let artifact = temp.path().join("dev_wallet.rv32a");
-        std::fs::write(&artifact, b"different wallet").expect("artifact should write");
-
-        let error = load_dev_wallet_contract(&artifact, &sha256_prefixed_hex(b"advertised wallet"))
-            .expect_err("mismatched artifact should fail");
-
-        assert!(error.to_string().contains("SHA-256 mismatch"));
-    }
-
-    #[test]
-    fn account_index_allocation_skips_sparse_runtime_indices() {
-        let actors = vec![actor_state(0, 0), actor_state(1, 3)];
-
-        let next = next_unused_account_index(&actors, 0).expect("unused index should exist");
-
-        assert_eq!(next, 1);
-    }
-
-    #[test]
-    fn provisioning_event_identifies_faucet_sponsor_outside_workload_actors() {
-        let event = actor_provision_event(
-            2,
-            3,
-            0,
-            &ProvisionPlan {
-                wallet_contract: Contract::kRv32 {
-                    rv32_contract: ContractBlob {
-                        data: BytesM(Vec::new()),
-                    },
-                },
-                wallet_contract_hash: [0; 32].into(),
-                create_wallet_entrypoint: [0; 8].into(),
-                wallet_action_entrypoint: [0; 8].into(),
-                airdrop_raw_amount: Some(1),
-                airdrop_hog: Some("0.0000001".into()),
-            },
-            ContractAddress::from([0x22; 32]),
-        );
-
-        assert_eq!(event.actor_id, 2);
-        assert_eq!(event.account_index, 3);
-        assert_eq!(event.sponsor_account_index, 0);
-        assert_eq!(event.airdrop_sponsor_account_index, Some(0));
-    }
-
-    fn runtime_manifest(artifact_hint: &str) -> RuntimeManifest {
-        serde_json::from_value(json!({
-            "schemaVersion": 2,
-            "kind": "hogd-dev-runtime",
-            "chainState": "fresh",
-            "networkHash": "00".repeat(32),
-            "protocol": "hogp/test00000000000",
-            "producer": {
-                "binary": "hog-devnode",
-                "version": "0.1.0"
-            },
-            "endpoints": {
-                "scheduler": "127.0.0.1:1000",
-                "indexer": "127.0.0.1:1001"
-            },
-            "bootstrapAccountDerivation": {
-                "scheme": "groundhog-bootstrap-account-v1",
-                "seed": "seed"
-            },
-            "bootstrapAccounts": [],
-            "bootstrap": {
-                "devWallet": {
-                    "contentHash": prefixed_hex(0x33),
-                    "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": artifact_hint,
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
-                "storageCostModel": {
-                    "hash": prefixed_hex(0x55),
-                    "baseDataItemCost": "1",
-                    "bytestringCostPerByte": "1",
-                    "baseContractDeploymentCost": "1",
-                    "contractDeploymentCostPerByte": "1",
-                    "authPerKeyCost": "1",
-                    "rcqCostPerEntry": "1",
-                    "replayCacheCostPerEntry": "1",
-                    "balanceCost": "1"
-                }
-            }
-        }))
-        .expect("runtime manifest fixture should parse")
-    }
-
-    fn prefixed_hex(byte: u8) -> String {
-        format!("0x{}", hex::encode([byte; 32]))
-    }
-
-    fn actor_state(actor_id: u32, account_index: u32) -> ActorState {
-        let address_byte = u8::try_from(account_index).expect("test account index should fit u8");
-        ActorState::new(
-            actor_id,
-            SimAccount {
-                index: account_index,
-                signer: derive_dev_account_signer("seed", account_index as usize),
-                wallet_address: ContractAddress::from([address_byte; 32]),
-                network_hash: groundhog_xdr::types::NetworkHash::new(
-                    groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
-                ),
-            },
-            NonceNamespace::new(1).expect("namespace should fit"),
-        )
+    fn funding_amount_is_exact() {
+        assert_eq!(parse_hog_amount("1.0000001").unwrap(), 10_000_001);
+        assert!(parse_hog_amount("0.00000001").is_err());
     }
 }

@@ -15,7 +15,7 @@ use std::time::Duration;
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
 const NODE_STARTUP_SCHEMA_VERSION: u32 = 3;
-pub(crate) const DEV_WALLET_ARTIFACT_FILENAME: &str = "dev_wallet.rv32a";
+pub(crate) const GENESIS_ROOT_ARTIFACT_FILENAME: &str = "genesis_root.rv32a";
 
 #[cfg(test)]
 fn test_local_runtime_state_result() -> PathBuf {
@@ -760,7 +760,7 @@ fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBu
         });
     resolve_hogd_dev_binary(&hogd)
         .ok()
-        .and_then(|binary| dev_wallet_artifact_for_binary(&binary))
+        .and_then(|binary| genesis_root_artifact_for_binary(&binary))
         .and_then(|artifact| artifact.parent().map(Path::to_path_buf))
 }
 
@@ -788,24 +788,24 @@ fn runtime_artifacts_dir(root: &Path) -> Option<PathBuf> {
     let root = std::fs::canonicalize(root).ok()?;
     (root
         .join("contracts")
-        .join(DEV_WALLET_ARTIFACT_FILENAME)
+        .join(GENESIS_ROOT_ARTIFACT_FILENAME)
         .is_file()
-        || root.join(DEV_WALLET_ARTIFACT_FILENAME).is_file())
+        || root.join(GENESIS_ROOT_ARTIFACT_FILENAME).is_file())
     .then_some(root)
 }
 
 fn contract_artifacts_dir(root: &Path) -> Option<PathBuf> {
     let root = std::fs::canonicalize(root).ok()?;
-    root.join(DEV_WALLET_ARTIFACT_FILENAME)
+    root.join(GENESIS_ROOT_ARTIFACT_FILENAME)
         .is_file()
         .then_some(root)
 }
 
-pub(crate) fn dev_wallet_artifact_for_binary(binary: &Path) -> Option<PathBuf> {
+pub(crate) fn genesis_root_artifact_for_binary(binary: &Path) -> Option<PathBuf> {
     let root = runtime_artifacts_dir_for_binary(binary)?;
     [
-        root.join("contracts").join(DEV_WALLET_ARTIFACT_FILENAME),
-        root.join(DEV_WALLET_ARTIFACT_FILENAME),
+        root.join("contracts").join(GENESIS_ROOT_ARTIFACT_FILENAME),
+        root.join(GENESIS_ROOT_ARTIFACT_FILENAME),
     ]
     .into_iter()
     .find(|path| path.is_file())
@@ -818,7 +818,7 @@ fn with_discovered_contract_artifacts(
 
     let Some(discovered) = resolve_hogd_dev_binary(&hogd)
         .ok()
-        .and_then(|binary| dev_wallet_artifact_for_binary(&binary))
+        .and_then(|binary| genesis_root_artifact_for_binary(&binary))
         .and_then(|artifact| artifact.parent().map(Path::to_path_buf))
     else {
         return hogd;
@@ -1164,7 +1164,7 @@ fn hogd_dev_endpoints_payload(
 mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, NODE_STARTUP_SCHEMA_VERSION,
-        default_tracing_filter, dev_wallet_artifact_for_binary, hogd_dev_startup_payload,
+        default_tracing_filter, genesis_root_artifact_for_binary, hogd_dev_startup_payload,
         local_node_config, local_node_pid_file, local_node_runtime_artifacts_dir,
         local_runtime_state_payload, map_node_supervisor_error, rpc_client_address,
         runtime_artifacts_dir_for_binary, test_local_runtime_state_result,
@@ -1406,7 +1406,7 @@ mod tests {
         fs::write(&binary, []).expect("bug: binary fixture should be written");
         let contracts = tmp.path().join("contracts");
         fs::create_dir(&contracts).expect("bug: contracts fixture should be created");
-        fs::write(contracts.join("dev_wallet.rv32a"), [])
+        fs::write(contracts.join("genesis_root.rv32a"), [])
             .expect("bug: artifact fixture should be written");
 
         assert_eq!(
@@ -1424,7 +1424,7 @@ mod tests {
         fs::write(&binary, []).expect("bug: binary fixture should be written");
         let contracts = tmp.path().join("build/built_contracts");
         fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
-        fs::write(contracts.join("dev_wallet.rv32a"), [])
+        fs::write(contracts.join("genesis_root.rv32a"), [])
             .expect("bug: artifact fixture should be written");
 
         assert_eq!(
@@ -1443,7 +1443,7 @@ mod tests {
         let artifacts_root = tmp.path().join("usr/share/groundhog");
         let contracts = artifacts_root.join("contracts");
         fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
-        fs::write(contracts.join("dev_wallet.rv32a"), [])
+        fs::write(contracts.join("genesis_root.rv32a"), [])
             .expect("bug: artifact fixture should be written");
 
         assert_eq!(
@@ -1451,9 +1451,9 @@ mod tests {
             Some(fs::canonicalize(artifacts_root).expect("bug: fixture root should resolve"))
         );
         assert_eq!(
-            dev_wallet_artifact_for_binary(&binary),
+            genesis_root_artifact_for_binary(&binary),
             Some(
-                fs::canonicalize(contracts.join("dev_wallet.rv32a"))
+                fs::canonicalize(contracts.join("genesis_root.rv32a"))
                     .expect("bug: artifact fixture should resolve")
             )
         );
@@ -1479,7 +1479,7 @@ mod tests {
 
         let contracts = tmp.path().join("usr/share/groundhog/contracts");
         fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
-        fs::write(contracts.join("dev_wallet.rv32a"), [])
+        fs::write(contracts.join("genesis_root.rv32a"), [])
             .expect("bug: artifact fixture should be written");
 
         let user_directory = tmp.path().join("user-contracts");
@@ -1512,7 +1512,7 @@ mod tests {
         let tmp = TempDir::new().expect("bug: tempdir should be created");
         let contracts = tmp.path().join("custom-contracts");
         fs::create_dir(&contracts).expect("bug: contracts fixture should be created");
-        fs::write(contracts.join("dev_wallet.rv32a"), [])
+        fs::write(contracts.join("genesis_root.rv32a"), [])
             .expect("bug: artifact fixture should be written");
 
         let resolved = local_node_runtime_artifacts_dir(&LocalNodeOptions {
@@ -1724,7 +1724,7 @@ mod tests {
         }
         let manifest_path = temp.path().join("runtime-manifest.json");
         let manifest = br#"{
-          "schemaVersion": 2,
+          "schemaVersion": 3,
           "kind": "hogd-dev-runtime",
           "chainState": "fresh",
           "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -1738,14 +1738,6 @@ mod tests {
           },
           "bootstrapAccounts": [],
           "bootstrap": {
-            "devWallet": {
-              "contentHash": "0x5151515151515151515151515151515151515151515151515151515151515151",
-              "deployedCodeHash": "0x5252525252525252525252525252525252525252525252525252525252525252",
-              "artifactHint": "./dev_wallet.rv32a",
-              "deployEntrypoint": "0xadac498222148e4f",
-              "createWalletEntrypoint": "0x6372656174655761",
-              "doActionEntrypoint": "0x646f416374696f6e"
-            },
             "storageCostModel": {
               "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
               "baseDataItemCost": "12000",
@@ -1768,7 +1760,7 @@ mod tests {
         }
         let hash = format!("0x{}", hex::encode(Sha256::digest(manifest)));
         let pointer = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "status": "ready",
             "manifestPath": manifest_path,
             "manifestHash": hash,
@@ -1786,7 +1778,7 @@ mod tests {
 
         assert_eq!(payload["schemaVersion"], NODE_STARTUP_SCHEMA_VERSION);
         assert_eq!(payload["chain_state"], "fresh");
-        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 2);
+        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 3);
         assert_eq!(
             payload["runtime_manifest"]["path"],
             manifest_path.display().to_string()

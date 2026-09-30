@@ -1452,6 +1452,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "xdrs",
 ]
 
 [[package]]
@@ -1669,7 +1670,6 @@ dependencies = [
  "aws-smithy-types",
  "axum",
  "clap",
- "ed25519-dalek",
  "groundhog-build-info",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
@@ -1677,6 +1677,7 @@ dependencies = [
  "groundhog-xdr",
  "hex",
  "http 1.5.0",
+ "jsonrpsee",
  "serde",
  "serde_json",
  "serial_test",
@@ -1687,7 +1688,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "xdr-common",
  "xdrs",
  "zeroize",
 ]

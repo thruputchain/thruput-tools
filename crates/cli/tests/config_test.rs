@@ -1042,7 +1042,7 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
     fs::write(
         path,
         serde_json::to_vec(&serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -1056,14 +1056,6 @@ fn write_local_runtime_manifest(path: &std::path::Path, accounts: &[(u32, &str)]
             },
             "bootstrapAccounts": accounts,
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": format!("0x{}", "51".repeat(32)),
-                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                    "artifactHint": "dev_wallet.rv32a",
-                    "deployEntrypoint": "0x6465706c6f794e77",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
                 "storageCostModel": {
                     "hash": format!("0x{}", "53".repeat(32)),
                     "baseDataItemCost": "12000",

@@ -28,8 +28,8 @@ an explicit action.
 
 A signing key and a wallet binding are different things. Native accounts can
 be derived and saved without creating an on-chain object or funding it. Funding
-is a separate explicit operation. Existing legacy bindings and manifest-backed
-`dev-N` wallets preserve their identities and transaction formats; changing the
+is a separate explicit operation. Saved legacy wallets preserve their identities
+and transaction formats; changing the
 default wallet implementation must not silently remap them.
 
 Native deployment transfers an explicit amount and can initialize the contract

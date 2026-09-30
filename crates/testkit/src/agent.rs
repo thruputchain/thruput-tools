@@ -370,10 +370,6 @@ impl AgentContext {
         Ok(receipt)
     }
 
-    pub(crate) fn native_wallet(&self) -> bool {
-        self.account.is_native()
-    }
-
     /// Call a deployed contract method from this agent's account, awaiting the
     /// receipt. The receipt is returned even when execution reverted.
     pub async fn call(

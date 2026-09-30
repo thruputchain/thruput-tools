@@ -12,7 +12,8 @@ bootstrap_order = 50
 Use public package exports and generated bindings, not package internals.
 Connect a cluster-aware client, create or load an account, then bind a wallet.
 One public client supports multiple independent wallet bindings. Pubkey accounts
-use DefaultWallet; local source-address accounts use `devWalletAdapter`.
+use DefaultWallet, including schema-3 bootstrap accounts. Historical saved
+legacy source-address wallets use `devWalletAdapter`; preserve their addresses.
 Do not submit an application invocation directly as the transaction root.
 
 Select an interface version for values; explicit types use the full namespace:

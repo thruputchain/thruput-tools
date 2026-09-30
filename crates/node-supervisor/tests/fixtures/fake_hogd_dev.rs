@@ -116,7 +116,7 @@ impl FakeStartupConfig {
             &fs::read(path).expect("bug: fake bootstrap manifest should be readable"),
         )
         .expect("bug: fake bootstrap manifest should parse");
-        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["schemaVersion"], 3);
         assert_eq!(manifest["kind"], "groundhog-bootstrap");
         assert_eq!(manifest["bootstrapFaucet"]["index"], 0);
         assert_eq!(
@@ -666,7 +666,7 @@ fn readiness_pointer(endpoints: &Value) -> String {
     let manifest_hash = sha256_prefixed_hex(&manifest_bytes);
     let manifest_path = write_runtime_manifest(&manifest_bytes);
     format!(
-        r#"{{"schemaVersion":2,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+        r#"{{"schemaVersion":3,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
         manifest_path.display(),
         manifest_hash,
     )
@@ -681,7 +681,7 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
     }
 
     json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": "00".repeat(32),
@@ -694,14 +694,6 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
         },
         "bootstrapAccounts": bootstrap_accounts(config),
         "bootstrap": {
-            "devWallet": {
-                "contentHash": Hex0x(SHA256Hash::from([0x51; 32])),
-                "deployedCodeHash": Hex0x(SHA256Hash::from([0x52; 32])),
-                "artifactHint": "fake-dev_wallet.rv32a",
-                "deployEntrypoint": "0xadac498222148e4f",
-                "createWalletEntrypoint": "0x6372656174655761",
-                "doActionEntrypoint": "0x646f416374696f6e",
-            },
             "storageCostModel": storage_cost_model(),
         },
     })
@@ -711,13 +703,16 @@ fn bootstrap_accounts(config: &FakeStartupConfig) -> Vec<Value> {
     (0..=config.count)
         .map(|index| {
             let signer = groundhog_signing::derive_dev_account_signer(&config.seed, index);
-            let mut address = [0x70_u8; 32];
-            address[31] = u8::try_from(index).expect("bug: default account count fits in u8");
+            let address = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                signer.verifying_key_bytes(),
+                0,
+            )
+            .address();
             json!({
                 "index": u32::try_from(index).expect("bug: fake account index fits in u32"),
                 "role": if index == 0 { "faucet" } else { "local_user" },
                 "publicKey": Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes())),
-                "walletAddress": Hex0x(groundhog_xdr::types::ContractAddress::from(address)),
+                "walletAddress": Hex0x(address),
                 "initialStorageTokens": if index == 0 {
                     groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
                 } else {

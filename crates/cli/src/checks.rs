@@ -65,10 +65,10 @@ pub struct DevnodeStatus {
     pub error: Option<String>,
 }
 
-/// Resolved and validated dev-wallet runtime artifact.
+/// Resolved and validated genesis-root runtime artifact.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DevWalletArtifactStatus {
+pub struct GenesisRootArtifactStatus {
     pub available: bool,
     pub valid: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +87,7 @@ pub struct EnvironmentStatus {
     pub rust_toolchain: RustToolchainStatus,
     pub rv32_target: RustTargetStatus,
     pub devnode: DevnodeStatus,
-    pub dev_wallet_artifact: DevWalletArtifactStatus,
+    pub genesis_root_artifact: GenesisRootArtifactStatus,
     pub registry_configured: bool,
     pub cargo_config_path: PathBuf,
 }
@@ -181,7 +181,7 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
     let cargo = which::which("cargo").is_ok();
     let (rust_toolchain, rv32_target) = detect_rust_environment(project_start);
     let devnode = check_devnode();
-    let dev_wallet_artifact = check_dev_wallet_artifact(&devnode);
+    let genesis_root_artifact = check_genesis_root_artifact(&devnode);
     let cargo_config_path = crate::config::cargo_config_path()?;
 
     let registry_configured = match std::fs::read_to_string(&cargo_config_path) {
@@ -195,7 +195,7 @@ pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliE
         rust_toolchain,
         rv32_target,
         devnode,
-        dev_wallet_artifact,
+        genesis_root_artifact,
         registry_configured,
         cargo_config_path,
     })
@@ -493,21 +493,21 @@ fn add_environment_findings(
                 "run `groundhog toolchain install`, or set GROUNDHOG_DEVNODE_BINARY to an executable hog-devnode; fix or unset the variable if it points to an old path",
             )),
         });
-    } else if !environment.dev_wallet_artifact.valid {
+    } else if !environment.genesis_root_artifact.valid {
         findings.push(Finding {
             level: FindingLevel::Warn,
-            code: if environment.dev_wallet_artifact.available {
-                "dev_wallet_artifact_invalid"
+            code: if environment.genesis_root_artifact.available {
+                "genesis_root_artifact_invalid"
             } else {
-                "dev_wallet_artifact_unavailable"
+                "genesis_root_artifact_unavailable"
             },
             message: environment
-                .dev_wallet_artifact
+                .genesis_root_artifact
                 .error
                 .clone()
-                .unwrap_or_else(|| "dev_wallet.rv32a is unavailable".into()),
+                .unwrap_or_else(|| "genesis_root.rv32a is unavailable".into()),
             hint: Some(Cow::Borrowed(
-                "install the dev-wallet artifact from the same client bundle as hog-devnode",
+                "install the genesis-root artifact from the same client bundle as hog-devnode",
             )),
         });
     }
@@ -1009,9 +1009,9 @@ fn check_devnode() -> DevnodeStatus {
     }
 }
 
-fn check_dev_wallet_artifact(devnode: &DevnodeStatus) -> DevWalletArtifactStatus {
+fn check_genesis_root_artifact(devnode: &DevnodeStatus) -> GenesisRootArtifactStatus {
     let Some(binary) = devnode.path.as_deref() else {
-        return DevWalletArtifactStatus {
+        return GenesisRootArtifactStatus {
             available: false,
             valid: false,
             path: None,
@@ -1019,15 +1019,15 @@ fn check_dev_wallet_artifact(devnode: &DevnodeStatus) -> DevWalletArtifactStatus
             error: None,
         };
     };
-    let Some(path) = crate::node::dev_wallet_artifact_for_binary(binary) else {
-        return DevWalletArtifactStatus {
+    let Some(path) = crate::node::genesis_root_artifact_for_binary(binary) else {
+        return GenesisRootArtifactStatus {
             available: false,
             valid: false,
             path: None,
             sha256: None,
             error: Some(format!(
                 "could not find {} for {}",
-                crate::node::DEV_WALLET_ARTIFACT_FILENAME,
+                crate::node::GENESIS_ROOT_ARTIFACT_FILENAME,
                 binary.display()
             )),
         };
@@ -1036,30 +1036,30 @@ fn check_dev_wallet_artifact(devnode: &DevnodeStatus) -> DevWalletArtifactStatus
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            return DevWalletArtifactStatus {
+            return GenesisRootArtifactStatus {
                 available: true,
                 valid: false,
                 path: Some(path),
                 sha256: None,
-                error: Some(format!("could not read dev-wallet artifact: {error}")),
+                error: Some(format!("could not read genesis-root artifact: {error}")),
             };
         }
     };
     let sha256 = groundhog_rv32_artifact::sha256_hex(&bytes);
     match groundhog_rv32_artifact::verify_artifact(&bytes) {
-        Ok(()) => DevWalletArtifactStatus {
+        Ok(()) => GenesisRootArtifactStatus {
             available: true,
             valid: true,
             path: Some(path),
             sha256: Some(sha256),
             error: None,
         },
-        Err(error) => DevWalletArtifactStatus {
+        Err(error) => GenesisRootArtifactStatus {
             available: true,
             valid: false,
             path: Some(path),
             sha256: Some(sha256),
-            error: Some(format!("dev-wallet artifact is invalid: {error}")),
+            error: Some(format!("genesis-root artifact is invalid: {error}")),
         },
     }
 }
@@ -1641,10 +1641,10 @@ mod tests {
                     version: Some("0.1.0".into()),
                     error: None,
                 },
-                dev_wallet_artifact: DevWalletArtifactStatus {
+                genesis_root_artifact: GenesisRootArtifactStatus {
                     available: true,
                     valid: true,
-                    path: Some(PathBuf::from("/usr/share/groundhog/dev_wallet.rv32a")),
+                    path: Some(PathBuf::from("/usr/share/groundhog/genesis_root.rv32a")),
                     sha256: Some("abc123".into()),
                     error: None,
                 },
@@ -1772,10 +1772,10 @@ mod tests {
                 version: Some("test".into()),
                 error: None,
             },
-            dev_wallet_artifact: DevWalletArtifactStatus {
+            genesis_root_artifact: GenesisRootArtifactStatus {
                 available: true,
                 valid: true,
-                path: Some(PathBuf::from("/usr/share/groundhog/dev_wallet.rv32a")),
+                path: Some(PathBuf::from("/usr/share/groundhog/genesis_root.rv32a")),
                 sha256: Some("abc123".into()),
                 error: None,
             },
@@ -1873,14 +1873,14 @@ mod tests {
     }
 
     #[test]
-    fn dev_wallet_artifact_check_rejects_invalid_artifacts() {
+    fn genesis_root_artifact_check_rejects_invalid_artifacts() {
         let tmp = tempfile::TempDir::new().unwrap();
         let binary = tmp.path().join("hog-devnode");
         std::fs::write(&binary, []).unwrap();
         let contracts = tmp.path().join("contracts");
         std::fs::create_dir(&contracts).unwrap();
-        std::fs::write(contracts.join("dev_wallet.rv32a"), b"not an artifact").unwrap();
-        let status = check_dev_wallet_artifact(&DevnodeStatus {
+        std::fs::write(contracts.join("genesis_root.rv32a"), b"not an artifact").unwrap();
+        let status = check_genesis_root_artifact(&DevnodeStatus {
             reachable: true,
             path: Some(binary),
             version: Some("test".into()),
@@ -2151,10 +2151,10 @@ mod tests {
                     version: Some("0.1.0".into()),
                     error: None,
                 },
-                dev_wallet_artifact: DevWalletArtifactStatus {
+                genesis_root_artifact: GenesisRootArtifactStatus {
                     available: true,
                     valid: true,
-                    path: Some(PathBuf::from("/usr/share/groundhog/dev_wallet.rv32a")),
+                    path: Some(PathBuf::from("/usr/share/groundhog/genesis_root.rv32a")),
                     sha256: Some("abc123".into()),
                     error: None,
                 },

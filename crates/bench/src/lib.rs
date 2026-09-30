@@ -18,7 +18,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::{process, sync::Arc};
 
 use clap::Parser;
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestEntrypointError;
 use groundhog_signing::SigningError;
 use hdrhistogram::Histogram;
 
@@ -109,13 +108,12 @@ enum BenchError {
     UnsupportedDerivationScheme { scheme: String },
     #[error("runtime manifest bootstrap account {index} public key does not match derivation seed")]
     BootstrapPublicKeyMismatch { index: u32 },
+    #[error(
+        "runtime manifest bootstrap account {index} address is not its nonce-zero native account"
+    )]
+    BootstrapAddressMismatch { index: u32 },
     #[error("runtime manifest bootstrap account index {index} does not fit this platform")]
     BootstrapAccountIndexTooLarge { index: u32 },
-    #[error("failed to parse runtime manifest devWallet.doActionEntrypoint: {source}")]
-    Entrypoint {
-        #[source]
-        source: RuntimeManifestEntrypointError,
-    },
     #[error("failed to encode wallet action calldata: {source}")]
     WalletCalldata {
         #[source]
@@ -244,7 +242,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
     };
     let manifest = loaded_manifest.as_ref().map(|loaded| &loaded.manifest);
     let needs_transactions = cli.method == "sendRawTransaction";
-    let (accounts, entrypoint) = transaction_inputs_for_method(
+    let accounts = transaction_inputs_for_method(
         if cli.seed_count.is_some() {
             "sendRawTransaction"
         } else {
@@ -338,7 +336,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             .ok_or(BenchError::MissingRuntimeManifest)?
             .network_hash
             .to_network_hash();
-        generate_tx_batch(batch_size, &accounts, entrypoint, &network_hash, 0)?
+        generate_tx_batch(batch_size, &accounts, &network_hash, 0)?
             .into_iter()
             .map(|tx| tx.hex)
             .collect()

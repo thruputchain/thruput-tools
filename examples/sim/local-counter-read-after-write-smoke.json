@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-counter-read-after-write-smoke",
   "seed": "sim-local-counter-read-after-write-smoke",
@@ -10,8 +10,8 @@
     "accounts": 1,
     "accountSeed": "sim-local-counter-read-after-write-smoke-accounts",
     "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
+    "storageCostProfile": "default",
+    "deploymentCollateralRaw": "100000000"
   },
   "loadShape": [
     {

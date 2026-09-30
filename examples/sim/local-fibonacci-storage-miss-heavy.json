@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-fibonacci-storage-miss-heavy",
   "seed": "sim-local-fibonacci-storage-miss-heavy",
@@ -10,8 +10,8 @@
     "accounts": 8,
     "accountSeed": "sim-local-fibonacci-storage-miss-heavy-accounts",
     "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
+    "storageCostProfile": "default",
+    "deploymentCollateralRaw": "100000000"
   },
   "loadShape": [
     {

@@ -10,8 +10,8 @@ use groundhog_json_rpc_types::events::{
 };
 use groundhog_json_rpc_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_json_rpc_types::network_descriptor::{
-    AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
-    NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
+    AirdropDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor,
+    NetworkDescriptor, NetworkDescriptorEndpoints,
 };
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::state::StorageItemInfo;
@@ -74,11 +74,6 @@ fn test_network_descriptor() -> NetworkDescriptor {
             HexBytes(vec![0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]),
         ),
         FaucetDescriptor::new(zero_address()),
-        WalletCreateDescriptor::new("100000000".into(), zero_hash()),
-        DevWalletDescriptor::new(
-            HexBytes(vec![0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]),
-            HexBytes(vec![0xa0, 0xff, 0xf9, 0x4c, 0x64, 0xfb, 0xaf, 0x3c]),
-        ),
     )
     .with_airdrop(AirdropDescriptor::new(
         "100000000".into(),
@@ -120,14 +115,8 @@ fn network_descriptor_wire_format_is_public_and_camel_case() {
         value["nativeHog"]["transferEntrypoint"],
         "0x63285b3523f9dc3f"
     );
-    assert_eq!(value["walletCreate"]["prefundRawAmount"], "100000000");
     assert_eq!(value["airdrop"]["rawAmount"], "100000000");
     assert!(value["airdrop"].get("amountHog").is_none());
-    assert_eq!(value["devWallet"]["deployEntrypoint"], "0xf969542572bd6860");
-    assert_eq!(
-        value["devWallet"]["doActionEntrypoint"],
-        "0xa0fff94c64fbaf3c"
-    );
 
     assert!(value.get("schema_version").is_none());
     assert!(value.get("bootstrapAccountDerivation").is_none());
@@ -142,15 +131,15 @@ fn network_descriptor_wire_format_is_public_and_camel_case() {
     assert!(!encoded.contains("privateKey"));
     assert!(!encoded.contains("seed"));
     assert!(!encoded.contains("createWalletEntrypoint"));
-    assert!(encoded.contains("doActionEntrypoint"));
-    assert!(encoded.contains("deployEntrypoint"));
+    assert!(!encoded.contains("doActionEntrypoint"));
+    assert!(!encoded.contains("deployEntrypoint"));
 
     let roundtrip: NetworkDescriptor = serde_json::from_value(value).unwrap();
     assert_eq!(roundtrip, descriptor);
 }
 
 #[test]
-fn schema_v2_network_descriptor_accepts_missing_airdrop_policy() {
+fn network_descriptor_accepts_missing_airdrop_policy() {
     let mut value = serde_json::to_value(test_network_descriptor()).unwrap();
     value.as_object_mut().unwrap().remove("airdrop");
 

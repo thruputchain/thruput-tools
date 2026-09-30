@@ -10,9 +10,8 @@ use groundhog_signing::default_wallet::{
     build_default_wallet_call_transaction, build_default_wallet_deploy_transaction,
 };
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
-    transaction_hash,
+    DEFAULT_TX_GAS_LIMIT, SignTransactionParams, derive_deploy_address,
+    sign_and_encode_transaction_hex, transaction_hash,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
@@ -239,10 +238,6 @@ impl Account {
         }
     }
 
-    pub(crate) fn is_native(&self) -> bool {
-        self.dev.native
-    }
-
     pub(crate) fn index(&self) -> u32 {
         self.dev.index
     }
@@ -320,9 +315,6 @@ impl Account {
         contract: Option<Contract>,
         options: DeployOptions<'_>,
     ) -> Result<PreparedDeploy> {
-        if !self.dev.native {
-            return Err(TestkitError::LegacyDeploymentUnsupported);
-        }
         let tx_nonce = self.next_nonce();
         let deploy_nonce =
             SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(tx_nonce.to_le_bytes())));
@@ -379,14 +371,8 @@ impl Account {
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<SubmittedTransaction> {
-        let (tx_hash, tx_hex) = prepare_call(
-            &self.dev,
-            network,
-            target,
-            entrypoint,
-            calldata,
-            self.next_nonce(),
-        )?;
+        let (tx_hash, tx_hex) =
+            prepare_call(&self.dev, target, entrypoint, calldata, self.next_nonce())?;
         self.advance()?;
         submit_signed(network, tx_hash, &tx_hex).await?;
         Ok(SubmittedTransaction::new(network.clone(), tx_hash, tx_hex))
@@ -395,13 +381,12 @@ impl Account {
 
 pub(crate) fn prepare_call(
     dev: &TestAccount,
-    network: &Network,
     target: ContractAddress,
     entrypoint: ContractEntrypointID,
     calldata: &[u8],
     nonce: u64,
 ) -> Result<(TxHash, String)> {
-    let tx = if dev.native {
+    let tx = {
         let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
             dev.signer.verifying_key_bytes(),
             0,
@@ -412,18 +397,6 @@ pub(crate) fn prepare_call(
             target_entrypoint: entrypoint,
             target_calldata: calldata,
             gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
-            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-            block_expiry_height: EXPIRY_HEIGHT,
-            nonce,
-        })
-    } else {
-        build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-            wallet_address: dev.wallet_address,
-            wallet_entrypoint: network.do_action_entrypoint()?,
-            target_address: target,
-            target_entrypoint: entrypoint,
-            target_calldata: calldata,
-            gas_limit: DEFAULT_TX_GAS_LIMIT,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height: EXPIRY_HEIGHT,
             nonce,

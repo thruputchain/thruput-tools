@@ -124,10 +124,6 @@ impl Installation {
     pub fn binary_path(&self) -> PathBuf {
         self.path.join("hog-devnode")
     }
-    /// Return the installed `dev_wallet.rv32a` path.
-    pub fn wallet_path(&self) -> PathBuf {
-        self.path.join("contracts/dev_wallet.rv32a")
-    }
     /// Return whether this operation installed bytes rather than reusing a complete bundle.
     pub const fn installed_now(&self) -> bool {
         self.installed_now

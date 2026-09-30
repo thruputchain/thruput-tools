@@ -17,11 +17,10 @@ use crate::error::{Result, TestkitError};
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 
-/// A signer paired with its native or explicitly selected legacy address.
+/// A signer paired with its nonce-zero native address.
 #[derive(Debug)]
 pub(crate) struct TestAccount {
     pub(crate) index: u32,
-    pub(crate) native: bool,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: ContractAddress,
     /// Network this account signs for. Part of every signature preimage.
@@ -109,9 +108,16 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccoun
                     index: account.index,
                 });
             }
+            if PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
+                != account.wallet_address.0
+            {
+                return Err(TestkitError::Manifest {
+                    field: "bootstrapAccounts.walletAddress",
+                    detail: "address is not its nonce-zero native account".into(),
+                });
+            }
             Ok(TestAccount {
                 index: account.index,
-                native: false,
                 signer,
                 wallet_address: account.wallet_address.0,
                 network_hash: Some(manifest.network_hash.to_network_hash()),
@@ -131,7 +137,6 @@ pub(crate) fn derive_native_accounts(
             let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
             TestAccount {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
-                native: true,
                 wallet_address: account.address(),
                 signer,
                 network_hash: network_hash.cloned(),
@@ -160,9 +165,16 @@ pub(crate) fn derive_faucet(manifest: &RuntimeManifest) -> Result<Option<TestAcc
             index: account.index,
         });
     }
+    if PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
+        != account.wallet_address.0
+    {
+        return Err(TestkitError::Manifest {
+            field: "bootstrapAccounts.walletAddress",
+            detail: "address is not its nonce-zero native account".into(),
+        });
+    }
     Ok(Some(TestAccount {
         index: account.index,
-        native: false,
         signer,
         wallet_address: account.wallet_address.0,
         network_hash: Some(manifest.network_hash.to_network_hash()),

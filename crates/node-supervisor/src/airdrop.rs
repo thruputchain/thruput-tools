@@ -20,8 +20,8 @@ use groundhog_json_rpc_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_signing::{
-    BuildSignedDevWalletHogTransfer, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_signed_dev_wallet_hog_transfer, derive_dev_account_signer,
+    DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
+    derive_dev_account_signer, encode_signed_transaction_xdr, sign_transaction, transaction_hash,
 };
 use groundhog_tx_validation::NetworkConfigParams;
 use jsonrpsee::core::RpcResult;
@@ -38,8 +38,6 @@ const LOCAL_AIRDROP_RETRY_AFTER_SECONDS: u64 = 1;
 #[derive(Clone)]
 pub(crate) struct LocalAirdropContext {
     network_hash: groundhog_xdr::types::NetworkHash,
-    wallet_address: groundhog_xdr::types::ContractAddress,
-    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     signer: Arc<LocalSigner>,
     config: LocalAirdropConfig,
 }
@@ -65,15 +63,14 @@ impl LocalAirdropContext {
         if faucet.public_key.as_ref() != signer.verifying_key_bytes() {
             return Err("runtime manifest dev-0 public key does not match configuration".into());
         }
-        let wallet_entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .do_action_entrypoint_id()
-            .map_err(|error| format!("invalid runtime dev-wallet doAction entrypoint: {error}"))?;
+        let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
+        if faucet.wallet_address.0 != account.address() {
+            return Err(
+                "runtime manifest dev-0 address is not its nonce-zero native account".into(),
+            );
+        }
         Ok(Self {
             network_hash: manifest.network_hash.to_network_hash(),
-            wallet_address: faucet.wallet_address.0,
-            wallet_entrypoint,
             signer: Arc::new(signer),
             config: config.local_airdrop,
         })
@@ -104,10 +101,8 @@ impl LocalAirdropRpc {
         S: SubmitPlane + ChainPlane,
         R: ReadPlane,
     {
-        let builder = DevWalletAirdropBuilder {
+        let builder = NativeAirdropBuilder {
             network_hash: context.network_hash,
-            wallet_address: context.wallet_address,
-            wallet_entrypoint: context.wallet_entrypoint,
             signer: context.signer,
             next_nonce: AtomicU64::new(nonce_from_timestamp()),
             raw_amount: context.config.raw_amount,
@@ -474,43 +469,53 @@ trait AirdropTransactionBuilder: Send + Sync + 'static {
     ) -> Result<SignedAirdrop, RpcServerError>;
 }
 
-struct DevWalletAirdropBuilder {
+struct NativeAirdropBuilder {
     network_hash: groundhog_xdr::types::NetworkHash,
-    wallet_address: groundhog_xdr::types::ContractAddress,
-    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     signer: Arc<LocalSigner>,
     next_nonce: AtomicU64,
     raw_amount: u128,
 }
 
-impl AirdropTransactionBuilder for DevWalletAirdropBuilder {
+impl AirdropTransactionBuilder for NativeAirdropBuilder {
     fn build(
         &self,
         recipient: ContractAddress,
         block_expiry_height: i64,
     ) -> Result<SignedAirdrop, RpcServerError> {
-        let signed = build_signed_dev_wallet_hog_transfer(
-            &BuildSignedDevWalletHogTransfer {
-                wallet_address: self.wallet_address,
-                wallet_entrypoint: self.wallet_entrypoint,
-                recipient: recipient.0,
-                raw_amount: self.raw_amount,
-                gas_limit: DEFAULT_TX_GAS_LIMIT,
-                block_expiry_height,
-                nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
-                sign_params: SignTransactionParams::default(),
-                network_hash: self.network_hash.clone(),
-            },
-            self.signer.as_ref(),
-        )
-        .map_err(|error| {
+        let build = || {
+            let account =
+                PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0);
+            let calldata =
+                groundhog_signing::native_hog_transfer_calldata(&recipient.0, self.raw_amount)?;
+            let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+                groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+                    account: &account,
+                    target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+                    target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+                    target_calldata: &calldata,
+                    gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
+                    target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+                    block_expiry_height,
+                    nonce: self.next_nonce.fetch_add(1, Ordering::Relaxed),
+                },
+            )?;
+            let tx_hash = transaction_hash(&tx)?;
+            let signed = sign_transaction(
+                tx,
+                self.signer.as_ref(),
+                SignTransactionParams::default(),
+                &self.network_hash,
+            )?;
+            let bytes = encode_signed_transaction_xdr(&signed)?;
+            Ok::<_, groundhog_signing::SigningError>(SignedAirdrop {
+                bytes,
+                tx_hash: TxHash(Hex0x(tx_hash)),
+            })
+        };
+        build().map_err(|error| {
             RpcServerError::BackendUnavailable(format!(
                 "failed to construct local airdrop transaction: {error}"
             ))
-        })?;
-        Ok(SignedAirdrop {
-            bytes: signed.bytes,
-            tx_hash: TxHash(Hex0x(signed.tx_hash)),
         })
     }
 }
@@ -746,14 +751,12 @@ mod tests {
     }
 
     #[test]
-    fn dev_wallet_builder_binds_signatures_to_network_hash() {
+    fn native_builder_binds_signatures_to_network_hash() {
         let build = |network_byte| {
-            DevWalletAirdropBuilder {
+            NativeAirdropBuilder {
                 network_hash: groundhog_xdr::types::NetworkHash::from(
                     groundhog_xdr::types::SHA256Hash::from([network_byte; 32]),
                 ),
-                wallet_address: groundhog_xdr::types::ContractAddress::from([0x11; 32]),
-                wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID::from([0x22; 8]),
                 signer: Arc::new(LocalSigner::from_secret_key([0x33; 32])),
                 next_nonce: AtomicU64::new(7),
                 raw_amount: 100_000_000,
@@ -986,16 +989,16 @@ mod tests {
     }
 
     #[test]
-    fn local_context_rejects_malformed_wallet_entrypoint() {
+    fn local_context_rejects_non_native_faucet_address() {
         let config = NodeSupervisorConfig::default();
         let mut manifest = runtime_manifest(&config);
-        manifest.bootstrap.dev_wallet.do_action_entrypoint = "0x00".into();
+        manifest.bootstrap_accounts[0].wallet_address = Hex0x([0; 32].into());
 
         let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
             .err()
-            .expect("malformed wallet entrypoint must fail validation");
+            .expect("non-native faucet address must fail validation");
 
-        assert!(error.contains("invalid runtime dev-wallet doAction entrypoint"));
+        assert!(error.contains("address is not its nonce-zero native account"));
     }
 
     #[tokio::test]
@@ -1448,7 +1451,7 @@ mod tests {
     fn runtime_manifest(config: &NodeSupervisorConfig) -> RuntimeManifest {
         let signer = derive_dev_account_signer(&config.hogd_dev.dev_account_seed, 0);
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -1464,18 +1467,10 @@ mod tests {
                 "index": 0,
                 "role": "faucet",
                 "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
-                "walletAddress": format!("0x{}", "11".repeat(32)),
+                "walletAddress": format!("0x{}", hex::encode(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
                 "initialStorageTokens": "100000000",
             }],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": format!("0x{}", "51".repeat(32)),
-                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e",
-                },
                 "storageCostModel": {
                     "hash": format!("0x{}", "53".repeat(32)),
                     "baseDataItemCost": "12000",

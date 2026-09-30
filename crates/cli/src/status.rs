@@ -14,7 +14,7 @@ use crate::checks::{self, FindingLevel};
 use crate::{CliError, Print};
 
 /// Schema version of the `status --json` data payload.
-pub const STATUS_JSON_SCHEMA_VERSION: u32 = 2;
+pub const STATUS_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Run the `status` diagnostic command.
 pub fn run(
@@ -109,8 +109,8 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
             devnode_label(&report.environment.devnode),
         ),
         (
-            "Dev Wallet".into(),
-            dev_wallet_artifact_label(&report.environment.dev_wallet_artifact),
+            "Genesis Root".into(),
+            genesis_root_artifact_label(&report.environment.genesis_root_artifact),
         ),
         (
             "Global Registry".into(),
@@ -190,7 +190,7 @@ fn devnode_label(status: &checks::DevnodeStatus) -> String {
     }
 }
 
-fn dev_wallet_artifact_label(status: &checks::DevWalletArtifactStatus) -> String {
+fn genesis_root_artifact_label(status: &checks::GenesisRootArtifactStatus) -> String {
     match (&status.path, &status.sha256) {
         (Some(path), Some(sha256)) if status.valid => {
             let short_hash = sha256.get(..12).unwrap_or(sha256);

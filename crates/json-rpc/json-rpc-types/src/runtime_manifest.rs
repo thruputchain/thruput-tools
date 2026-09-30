@@ -6,10 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{ContractAddress, Ed25519PublicKey, NetworkHashHex, SHA256Hash};
-use groundhog_xdr::contract::ContractEntrypointID;
 
 /// Current runtime manifest schema version.
-pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// Runtime manifest family emitted by hog-devnode.
 pub const HOGD_DEV_RUNTIME_MANIFEST_KIND: &str = "hogd-dev-runtime";
@@ -48,7 +47,7 @@ pub struct RuntimeManifest {
     pub bootstrap_account_derivation: BootstrapAccountDerivation,
     /// Accounts present in genesis and funded by the producer.
     pub bootstrap_accounts: Vec<BootstrapAccount>,
-    /// Deployed bootstrap artifacts and cost model metadata.
+    /// Storage cost model used at genesis.
     pub bootstrap: RuntimeManifestBootstrap,
 }
 
@@ -126,8 +125,7 @@ pub struct RuntimeManifestProducer {
 pub struct RuntimeManifestEndpoints {
     /// Coordinator-facing scheduler service used by local orchestration.
     pub scheduler: SocketAddr,
-    /// Public gateway-facing scheduler service. Absent only in legacy schema-2
-    /// manifests produced before the scheduler gateway was advertised.
+    /// Public gateway-facing scheduler service, omitted when unavailable.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -180,7 +178,7 @@ pub struct BootstrapAccount {
     pub role: String,
     /// Public key authorized for the wallet.
     pub public_key: Ed25519PublicKey,
-    /// Wallet contract deployed and funded for this account.
+    /// Nonce-zero native pubkey account funded at genesis.
     pub wallet_address: ContractAddress,
     /// Initial storage-token balance as a decimal string.
     pub initial_storage_tokens: String,
@@ -191,98 +189,8 @@ pub struct BootstrapAccount {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestBootstrap {
-    /// Wallet artifact installed during bootstrap.
-    pub dev_wallet: RuntimeManifestDevWallet,
     /// Concrete storage costs used at genesis.
     pub storage_cost_model: RuntimeManifestStorageCostModel,
-}
-
-/// Dev-wallet bootstrap artifact metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct RuntimeManifestDevWallet {
-    /// Hash of the wallet artifact bytes.
-    pub content_hash: SHA256Hash,
-    /// Hash of the code installed in genesis.
-    pub deployed_code_hash: SHA256Hash,
-    /// Human-readable artifact location hint from the producer.
-    pub artifact_hint: String,
-    /// Entrypoint used to deploy the wallet.
-    pub deploy_entrypoint: String,
-    /// Entrypoint used to sponsor creation of a new initialized wallet.
-    pub create_wallet_entrypoint: String,
-    /// Entrypoint used to submit wallet actions.
-    pub do_action_entrypoint: String,
-}
-
-impl RuntimeManifestDevWallet {
-    /// Parse the advertised dev-wallet `deploy` entrypoint into its XDR ID.
-    pub fn deploy_entrypoint_id(
-        &self,
-    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
-        parse_entrypoint_id(
-            "bootstrap.devWallet.deployEntrypoint",
-            &self.deploy_entrypoint,
-        )
-    }
-
-    /// Parse the advertised dev-wallet `doAction` entrypoint into its XDR ID.
-    pub fn do_action_entrypoint_id(
-        &self,
-    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
-        parse_entrypoint_id(
-            "bootstrap.devWallet.doActionEntrypoint",
-            &self.do_action_entrypoint,
-        )
-    }
-
-    /// Parse the advertised dev-wallet `createWallet` entrypoint into its XDR ID.
-    pub fn create_wallet_entrypoint_id(
-        &self,
-    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
-        parse_entrypoint_id(
-            "bootstrap.devWallet.createWalletEntrypoint",
-            &self.create_wallet_entrypoint,
-        )
-    }
-}
-
-fn parse_entrypoint_id(
-    field: &'static str,
-    value: &str,
-) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
-    let bytes = crate::hex::decode_fixed_hex::<8>(value).map_err(|error| match error {
-        crate::hex::FixedHexError::InvalidHex(source) => {
-            RuntimeManifestEntrypointError::InvalidHex { field, source }
-        }
-        crate::hex::FixedHexError::InvalidLength { len, .. } => {
-            RuntimeManifestEntrypointError::InvalidLength { field, len }
-        }
-    })?;
-    Ok(ContractEntrypointID::from(bytes))
-}
-
-/// Errors returned while parsing entrypoint IDs advertised by a runtime manifest.
-#[derive(Debug, thiserror::Error)]
-pub enum RuntimeManifestEntrypointError {
-    /// The manifest field was not valid hex.
-    #[error("{field} is not valid hex: {source}")]
-    InvalidHex {
-        /// JSON field path being parsed.
-        field: &'static str,
-        /// Hex decoder failure.
-        #[source]
-        source: hex::FromHexError,
-    },
-    /// The manifest field decoded to the wrong byte length.
-    #[error("{field} must be 8 bytes, got {len}")]
-    InvalidLength {
-        /// JSON field path being parsed.
-        field: &'static str,
-        /// Decoded byte length.
-        len: usize,
-    },
 }
 
 /// Concrete storage cost model used at genesis.
@@ -329,9 +237,22 @@ mod tests {
     use super::{
         BOOTSTRAP_ACCOUNT_ROLE_FAUCET, BootstrapAccount, BootstrapAccountDerivation,
         RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest, RuntimeManifestBootstrap,
-        RuntimeManifestChainState, RuntimeManifestDevWallet, RuntimeManifestEndpoints,
-        RuntimeManifestProducer, RuntimeManifestStorageCostModel,
+        RuntimeManifestChainState, RuntimeManifestEndpoints, RuntimeManifestProducer,
+        RuntimeManifestStorageCostModel,
     };
+
+    #[test]
+    fn old_runtime_schema_is_rejected_before_native_account_interpretation() {
+        let mut value = serde_json::to_value(full_manifest()).unwrap();
+        value["schemaVersion"] = serde_json::json!(2);
+        assert!(matches!(
+            super::parse_runtime_manifest(&serde_json::to_vec(&value).unwrap()),
+            Err(super::RuntimeManifestParseError::UnsupportedSchema {
+                expected: 3,
+                actual: 2
+            })
+        ));
+    }
 
     #[test]
     fn runtime_manifest_serializes_expected_shape() {
@@ -340,7 +261,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 2,
+                "schemaVersion": 3,
                 "kind": "hogd-dev-runtime",
                 "chainState": "fresh",
                 "networkHash": "4242424242424242424242424242424242424242424242424242424242424242",
@@ -369,14 +290,6 @@ mod tests {
                     "initialStorageTokens": "10000000000000",
                 }],
                 "bootstrap": {
-                    "devWallet": {
-                        "contentHash": prefixed_hex(0x51),
-                        "deployedCodeHash": prefixed_hex(0x52),
-                        "artifactHint": "./dev_wallet.rv32a",
-                        "deployEntrypoint": "0xadac498222148e4f",
-                        "createWalletEntrypoint": "0x6372656174655761",
-                        "doActionEntrypoint": "0x646f416374696f6e",
-                    },
                     "storageCostModel": {
                         "hash": prefixed_hex(0x53),
                         "baseDataItemCost": "12000",
@@ -444,7 +357,7 @@ mod tests {
         }
 
         let manifest = serde_json::from_value::<RuntimeManifest>(value)
-            .expect("schema 2 compatibility should allow a missing additive field");
+            .expect("schema 3 should allow a missing additive field");
 
         assert_eq!(manifest.chain_state, None);
         assert_eq!(manifest.endpoints.scheduler_gateway, None);
@@ -497,14 +410,6 @@ mod tests {
                 initial_storage_tokens: "10000000000000".into(),
             }],
             bootstrap: RuntimeManifestBootstrap {
-                dev_wallet: RuntimeManifestDevWallet {
-                    content_hash: hash(0x51),
-                    deployed_code_hash: hash(0x52),
-                    artifact_hint: "./dev_wallet.rv32a".into(),
-                    deploy_entrypoint: "0xadac498222148e4f".into(),
-                    create_wallet_entrypoint: "0x6372656174655761".into(),
-                    do_action_entrypoint: "0x646f416374696f6e".into(),
-                },
                 storage_cost_model: RuntimeManifestStorageCostModel {
                     hash: hash(0x53),
                     base_data_item_cost: "12000".into(),
@@ -565,45 +470,6 @@ mod tests {
         .expect("bug: additive manifest fields should be ignored");
 
         assert_eq!(account.index, 0);
-    }
-
-    #[test]
-    fn dev_wallet_do_action_entrypoint_parses_from_manifest() {
-        let manifest = full_manifest();
-        let entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .do_action_entrypoint_id()
-            .expect("entrypoint should parse");
-
-        assert_eq!(entrypoint.as_ref(), b"doAction");
-    }
-
-    #[test]
-    fn dev_wallet_create_wallet_entrypoint_parses_from_manifest() {
-        let manifest = full_manifest();
-        let entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .create_wallet_entrypoint_id()
-            .expect("entrypoint should parse");
-
-        assert_eq!(entrypoint.as_ref(), b"createWa");
-    }
-
-    #[test]
-    fn dev_wallet_deploy_entrypoint_parses_from_manifest() {
-        let manifest = full_manifest();
-        let entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .deploy_entrypoint_id()
-            .expect("entrypoint should parse");
-
-        assert_eq!(
-            entrypoint.as_ref(),
-            [0xad, 0xac, 0x49, 0x82, 0x22, 0x14, 0x8e, 0x4f]
-        );
     }
 
     fn addr(value: &str) -> SocketAddr {

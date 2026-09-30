@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn validate_report_uses_json_envelope_and_schema_version() {
         let manifest: SimulationManifest = serde_json::from_value(serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "local-smoke",
             "seed": "seed",

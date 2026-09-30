@@ -171,7 +171,7 @@ async fn prepare_inner(
             )
         })?;
         let manifest = manifest.ok_or(BenchError::MissingRuntimeManifest)?;
-        let (accounts, entrypoint) =
+        let accounts =
             transaction_inputs_for_method("sendRawTransaction", Some(manifest), cli.accounts)?;
         let first_nonce = match cli.seed_nonce_start {
             Some(value) => value,
@@ -187,7 +187,7 @@ async fn prepare_inner(
         let network_hash = manifest.network_hash.to_network_hash();
         *progress = format!("generating {count} seed transactions");
         let batch = tokio::task::spawn_blocking(move || {
-            generate_tx_batch(count, &accounts, entrypoint, &network_hash, first_nonce)
+            generate_tx_batch(count, &accounts, &network_hash, first_nonce)
         })
         .await
         .map_err(|source| BenchError::WorkerJoin { source })??;
@@ -321,7 +321,7 @@ async fn prepare_inner(
             seed_nonce_start: nonce_start,
             fixture: cli
                 .seed_count
-                .map(|_| "dev-wallet-self-do-action-empty-v1".into()),
+                .map(|_| "native-wallet-hog-balance-v1".into()),
         },
         records,
     })

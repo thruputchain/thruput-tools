@@ -367,7 +367,7 @@ fn resource_sample(simulation_time_ms: u64, rss_bytes: u64) -> ResourceSamplePoi
 
 fn manifest_with_assertions(assertions: &serde_json::Value) -> SimulationManifest {
     serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "assertion-test",
         "seed": "seed",

@@ -3,23 +3,21 @@ use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_client::poll_receipt;
 use groundhog_json_rpc_types::{
-    hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
-    runtime_manifest::RuntimeManifest,
     transaction::TxHash,
 };
 use groundhog_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
-    derive_deploy_address, sign_and_encode_transaction_hex,
+    DEFAULT_TX_GAS_LIMIT, SignTransactionParams, derive_deploy_address,
+    sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::{
-    contract::{Contract, ContractBlob, ContractEntrypointID},
+    contract::{Contract, ContractBlob},
     types::{ContractAddress, SHA256Hash},
 };
 use sha2::{Digest, Sha256};
-use xdr_common::{BytesM, VecM};
+use xdr_common::BytesM;
 
-use crate::actor::{ActorError, ActorState, WalletKind};
+use crate::actor::{ActorError, ActorState};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
 use crate::executor::DEFAULT_RECEIPT_DRAIN_TIMEOUT;
@@ -121,7 +119,6 @@ pub struct PreparedEventQuery {
 pub async fn deploy_manifest_contracts<C>(
     client: C,
     manifest: &SimulationManifest,
-    runtime_manifest: &RuntimeManifest,
     scenario_path: &Path,
     contract_artifact_root: Option<&Path>,
     actor_states: &mut [ActorState],
@@ -144,19 +141,6 @@ where
     let actor = actor_states.get_mut(0).ok_or(SimError::Executor(
         "contract deploy requires actor 0".into(),
     ))?;
-    let deploy_entrypoint = if actor.wallet_kind == WalletKind::NativePubkey {
-        groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT
-    } else {
-        runtime_manifest
-        .bootstrap
-        .dev_wallet
-        .deploy_entrypoint_id()
-        .map_err(|source| {
-            SimError::Executor(format!(
-                "failed to parse runtime manifest bootstrap.devWallet.deployEntrypoint: {source}"
-            ))
-        })?
-    };
     let mut records = Vec::new();
     let mut deployed = BTreeMap::new();
     let mut failed = false;
@@ -172,10 +156,15 @@ where
                 collateral_raw: manifest
                     .accounts
                     .as_ref()
-                    .and_then(|a| a.deployment_collateral_raw.as_deref()),
+                    .and_then(|a| a.deployment_collateral_raw.as_deref())
+                    .or_else(|| {
+                        manifest
+                            .bootstrap
+                            .as_ref()
+                            .and_then(|b| b.deployment_collateral_raw.as_deref())
+                    }),
                 scenario_path,
                 contract_artifact_root,
-                deploy_entrypoint,
                 block_expiry_height,
             },
         )
@@ -250,7 +239,6 @@ where
     let prepared = match prepare_deploy(
         &artifact_path,
         actor,
-        input.deploy_entrypoint,
         input.block_expiry_height,
         input.collateral_raw,
     ) {
@@ -264,13 +252,11 @@ where
     record.contract_hash = Some(prepared.contract_hash.clone());
     record.nonce = Some(prepared.tx_nonce.to_string());
     record.deploy_address_nonce = Some(prepared.deploy_address_nonce.clone());
-    if let Some(amount) = prepared.native_amount {
-        record.tx_hash = Some(json_string(&prepared.tx_hash, "deployment txHash")?);
-        record.collateral = Some(crate::result::NativeDeploymentCollateral {
-            recipient: format!("0x{}", hex::encode(prepared.predicted_address.as_ref())),
-            raw_amount: amount.to_string(),
-        });
-    }
+    record.tx_hash = Some(json_string(&prepared.tx_hash, "deployment txHash")?);
+    record.collateral = Some(crate::result::NativeDeploymentCollateral {
+        recipient: format!("0x{}", hex::encode(prepared.predicted_address.as_ref())),
+        raw_amount: prepared.deployment_amount.to_string(),
+    });
     event_writer
         .write(&ResultEvent::ContractDeployStarted {
             event: record.clone(),
@@ -306,7 +292,6 @@ struct DeployOneContractInput<'a> {
     artifact: &'a ContractArtifactSpec,
     scenario_path: &'a Path,
     contract_artifact_root: Option<&'a Path>,
-    deploy_entrypoint: ContractEntrypointID,
     block_expiry_height: i64,
 }
 
@@ -359,7 +344,7 @@ fn resolve_artifact_path(
 
 struct PreparedDeploy {
     tx_hash: TxHash,
-    native_amount: Option<u128>,
+    deployment_amount: u128,
     tx_hex: String,
     tx_nonce: u64,
     predicted_address: ContractAddress,
@@ -371,7 +356,6 @@ struct PreparedDeploy {
 fn prepare_deploy(
     artifact_path: &Path,
     actor: &ActorState,
-    deploy_entrypoint: ContractEntrypointID,
     block_expiry_height: i64,
     collateral_raw: Option<&str>,
 ) -> Result<PreparedDeploy, SimError> {
@@ -393,50 +377,27 @@ fn prepare_deploy(
     let predicted_address =
         derive_deploy_address(&actor.wallet_address, &deploy_address_nonce, &contract_hash)
             .map_err(|source| SimError::Executor(source.to_string()))?;
-    let native_amount = if actor.wallet_kind == WalletKind::NativePubkey {
-        Some(
-            collateral_raw
-                .ok_or_else(|| SimError::Executor("native deploy collateral is missing".into()))?
-                .parse::<u128>()
-                .map_err(|_| SimError::Executor("invalid native deploy collateral".into()))?,
-        )
-    } else {
-        None
-    };
-    let tx = if let Some(amount) = native_amount {
-        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-            actor.signer.verifying_key_bytes(),
-            0,
-        );
-        groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
-            groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
-                account: &account,
-                deployment_nonce: deploy_address_nonce,
-                code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
-                amount,
-                initializer: None,
-                gas_limit: DEFAULT_TX_GAS_LIMIT,
-                block_expiry_height,
-                nonce: tx_nonce,
-            },
-        )
-        .map_err(|error| SimError::Executor(error.to_string()))?
-    } else {
-        let calldata =
-            xdrs::cxs::encode(&(&deploy_address_nonce, &contract_hash)).map_err(|error| {
-                SimError::Executor(format!("failed to encode deploy calldata: {error}"))
-            })?;
-        build_deploy_transaction(BuildDeployTransaction {
-            invoked_address: actor.wallet_address,
-            entrypoint: deploy_entrypoint,
-            calldata,
+    let amount = collateral_raw
+        .ok_or_else(|| SimError::Executor("native deploy collateral is missing".into()))?
+        .parse::<u128>()
+        .map_err(|_| SimError::Executor("invalid native deploy collateral".into()))?;
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        actor.signer.verifying_key_bytes(),
+        0,
+    );
+    let tx = groundhog_signing::default_wallet::build_default_wallet_deploy_transaction(
+        groundhog_signing::default_wallet::BuildDefaultWalletDeployTransaction {
+            account: &account,
+            deployment_nonce: deploy_address_nonce,
+            code: groundhog_signing::default_wallet::DeploymentCode::Attached(contract),
+            amount,
+            initializer: None,
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height,
             nonce: tx_nonce,
-            contracts_to_deploy: VecM(vec![contract]),
-            auth_claim: actor.auth_claim(),
-        })
-    };
+        },
+    )
+    .map_err(|error| SimError::Executor(error.to_string()))?;
     let tx_hash = TxHash(
         groundhog_signing::transaction_hash(&tx)
             .map_err(|error| SimError::Executor(error.to_string()))?
@@ -452,7 +413,7 @@ fn prepare_deploy(
 
     Ok(PreparedDeploy {
         tx_hash,
-        native_amount,
+        deployment_amount: amount,
         tx_hex,
         tx_nonce,
         predicted_address,
@@ -509,14 +470,13 @@ async fn submit_and_resolve_deploy<C>(
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
-    let native = prepared.native_amount.is_some();
     let mut progress = DeployProgress {
-        tx_hash: native.then(|| format!("0x{}", hex::encode(prepared.tx_hash.0.0.as_ref()))),
+        tx_hash: Some(format!("0x{}", hex::encode(prepared.tx_hash.0.0.as_ref()))),
         height: None,
         address: None,
         address_source: None,
     };
-    if native && let Err(error) = actor.consume_setup_nonce() {
+    if let Err(error) = actor.consume_setup_nonce() {
         return DeployAttempt {
             progress,
             result: Err(error.into()),
@@ -531,7 +491,7 @@ where
             };
         }
     };
-    if native && tx_hash != prepared.tx_hash {
+    if tx_hash != prepared.tx_hash {
         return DeployAttempt {
             progress,
             result: Err(SimError::Executor(format!(
@@ -540,12 +500,6 @@ where
                 hex::encode(prepared.tx_hash.0.0.as_ref())
             ))
             .into()),
-        };
-    }
-    if !native && let Err(error) = actor.consume_setup_nonce() {
-        return DeployAttempt {
-            progress,
-            result: Err(error.into()),
         };
     }
     progress.tx_hash = match json_string(&tx_hash, "txHash") {
@@ -575,7 +529,7 @@ where
         }
     };
     let result = resolve_deploy_receipt(
-        native.then_some(prepared.tx_hash),
+        prepared.tx_hash,
         &prepared.predicted_address,
         &receipt,
         &mut progress,
@@ -584,12 +538,12 @@ where
 }
 
 fn resolve_deploy_receipt(
-    expected_hash: Option<TxHash>,
+    expected_hash: TxHash,
     predicted_address: &ContractAddress,
     receipt: &TransactionReceipt,
     progress: &mut DeployProgress,
 ) -> Result<(), DeployAttemptError> {
-    if expected_hash.is_some_and(|hash| receipt.tx_hash != hash) {
+    if receipt.tx_hash != expected_hash {
         return Err(SimError::Executor("native deployment receipt hash mismatch".into()).into());
     }
     progress.height = Some(*receipt.height);
@@ -598,44 +552,19 @@ fn resolve_deploy_receipt(
             status: exec_status_name(&receipt.status),
         });
     }
-    if expected_hash.is_some()
-        && receipt
-            .return_data
-            .as_ref()
-            .is_none_or(|data| data.0.as_slice() != predicted_address.as_ref())
+    if receipt
+        .return_data
+        .as_ref()
+        .is_none_or(|data| data.0.as_slice() != predicted_address.as_ref())
     {
         return Err(SimError::Executor(
             "native deployment did not return the exact predicted address".into(),
         )
         .into());
     }
-    let (address, address_source) =
-        resolve_deployed_address(receipt.return_data.as_ref(), predicted_address)?;
-    progress.address = Some(address);
-    progress.address_source = Some(address_source);
+    progress.address = Some(format!("0x{}", hex::encode(predicted_address.as_ref())));
+    progress.address_source = Some(DeployAddressSource::Receipt);
     Ok(())
-}
-
-fn resolve_deployed_address(
-    return_data: Option<&HexBytes>,
-    predicted_address: &ContractAddress,
-) -> Result<(String, DeployAddressSource), SimError> {
-    if let Some(return_data) = return_data {
-        if return_data.0.len() != 32 {
-            return Err(SimError::Executor(format!(
-                "deploy receipt return_data had {} bytes, expected 32-byte contract address",
-                return_data.0.len()
-            )));
-        }
-        return Ok((
-            format!("0x{}", hex::encode(&return_data.0)),
-            DeployAddressSource::Receipt,
-        ));
-    }
-    Ok((
-        format!("0x{}", hex::encode(predicted_address.as_ref())),
-        DeployAddressSource::Derived,
-    ))
 }
 
 fn prepare_view_calls(
@@ -820,12 +749,12 @@ mod tests {
     use groundhog_json_rpc_types::{
         BlockHeight,
         block::ChainTip,
-        hex::Hex0x,
+        hex::{Hex0x, HexBytes},
         receipt::TransactionReceipt,
-        runtime_manifest::RuntimeManifest,
         view::{ViewRequest, ViewResponse},
     };
     use groundhog_signing::derive_dev_account_signer;
+    use groundhog_xdr::contract::ContractEntrypointID;
     use groundhog_xdr::transaction::SignedTransaction;
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -846,7 +775,6 @@ mod tests {
 
     #[derive(Clone)]
     struct DeployClient {
-        tx_hash: TxHash,
         receipt: Option<TransactionReceipt>,
         submitted: Arc<Mutex<Vec<String>>>,
         tip_height: i64,
@@ -870,8 +798,13 @@ mod tests {
             tx_hex: String,
         ) -> impl Future<Output = Result<TxHash, SimRpcError>> + Send {
             let submitted = self.submitted.clone();
-            let tx_hash = self.tx_hash;
             async move {
+                let signed: SignedTransaction =
+                    xdrs::txs::decode(&hex::decode(tx_hex.trim_start_matches("0x")).unwrap())
+                        .unwrap();
+                let tx_hash = TxHash(Hex0x(
+                    groundhog_signing::transaction_hash(&signed.tx).unwrap(),
+                ));
                 submitted
                     .lock()
                     .expect("submitted list should lock")
@@ -883,10 +816,36 @@ mod tests {
         #[allow(clippy::manual_async_fn)]
         fn transaction_receipt(
             &self,
-            _tx_hash: TxHash,
+            tx_hash: TxHash,
         ) -> impl Future<Output = Result<Option<TransactionReceipt>, SimRpcError>> + Send {
-            let receipt = self.receipt.clone();
-            async move { Ok(receipt) }
+            let mut receipt = self.receipt.clone();
+            let submitted = self.submitted.clone();
+            async move {
+                if let Some(receipt) = &mut receipt {
+                    receipt.tx_hash = tx_hash;
+                    if matches!(receipt.status, ExecStatus::Ok) {
+                        let submitted = submitted.lock().unwrap();
+                        let signed: SignedTransaction = xdrs::txs::decode(
+                            &hex::decode(submitted.last().unwrap().trim_start_matches("0x"))
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        let (nonce, hash, _, _): NativeDeployCalldata =
+                            xdrs::cxs::decode(&signed.tx.invocation.calldata).unwrap();
+                        receipt.return_data = Some(HexBytes(
+                            derive_deploy_address(
+                                &signed.tx.invocation.invoked_address,
+                                &nonce,
+                                &hash,
+                            )
+                            .unwrap()
+                            .as_ref()
+                            .to_vec(),
+                        ));
+                    }
+                }
+                Ok(receipt)
+            }
         }
 
         #[allow(clippy::manual_async_fn)]
@@ -939,13 +898,11 @@ mod tests {
 
         let setup = deploy_manifest_contracts(
             DeployClient {
-                tx_hash,
                 receipt: Some(receipt),
                 submitted: submitted.clone(),
                 tip_height: 15_000_000,
             },
             &manifest,
-            &runtime_manifest(),
             Path::new("/repo/examples/sim/demo.json"),
             None,
             &mut actors,
@@ -962,8 +919,12 @@ mod tests {
         );
         let record = &setup.records[0];
         assert_eq!(record.status, ContractDeploymentStatus::Completed);
-        assert_eq!(record.tx_hash.as_deref(), Some(prefixed_hex(0x5a).as_str()));
-        assert_eq!(record.address.as_deref(), Some(prefixed_hex(0x77).as_str()));
+        assert!(record.tx_hash.is_some());
+        let address = parse_contract_address(record.address.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            record.collateral.as_ref().unwrap().recipient,
+            record.address.as_ref().unwrap().as_str()
+        );
         assert_eq!(record.address_source, Some(DeployAddressSource::Receipt));
         assert_eq!(record.height, Some(42));
         assert_eq!(setup.view_calls.len(), 1);
@@ -973,24 +934,15 @@ mod tests {
         );
         assert_eq!(setup.storage_reads.len(), 1);
         assert_eq!(setup.storage_reads[0].name, "fib-zero-key");
-        assert_eq!(
-            setup.storage_reads[0].contract,
-            Hex0x(ContractAddress::from([0x77; 32])).0
-        );
+        assert_eq!(setup.storage_reads[0].contract, address);
         assert_eq!(setup.storage_reads[0].key, vec![0; 32]);
         assert_eq!(setup.event_queries.len(), 1);
         assert_eq!(setup.event_queries[0].name, "fib-events");
-        assert_eq!(
-            setup.event_queries[0].contract,
-            Hex0x(ContractAddress::from([0x77; 32])).0
-        );
+        assert_eq!(setup.event_queries[0].contract, address);
         assert_eq!(setup.event_queries[0].cursor, Vec::<u8>::new());
         assert_eq!(setup.read_after_write.len(), 1);
         assert_eq!(setup.read_after_write[0].name, "counter-roundtrip");
-        assert_eq!(
-            setup.read_after_write[0].contract,
-            Hex0x(ContractAddress::from([0x77; 32])).0
-        );
+        assert_eq!(setup.read_after_write[0].contract, address);
         assert_eq!(
             setup.read_after_write[0].write_entrypoint,
             vec![0xb3, 0x04, 0xd6, 0xb5, 0xe0, 0x57, 0xd0, 0xf6]
@@ -998,10 +950,7 @@ mod tests {
         assert_eq!(setup.read_after_write[0].read_entrypoint, vec![0xdf; 8]);
         assert_eq!(setup.contract_calls.len(), 1);
         assert_eq!(setup.contract_calls[0].name, "events-store-value");
-        assert_eq!(
-            setup.contract_calls[0].contract,
-            ContractAddress::from([0x77; 32])
-        );
+        assert_eq!(setup.contract_calls[0].contract, address);
         assert_eq!(setup.contract_calls[0].entrypoint, vec![0x11; 8]);
         assert_eq!(setup.contract_calls[0].calldata, vec![0x2a, 0x64]);
     }
@@ -1028,13 +977,11 @@ mod tests {
 
         let setup = deploy_manifest_contracts(
             DeployClient {
-                tx_hash,
                 receipt: Some(receipt),
                 submitted: submitted.clone(),
                 tip_height: 15_000_000,
             },
             &manifest,
-            &runtime_manifest(),
             Path::new("/repo/examples/sim/demo.json"),
             None,
             &mut actors,
@@ -1085,13 +1032,11 @@ mod tests {
 
         let setup = deploy_manifest_contracts(
             DeployClient {
-                tx_hash,
                 receipt: Some(receipt),
                 submitted: Arc::new(Mutex::new(Vec::new())),
                 tip_height: 10,
             },
             &manifest,
-            &runtime_manifest(),
             Path::new("/repo/examples/sim/demo.json"),
             None,
             &mut actors,
@@ -1104,7 +1049,7 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 1);
         let record = &setup.records[0];
         assert_eq!(record.status, ContractDeploymentStatus::Failed);
-        assert_eq!(record.tx_hash.as_deref(), Some(prefixed_hex(0x6b).as_str()));
+        assert!(record.tx_hash.is_some());
         assert_eq!(record.height, Some(42));
         assert!(record.error.as_deref().is_some_and(|error| {
             error.contains("contract deploy receipt status deterministic-error")
@@ -1230,7 +1175,6 @@ mod tests {
             let setup = deploy_manifest_contracts(
                 client,
                 &manifest,
-                &runtime_manifest(),
                 Path::new("scenario.json"),
                 None,
                 &mut actors,
@@ -1288,7 +1232,6 @@ mod tests {
             let setup = deploy_manifest_contracts(
                 client,
                 &manifest,
-                &runtime_manifest(),
                 Path::new("/tmp/scenario.json"),
                 None,
                 &mut actors,
@@ -1340,10 +1283,9 @@ mod tests {
         let bytes = b"rv32 artifact bytes".to_vec();
         std::fs::write(rv32.path(), &bytes).expect("rv32 fixture should write");
         let actors = actor_states();
-        let deploy_entrypoint =
-            ContractEntrypointID::from([0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]);
+        let deploy_entrypoint = groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT;
 
-        let prepared = prepare_deploy(rv32.path(), &actors[0], deploy_entrypoint, 42, None)
+        let prepared = prepare_deploy(rv32.path(), &actors[0], 42, Some("10000000"))
             .expect("rv32 deploy should prepare");
         let tx_bytes =
             hex::decode(prepared.tx_hex.trim_start_matches("0x")).expect("signed tx should be hex");
@@ -1365,52 +1307,6 @@ mod tests {
         assert_eq!(signed_tx.tx.invocation.entrypoint, deploy_entrypoint);
     }
 
-    fn runtime_manifest() -> RuntimeManifest {
-        serde_json::from_value(json!({
-            "schemaVersion": 2,
-            "kind": "hosted-devnet-runtime",
-            "networkHash": "11".repeat(32),
-            "protocol": "hogp/test00000000000",
-            "producer": {
-                "binary": "chuckd",
-                "version": "0.1.0"
-            },
-            "endpoints": {
-                "scheduler": "127.0.0.1:1000",
-                "indexer": "127.0.0.1:1001",
-                "dbGateway": "127.0.0.1:1002",
-                "viewGateway": "127.0.0.1:1003"
-            },
-            "bootstrapAccountDerivation": {
-                "scheme": crate::runtime::SUPPORTED_DERIVATION_SCHEME,
-                "seed": "seed"
-            },
-            "bootstrapAccounts": [],
-            "bootstrap": {
-                "devWallet": {
-                    "contentHash": prefixed_hex(0x33),
-                    "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "dev_wallet.rv32a",
-                    "deployEntrypoint": "0xf969542572bd6860",
-                    "createWalletEntrypoint": "0x78b187d37f222827",
-                    "doActionEntrypoint": "0xa0fff94c64fbaf3c"
-                },
-                "storageCostModel": {
-                    "hash": prefixed_hex(0x55),
-                    "baseDataItemCost": "1",
-                    "bytestringCostPerByte": "1",
-                    "baseContractDeploymentCost": "1",
-                    "contractDeploymentCostPerByte": "1",
-                    "authPerKeyCost": "1",
-                    "rcqCostPerEntry": "1",
-                    "replayCacheCostPerEntry": "1",
-                    "balanceCost": "1"
-                }
-            }
-        }))
-        .expect("runtime manifest fixture should parse")
-    }
-
     fn manifest(artifact_path: &Path) -> SimulationManifest {
         SimulationManifest {
             schema_version: crate::manifest::SIMULATION_SCHEMA_VERSION,
@@ -1428,7 +1324,7 @@ mod tests {
                 max_rpc_client_concurrency: None,
             },
             client: None,
-            bootstrap: None,
+            bootstrap: Some(serde_json::from_value(json!({"accounts":1,"accountSeed":"seed","initialStorageTokens":"1000000000","storageCostProfile":"hog-devnode-default","deploymentCollateralRaw":"10000000"})).unwrap()),
             accounts: None,
             load_shape: vec![LoadPhase {
                 duration: crate::manifest::DurationSpec("1s".into()),
@@ -1514,7 +1410,11 @@ mod tests {
             SimAccount {
                 index: 0,
                 signer: derive_dev_account_signer("contract-test-seed", 0),
-                wallet_address: Hex0x(ContractAddress::from([0x99; 32])).0,
+                wallet_address: groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                    derive_dev_account_signer("contract-test-seed", 0).verifying_key_bytes(),
+                    0,
+                )
+                .address(),
                 network_hash: groundhog_xdr::types::NetworkHash::new(
                     groundhog_xdr::types::SHA256Hash::new([0x5a; 32]),
                 ),
@@ -1537,9 +1437,5 @@ mod tests {
             abort_data: None,
             gas_used: 1_500,
         }
-    }
-
-    fn prefixed_hex(byte: u8) -> String {
-        format!("0x{}", hex::encode([byte; 32]))
     }
 }

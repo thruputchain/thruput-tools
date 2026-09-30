@@ -130,6 +130,7 @@ async fn loading_defers_entrypoint_resolution_until_contextual_validation() {
         "weight": 1
     }]))
     .expect("workload should parse");
+    manifest.bootstrap = Some(serde_json::from_value(json!({"accounts":1,"accountSeed":"seed","initialStorageTokens":"1000000000","storageCostProfile":"hog-devnode-default","deploymentCollateralRaw":"10000000"})).unwrap());
     manifest.contract_artifacts = serde_json::from_value(json!([{
         "name": "counter",
         "artifact": {"kind": "rv32", "path": "counter.rv32a"}
@@ -231,7 +232,7 @@ fn simulation_manifest(
     nonce_namespace: u32,
 ) -> SimulationManifest {
     serde_json::from_value(json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "config-hash-test",
         "seed": "seed-v1",

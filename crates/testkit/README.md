@@ -29,8 +29,7 @@ scenario.stop().await?;
 ```
 
 Native deployment uses `DefaultWallet.deploy(nonce, contract_hash, amount, initializer)`.
-Use a supporting runtime (hogd 0.1.29-rc.2 or later); older runtimes cannot execute
-this deployment ABI.
+Use a native bootstrap runtime emitting schema-3 manifests.
 
 Every deploy helper takes `DeployOptions`. Amounts are exact raw HOG units,
 including explicit zero. An optional `WalletInitCall` supplies an entrypoint, gas
@@ -47,8 +46,8 @@ A deployment is accepted only after its successful receipt matches the original
 hash and predicted address. Changing a retained attempt's funding or initializer
 requires resolving that attempt first.
 
-`legacy_bootstrap_accounts()` selects the manifest's existing dev-N addresses for
-legacy call tests. It cannot deploy. Ordinary native accounts use the internal
+`bootstrap_accounts()` selects the manifest's funded native dev-N accounts and
+supports the same calls and deployments as scenario-derived accounts. Ordinary native accounts use the internal
 bootstrap faucet only when `fund` or `submit_fund` is explicitly called.
 
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,

@@ -719,6 +719,21 @@ fn positive_raw(raw: &str) -> bool {
         && raw.parse::<u128>().is_ok_and(|value| value > 0)
 }
 fn validate_native_accounts(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if manifest.accounts.is_none() {
+        let raw = manifest
+            .bootstrap
+            .as_ref()
+            .and_then(|b| b.deployment_collateral_raw.as_deref());
+        if raw.is_some_and(|value| !positive_raw(value)) {
+            return Err(ValidationError::NativeAccounts {
+                reason: "bootstrap.deploymentCollateralRaw must be a positive u128 decimal".into(),
+            });
+        }
+        if !manifest.contract_artifacts.is_empty() && raw.is_none() {
+            return Err(ValidationError::NativeAccounts { reason: "bootstrap contract deployment requires explicit bootstrap.deploymentCollateralRaw".into() });
+        }
+    }
+
     if let Some(accounts) = &manifest.accounts {
         if accounts.seed.trim().is_empty() || accounts.seed.len() > 1024 {
             return Err(ValidationError::NativeAccounts {
@@ -742,11 +757,11 @@ fn validate_native_accounts(manifest: &SimulationManifest) -> Result<(), Validat
         }
         if actor_provisioning_enabled(manifest) {
             return Err(ValidationError::NativeAccounts {
-                reason: "native accounts cannot use legacy bootstrap.actorProvisioning".into(),
+                reason: "explicit accounts cannot use bootstrap.actorProvisioning".into(),
             });
         }
         if manifest.target.provider != TargetProviderKind::Existing {
-            return Err(ValidationError::NativeAccounts { reason: "native accounts currently require provider existing; local bootstrap scenarios retain their wallet adapter".into() });
+            return Err(ValidationError::NativeAccounts { reason: "native accounts currently require provider existing; local scenarios use native bootstrap accounts".into() });
         }
         if manifest.load_shape.iter().any(|phase| phase.users > 1024) {
             return Err(ValidationError::NativeAccounts {
@@ -879,7 +894,9 @@ pub(crate) fn required_bootstrap_accounts(manifest: &SimulationManifest) -> u32 
 pub enum ValidationError {
     #[error("invalid native accounts: {reason}")]
     NativeAccounts { reason: String },
-    #[error("unsupported simulation schemaVersion {actual}")]
+    #[error(
+        "unsupported simulation schemaVersion {actual}; update the scenario to schema 3 native bootstrap accounts, remove devWalletProfile/artifact fields and set explicit deploymentCollateralRaw for contract deployments"
+    )]
     UnsupportedSimulationSchema { actual: u32 },
     #[error("invalid simulation kind `{actual}`")]
     InvalidSimulationKind { actual: String },
@@ -1088,6 +1105,42 @@ mod tests {
         EventQueryOrderSpec, EventQuerySpec, LoadPhase, WorkloadSpec,
     };
     use crate::target::TargetProviderSpec;
+
+    #[test]
+    fn old_schema_and_missing_bootstrap_deployment_amount_are_rejected() {
+        let mut manifest = basic_manifest();
+        manifest.schema_version = 2;
+        let error = validate_manifest(&manifest).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("update the scenario to schema 3")
+        );
+        manifest.schema_version = SIMULATION_SCHEMA_VERSION;
+        manifest.contract_artifacts.push(
+            serde_json::from_value(
+                json!({"name":"counter","artifact":{"kind":"rv32","path":"counter.rv32a"}}),
+            )
+            .unwrap(),
+        );
+        manifest
+            .bootstrap
+            .as_mut()
+            .unwrap()
+            .deployment_collateral_raw = None;
+        let error = validate_manifest(&manifest).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("bootstrap.deploymentCollateralRaw")
+        );
+        manifest
+            .bootstrap
+            .as_mut()
+            .unwrap()
+            .deployment_collateral_raw = Some("10000000".into());
+        validate_manifest(&manifest).unwrap();
+    }
 
     #[test]
     fn native_accounts_ignore_legacy_inventory_but_reject_unsafe_configuration() {
@@ -1959,15 +2012,13 @@ mod tests {
         let mut manifest = basic_manifest();
         manifest.load_shape[0].users = 2;
         manifest.bootstrap = Some(BootstrapSpec {
+            deployment_collateral_raw: None,
             accounts: 2,
             account_seed: "seed".into(),
             initial_storage_tokens: "1000000000".into(),
-            dev_wallet_profile: "hog-devnode-default".into(),
             storage_cost_profile: "default".into(),
             actor_provisioning: Some(ActorProvisioningSpec {
                 enabled: true,
-                dev_wallet_artifact: None,
-                dev_wallet_artifact_kind: None,
                 airdrop_hog: None,
             }),
         });
@@ -1986,15 +2037,13 @@ mod tests {
     fn allows_faucet_only_runtime_to_provision_first_workload_actor() {
         let mut manifest = basic_manifest();
         manifest.bootstrap = Some(BootstrapSpec {
+            deployment_collateral_raw: None,
             accounts: 1,
             account_seed: "seed".into(),
             initial_storage_tokens: "1000000000".into(),
-            dev_wallet_profile: "hog-devnode-default".into(),
             storage_cost_profile: "hogd-default".into(),
             actor_provisioning: Some(ActorProvisioningSpec {
                 enabled: true,
-                dev_wallet_artifact: None,
-                dev_wallet_artifact_kind: None,
                 airdrop_hog: None,
             }),
         });
@@ -2011,15 +2060,13 @@ mod tests {
         let mut manifest = basic_manifest();
         manifest.load_shape[0].users = 2;
         manifest.bootstrap = Some(BootstrapSpec {
+            deployment_collateral_raw: None,
             accounts: 1,
             account_seed: "seed".into(),
             initial_storage_tokens: "1000000000".into(),
-            dev_wallet_profile: "hog-devnode-default".into(),
             storage_cost_profile: "default".into(),
             actor_provisioning: Some(ActorProvisioningSpec {
                 enabled: true,
-                dev_wallet_artifact: None,
-                dev_wallet_artifact_kind: None,
                 airdrop_hog: None,
             }),
         });
@@ -2259,7 +2306,7 @@ mod tests {
                 max_rpc_client_concurrency: None,
             },
             client: None,
-            bootstrap: None,
+            bootstrap: Some(serde_json::from_value(json!({"accounts":1,"accountSeed":"seed","initialStorageTokens":"1000000000","storageCostProfile":"hog-devnode-default","deploymentCollateralRaw":"10000000"})).unwrap()),
             accounts: None,
             load_shape: vec![LoadPhase {
                 duration: DurationSpec("1s".into()),
@@ -2299,7 +2346,7 @@ mod tests {
         let signer = derive_dev_account_signer("seed", 0);
         let public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         serde_json::from_value(json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -2325,14 +2372,6 @@ mod tests {
                 "initialStorageTokens": "1000000000"
             }],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": prefixed_hex(0x33),
-                    "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
                 "storageCostModel": {
                     "hash": prefixed_hex(0x55),
                     "baseDataItemCost": "1",
