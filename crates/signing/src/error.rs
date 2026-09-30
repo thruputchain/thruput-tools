@@ -10,6 +10,9 @@ pub enum SigningError {
     /// The provided keypair bytes were invalid.
     #[error("invalid keypair bytes")]
     InvalidKeypair,
+    /// Signer does not authorize the prepared native account.
+    #[error("signer public key does not match the native account")]
+    SignerMismatch,
     /// Failed to encode an XDR value.
     #[error("xdr encode failed: {0}")]
     XdrEncode(String),
