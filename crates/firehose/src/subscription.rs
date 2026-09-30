@@ -133,6 +133,7 @@ struct Subscriber {
 #[derive(Debug)]
 struct State {
     tip: i64,
+    request_window: Option<i64>,
     next_id: u64,
     subscribers: BTreeMap<u64, Subscriber>,
     totals: Counters,
@@ -175,6 +176,7 @@ impl Hub {
             connections: Arc::new(AtomicUsize::new(0)),
             state: Arc::new(Mutex::new(State {
                 tip,
+                request_window: None,
                 next_id: 1,
                 subscribers: BTreeMap::new(),
                 totals: Counters::default(),
@@ -316,20 +318,21 @@ impl Hub {
 
     // Retention removes a prefix of immutable consecutive height files. Locate its
     // boundary within the admission window in O(log window) metadata probes, without
-    // enumerating the archive on every scrape. This observation never affects cursors.
-    fn realised_window(&self, tip: i64) -> std::io::Result<i64> {
+    // enumerating the archive. This observation never affects cursors.
+    async fn realised_window(&self, tip: i64) -> std::io::Result<i64> {
         if tip < 0 {
             return Ok(0);
         }
-        let present = |height| crate::store::record_path(&self.directory, height).try_exists();
-        if !present(tip)? {
+        let present =
+            |height| tokio::fs::try_exists(crate::store::record_path(&self.directory, height));
+        if !present(tip).await? {
             return Ok(0);
         }
         let mut low = tip.saturating_sub(self.config.request_window).max(0);
         let mut high = tip;
         while low < high {
             let mid = low + (high - low) / 2;
-            if present(mid)? {
+            if present(mid).await? {
                 high = mid;
             } else {
                 low = mid + 1;
@@ -338,15 +341,23 @@ impl Hub {
         Ok(tip - low)
     }
 
+    /// Cache realised archive depth using async I/O, independently of metrics scrapes.
+    /// Unknown depth or a failed probe is exposed as NaN until the next refresh.
+    pub async fn refresh_request_window(&self) {
+        let tip = self.lock().tip;
+        let window = self.realised_window(tip).await.ok();
+        self.lock().request_window = window;
+    }
+
     /// Prometheus exposition with active-only subscriber labels and retained totals.
     pub fn render_metrics(&self) -> String {
         use std::fmt::Write;
         let stats = self.stats();
         let mut output = format!("firehose_subscribers {}\n", stats["currentSubscribers"]);
-        let tip = stats["tip"].as_i64().unwrap_or(-1);
         let window = self
-            .realised_window(tip)
-            .map_or_else(|_| "NaN".to_owned(), |span| span.to_string());
+            .lock()
+            .request_window
+            .map_or_else(|| "NaN".to_owned(), |span| span.to_string());
         let _ = writeln!(output, "# TYPE firehose_request_window_blocks gauge");
         let _ = writeln!(output, "firehose_request_window_blocks {window}");
         let _ = writeln!(output, "# TYPE firehose_connections gauge");

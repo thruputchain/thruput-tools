@@ -162,6 +162,7 @@ async fn request_window_refuses_retained_history_and_preserves_attached_cursors(
         0,
         "no records delivered"
     );
+    hub.refresh_request_window().await;
     assert!(
         hub.render_metrics()
             .contains("firehose_request_window_blocks 2\n")
@@ -211,11 +212,12 @@ async fn in_window_missing_record_remains_an_archive_io_error() {
     server.stopped().await;
 }
 
-#[test]
-fn request_window_metric_tracks_available_depth_within_policy() {
+#[tokio::test]
+async fn request_window_metric_tracks_available_depth_within_policy() {
     let dir = tempfile::tempdir().unwrap();
     for tip in [-1, 0, 50_000] {
         let hub = Hub::new(dir.path().to_owned(), tip, config());
+        hub.refresh_request_window().await;
         assert!(
             hub.render_metrics()
                 .contains("firehose_request_window_blocks 0\n")
@@ -225,6 +227,7 @@ fn request_window_metric_tracks_available_depth_within_policy() {
     let hub = Hub::new(dir.path().to_owned(), 50_000, config());
     for (height, span) in [(50_000, 0), (49_999, 1), (49_998, 2)] {
         std::fs::write(dir.path().join(format!("{height:020}.xdr")), []).unwrap();
+        hub.refresh_request_window().await;
         assert!(
             hub.render_metrics()
                 .contains(&format!("firehose_request_window_blocks {span}\n"))
@@ -233,12 +236,18 @@ fn request_window_metric_tracks_available_depth_within_policy() {
     let mut config = config();
     config.request_window = 1;
     let hub = Hub::new(dir.path().to_owned(), 50_000, config.clone());
+    hub.refresh_request_window().await;
     assert!(
         hub.render_metrics()
             .contains("firehose_request_window_blocks 1\n")
     );
     std::fs::remove_file(dir.path().join("00000000000000049998.xdr")).unwrap();
     std::fs::remove_file(dir.path().join("00000000000000049999.xdr")).unwrap();
+    assert!(
+        hub.render_metrics()
+            .contains("firehose_request_window_blocks 1\n")
+    );
+    hub.refresh_request_window().await;
     assert!(
         hub.render_metrics()
             .contains("firehose_request_window_blocks 0\n")

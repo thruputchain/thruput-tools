@@ -60,7 +60,10 @@ cadence. New height subscriptions below `max(0, tip - window)` are rejected with
 `below_window` even if the archive still holds their records. Already accepted
 subscriptions may finish catch-up under the existing deadlines as the window moves.
 `firehose_request_window_blocks` reports available archive depth capped by the policy
-window, in blocks rather than elapsed seconds.
+window, in blocks rather than elapsed seconds. Scrapes read a cached measurement;
+async filesystem probes refresh it at startup and after each tailer poll. It can lag
+by the poll interval (default 200 ms) plus polling and probe time, with no hard bound
+if archive I/O stalls. Probe failures report NaN until a successful refresh.
 
 ## Discovery and protocol safety
 

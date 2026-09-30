@@ -81,6 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stale = Duration::from_secs(config.tip_stale_seconds);
     tailer.update_health(&metrics, stale);
     let hub = Hub::new(config.store, tailer.tip(), config.subscriptions);
+    hub.refresh_request_window().await;
     let (address, ws) = hub.serve().await?;
     tracing::info!(%address, tip = tailer.tip(), "subscription listener started");
     let router = Router::new()
