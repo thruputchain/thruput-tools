@@ -312,7 +312,7 @@ async fn acquire_network(
             runtime_manifest,
         } => {
             let manifest = load_runtime_manifest(&runtime_manifest)?;
-            let network = Network::connect(&rpc_url, &manifest, None, seed)?;
+            let network = Network::connect(&rpc_url, &manifest, None)?;
             Ok((
                 network,
                 account_source(manifest, seed, legacy_accounts),
@@ -328,7 +328,7 @@ async fn acquire_network(
                 .clone()
                 .ok_or(TestkitError::MissingRuntimeManifest)?;
             let manual_block_producer = handle.manual_block_producer();
-            let network = Network::connect(&rpc_url, &manifest, manual_block_producer, seed)?;
+            let network = Network::connect(&rpc_url, &manifest, manual_block_producer)?;
             Ok((
                 network,
                 account_source(manifest, seed, legacy_accounts),

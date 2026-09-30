@@ -379,52 +379,69 @@ impl Account {
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<SubmittedTransaction> {
-        let nonce = self.next_nonce();
-        let tx = if self.dev.native {
-            let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                self.dev.signer.verifying_key_bytes(),
-                0,
-            );
-            build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
-                account: &account,
-                target_address: target,
-                target_entrypoint: entrypoint,
-                target_calldata: calldata,
-                gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
-                target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-                block_expiry_height: EXPIRY_HEIGHT,
-                nonce,
-            })
-        } else {
-            build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-                wallet_address: self.dev.wallet_address,
-                wallet_entrypoint: network.do_action_entrypoint()?,
-                target_address: target,
-                target_entrypoint: entrypoint,
-                target_calldata: calldata,
-                gas_limit: DEFAULT_TX_GAS_LIMIT,
-                target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-                block_expiry_height: EXPIRY_HEIGHT,
-                nonce,
-            })
-        }
-        .map_err(TestkitError::signing)?;
-        let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
-        let tx_hex = sign_and_encode_transaction_hex(
-            tx,
-            &self.dev.signer,
-            SignTransactionParams::default(),
-            self.dev
-                .network_hash
-                .as_ref()
-                .ok_or(TestkitError::Offline { operation: "call" })?,
-        )
-        .map_err(TestkitError::signing)?;
-
+        let (tx_hash, tx_hex) = prepare_call(
+            &self.dev,
+            network,
+            target,
+            entrypoint,
+            calldata,
+            self.next_nonce(),
+        )?;
         self.advance()?;
         submit_signed(network, tx_hash, &tx_hex).await?;
         Ok(SubmittedTransaction::new(network.clone(), tx_hash, tx_hex))
     }
+}
+
+pub(crate) fn prepare_call(
+    dev: &TestAccount,
+    network: &Network,
+    target: ContractAddress,
+    entrypoint: ContractEntrypointID,
+    calldata: &[u8],
+    nonce: u64,
+) -> Result<(TxHash, String)> {
+    let tx = if dev.native {
+        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+            dev.signer.verifying_key_bytes(),
+            0,
+        );
+        build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+            account: &account,
+            target_address: target,
+            target_entrypoint: entrypoint,
+            target_calldata: calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
+            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: EXPIRY_HEIGHT,
+            nonce,
+        })
+    } else {
+        build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+            wallet_address: dev.wallet_address,
+            wallet_entrypoint: network.do_action_entrypoint()?,
+            target_address: target,
+            target_entrypoint: entrypoint,
+            target_calldata: calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: EXPIRY_HEIGHT,
+            nonce,
+        })
+    }
+    .map_err(TestkitError::signing)?;
+    let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
+    let tx_hex = sign_and_encode_transaction_hex(
+        tx,
+        &dev.signer,
+        SignTransactionParams::default(),
+        dev.network_hash
+            .as_ref()
+            .ok_or(TestkitError::Offline { operation: "call" })?,
+    )
+    .map_err(TestkitError::signing)?;
+
+    Ok((tx_hash, tx_hex))
 }
 
 pub(crate) async fn submit_signed(network: &Network, tx_hash: TxHash, tx_hex: &str) -> Result<()> {

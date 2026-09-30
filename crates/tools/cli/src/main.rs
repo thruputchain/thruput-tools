@@ -716,7 +716,7 @@ impl TransferArgs {
 
 #[derive(Args)]
 struct AirdropArgs {
-    /// Wallet name, dev-N wallet, or direct address (default: effective wallet)
+    /// Wallet name, key name, contract alias, or direct address (default: effective wallet)
     recipient: Option<String>,
     /// Amount in HOG, with up to 7 decimal places
     #[arg(long)]

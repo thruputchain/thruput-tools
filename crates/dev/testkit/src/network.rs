@@ -82,7 +82,7 @@ impl SubmittedTransaction {
 struct NetworkInner {
     rpc_url: Option<String>,
     client: Option<HttpClient>,
-    faucet: tokio::sync::Mutex<Option<crate::account::Account>>,
+    faucet: tokio::sync::Mutex<Option<crate::manifest::TestAccount>>,
     do_action_entrypoint: Option<ContractEntrypointID>,
     manual_block_producer: Option<ManualBlockProducer>,
 }
@@ -106,7 +106,6 @@ impl Network {
         rpc_url: &str,
         manifest: &RuntimeManifest,
         manual_block_producer: Option<ManualBlockProducer>,
-        seed: &str,
     ) -> Result<Self> {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
@@ -123,14 +122,7 @@ impl Network {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
                 client: Some(client),
-                faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?.map(
-                    |dev| {
-                        crate::account::Account::new(
-                            dev,
-                            crate::nonce::NonceNamespace::for_run(&format!("faucet:{seed}"), 0),
-                        )
-                    },
-                )),
+                faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
                 do_action_entrypoint: Some(do_action_entrypoint),
                 manual_block_producer,
             }),
@@ -324,16 +316,24 @@ impl Network {
         self.require_client("fund")?;
         let calldata = groundhog_signing::native_hog_transfer_calldata(&recipient, amount)
             .map_err(TestkitError::signing)?;
-        let mut faucet = self.inner.faucet.lock().await;
-        let faucet = faucet.as_mut().ok_or(TestkitError::MissingFaucet)?;
-        faucet
-            .submit_call(
-                self,
-                groundhog_signing::NATIVE_HOG_ADDRESS,
-                groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
-                &calldata,
-            )
-            .await
+        let faucet = self.inner.faucet.lock().await;
+        let faucet = faucet.as_ref().ok_or(TestkitError::MissingFaucet)?;
+        // The bootstrap faucet is shared across scenarios and processes. Its
+        // funding transactions must not replay a deterministic scenario nonce.
+        let mut nonce = [0; 8];
+        getrandom::getrandom(&mut nonce).map_err(|error| {
+            TestkitError::signing(format!("generate faucet transaction nonce: {error}"))
+        })?;
+        let (tx_hash, tx_hex) = crate::account::prepare_call(
+            faucet,
+            self,
+            groundhog_signing::NATIVE_HOG_ADDRESS,
+            groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            &calldata,
+            u64::from_le_bytes(nonce),
+        )?;
+        crate::account::submit_signed(self, tx_hash, &tx_hex).await?;
+        Ok(SubmittedTransaction::new(self.clone(), tx_hash, tx_hex))
     }
 
     pub(crate) fn do_action_entrypoint(&self) -> Result<ContractEntrypointID> {

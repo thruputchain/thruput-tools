@@ -163,6 +163,73 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn repeated_scenarios_fund_the_same_account_with_distinct_transactions() {
+    let fixture = Fixture::new(Outcome::Success).await;
+    for _ in 0..2 {
+        let scenario = fixture.scenario(false).await;
+        scenario
+            .run_agents([Agent::new("alice", |ctx| async move {
+                let signer = derive_dev_account_signer("groundhog-testkit:native-test", 0);
+                assert_eq!(
+                    ctx.address(),
+                    PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
+                );
+                for _ in 0..2 {
+                    ctx.fund(12345).await?;
+                }
+                Ok(())
+            })])
+            .await
+            .unwrap();
+    }
+
+    let submitted = fixture.state.submitted.lock().unwrap();
+    assert_eq!(submitted.len(), 4);
+    for (index, signed) in submitted.iter().enumerate() {
+        assert_eq!(signed.tx.invocation, submitted[0].tx.invocation);
+        for prior in &submitted[..index] {
+            assert_ne!(signed.tx.uniquifier.nonce, prior.tx.uniquifier.nonce);
+            assert_ne!(
+                transaction_hash(&signed.tx).unwrap(),
+                transaction_hash(&prior.tx).unwrap()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_funding_retains_the_original_transaction_without_retrying() {
+    for outcome in [Outcome::SendError, Outcome::SendHash] {
+        let fixture = Fixture::new(outcome).await;
+        let scenario = fixture.scenario(false).await;
+        let state = fixture.state.clone();
+        scenario
+            .run_agents([Agent::new("alice", move |ctx| async move {
+                let error = ctx.submit_fund(12345).await.unwrap_err();
+                let TestkitError::Submission {
+                    tx_hash,
+                    signed_transaction,
+                    ..
+                } = error
+                else {
+                    panic!("expected a retained funding submission")
+                };
+                let signed: SignedTransaction = xdrs::txs::decode(
+                    &hex::decode(signed_transaction.trim_start_matches("0x")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(tx_hash.0.0, transaction_hash(&signed.tx).unwrap());
+                let submitted = state.submitted.lock().unwrap();
+                assert_eq!(submitted.len(), 1);
+                assert_eq!(signed, submitted[0]);
+                Ok(())
+            })])
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_returns() {
     let fixture = Fixture::new(Outcome::Success).await;
     let scenario = fixture.scenario(false).await;

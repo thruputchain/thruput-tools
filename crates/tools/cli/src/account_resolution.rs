@@ -209,7 +209,7 @@ fn resolve_wallet_selection(
         return resolve_selected_wallet(profile, key_name, signer, wallet_name)
             .map(|address| (Some(wallet_name.to_owned()), address));
     }
-    resolve_saved_wallet_for_signer(profile, key_name, signer)
+    resolve_saved_wallet_for_public_key(profile, key_name, signer.verifying_key_bytes())
 }
 
 fn resolve_selected_wallet(
@@ -285,12 +285,11 @@ fn default_native_account(signer: &LocalSigner) -> groundhog_signing::PubkeyAcco
     groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
 }
 
-fn resolve_saved_wallet_for_signer(
+fn resolve_saved_wallet_for_public_key(
     profile: &ResolvedProfile,
     key_name: &str,
-    signer: &LocalSigner,
+    expected_public_key: [u8; 32],
 ) -> Result<(Option<String>, groundhog_xdr::types::ContractAddress), CliError> {
-    let expected_public_key = signer.verifying_key_bytes();
     let mut matches = Vec::new();
     for (wallet_name, wallet) in &profile.wallets {
         match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
@@ -305,7 +304,11 @@ fn resolve_saved_wallet_for_signer(
     }
     let [(_, wallet)] = matches.as_slice() else {
         if matches.is_empty() {
-            return Ok((None, default_native_account(signer).address()));
+            return Ok((
+                None,
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(expected_public_key, 0)
+                    .address(),
+            ));
         }
         return Err(CliError::SavedWalletAmbiguous {
             key_name: key_name.to_string(),
@@ -372,10 +375,18 @@ pub(crate) fn looks_like_address_literal(value: &str) -> bool {
     value.starts_with("0x") || value.starts_with("0X") || value.starts_with('C')
 }
 
-/// Resolve a saved wallet, contract alias, direct address, or local dev account.
+/// Resolve a saved wallet, contract alias, direct address, or named key account.
 pub(crate) fn resolve_address_target(
     profile: &ResolvedProfile,
     target: &str,
+) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+    resolve_address_target_with_keys(profile, target, true)
+}
+
+fn resolve_address_target_with_keys(
+    profile: &ResolvedProfile,
+    target: &str,
+    allow_key_names: bool,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
     if let Some(wallet) = profile.wallets.get(target) {
         native_account_for_binding(target, wallet)?;
@@ -384,11 +395,25 @@ pub(crate) fn resolve_address_target(
     if let Some(address) = profile.contracts.get(target) {
         return parse_target_address(target, address);
     }
-    if looks_like_address_literal(target) {
-        return parse_target_address(target, target);
-    }
+    let literal_error = if looks_like_address_literal(target)
+        || (target.len() == 64 && target.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        match parse_target_address(target, target) {
+            Ok(address) => return Ok(address),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
     if let Some(index) = dev_keys::dev_key_index(target) {
         return Ok(lookup_dev_account_address(profile, target, index)?.0);
+    }
+    if allow_key_names && let Some(public_key) = crate::keys::load_local_public_key(target)? {
+        return resolve_saved_wallet_for_public_key(profile, target, public_key)
+            .map(|(_, address)| address);
+    }
+    if let Some(error) = literal_error {
+        return Err(error);
     }
     Err(CliError::UnknownAddressTarget {
         target: target.to_owned(),
@@ -404,7 +429,9 @@ pub(crate) fn resolve_address_target_or_default_wallet(
         return resolve_address_target(profile, target).map(|address| (target.to_owned(), address));
     }
     if let Some(wallet_name) = profile.default_wallet.as_deref() {
-        return resolve_address_target(profile, wallet_name)
+        // A configured wallet must retain its saved/alias/dev identity; a missing binding
+        // must not silently become the same-named key's default native account.
+        return resolve_address_target_with_keys(profile, wallet_name, false)
             .map(|address| (wallet_name.to_owned(), address));
     }
 
@@ -1066,7 +1093,10 @@ mod tests {
             BTreeMap::from([("alice".into(), invalid.clone())]),
         );
         assert!(resolve_selected_wallet(&profile, "alice", &signer, "alice").is_err());
-        assert!(resolve_saved_wallet_for_signer(&profile, "alice", &signer).is_err());
+        assert!(
+            resolve_saved_wallet_for_public_key(&profile, "alice", signer.verifying_key_bytes())
+                .is_err()
+        );
         assert!(resolve_address_target(&profile, "alice").is_err());
         invalid.kind = crate::config::WalletKind::DevWallet;
         assert!(validate_saved_wallet_binding("alice", &invalid).is_err());

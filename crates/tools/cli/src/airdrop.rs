@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::account_resolution::{
-    LocalBootstrapRole, lookup_dev_account_address, resolve_address_target_or_default_wallet,
+    LocalBootstrapRole, resolve_address_target, resolve_address_target_or_default_wallet,
     resolve_local_bootstrap_account,
 };
 use crate::balance::{
@@ -26,7 +26,6 @@ use crate::balance::{
 };
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
-use crate::dev_keys;
 use crate::hog;
 use crate::network_descriptor::{RemoteAirdropDescriptor, fetch_remote_airdrop_descriptor};
 use crate::profile_backend::{FaucetBackend, resolve_faucet_backend};
@@ -852,24 +851,19 @@ fn resolve_airdrop_recipient(
     profile: &ResolvedProfile,
     recipient: &str,
 ) -> Result<String, CliError> {
-    if let Some(wallet) = profile.resolve_wallet(recipient) {
-        return parse_contract_address(&wallet).map(|address| format_contract_address(&address));
+    match resolve_address_target(profile, recipient) {
+        Ok(address) => Ok(format_contract_address(&address)),
+        Err(CliError::InvalidAddressTarget { .. }) => Err(CliError::Other(
+            "wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x"
+                .into(),
+        )),
+        Err(CliError::UnknownAddressTarget { .. }) => Err(CliError::Other(format!(
+            "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
+            crate::terminal::terminal_safe(recipient),
+            crate::terminal::render_shell_arg(recipient),
+        ))),
+        Err(error) => Err(error),
     }
-    if crate::account_resolution::looks_like_address_literal(recipient) {
-        let address = parse_contract_address(recipient).map_err(|_| {
-            CliError::Other("wallet address must be a C StrKey or 64 hex characters, optionally prefixed with 0x".into())
-        })?;
-        return Ok(format_contract_address(&address));
-    }
-    if let Some(index) = dev_keys::dev_key_index(recipient) {
-        let address = lookup_dev_account_address(profile, recipient, index)?;
-        return Ok(format_contract_address(&address.0));
-    }
-    Err(CliError::Other(format!(
-        "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a C StrKey or 0x-prefixed wallet address",
-        crate::terminal::terminal_safe(recipient),
-        crate::terminal::render_shell_arg(recipient),
-    )))
 }
 
 fn print_dry_run(

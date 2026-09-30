@@ -5182,6 +5182,62 @@ fn wallet_create_respects_inherited_binding_and_selection() {
 }
 
 #[test]
+fn wallet_create_preserves_global_key_selection_when_adding_another_account() {
+    for legacy_wallet in [false, true] {
+        let (_tmp, project, config) = empty_wallet_fixture();
+        let selected = groundhog()
+            .args(["keys", "use", "owner"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(selected.status.success());
+        let mut project_config = "default_profile = 'default'\n[profile.default]\n".to_owned();
+        if legacy_wallet {
+            let key: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(config.join("groundhog/keys/owner.json")).unwrap(),
+            )
+            .unwrap();
+            let public_key = format!("0x{}", key["public_key_hex"].as_str().unwrap());
+            write!(project_config, "\n[profile.default.wallets.legacy]\naddress = '0x{}'\nowner_public_key = '{public_key}'\n", "ab".repeat(32)).unwrap();
+        }
+        std::fs::write(project.join("groundhog.toml"), project_config).unwrap();
+        if !legacy_wallet {
+            let first = create_empty_wallet(&project, &config, &[]);
+            assert!(
+                first.status.success(),
+                "{}",
+                String::from_utf8_lossy(&first.stderr)
+            );
+        }
+        if !legacy_wallet {
+            let path = project.join("groundhog.toml");
+            let mut doc: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            doc["profile"]["default"]
+                .as_table_mut()
+                .unwrap()
+                .remove("default_wallet");
+            std::fs::write(path, toml::to_string(&doc).unwrap()).unwrap();
+        }
+        let added = create_empty_wallet(&project, &config, &["--name", "trading"]);
+        assert!(
+            added.status.success(),
+            "{}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+        let config: toml::Value =
+            toml::from_str(&std::fs::read_to_string(project.join("groundhog.toml")).unwrap())
+                .unwrap();
+        assert_eq!(
+            config["profile"]["default"]["default_wallet"].as_str(),
+            Some(if legacy_wallet { "legacy" } else { "owner" })
+        );
+        assert!(config["profile"]["default"].get("default_key").is_none());
+    }
+}
+
+#[test]
 fn wallet_create_dry_run_only_derives_and_prefund_is_rejected() {
     let (_tmp, project, config) = empty_wallet_fixture();
     let before = std::fs::read(project.join("groundhog.toml")).unwrap();
@@ -5675,6 +5731,152 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
         assert_eq!(
             report["data"]["recipientWallet"],
             format!("0x{}", hex::encode(account.address().as_ref()))
+        );
+    }
+}
+
+#[test]
+fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
+    let bare_address = "ab".repeat(32);
+    let prefixed_address = format!("0x{bare_address}");
+    let strkey_address = groundhog_signing::strkey::format_contract_address(&[0xab; 32].into());
+    for (selection, key_name) in [
+        ("unsaved", "alice"),
+        ("unsaved", "Charlie"),
+        ("unsaved", "0xowner"),
+        ("unsaved", "0Xowner"),
+        ("literal", bare_address.as_str()),
+        ("literal", prefixed_address.as_str()),
+        ("literal", strkey_address.as_str()),
+        ("legacy", "alice"),
+        ("native", "alice"),
+        ("saved-name", "alice"),
+        ("alias", "alice"),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config_home, key_name);
+        let global_config = config_home.join("groundhog/config.toml");
+        let before = std::fs::read(&global_config).unwrap();
+        let owner_bytes = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+        let nonce = if selection == "native" { 7 } else { 0 };
+        let native = groundhog_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
+        let native_address = format!("0x{}", hex::encode(native.address().as_ref()));
+        let legacy_address = format!("0x{}", "ab".repeat(32));
+        let expected = match selection {
+            "unsaved" | "native" => native_address.as_str(),
+            _ => legacy_address.as_str(),
+        };
+        let binding = match selection {
+            "legacy" => format!(
+                "\n[profile.default.wallets.legacy]\naddress = '{legacy_address}'\nowner_public_key = '{owner}'\n"
+            ),
+            "native" => format!(
+                "\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '{native_address}'\nowner_public_key = '{owner}'\n"
+            ),
+            "saved-name" => format!(
+                "\n[profile.default.wallets.alice]\naddress = '{legacy_address}'\nowner_public_key = '0x{}'\n\n[profile.default.contracts]\nalice = '0x{}'\n",
+                "cd".repeat(32),
+                "ef".repeat(32)
+            ),
+            "alias" => format!("\n[profile.default.contracts]\nalice = '{legacy_address}'\n"),
+            _ => String::new(),
+        };
+        // Explicit recipients use public metadata without constructing a signer.
+        let key_path = config_home.join(format!("groundhog/keys/{key_name}.json"));
+        let mut key: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+        key["keypair_hex"] = serde_json::Value::String("unavailable".into());
+        std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+        let faucet_wallet = advertised_dev_wallet_address(0);
+        let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
+        let (rpc_url, rpc_server) =
+            spawn_balance_then_chain_tip_rpc(&faucet_wallet, "100000000000", 42);
+        std::fs::write(project.join("groundhog.toml"), format!("default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n{binding}", manifest_path.file_name().unwrap().to_string_lossy())).unwrap();
+        let output = groundhog()
+            .args(["--json", "airdrop", key_name, "--amount", "1", "--dry-run"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{selection}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        rpc_server.join().unwrap();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["recipient"], key_name);
+        assert_eq!(report["data"]["recipientWallet"], expected, "{selection}");
+        assert_eq!(report["data"]["submitted"], false);
+        assert_eq!(std::fs::read(&global_config).unwrap(), before);
+    }
+}
+
+#[test]
+fn airdrop_default_rejects_missing_wallet_binding_even_when_key_exists() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config");
+    std::fs::create_dir_all(&project).unwrap();
+    generate_key_public_key(&config_home, "alice");
+    std::fs::write(project.join("groundhog.toml"), "default_profile = 'default'\n[profile.default]\ndefault_wallet = 'alice'\nrpc_url = 'http://127.0.0.1:1'\n").unwrap();
+    let output = groundhog()
+        .args(["--json", "airdrop", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(report["error"]["code"], "unknown_address_target");
+}
+
+#[test]
+fn airdrop_explicit_key_rejects_ambiguous_or_invalid_saved_accounts_before_rpc() {
+    for invalid_binding in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config_home = tmp.path().join("config");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config_home, "alice");
+        let binding = if invalid_binding {
+            format!(
+                "[profile.default.wallets.alice]\nkind = 'native'\naccount_nonce = 0\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
+                "ab".repeat(32)
+            )
+        } else {
+            format!(
+                "[profile.default.wallets.primary]\naddress = '0x{}'\nowner_public_key = '{owner}'\n[profile.default.wallets.trading]\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
+                "ab".repeat(32),
+                "cd".repeat(32)
+            )
+        };
+        let config = format!(
+            "default_profile = 'default'\n[profile.default]\nrpc_url = 'http://127.0.0.1:1'\n{binding}"
+        );
+        std::fs::write(project.join("groundhog.toml"), &config).unwrap();
+        let output = groundhog()
+            .args(["--json", "airdrop", "alice", "--dry-run"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(
+            report["error"]["code"],
+            if invalid_binding {
+                "invalid_wallet_binding"
+            } else {
+                "saved_wallet_ambiguous"
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.join("groundhog.toml")).unwrap(),
+            config
         );
     }
 }
