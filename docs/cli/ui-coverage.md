@@ -130,6 +130,9 @@ Test files are under `crates/tools/cli/tests/`. `CLI` below means
 - Linux workspace tests, build, all-target Clippy, formatting, and diff checks pass.
 - PTYs exercise widths 24/40/60/80/120, short terminals, scrollback, interruption,
   resume, source snippets, warnings, exact values, and output modes.
+- Progress renders Ratatui cell buffers on a reserved output row. It never queries
+  the cursor or changes input mode. PTYs withhold cursor replies and verify Ctrl-C,
+  SIGTERM, and terminal attributes during progress initialization.
 - An isolated tmux server ran a slow local balance RPC: progress completed, the
   complete result remained in scrollback, and the command exited successfully.
 - `.github/workflows/cli-ui.yml` runs shared components, progress/listing PTYs, and

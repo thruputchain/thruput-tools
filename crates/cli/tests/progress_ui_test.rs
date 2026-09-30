@@ -234,6 +234,7 @@ struct Pty {
     parser: vt100::Parser,
     raw: Vec<u8>,
     queries: usize,
+    progress_rows: usize,
     recent: Vec<u8>,
 }
 
@@ -305,6 +306,7 @@ impl Pty {
             parser: vt100::Parser::new(12, 80, 10000),
             raw: Vec::new(),
             queries: 0,
+            progress_rows: 0,
             recent: Vec::new(),
         }
     }
@@ -324,8 +326,9 @@ impl Pty {
                         }
                         if self.recent == b"\x1b[6n" {
                             self.queries += 1;
-                            let (row, col) = self.parser.screen().cursor_position();
-                            write!(self.master, "\x1b[{};{}R", row + 1, col + 1).unwrap();
+                        }
+                        if self.recent == b"\x1b[2K" {
+                            self.progress_rows += 1;
                         }
                     }
                 }
@@ -375,6 +378,7 @@ impl Pty {
             thread::sleep(Duration::from_millis(5));
         };
         self.pump();
+        assert_eq!(self.queries, 0, "progress must not query terminal input");
         let current = attributes(&self.master);
         assert_eq!(current.c_lflag, self.original.c_lflag);
         assert_eq!(current.c_iflag, self.original.c_iflag);
@@ -486,7 +490,7 @@ fn inline_build_preserves_both_streams_scrollback_and_artifacts() {
     command.args(["--bindings", "ts", "--show-cargo-commands"]);
     let mut pty = Pty::spawn(command);
     assert!(pty.finish().success());
-    assert!(pty.queries > 0, "must exercise the inline viewport");
+    assert!(pty.progress_rows > 0, "must exercise the progress row");
     let history = pty.history();
     assert!(history.contains("PREEXISTING-SHELL-LINE"));
     for index in 0..300 {
@@ -522,7 +526,7 @@ fn fast_and_plain_builds_do_not_start_a_live_viewport() {
         // A loaded CI host may make even this fixture genuinely slow. Only assert
         // no flash when the measured whole invocation was shorter than the delay.
         if mode != "fast" || started.elapsed() < Duration::from_millis(150) {
-            assert_eq!(pty.queries, 0);
+            assert_eq!(pty.progress_rows, 0);
         }
     }
 }
@@ -562,7 +566,7 @@ fn json_build_report_and_error_contracts_are_preserved() {
 fn resize_falls_back_without_erasing_diagnostics_or_losing_utf8() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("split"));
-    pty.until(|pty| pty.queries > 0 && pty.parser.screen().contents().contains("Compiling"));
+    pty.until(|pty| pty.progress_rows > 0 && pty.parser.screen().contents().contains("Compiling"));
     pty.resize(40, 8);
     assert!(pty.finish().success());
     let output = String::from_utf8_lossy(&pty.raw);
@@ -576,7 +580,7 @@ fn ctrl_c_retains_foreground_signal_behaviour_and_no_success_card() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("hang"));
     pty.until(|pty| {
-        pty.queries > 0
+        pty.progress_rows > 0
             && pty.parser.screen().contents().contains("Compiling")
             && fixture.root.join("cargo.pid").exists()
     });
@@ -609,7 +613,7 @@ fn live_failure_finishes_progress_before_the_shared_error() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("fail"));
     assert!(!pty.finish().success());
-    assert!(pty.queries > 0);
+    assert!(pty.progress_rows > 0);
     let history = pty.history();
     assert!(history.contains("compiler-failure-detail"));
     assert!(history.contains("cargo_failed"));
@@ -649,11 +653,7 @@ fn partial_diagnostics_precede_later_status_lines() {
 fn resume_preserves_output_written_while_the_job_was_stopped() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("slow"));
-    pty.until(|pty| {
-        pty.queries > 0
-            && pty.parser.screen().contents().contains("Compiling")
-            && pty.raw.ends_with(b"H")
-    });
+    pty.until(|pty| pty.progress_rows > 0 && pty.parser.screen().contents().contains("Compiling"));
     let pid = i32::try_from(pty.child.id()).unwrap();
     // SAFETY: stop the isolated test process group. SIGSTOP works even when the
     // new session is an orphaned process group that would ignore terminal SIGTSTP.
@@ -687,14 +687,36 @@ fn monochrome_progress_and_explicit_cargo_color_use_the_correct_modes() {
     command.env("NO_COLOR", "1");
     let mut pty = Pty::spawn(command);
     assert!(pty.finish().success());
-    assert!(pty.queries > 0);
+    assert!(pty.progress_rows > 0);
     assert!(!String::from_utf8_lossy(&pty.raw).contains("\x1b[38;"));
 
     let mut command = fixture.command("slow");
     command.env("CARGO_TERM_COLOR", "always");
     let mut pty = Pty::spawn(command);
     assert!(pty.finish().success());
-    assert_eq!(pty.queries, 0);
+    assert_eq!(pty.progress_rows, 0);
+}
+
+#[test]
+fn progress_initialization_preserves_input_and_interrupts_without_a_cursor_reply() {
+    for keyboard_interrupt in [true, false] {
+        let fixture = Fixture::new();
+        let mut pty = Pty::spawn(fixture.command("hang"));
+        // Never answer cursor queries. This reaches the old raw-mode query window
+        // as well as the replacement's first output-only progress frame.
+        pty.until(|pty| pty.queries > 0 || pty.progress_rows > 0);
+        if keyboard_interrupt {
+            pty.master.write_all(b"\x03").unwrap();
+        } else {
+            // SAFETY: signal only the child owned by this isolated terminal fixture.
+            assert_eq!(
+                unsafe { libc::kill(i32::try_from(pty.child.id()).unwrap(), libc::SIGTERM) },
+                0
+            );
+        }
+        // Also checks every termios flag and control character after termination.
+        assert!(!pty.finish().success());
+    }
 }
 
 #[test]
@@ -715,7 +737,7 @@ fn background_build_does_not_query_terminal_input() {
     }
     let mut pty = Pty::spawn(shell);
     assert!(pty.finish().success());
-    assert_eq!(pty.queries, 0);
+    assert_eq!(pty.progress_rows, 0);
     assert!(pty.history().contains("Build complete"));
 }
 
@@ -903,7 +925,9 @@ fn approved_preview_disappears_but_warnings_and_prior_output_remain() {
 fn active_build_phase_is_muted_but_spinner_keeps_the_accent() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("hang"));
-    pty.until(|pty| pty.queries > 0 && pty.parser.screen().contents().contains("Compiling demo"));
+    pty.until(|pty| {
+        pty.progress_rows > 0 && pty.parser.screen().contents().contains("Compiling demo")
+    });
     let (row, col) = pty
         .parser
         .screen()
@@ -1066,7 +1090,7 @@ fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
     let mut pty = Pty::spawn(fixture.verbose_command("styled"));
     // Log styling must not infer failure from a line that merely says "error".
     assert!(pty.finish().success());
-    assert!(pty.queries > 0);
+    assert!(pty.progress_rows > 0);
     assert!(pty.style_in_history("Updating fake-registry", 0).0);
     assert!(pty.style_in_history("Compiling style-fixture", 0).0);
     assert!(pty.style_in_history("Wrote ", 0).0);
@@ -1096,7 +1120,7 @@ fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
 fn compact_build_defers_and_deduplicates_structured_warnings() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("diagnostics"));
-    pty.until(|pty| pty.queries > 0);
+    pty.until(|pty| pty.progress_rows > 0);
     assert!(!String::from_utf8_lossy(&pty.raw).contains("unused variable"));
     assert!(pty.finish().success());
     let history = pty.history();

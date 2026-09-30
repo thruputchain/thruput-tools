@@ -275,7 +275,7 @@ fn balance_progress_finishes_before_full_precision_result_and_survives_resize() 
     for raw in ["0", "340282366920938463463374607431768211455"] {
         let query = Query::new(balance(raw), SLOW);
         let mut pty = Pty::spawn(query.command(&["balance"]));
-        pty.until(|pty| pty.queries > 0);
+        pty.until(|pty| pty.progress_rows > 0);
         pty.resize(40, 12);
         assert!(pty.finish().success());
         let history = pty.history();
@@ -320,7 +320,7 @@ fn view_cards_distinguish_raw_returns_aborts_faults_and_events() {
             pty.finish().success(),
             "view outcomes retain the existing exit status"
         );
-        assert!(pty.queries > 0);
+        assert!(pty.progress_rows > 0);
         let history = pty.history();
         for value in [title, detail, "Event 0", "data=0xcafe", "Entrypoint"] {
             assert!(history.contains(value), "missing {value}: {history}");
@@ -389,7 +389,7 @@ fn rpc_errors_and_invalid_balances_stop_progress_without_success_cards() {
         let query = Query::new(reply, SLOW);
         let mut pty = Pty::spawn(query.command(&args));
         assert!(!pty.finish().success());
-        assert!(pty.queries > 0);
+        assert!(pty.progress_rows > 0);
         let history = pty.history();
         assert!(history.contains("Error"), "{history}");
         assert!(!history.contains('╭'), "{history}");
@@ -442,7 +442,7 @@ fn fast_monochrome_query_keeps_the_card_without_flashing_progress() {
     let mut pty = Pty::spawn(command);
     assert!(pty.finish().success());
     if started.elapsed() < Duration::from_millis(150) {
-        assert_eq!(pty.queries, 0);
+        assert_eq!(pty.progress_rows, 0);
     }
     let history = pty.history();
     assert!(history.contains("Raw balance"));

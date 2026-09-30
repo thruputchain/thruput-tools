@@ -10,11 +10,15 @@ use std::{
 };
 
 use ratatui::{
-    Terminal, TerminalOptions, Viewport,
-    backend::{Backend, CrosstermBackend},
-    layout::{Position, Rect, Size},
+    buffer::Buffer,
+    crossterm::{
+        cursor::MoveToColumn,
+        queue,
+        terminal::{Clear, ClearType, size},
+    },
+    layout::{Rect, Size},
     text::{Line, Span},
-    widgets::{Paragraph, Widget, Wrap},
+    widgets::{Paragraph, Widget},
 };
 
 use super::{
@@ -23,8 +27,6 @@ use super::{
     theme::{Outcome, Theme},
 };
 use crate::terminal::terminal_safe;
-mod backend;
-use backend::InlineBackend;
 
 const DELAY: Duration = Duration::from_millis(150);
 const TICK: Duration = Duration::from_millis(100);
@@ -254,7 +256,7 @@ pub(super) fn eligible(print: &Print, policy: Policy) -> bool {
 fn same_terminal() -> bool {
     use std::os::unix::fs::MetadataExt;
     // SAFETY: these queries only inspect the controlling terminal/process group.
-    // Cursor-position queries must not stop a background job with SIGTTIN/SIGTTOU.
+    // A background job must not rewrite the foreground application's output.
     if unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) != libc::getpgrp() } {
         return false;
     }
@@ -282,89 +284,100 @@ pub(crate) fn relay(mut reader: impl Read, print: &Print, stream: Stream) -> io:
 }
 
 struct Inline {
-    terminal: Terminal<InlineBackend>,
     size: Size,
     valid: bool,
+    invalidated: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Inline {
     fn open(invalidated: Arc<std::sync::atomic::AtomicBool>) -> io::Result<Self> {
-        let inner = CrosstermBackend::new(io::stderr());
-        let size = inner.size()?;
+        let (width, height) = size()?;
+        let size = Size::new(width, height);
         if size.width < 24 || size.height < 3 {
             return Err(io::Error::other(
                 "terminal is too small for inline progress",
             ));
         }
-        let terminal = Terminal::with_options(
-            InlineBackend {
-                inner,
-                size,
-                invalidated,
-            },
-            TerminalOptions {
-                viewport: Viewport::Inline(1),
-            },
-        )?;
+        // Reserve a fresh row without querying the cursor or reading stdin.
+        // Crossterm's cursor query temporarily enters raw mode, which can swallow
+        // keyboard signals or leave terminal input altered on abrupt termination.
+        let mut stderr = io::stderr().lock();
+        stderr.write_all(b"\r\n")?;
+        stderr.flush()?;
         Ok(Self {
-            terminal,
             size,
             valid: true,
+            invalidated,
         })
     }
 
     fn current_size(&self) -> io::Result<Size> {
-        self.terminal.size()
+        let (width, height) = size()?;
+        if self.invalidated.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(io::Error::other("progress row invalidated"));
+        }
+        Ok(Size::new(width, height))
     }
 
     fn draw(&mut self, phase: &str, elapsed: Duration, policy: Policy) -> io::Result<()> {
-        self.terminal.draw(|frame| {
-            let area = frame.area();
-            let content = Rect {
-                width: area.width.saturating_sub(1),
-                ..area
-            };
-            let symbol = if policy.unicode {
-                ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-                    [usize::try_from(elapsed.as_millis() / 100 % 10).unwrap_or(0)]
-            } else {
-                ["|", "/", "-", "\\"][usize::try_from(elapsed.as_millis() / 100 % 4).unwrap_or(0)]
-            };
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("{symbol} "),
-                    Theme(policy).outcome(Outcome::Information),
-                ),
-                Span::styled(
-                    format!("{}s  {phase}", elapsed.as_secs()),
-                    Theme(policy).routine_log(),
-                ),
-            ]);
-            let cursor = u16::try_from(line.width())
-                .unwrap_or(u16::MAX)
-                .min(content.width);
-            frame.render_widget(Paragraph::new(line), content);
-            // No hidden cursor, raw mode, or alternate screen: ordinary signals keep
-            // their original semantics, even if the process is killed between frames.
-            frame.set_cursor_position(Position::new(area.x + cursor, area.y));
-        })?;
-        Ok(())
+        self.check_size()?;
+        let content = Rect::new(0, 0, self.size.width - 1, 1);
+        let symbol = if policy.unicode {
+            ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                [usize::try_from(elapsed.as_millis() / 100 % 10).unwrap_or(0)]
+        } else {
+            ["|", "/", "-", "\\"][usize::try_from(elapsed.as_millis() / 100 % 4).unwrap_or(0)]
+        };
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{symbol} "),
+                Theme(policy).outcome(Outcome::Information),
+            ),
+            Span::styled(
+                format!("{}s  {phase}", elapsed.as_secs()),
+                Theme(policy).routine_log(),
+            ),
+        ]);
+        let mut buffer = Buffer::empty(content);
+        Paragraph::new(line).render(content, &mut buffer);
+        let mut stderr = io::stderr().lock();
+        self.clear_row(&mut stderr)?;
+        for line in super::render::buffer_lines(&buffer, policy.color) {
+            stderr.write_all(line.as_bytes())?;
+        }
+        stderr.flush()
     }
 
     fn lines(&mut self, lines: &[String], policy: Policy) -> io::Result<()> {
-        self.current_size()?;
-        let paragraph = Paragraph::new(
-            lines
-                .iter()
-                .map(|line| super::log::line(line, Theme(policy)))
-                .collect::<Vec<_>>(),
-        )
-        .wrap(Wrap { trim: false });
-        let height =
-            u16::try_from(paragraph.line_count(self.size.width).max(1)).unwrap_or(u16::MAX);
-        self.terminal
-            .insert_before(height, |buffer| paragraph.render(buffer.area, buffer))?;
-        self.terminal.backend_mut().flush()
+        self.check_size()?;
+        let mut renderer = super::render::Renderer::new(policy);
+        renderer.text(
+            ratatui::text::Text::from(
+                lines
+                    .iter()
+                    .map(|line| super::log::line(line, Theme(policy)))
+                    .collect::<Vec<_>>(),
+            ),
+            0,
+        );
+        let mut stderr = io::stderr().lock();
+        self.clear_row(&mut stderr)?;
+        for line in renderer.lines {
+            writeln!(stderr, "{line}")?;
+        }
+        stderr.flush()
+    }
+
+    fn check_size(&self) -> io::Result<()> {
+        if self.current_size()? != self.size {
+            return Err(io::Error::other("progress row resized"));
+        }
+        Ok(())
+    }
+
+    fn clear_row(&self, stderr: &mut impl Write) -> io::Result<()> {
+        self.check_size()?;
+        queue!(stderr, MoveToColumn(0), Clear(ClearType::CurrentLine))
     }
 
     fn finish(&mut self) {
@@ -372,14 +385,12 @@ impl Inline {
             && !thread::panicking()
             && self.current_size().is_ok_and(|size| size == self.size)
         {
-            let _ = self.terminal.draw(|frame| {
-                frame.set_cursor_position(Position::new(0, frame.area().y));
-            });
+            let mut stderr = io::stderr().lock();
+            let _ = self.clear_row(&mut stderr).and_then(|()| stderr.flush());
         } else {
             // A resize can reflow the old row. Never guess its new coordinates.
             let _ = writeln!(io::stderr());
         }
-        let _ = self.terminal.show_cursor();
     }
 }
 
@@ -431,8 +442,8 @@ impl Worker {
         };
         loop {
             let event = events.recv_timeout(TICK);
-            // Check before draw/insert: Ratatui 0.30's horizontal shrink path clears
-            // the whole screen. Resume may also leave the old row behind other output.
+            // Reflow or resume invalidates row ownership. Switch to append-only
+            // output before doing any further cursor writes.
             if self
                 .invalidated
                 .swap(false, std::sync::atomic::Ordering::Relaxed)
