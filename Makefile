@@ -1,5 +1,5 @@
 # Convenience wrapper around cargo for this workspace. Cargo stays
-# authoritative; every target here is the command CLAUDE.md already documents.
+# authoritative; run `make help` for the available targets.
 #
 #   make config     fetch dependencies (needs the private registry token)
 #   make cli        build just the groundhog CLI
@@ -153,7 +153,7 @@ node:
 		echo "no hog-devnode at $(DEVNODE_BINARY); build it in the hogd repo or set DEVNODE_BINARY" >&2; exit 1; }
 	GROUNDHOG_DEVNODE_BINARY="$(DEVNODE_BINARY)" $(TARGET_DIR)/groundhog node $(NODE_ARGS)
 
-# The pre-PR checklist in CLAUDE.md, in one target.
+# Core workspace format, lint, and test checks.
 .PHONY: check
 check: fmt-check lint test
 

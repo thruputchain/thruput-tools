@@ -15,7 +15,7 @@
 //!   3. `groundhog-rv32-artifact` — pack the v5 header + sections, then
 //!      self-verify.
 //!
-//! See `docs/rv32/rv32-author-toolchain.md` for the surrounding design.
+//! See `docs/rv32/design.md` for the surrounding design.
 
 pub mod elf;
 pub mod error;

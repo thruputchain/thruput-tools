@@ -1,9 +1,9 @@
 //! ELF validation and the top-level [`lower`] entry point.
 //!
-//! Validation rules follow `docs/rv32/rv32-vm-experimental-design.md`. v4
-//! dispatch lives in the guest (`_start` reads the method id seeded in
-//! registers), so the lowerer no longer scans the symbol table: the entry
-//! contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
+//! ELF layout checks live here and in [`elf`]; output validation uses
+//! `groundhog-rv32-artifact`. Since v4, dispatch lives in the guest (`_start`
+//! reads the method id seeded in registers), so the lowerer no longer scans the
+//! symbol table: the entry contract is `e_entry == 0` (enforced in [`elf::parse_elf`]) plus the
 //! `.text` layout rules below. Stripped release builds are valid inputs.
 
 use std::collections::HashSet;

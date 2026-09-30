@@ -879,3 +879,27 @@ This is a root-only, exclusive mode rather than a global flag; invoke it exactly
 as shown. The command prints the complete Groundhog skill as Markdown without
 network access or filesystem changes. An agent can read it directly, or the
 user can save and install it using the agent's normal skill workflow.
+
+## Local documentation
+
+```sh
+groundhog docs                 # Serve bundled docs at http://127.0.0.1:4321
+groundhog docs --port 8080     # Choose a port (0 selects an available one)
+groundhog docs --dir /path/to/developers-site/dist/docs-snapshot
+```
+
+The selected developer-site snapshot is embedded in the CLI. On first use it is
+verified and extracted under `${XDG_CACHE_HOME:-$HOME/.cache}/groundhog/docs/`,
+keyed by its archive SHA-256. Later runs verify and reuse those files. Damaged or
+partial cache entries are rebuilt from the bundled bytes; no network request or
+administrator access is needed. Clearing the docs cache is safe while servers
+are stopped; the next invocation recreates it.
+
+`--dir` serves a trusted local build directly and bypasses the bundled cache.
+Keep such a directory unchanged while serving. Open the printed loopback URL;
+Ctrl-C or SIGTERM stops the foreground server. `--json` reports readiness,
+resolved path, source identity, and guide/CLI version matching. No node, wallet,
+or project setup is required. External API references and network services still
+need access; page version notes remain authoritative for their examples.
+
+For snapshot updates, see [Bundled documentation maintenance](../../../docs/bundled-documentation.md).
