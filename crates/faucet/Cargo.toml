@@ -20,13 +20,13 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-groundhog-heap-profiling = { path = "../heap-profiling" }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 thruput-build-info = { workspace = true }
+groundhog-heap-profiling = { workspace = true }
 thruput-json-rpc-client = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
 thruput-signing = { workspace = true }
@@ -53,4 +53,4 @@ tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true, features = ["util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemallocator = { workspace = true }

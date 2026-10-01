@@ -6,6 +6,7 @@ fn invalid() -> io::Error {
         "malformed jemalloc heap profile or process mappings",
     )
 }
+
 fn number(text: &str, radix: u32) -> io::Result<u64> {
     let text = if radix == 16 {
         text.strip_prefix("0x").unwrap_or(text)
@@ -17,6 +18,7 @@ fn number(text: &str, radix: u32) -> io::Result<u64> {
     }
     u64::from_str_radix(text, radix).map_err(|_| invalid())
 }
+
 fn varint(out: &mut Vec<u8>, mut value: u64) {
     while value >= 128 {
         out.push(((value & 127) | 128).to_le_bytes()[0]);
@@ -24,15 +26,18 @@ fn varint(out: &mut Vec<u8>, mut value: u64) {
     }
     out.push(value.to_le_bytes()[0]);
 }
+
 fn integer(out: &mut Vec<u8>, field: u64, value: u64) {
     varint(out, field << 3);
     varint(out, value);
 }
+
 fn message(out: &mut Vec<u8>, field: u64, value: &[u8]) {
     varint(out, (field << 3) | 2);
     varint(out, value.len() as u64);
     out.extend_from_slice(value);
 }
+
 struct Mapping {
     start: u64,
     limit: u64,
@@ -144,8 +149,8 @@ pub fn jemalloc_to_pprof(dump: &str, maps: &str) -> io::Result<Vec<u8>> {
                 return Err(invalid());
             }
             consumed = true;
-            let n = number(fields[1].strip_suffix(':').ok_or_else(invalid)?, 10)?;
-            let b = number(fields[2], 10)?;
+            let sampled_count = number(fields[1].strip_suffix(':').ok_or_else(invalid)?, 10)?;
+            let sampled_bytes = number(fields[2], 10)?;
             number(
                 fields[3]
                     .strip_prefix('[')
@@ -154,15 +159,16 @@ pub fn jemalloc_to_pprof(dump: &str, maps: &str) -> io::Result<Vec<u8>> {
                 10,
             )?;
             number(fields[4].strip_suffix(']').ok_or_else(invalid)?, 10)?;
-            if (n == 0) != (b == 0) {
+            if (sampled_count == 0) != (sampled_bytes == 0) {
                 return Err(invalid());
             }
-            if n == 0 {
+            if sampled_count == 0 {
                 continue;
             }
-            let probability = -(-(b as f64) / n as f64 / period as f64).exp_m1();
-            let bytes = rounded(b as f64 / probability)?;
-            let count = rounded(bytes as f64 * n as f64 / b as f64)?;
+            let probability =
+                -(-(sampled_bytes as f64) / sampled_count as f64 / period as f64).exp_m1();
+            let bytes = rounded(sampled_bytes as f64 / probability)?;
+            let count = rounded(bytes as f64 * sampled_count as f64 / sampled_bytes as f64)?;
             let mut sample = Vec::new();
             for id in &stack {
                 integer(&mut sample, 1, *id);
@@ -207,6 +213,7 @@ pub fn jemalloc_to_pprof(dump: &str, maps: &str) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn read(input: &mut &[u8]) -> u64 {
         let mut value = 0;
         for shift in (0..64).step_by(7) {
@@ -219,6 +226,7 @@ mod tests {
         }
         panic!("invalid varint");
     }
+
     fn decode(mut input: &[u8]) -> Vec<(u64, u64, &[u8])> {
         let mut fields = Vec::new();
         while !input.is_empty() {
@@ -235,6 +243,7 @@ mod tests {
         }
         fields
     }
+
     #[test]
     fn captured_fixture() {
         let profile = jemalloc_to_pprof(include_str!("../testdata/jemalloc.heap"), "").unwrap();
@@ -245,6 +254,7 @@ mod tests {
             assert!(!decode(sample.2).is_empty());
         }
     }
+
     #[test]
     fn sampling_locations_and_mappings() {
         let profile = jemalloc_to_pprof(
@@ -276,6 +286,7 @@ mod tests {
         assert!(!fields.iter().any(|f| f.0 == 5));
         assert_eq!(fields.last().unwrap().1, 3);
     }
+
     #[test]
     fn malformed_input() {
         for dump in [

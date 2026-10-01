@@ -34,7 +34,7 @@ pub async fn spawn_observability_server(
     health: GatewayHealth,
     metrics: GatewayMetrics,
     shutdown: oneshot::Receiver<()>,
-    heap_profiling: bool,
+    enabled: bool,
 ) -> Result<ObservabilityServer, std::io::Error> {
     let listener = TcpListener::bind(listen_address).await?;
     let local_addr = listener.local_addr()?;
@@ -44,7 +44,7 @@ pub async fn spawn_observability_server(
         .route("/readyz", get(readyz))
         .route("/health", get(healthz))
         .route("/metrics", get(metrics_endpoint))
-        .merge(crate::heap_profiling::routes(heap_profiling))
+        .merge(crate::heap_profiling::routes(enabled))
         .fallback(unknown_endpoint)
         .method_not_allowed_fallback(method_not_allowed_endpoint)
         .with_state(state);

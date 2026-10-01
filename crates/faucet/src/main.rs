@@ -1,5 +1,6 @@
-use clap::Parser;
 mod heap_profiling;
+
+use clap::Parser;
 use std::sync::Arc;
 use thruput_faucet::{FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve};
 use tracing_subscriber::EnvFilter;
@@ -52,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
-    let heap_profiling = heap_profiling::initialize().await?;
+    let heap_profiling_enabled = heap_profiling::initialize().await?;
     let config_toml = tokio::fs::read_to_string(&cli.config)
         .await
         .map_err(|error| {
@@ -85,10 +86,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(listener) = listener {
         tracing::info!(listen = %listener.local_addr()?, "faucet heap profile server listening");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let profiles = axum::serve(listener, heap_profiling::routes::<()>(heap_profiling))
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            });
+        let profiles = axum::serve(
+            listener,
+            heap_profiling::routes::<()>(heap_profiling_enabled),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        });
         let profiles = tokio::spawn(async move { profiles.await });
         let result = serve(config).await;
         let _ = shutdown_tx.send(());

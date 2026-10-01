@@ -39,16 +39,18 @@ behavior.
 
 ## Operate and measure
 
-On Linux, set `GROUNDHOG_HEAP_PROFILING=1` to activate heap profiling and serve
-`GET /debug/pprof/heap` on the existing private observability listener. The path
-returns 404 when the switch is unset. The response is an uncompressed pprof protobuf
-with `Content-Type: application/octet-stream`; dumps require a writable temporary
-directory. The switch is supported only on Linux; requesting it elsewhere fails
-at startup. Linux builds use jemalloc even with profiling inactive, and compile
-in profiling support with a 512 KiB average allocation sampling interval.
-Dump and conversion run on a blocking worker; a concurrent dump request returns
-HTTP 429. Private dump files use mode 0600 and are removed after each request.
-`--dump-effective-config` bypasses profiling initialization.
+Heap profiling is opt-in on the existing private observability listener:
+
+- Set `GROUNDHOG_HEAP_PROFILING=1` to activate profiling. The path returns 404
+  when the switch is unset. `--dump-effective-config` bypasses profiling initialization.
+- `GET /debug/pprof/heap` returns an uncompressed pprof protobuf with
+  `Content-Type: application/octet-stream`.
+- Dump and conversion run on a blocking worker; a concurrent dump request returns HTTP 429.
+- Dumps require a writable temporary directory. Private dump files use mode 0600
+  and are removed after each request.
+- The switch is supported only on Linux; requesting it elsewhere fails at startup.
+  Linux builds use jemalloc even with profiling inactive, and compile in profiling
+  support with a 512 KiB average allocation sampling interval.
 
 - [Health and metrics](../../../docs/gateway/observability-smoke-test.md)
 - [Local benchmark scenarios](../../../docs/gateway/bench-scenarios.md)

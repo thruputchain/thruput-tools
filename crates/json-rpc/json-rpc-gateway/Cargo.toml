@@ -24,9 +24,9 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-groundhog-heap-profiling = { path = "../../heap-profiling" }
 thruput-build-info = { workspace = true }
 thruput-bundle-identity = { workspace = true }
+groundhog-heap-profiling = { workspace = true }
 thruput-hogd-backend = { workspace = true }
 thruput-json-rpc-api = { workspace = true }
 thruput-json-rpc-types = { workspace = true }
@@ -70,4 +70,4 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+tikv-jemallocator = { workspace = true }

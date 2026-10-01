@@ -4,15 +4,21 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
 publish = false
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Opt-in heap profiling for Groundhog services"
 
 [lints]
 workspace = true
 
 [dependencies]
-axum.workspace = true
-tokio.workspace = true
-tracing.workspace = true
+axum = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemalloc-sys = { version = "0.7", features = ["profiling"] }
