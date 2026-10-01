@@ -511,8 +511,14 @@ async fn public_bundle_installs_with_the_embedded_catalog() {
     assert!(
         installation
             .path()
-            .join("contracts/dev_wallet.rv32a")
+            .join("contracts/genesis_root.rv32a")
             .is_file()
+    );
+    assert!(
+        !installation
+            .path()
+            .join("contracts/dev_wallet.rv32a")
+            .exists()
     );
     assert!(installation.path().join(".ok").is_file());
 }
