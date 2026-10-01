@@ -355,12 +355,8 @@ pub struct GatewayConfig {
     /// Maximum `groundhog_view` calldata byte length.
     pub max_view_calldata_bytes: usize,
 
-    /// Ceiling on `groundhog_view` gas, and the budget used when a request
-    /// names no `gasLimit`. Local to this gateway, not consensus-checked;
-    /// clients read it through `groundhog_serverLimits`. `view_gas_limit` is
-    /// accepted as a legacy spelling.
-    #[serde(alias = "view_gas_limit")]
-    pub max_view_gas: u64,
+    /// Gas budget assigned to backend `groundhog_view` execution.
+    pub view_gas_limit: u64,
 
     /// Per-page cap on `getEvents` responses; requests with `limit`
     /// above this are rejected as `InvalidParam`.
@@ -411,7 +407,7 @@ impl Default for GatewayConfig {
             view_timeout_ms: 30_000,
             hogd_protocol_override: None,
             max_view_calldata_bytes: 64 * 1024,
-            max_view_gas: groundhog_json_rpc_server::DEFAULT_MAX_VIEW_GAS,
+            view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             max_events_per_page: 200,
             max_transactions_per_page: 200,
             max_cursor_bytes: 256,
@@ -643,22 +639,6 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn max_view_gas_accepts_current_and_legacy_keys() {
-        assert_eq!(
-            toml::from_str::<GatewayConfig>("")
-                .expect("bug: empty config should parse")
-                .max_view_gas,
-            groundhog_json_rpc_server::DEFAULT_MAX_VIEW_GAS
-        );
-        for key in ["max_view_gas", "view_gas_limit"] {
-            let config = toml::from_str::<GatewayConfig>(&format!("{key} = 2500000"))
-                .unwrap_or_else(|error| panic!("bug: `{key}` should parse: {error}"));
-            assert_eq!(config.max_view_gas, 2_500_000, "{key}");
-        }
-    }
-
     #[test]
     fn toml_with_unknown_top_level_key_is_rejected() {
         let error = toml::from_str::<GatewayConfig>(

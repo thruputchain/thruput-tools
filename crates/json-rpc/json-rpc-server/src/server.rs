@@ -545,7 +545,7 @@ where
     #[tracing::instrument(skip_all)]
     async fn server_limits(&self) -> RpcResult<ServerLimits> {
         Ok(ServerLimits::new(
-            self.config.max_view_gas,
+            self.config.view_gas_limit,
             self.config.max_view_calldata_bytes as u64,
             self.config.max_events_per_page,
             self.config.max_transactions_per_page,
@@ -708,7 +708,7 @@ where
                     None::<()>,
                 ));
             }
-            let gas_limit = view_gas_limit(request.gas_limit, self.config.max_view_gas)?;
+            let gas_limit = view_gas_limit(request.gas_limit, self.config.view_gas_limit)?;
             Ok(self.view.view(context, request, gas_limit).await?)
         })
         .await
@@ -734,16 +734,16 @@ where
 }
 
 /// Resolve the gas budget for a `groundhog_view` request: the requested
-/// `gasLimit` when it is within `1..=max_view_gas`, else `max_view_gas` when
-/// the request names none.
-fn view_gas_limit(requested: Option<u64>, max_view_gas: u64) -> Result<u64, RpcServerError> {
+/// `gasLimit` when it is within `1..=ceiling`, else `ceiling` (the configured
+/// `view_gas_limit`) when the request names none.
+fn view_gas_limit(requested: Option<u64>, ceiling: u64) -> Result<u64, RpcServerError> {
     match requested {
-        None => Ok(max_view_gas),
+        None => Ok(ceiling),
         Some(0) => Err(RpcServerError::InvalidParam(
             "view gasLimit must be greater than zero".into(),
         )),
-        Some(gas_limit) if gas_limit > max_view_gas => Err(RpcServerError::InvalidParam(format!(
-            "view gasLimit {gas_limit} exceeds maximum {max_view_gas}"
+        Some(gas_limit) if gas_limit > ceiling => Err(RpcServerError::InvalidParam(format!(
+            "view gasLimit {gas_limit} exceeds maximum {ceiling}"
         ))),
         Some(gas_limit) => Ok(gas_limit),
     }
@@ -2204,10 +2204,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     /// Run one view with `requested` gas against a server whose ceiling is
-    /// `max_view_gas`; return the outcome and the gas limits the view plane saw.
+    /// `ceiling`; return the outcome and the gas limits the view plane saw.
     async fn view_with_gas(
         requested: Option<u64>,
-        max_view_gas: u64,
+        ceiling: u64,
     ) -> (RpcResult<ViewResponse>, Vec<u64>) {
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let event_calls = Arc::new(Mutex::new(0));
@@ -2224,7 +2224,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 view_gas_limits: view_gas_limits.clone(),
             },
             test_network_info(),
-            RpcServerConfig::default().with_max_view_gas(max_view_gas),
+            RpcServerConfig::default().with_view_gas_limit(ceiling),
             BuildInfo::for_tests(),
         );
 
@@ -2279,7 +2279,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             mock.clone(),
             test_network_info(),
             RpcServerConfig::default()
-                .with_max_view_gas(42_000)
+                .with_view_gas_limit(42_000)
                 .with_max_view_calldata_bytes(512)
                 .with_max_events_per_page(17)
                 .with_max_transactions_per_page(19)

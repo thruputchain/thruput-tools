@@ -138,9 +138,8 @@ pub struct NodeSupervisorConfig {
     /// This override is intended for local cross-repo smoke tests before a
     /// matching Rust protocol crate has been published.
     pub hogd_protocol_override: Option<String>,
-    /// Ceiling on hogd-dev `ViewGateway` root invocation gas, and the budget
-    /// used when a view request names no `gasLimit`.
-    pub max_view_gas: u64,
+    /// Gas budget assigned to hogd-dev `ViewGateway` root invocations.
+    pub view_gas_limit: u64,
     /// Maximum time to wait for one hogd-dev `ViewGateway` execution RPC.
     pub view_timeout: Duration,
     /// Local block production policy for hogd-dev scheduler coordination.
@@ -159,7 +158,7 @@ impl Default for NodeSupervisorConfig {
             rpc_batch_concurrency: groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
             hogd_dev: HogdDevConfig::default(),
             hogd_protocol_override: None,
-            max_view_gas: groundhog_json_rpc_server::DEFAULT_MAX_VIEW_GAS,
+            view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
             block_driver: BlockDriverConfig::default(),
             local_airdrop: LocalAirdropConfig::default(),
@@ -217,10 +216,10 @@ impl NodeSupervisorConfig {
         self
     }
 
-    /// Return a copy with a different hogd-dev `ViewGateway` gas ceiling.
+    /// Return a copy with a different hogd-dev `ViewGateway` gas budget.
     #[must_use]
-    pub fn with_max_view_gas(mut self, max_view_gas: u64) -> Self {
-        self.max_view_gas = max_view_gas;
+    pub fn with_view_gas_limit(mut self, view_gas_limit: u64) -> Self {
+        self.view_gas_limit = view_gas_limit;
         self
     }
 

@@ -290,7 +290,7 @@ pub trait ViewPlane: Send + Sync + 'static {
     /// request-level failures.
     ///
     /// `gas_limit` is the validated budget to put on the root view
-    /// invocation: the request's `gasLimit`, or the server's `max_view_gas`
+    /// invocation: the request's `gasLimit`, or the server's `view_gas_limit`
     /// when the request names none. No gas is charged.
     ///
     /// Backends should override this once they have a stable hogd view
