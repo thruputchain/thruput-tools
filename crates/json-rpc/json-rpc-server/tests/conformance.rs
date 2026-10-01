@@ -235,6 +235,7 @@ impl ViewPlane for ScriptedViewBackend {
             output: self.output.clone(),
             events: vec![],
             height: BlockHeight::from(42),
+            gas_used: 0,
         })
     }
 }

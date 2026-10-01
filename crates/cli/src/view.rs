@@ -84,6 +84,7 @@ pub fn run(
             caller: &prepared.request.caller,
             selector: selector_json(&prepared.resolved),
             height: &response.height,
+            gas_used: response.gas_used,
             output: &response.output,
             events: &response.events,
             return_value: return_value.as_ref(),
@@ -273,6 +274,8 @@ fn print_view_response(
         }
     }
 
+    print.detail("gas used", response.gas_used);
+
     if !response.events.is_empty() {
         print.detail("events", response.events.len());
         for (index, event) in response.events.iter().enumerate() {
@@ -363,6 +366,7 @@ mod tests {
             },
             events: vec![],
             height: groundhog_json_rpc_types::BlockHeight::from(12),
+            gas_used: 0,
         };
 
         assert_eq!(

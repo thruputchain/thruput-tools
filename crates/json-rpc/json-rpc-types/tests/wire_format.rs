@@ -252,11 +252,14 @@ fn view_response_wire_format() {
         },
         events: vec![],
         height: BlockHeight::from(7i64),
+        gas_used: 1234,
     };
     let v: Value = serde_json::to_value(&response).unwrap();
     assert_eq!(v["output"]["result"], "return");
     assert_eq!(v["output"]["returnData"], "0x2a");
     assert_eq!(v["height"], 7);
+    assert_eq!(v["gasUsed"], 1234);
+    assert!(v.get("gas_used").is_none());
     assert!(v["events"].as_array().unwrap().is_empty());
 }
 

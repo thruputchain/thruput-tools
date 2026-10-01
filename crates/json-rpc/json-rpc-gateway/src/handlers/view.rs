@@ -63,7 +63,15 @@ async fn view_response_from_client(
         VIEW_GATEWAY,
         deadline,
         client.viewgateway_view(query),
-        |result| matches!(result, ViewGatewayResult::ViewGatewayOk { .. }),
+        // A rejected request is the caller's error, not the backend's: the
+        // backend answered correctly, so it counts as a healthy round trip.
+        |result| {
+            matches!(
+                result,
+                ViewGatewayResult::ViewGatewayOk { .. }
+                    | ViewGatewayResult::ViewGatewayInvalidInput { .. }
+            )
+        },
     )
     .await;
     if matches!(result, Err(RpcServerError::BackendTimeout)) {

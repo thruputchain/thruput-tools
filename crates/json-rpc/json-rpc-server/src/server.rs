@@ -1204,6 +1204,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 },
                 events: vec![],
                 height: BlockHeight::from(0),
+                gas_used: 0,
             })
         }
     }

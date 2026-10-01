@@ -5517,6 +5517,7 @@ mod tests {
                     },
                     events: Vec::new(),
                     height: BlockHeight::from(44),
+                    gas_used: 0,
                 },
             },
             &tick,
@@ -5555,6 +5556,7 @@ mod tests {
                     },
                     events: Vec::new(),
                     height: BlockHeight::from(44),
+                    gas_used: 0,
                 },
             },
             &tick,
@@ -7263,6 +7265,7 @@ mod tests {
             output,
             events: Vec::new(),
             height: BlockHeight::from(77),
+            gas_used: 0,
         }
     }
 
