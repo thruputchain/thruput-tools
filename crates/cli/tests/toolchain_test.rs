@@ -54,7 +54,20 @@ fn toolchain_use_persists_an_exact_catalog_version() {
         serde_json::from_slice(&list_output.stdout).expect("bug: list output should be JSON");
     assert_eq!(list_json["command"], "toolchain.list");
     assert_eq!(list_json["data"]["selectedVersion"], version);
-    assert_eq!(list_json["data"]["toolchains"][0]["active"], true);
+    let toolchains = list_json["data"]["toolchains"]
+        .as_array()
+        .expect("bug: toolchains should be an array");
+    let selected = toolchains
+        .iter()
+        .find(|toolchain| toolchain["version"] == version)
+        .expect("bug: selected version should be listed");
+    assert_eq!(selected["active"], true);
+    assert!(
+        toolchains
+            .iter()
+            .filter(|toolchain| toolchain["version"] != version)
+            .all(|toolchain| toolchain["active"] == false)
+    );
 
     let repeated_use_output = groundhog(&config, &cache)
         .args(["--json", "toolchain", "use", version.as_str()])
@@ -64,6 +77,24 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let repeated_use_json: serde_json::Value = serde_json::from_slice(&repeated_use_output.stdout)
         .expect("bug: repeated use output should be JSON");
     assert_eq!(repeated_use_json["data"]["changed"], false);
+}
+
+#[test]
+fn toolchain_use_accepts_the_previous_release() {
+    // Users who saved the previous default must keep a selectable version.
+    let root = tempfile::tempdir().expect("bug: tempdir should create");
+    let config = root.path().join("config");
+    let cache = root.path().join("cache");
+
+    let output = groundhog(&config, &cache)
+        .args(["--json", "toolchain", "use", "0.1.29-rc.5"])
+        .output()
+        .expect("bug: groundhog should run");
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("bug: use output should be JSON");
+    assert_eq!(json["data"]["version"], "0.1.29-rc.5");
+    assert_ne!(json["data"]["version"], default_version());
 }
 
 #[test]
