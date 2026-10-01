@@ -1556,7 +1556,7 @@
           "gasLimit": {
             "description": "Optional gas budget for the root invocation. Absent selects the\nserver's `maxViewGas` (see `serverLimits`); a value above it, or zero,\nis rejected as an invalid parameter. No gas is charged for a view.",
             "format": "uint64",
-            "minimum": 0,
+            "minimum": 1,
             "type": [
               "integer",
               "null"
