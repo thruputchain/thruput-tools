@@ -14,6 +14,7 @@ use groundhog_json_rpc_types::network_descriptor::{
     NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
 };
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::server_limits::ServerLimits;
 use groundhog_json_rpc_types::state::StorageItemInfo;
 use groundhog_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
@@ -217,12 +218,41 @@ fn view_request_wire_format() {
         entrypoint: HexBytes(vec![1, 2, 3, 4, 5, 6, 7, 8]),
         calldata: HexBytes(vec![0xca, 0xfe]),
         caller: None,
+        gas_limit: None,
     };
     let v: Value = serde_json::to_value(&request).unwrap();
     assert!(v["contract"].as_str().unwrap().starts_with("0x"));
     assert_eq!(v["entrypoint"], "0x0102030405060708");
     assert_eq!(v["calldata"], "0xcafe");
     assert!(v.get("caller").is_none());
+    assert!(v.get("gasLimit").is_none());
+
+    let with_gas = ViewRequest {
+        gas_limit: Some(250_000),
+        ..request
+    };
+    let v: Value = serde_json::to_value(&with_gas).unwrap();
+    assert_eq!(v["gasLimit"], 250_000);
+    let decoded: ViewRequest = serde_json::from_value(v).unwrap();
+    assert_eq!(decoded.gas_limit, Some(250_000));
+}
+
+#[test]
+fn server_limits_wire_format() {
+    let limits = ServerLimits::new(10_000_000, 65_536, 200, 200, 256);
+    let v: Value = serde_json::to_value(limits).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({
+            "maxViewGas": 10_000_000,
+            "maxViewCalldataBytes": 65_536,
+            "maxEventsPerPage": 200,
+            "maxTransactionsPerPage": 200,
+            "maxCursorBytes": 256,
+        })
+    );
+    let decoded: ServerLimits = serde_json::from_value(v).unwrap();
+    assert_eq!(decoded, limits);
 }
 
 #[test]
@@ -394,6 +424,7 @@ fn request_types_reject_unknown_fields() {
         entrypoint: HexBytes(vec![0; 8]),
         calldata: HexBytes(vec![]),
         caller: None,
+        gas_limit: None,
     })
     .unwrap();
     rejects::<ViewRequest>(&view, &[]);
