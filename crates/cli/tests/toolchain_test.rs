@@ -1,5 +1,14 @@
 use std::process::Command;
 
+use groundhog_toolchain::Catalog;
+
+fn default_version() -> String {
+    Catalog::embedded()
+        .expect("bug: embedded catalog should validate")
+        .default_version()
+        .to_owned()
+}
+
 fn groundhog(config: &std::path::Path, cache: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
     command
@@ -12,12 +21,13 @@ fn groundhog(config: &std::path::Path, cache: &std::path::Path) -> Command {
 
 #[test]
 fn toolchain_use_persists_an_exact_catalog_version() {
+    let version = default_version();
     let root = tempfile::tempdir().expect("bug: tempdir should create");
     let config = root.path().join("config");
     let cache = root.path().join("cache");
 
     let use_output = groundhog(&config, &cache)
-        .args(["--json", "toolchain", "use", "0.1.29-rc.4"])
+        .args(["--json", "toolchain", "use", version.as_str()])
         .output()
         .expect("bug: groundhog should run");
     assert!(use_output.status.success());
@@ -25,7 +35,7 @@ fn toolchain_use_persists_an_exact_catalog_version() {
         serde_json::from_slice(&use_output.stdout).expect("bug: use output should be JSON");
     assert_eq!(use_json["command"], "toolchain.use");
     assert_eq!(use_json["data"]["schemaVersion"], 1);
-    assert_eq!(use_json["data"]["version"], "0.1.29-rc.4");
+    assert_eq!(use_json["data"]["version"], version);
     assert_eq!(use_json["data"]["active"], true);
     assert_eq!(use_json["data"]["installed"], false);
     assert_eq!(use_json["data"]["changed"], true);
@@ -33,7 +43,7 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let config_text = std::fs::read_to_string(config.join("groundhog/config.toml"))
         .expect("bug: global config should exist");
     assert!(config_text.contains("[toolchain]"));
-    assert!(config_text.contains("hog_devnode_version = \"0.1.29-rc.4\""));
+    assert!(config_text.contains(&format!("hog_devnode_version = \"{version}\"")));
 
     let list_output = groundhog(&config, &cache)
         .args(["--json", "toolchain", "list"])
@@ -43,11 +53,11 @@ fn toolchain_use_persists_an_exact_catalog_version() {
     let list_json: serde_json::Value =
         serde_json::from_slice(&list_output.stdout).expect("bug: list output should be JSON");
     assert_eq!(list_json["command"], "toolchain.list");
-    assert_eq!(list_json["data"]["selectedVersion"], "0.1.29-rc.4");
+    assert_eq!(list_json["data"]["selectedVersion"], version);
     assert_eq!(list_json["data"]["toolchains"][0]["active"], true);
 
     let repeated_use_output = groundhog(&config, &cache)
-        .args(["--json", "toolchain", "use", "0.1.29-rc.4"])
+        .args(["--json", "toolchain", "use", version.as_str()])
         .output()
         .expect("bug: groundhog should run");
     assert!(repeated_use_output.status.success());
@@ -74,7 +84,8 @@ fn offline_install_fails_without_touching_the_network() {
     assert_eq!(json["error"]["code"], "toolchain_offline_missing");
     assert!(
         !cache
-            .join("groundhog/toolchain/hog-devnode/0.1.29-rc.4")
+            .join("groundhog/toolchain/hog-devnode")
+            .join(default_version())
             .exists()
     );
 }
@@ -150,7 +161,7 @@ fn toolchain_list_human_output_is_stdout_data() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).expect("bug: list output should be UTF-8");
-    assert!(stdout.contains("0.1.29-rc.4 (active) — available"));
+    assert!(stdout.contains(&format!("{} (active) — available", default_version())));
 }
 
 #[test]
