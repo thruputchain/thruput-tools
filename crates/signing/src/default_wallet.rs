@@ -128,7 +128,13 @@ pub fn build_default_wallet_deploy_transaction(
 
 /// Decode a successful native `execute` result for a single child call.
 /// Pass return data only after checking the root receipt's success status.
+/// The protocol's root return-buffer limit includes the collection framing.
 pub fn decode_default_wallet_call_return(data: &[u8]) -> Result<Vec<u8>, SigningError> {
+    if data.len() > groundhog_xdr::transaction::kMaxReturnBufferLen as usize {
+        return Err(SigningError::XdrDecode(
+            "native wallet return exceeds protocol buffer limit".into(),
+        ));
+    }
     let mut returns: Vec<Vec<u8>> =
         xdrs::cxs::decode(data).map_err(|error| SigningError::XdrDecode(error.to_string()))?;
     if returns.len() != 1 {

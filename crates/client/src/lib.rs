@@ -116,7 +116,14 @@ impl UnsignedCall {
     }
 
     /// Sign this prepared invocation without submitting it or consulting configuration.
+    /// Reject a signer whose public key differs from the native account's auth claim.
     pub fn sign(self, signer: &impl Signer) -> Result<SignedCall, SigningError> {
+        if let xdr::auth_claim::AuthClaim::kPubkeySignature { pubkey_preimage } =
+            &self.transaction.auth_claim
+            && pubkey_preimage.pubkey != signer.public_key()
+        {
+            return Err(SigningError::SignerMismatch);
+        }
         let tx_hash = TxHash(groundhog_signing::transaction_hash(&self.transaction)?.into());
         let tx_hex = groundhog_signing::sign_and_encode_transaction_hex(
             self.transaction,
@@ -290,12 +297,16 @@ mod tests {
     use jsonrpsee::{RpcModule, server::ServerBuilder};
 
     fn prepared() -> UnsignedCall {
+        prepared_with_wallet(Wallet::Legacy {
+            address: ContractAddress::from([1; 32]),
+            entrypoint: ContractEntrypointID::from([2; 8]),
+        })
+    }
+
+    fn prepared_with_wallet(wallet: Wallet<'_>) -> UnsignedCall {
         prepare_call(
             CallRequest {
-                wallet: Wallet::Legacy {
-                    address: ContractAddress::from([1; 32]),
-                    entrypoint: ContractEntrypointID::from([2; 8]),
-                },
+                wallet,
                 target_address: ContractAddress::from([3; 32]),
                 target_entrypoint: ContractEntrypointID::from([4; 8]),
                 target_calldata: &[5, 6],
@@ -307,6 +318,45 @@ mod tests {
             NetworkHash::from(SHA256Hash::from([8; 32])),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn native_signer_mismatch_is_rejected_before_signing() {
+        struct WrongSigner;
+        impl Signer for WrongSigner {
+            fn public_key(&self) -> xdr::types::PublicKey {
+                LocalSigner::from_secret_key([10; 32]).public_key()
+            }
+
+            fn sign(&self, _: &[u8]) -> Result<xdr::types::Signature, SigningError> {
+                panic!("mismatching signer must not be invoked")
+            }
+        }
+
+        let owner = LocalSigner::from_secret_key([9; 32]);
+        for nonce in [0, 17] {
+            let account = signing::PubkeyAccount::new(owner.public_key(), nonce);
+            let plan = prepared_with_wallet(Wallet::Native(&account));
+            assert!(matches!(
+                plan.sign(&WrongSigner),
+                Err(SigningError::SignerMismatch)
+            ));
+        }
+    }
+
+    #[test]
+    fn matching_native_signer_preserves_canonical_bytes() {
+        let owner = LocalSigner::from_secret_key([9; 32]);
+        let account = signing::PubkeyAccount::new(owner.public_key(), 17);
+        let plan = prepared_with_wallet(Wallet::Native(&account));
+        let expected = signing::sign_and_encode_transaction_hex(
+            plan.transaction().clone(),
+            &owner,
+            SignTransactionParams::default(),
+            &NetworkHash::from(SHA256Hash::from([8; 32])),
+        )
+        .unwrap();
+        assert_eq!(plan.sign(&owner).unwrap().tx_hex(), expected);
     }
 
     #[test]
