@@ -8165,6 +8165,7 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["data"]["height"], 12);
     assert_eq!(stdout["data"]["output"]["result"], "return");
     assert_eq!(stdout["data"]["output"]["returnData"], "0x0102");
+    assert_eq!(stdout["data"]["gasUsed"], 4321);
     assert_eq!(stdout["data"]["events"], serde_json::json!([]));
     // Abort fields stay absent (not null) on non-abort payloads so the
     // v1 schema shape is unchanged for existing consumers.
@@ -8383,6 +8384,7 @@ fn view_human_prints_event_details() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("View succeeded"));
+    assert!(stderr.contains("gas used: 4321"), "{stderr}");
     assert!(stderr.contains("events: 1"));
     assert!(stderr.contains(&format!(
         "    [0] {address} topic0={topic} data={event_data}"
@@ -14286,6 +14288,7 @@ fn spawn_view_rpc_inner_with_events(
                 "output": output,
                 "events": events,
                 "height": 12,
+                "gasUsed": 4321,
             }),
         );
     });

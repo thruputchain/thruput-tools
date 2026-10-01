@@ -45,6 +45,13 @@ pub struct ViewResponse {
 
     /// Block height of the committed snapshot used for the view.
     pub height: BlockHeight,
+
+    /// Gas the invocation consumed: the root frame and every frame it
+    /// invoked. On an out-of-gas fault it equals the gas limit the view ran
+    /// with. Matches the `gasUsed` a transaction with no attached contracts
+    /// making the same invocation would report; out-of-gas is checked
+    /// strictly, so size a transaction's limit above this figure.
+    pub gas_used: u64,
 }
 
 /// Root invocation output with raw buffers preserved as hex.

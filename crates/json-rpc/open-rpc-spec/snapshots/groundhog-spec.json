@@ -1667,6 +1667,12 @@
             },
             "type": "array"
           },
+          "gasUsed": {
+            "description": "Gas the invocation consumed: the root frame and every frame it\ninvoked. On an out-of-gas fault it equals the gas limit the view ran\nwith. Matches the `gasUsed` a transaction with no attached contracts\nmaking the same invocation would report; out-of-gas is checked\nstrictly, so size a transaction's limit above this figure.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "height": {
             "$ref": "#/components/schemas/BlockHeight",
             "description": "Block height of the committed snapshot used for the view."
@@ -1679,7 +1685,8 @@
         "required": [
           "output",
           "events",
-          "height"
+          "height",
+          "gasUsed"
         ],
         "type": "object"
       }

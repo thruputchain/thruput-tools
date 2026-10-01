@@ -22,6 +22,8 @@ pub struct ViewJsonPayload<'a> {
     pub caller: &'a Option<ContractAddress>,
     pub selector: serde_json::Value,
     pub height: &'a BlockHeight,
+    /// Gas the viewed invocation consumed.
+    pub gas_used: u64,
     pub output: &'a RootInvocationOutput,
     pub events: &'a [EmittedEvent],
     pub return_value: Option<&'a serde_json::Value>,

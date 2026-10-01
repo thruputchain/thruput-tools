@@ -4,6 +4,7 @@ use groundhog_json_rpc_types::view::RootInvocationOutput;
 use groundhog_json_rpc_types::view::ViewRequest;
 use groundhog_view::ViewGatewayResult;
 use groundhog_xdr::invoke_flag::InvokeFlag;
+use groundhog_xdr::syscall_error::SyscallErrorCode;
 use groundhog_xdr::transaction::InvocationFrameOutput;
 use xdr_common::BytesM;
 use xdr_common::VecM;
@@ -65,8 +66,8 @@ fn an_ok_result_splits_topics_and_counts_malformed_events() {
     serialized_event.extend_from_slice(&[12, 13, 14]);
     let result = ViewGatewayResult::ViewGatewayOk {
         payload: ViewGatewayPayload {
-            gas_consumed: 0,
             height: 42.into(),
+            gas_consumed: 1234,
             output: InvocationFrameOutput::Return {
                 return_buffer: BytesM(vec![1, 2, 3]),
             },
@@ -88,6 +89,7 @@ fn an_ok_result_splits_topics_and_counts_malformed_events() {
     let outcome = view_outcome("view_gateway", result).expect("ok response");
 
     assert_eq!(outcome.response.height, 42.into());
+    assert_eq!(outcome.response.gas_used, 1234);
     assert!(matches!(
         outcome.response.output,
         RootInvocationOutput::Return { .. }
@@ -112,6 +114,21 @@ fn service_failures_map_to_backend_errors_naming_the_service() {
             "{error}"
         );
     }
+}
+
+#[test]
+fn invalid_input_is_a_caller_error_naming_the_service_and_code() {
+    let result = ViewGatewayResult::ViewGatewayInvalidInput {
+        error_code: SyscallErrorCode::kSyscallErrorCodeReentrance,
+    };
+    let error = view_outcome("hogd-dev ViewGateway", result).unwrap_err();
+    assert!(
+        matches!(error, RpcServerError::InvalidParam(_)),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(message.contains("hogd-dev ViewGateway"), "{message}");
+    assert!(message.contains("kSyscallErrorCodeReentrance"), "{message}");
 }
 
 #[test]

@@ -104,10 +104,16 @@ pub fn view_outcome(
                     output,
                     events: parsed.events,
                     height: payload.height,
+                    gas_used: payload.gas_consumed,
                 },
                 dropped_events: parsed.dropped,
             })
         }
+        // Rejected before any frame ran: deterministic for this request
+        // against this state, so it is the caller's to fix, not a retry.
+        ViewGatewayResult::ViewGatewayInvalidInput { error_code } => Err(
+            RpcServerError::InvalidParam(format!("{service} rejected the view: {error_code}")),
+        ),
         ViewGatewayResult::ViewGatewayAbandoned => Err(RpcServerError::BackendUnavailable(
             format!("{service} abandoned the view after retrying; retry later"),
         )),
