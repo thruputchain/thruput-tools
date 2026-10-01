@@ -24,11 +24,11 @@ Native calls use `DefaultWallet.execute`; legacy calls use `doAction`. After
 checking receipt success, `SignedCall::decode_return` extracts the single child
 return for the selected wallet. Native return decoding bounds the complete encoded
 buffer, including collection framing, to the protocol's return-buffer limit.
-Native accounts supply pubkey authentication;
-legacy addresses remain explicit and are never rederived. Network validation is explicit;
-`prepare_call` and `sign` do not contact the network. Submission is not retried
-by this library. After an ambiguous submission error or receipt timeout, reconcile
-by the retained hash before deciding what to do next.
+Native accounts supply pubkey authentication; legacy addresses remain explicit and
+are never rederived. Network validation is explicit; `prepare_call` and `sign` do
+not contact the network. Submission is not retried by this library. After an
+ambiguous submission error or receipt timeout, reconcile by the retained hash
+before deciding what to do next.
 
 The `codec` module decodes canonical specs, resolves methods, derives selectors,
 encodes positional arguments and decodes returns/declared aborts. The caller
