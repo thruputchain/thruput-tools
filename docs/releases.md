@@ -25,13 +25,16 @@ SHA256SUMS
 ```
 
 Each binary archive also has a `<binary-archive-base>-debuginfo.tar.gz`
-companion covered by `SHA256SUMS` (24 archives total). The trailing
-`-debuginfo` prevents it matching binary selectors ending in the target or
-`-znver5`. Linux binaries retain `.symtab` and carry a GNU debuglink; their
-split debug files are rooted at `usr/lib/debug/.build-id/<xx>/<rest>.debug`,
-using the binary's GNU build-id. The macOS companion contains a `groundhog.dSYM`
-bundle; its binary is stripped of debug information and re-signed ad hoc.
-Release builds include line tables and force frame pointers.
+companion covered by `SHA256SUMS` (24 archives total).
+
+- The trailing `-debuginfo` prevents it matching binary selectors ending in the
+  target or `-znver5`.
+- Linux binaries retain `.symtab` and carry a GNU debuglink. Their split debug
+  files are rooted at `usr/lib/debug/.build-id/<xx>/<rest>.debug`, using the
+  binary's GNU build-id.
+- The macOS companion contains a `groundhog.dSYM` bundle. Its binary is stripped
+  of debug information and re-signed ad hoc.
+- Release builds include line tables and force frame pointers.
 
 Install the Linux debuginfo companion with
 `sudo tar -C / -xzf <archive>-debuginfo.tar.gz` to place its files under

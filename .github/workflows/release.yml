@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - 'scripts/split-release-debuginfo.sh'
+      - 'scripts/split-release-dsym.sh'
+      - 'scripts/test_split_release_dsym.py'
       - 'Cargo.toml'
       - '.cargo/config.toml'
 
@@ -71,6 +73,9 @@ jobs:
           crate_version=${crate_id##*[@#]}
           test -n "$crate_version"
           echo "CRATE_VERSION=$crate_version" >> "$GITHUB_ENV"
+
+      - name: Test macOS debuginfo packaging
+        run: python3 -m unittest discover -s scripts -p test_split_release_dsym.py
 
       - name: Verify native architecture
         run: test "$(uname -m)" = "${{ matrix.machine }}"
@@ -199,12 +204,7 @@ jobs:
             if [ "${{ matrix.platform }}" = linux ]; then
               bash scripts/split-release-debuginfo.sh "$package_dir/$app" "$debug_root" "$debug_archive"
             else
-              mkdir -p "$debug_root"
-              dsymutil "target/release/$app" -o "$debug_root/$app.dSYM"
-              strip -S "$package_dir/$app"
-              codesign --force --sign - "$package_dir/$app"
-              codesign --verify --strict "$package_dir/$app"
-              tar -czf "$debug_archive" -C "$debug_root" "$app.dSYM"
+              bash scripts/split-release-dsym.sh "$package_dir/$app" "$debug_root" "$debug_archive"
             fi
             cp README.md LICENSE "$package_dir/"
             if [ "$app" = groundhog ]; then
