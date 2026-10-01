@@ -147,6 +147,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
 enum Outcome {
     Success,
     SendError,
+    ConnectionLost,
     Rejected(i32),
     SendHashMismatch,
     LookupError,
@@ -205,6 +206,11 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
                 Outcome::SendError => Err(ErrorObjectOwned::owned(
                     groundhog_json_rpc_types::error::codes::BACKEND_TIMEOUT,
                     "post-admission response failure",
+                    None::<()>,
+                )),
+                Outcome::ConnectionLost => Err(ErrorObjectOwned::owned(
+                    groundhog_json_rpc_types::error::codes::BACKEND_UNAVAILABLE,
+                    "scheduler connection lost after dispatch",
                     None::<()>,
                 )),
                 Outcome::SendHashMismatch => Ok(format!("0x{}", "bb".repeat(32))),
@@ -509,7 +515,6 @@ async fn native_deploy_reports_definitive_rejections_without_reconciliation() {
         codes::INVALID_PARAMS,
         codes::TX_INVALID,
         codes::TX_REJECTED,
-        codes::BACKEND_UNAVAILABLE,
         codes::OVERLOADED,
         -32601,
     ] {
@@ -554,6 +559,7 @@ async fn native_deploy_reports_definitive_rejections_without_reconciliation() {
 async fn native_deploy_preserves_identity_and_never_saves_alias_for_unverified_results() {
     for outcome in [
         Outcome::SendError,
+        Outcome::ConnectionLost,
         Outcome::SendHashMismatch,
         Outcome::LookupError,
         Outcome::ReceiptHashMismatch,

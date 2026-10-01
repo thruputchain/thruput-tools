@@ -7300,7 +7300,7 @@ fn transfer_live_lost_submission_response_polls_local_hash() {
 
 #[test]
 fn transfer_live_classifies_send_errors_by_numeric_code() {
-    for code in [-32602, -32000, -32001, -32050, -32053] {
+    for code in [-32602, -32000, -32001, -32053] {
         let output = run_transfer_live_mock(
             TransferRpcMock {
                 submit: TransferSubmitMock::Error(code),
@@ -7334,8 +7334,8 @@ fn transfer_live_classifies_send_errors_by_numeric_code() {
         );
     }
 
-    for code in [-32051, -32123] {
-        let output = run_transfer_live_mock(
+    for code in [-32050, -32051, -32123] {
+        let run = run_transfer_live_mock_with_hash(
             TransferRpcMock {
                 submit: TransferSubmitMock::Error(code),
                 poll: Some(TransferPollMock::Status(
@@ -7344,12 +7344,14 @@ fn transfer_live_classifies_send_errors_by_numeric_code() {
             },
             true,
         );
+        let output = run.output;
         assert!(
             !output.status.success(),
             "code {code} should poll then fail"
         );
         assert!(output.stderr.is_empty());
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(stdout["data"]["txHash"], run.local_hash);
         assert_eq!(
             stdout["error"]["code"],
             "transaction_confirmation_unavailable"
