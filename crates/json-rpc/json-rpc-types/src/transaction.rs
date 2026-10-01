@@ -34,9 +34,9 @@ pub enum TransactionStatus {
     /// Scheduler rejected the transaction.
     Invalid { reason: String },
 
-    /// No committed record, but the transaction failed
-    /// nondeterministically during two-phase commit within the last few
-    /// blocks and the indexer still holds the diagnostic.
+    /// No committed record, but a recent proposal attempt failed and the
+    /// indexer still holds its diagnostic. This includes storage conflicts
+    /// during two-phase commit and contract attachments refused before execution.
     ///
     /// Best-effort and advisory: reports are dropped freely under load,
     /// only the proposing node's indexers hear them, and a later retry
@@ -46,8 +46,8 @@ pub enum TransactionStatus {
     RecentFailure {
         /// Executing block height of the failed attempt.
         attempt_height: BlockHeight,
-        /// First conflicting storage op reported for the failed attempt.
-        conflict: ConflictDiagnostic,
+        /// First storage conflict or refused contract attachment.
+        cause: TransactionFailureCause,
     },
 
     /// Not found in mempool or indexer.
@@ -58,6 +58,117 @@ pub enum TransactionStatus {
     /// for client updates.
     #[serde(other)]
     Other,
+}
+
+/// Why a recent proposal attempt failed. This diagnostic is advisory, not final.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TransactionFailureCause {
+    /// Two-phase commit could not apply a storage delta.
+    DbConflict { conflict: ConflictDiagnostic },
+    /// The executor refused a contract attachment before execution.
+    #[serde(rename_all = "camelCase")]
+    ContractRejected {
+        /// Position in the transaction's contracts-to-deploy list.
+        contract_index: u32,
+        code: ContractRejectCode,
+    },
+    /// A cause added by a newer server.
+    #[serde(other)]
+    Other,
+}
+
+impl std::fmt::Display for TransactionFailureCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DbConflict { conflict } => {
+                let code = serde_json::to_string(&conflict.code).map_err(|_| std::fmt::Error)?;
+                let address =
+                    serde_json::to_string(&conflict.address).map_err(|_| std::fmt::Error)?;
+                write!(
+                    f,
+                    "{} conflict at {} (key 0x{})",
+                    code.trim_matches('"'),
+                    address.trim_matches('"'),
+                    hex::encode(&conflict.key.0)
+                )
+            }
+            Self::ContractRejected {
+                contract_index,
+                code,
+            } => {
+                let code = serde_json::to_string(code).map_err(|_| std::fmt::Error)?;
+                write!(
+                    f,
+                    "contract attachment {contract_index} rejected: {}",
+                    code.trim_matches('"')
+                )
+            }
+            Self::Other => f.write_str("unrecognized failure cause"),
+        }
+    }
+}
+
+impl From<&groundhog_trace::TxFailureCause> for TransactionFailureCause {
+    fn from(cause: &groundhog_trace::TxFailureCause) -> Self {
+        use groundhog_trace::TxFailureCause as Xdr;
+        match cause {
+            Xdr::TxFailureDbConflict { conflict } => Self::DbConflict {
+                conflict: conflict.into(),
+            },
+            Xdr::TxFailureContractRejected { contract } => Self::ContractRejected {
+                contract_index: contract.contract_index,
+                code: contract.code.into(),
+            },
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Reason the executor refused a contract attachment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub enum ContractRejectCode {
+    TooMany,
+    BlobTooLarge,
+    NotDeployable,
+    Duplicate,
+    MalformedArtifact,
+    UnsupportedFormat,
+    UnsupportedAbi,
+    GasScheduleMismatch,
+    MemoryTooLarge,
+    CodeSizeInvalid,
+    InitialMemoryInvalid,
+    DigestMismatch,
+    InvalidProgram,
+    /// Unrecognized rejection code from a newer node.
+    #[serde(other)]
+    Other,
+}
+
+impl From<groundhog_trace::ContractRejectCode> for ContractRejectCode {
+    fn from(code: groundhog_trace::ContractRejectCode) -> Self {
+        use groundhog_trace::ContractRejectCode as Xdr;
+        match code {
+            Xdr::ContractRejectTooMany => Self::TooMany,
+            Xdr::ContractRejectBlobTooLarge => Self::BlobTooLarge,
+            Xdr::ContractRejectNotDeployable => Self::NotDeployable,
+            Xdr::ContractRejectDuplicate => Self::Duplicate,
+            Xdr::ContractRejectMalformedArtifact => Self::MalformedArtifact,
+            Xdr::ContractRejectUnsupportedFormat => Self::UnsupportedFormat,
+            Xdr::ContractRejectUnsupportedAbi => Self::UnsupportedAbi,
+            Xdr::ContractRejectGasScheduleMismatch => Self::GasScheduleMismatch,
+            Xdr::ContractRejectMemoryTooLarge => Self::MemoryTooLarge,
+            Xdr::ContractRejectCodeSizeInvalid => Self::CodeSizeInvalid,
+            Xdr::ContractRejectInitialMemoryInvalid => Self::InitialMemoryInvalid,
+            Xdr::ContractRejectDigestMismatch => Self::DigestMismatch,
+            Xdr::ContractRejectInvalidProgram => Self::InvalidProgram,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// One conflicting storage operation reported by two-phase commit.
@@ -160,7 +271,7 @@ impl From<&groundhog_trace::TxFailureDiagnostic> for TransactionStatus {
     fn from(diagnostic: &groundhog_trace::TxFailureDiagnostic) -> Self {
         Self::RecentFailure {
             attempt_height: diagnostic.attempt_height.clone(),
-            conflict: (&diagnostic.conflict).into(),
+            cause: (&diagnostic.cause).into(),
         }
     }
 }

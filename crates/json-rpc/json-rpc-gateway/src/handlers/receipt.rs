@@ -1215,12 +1215,14 @@ mod tests {
         use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
         TxFailureDiagnostic {
             attempt_height: 43.into(),
-            conflict: DbConflictDiagnostic {
-                addrkey: groundhog_xdr::types::AddressAndKey {
-                    address: [0; 32].into(),
-                    key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+            cause: groundhog_trace::TxFailureCause::TxFailureDbConflict {
+                conflict: DbConflictDiagnostic {
+                    addrkey: groundhog_xdr::types::AddressAndKey {
+                        address: [0; 32].into(),
+                        key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                    },
+                    code: DbConflictCode::ExclusiveLockDenied,
                 },
-                code: DbConflictCode::ExclusiveLockDenied,
             },
         }
     }

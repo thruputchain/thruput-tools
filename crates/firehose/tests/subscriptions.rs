@@ -381,6 +381,8 @@ async fn measure_fanout_and_catchup() {
         let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose"))
             .args([
                 "run",
+                "--protocol",
+                std::str::from_utf8(&fixture().origin.protocol).unwrap(),
                 "--event-endpoint",
                 &endpoint.to_string(),
                 "--store",
@@ -490,6 +492,8 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_hog-firehose"))
         .args([
             "run",
+            "--protocol",
+            std::str::from_utf8(&fixture().origin.protocol).unwrap(),
             "--event-endpoint",
             &endpoint.to_string(),
             "--store",

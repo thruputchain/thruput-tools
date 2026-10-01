@@ -142,12 +142,17 @@ async fn qualify_native_deployment(atomic: bool) {
     let mut saw_funding_failure = false;
     for _ in 0..120 {
         match client.get_transaction_status(negative_hash).await.unwrap() {
-            TransactionStatus::RecentFailure { conflict, .. }
-                if conflict.address.0 == unfunded_target
-                    && matches!(
-                        conflict.code,
-                        ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
-                    ) =>
+            TransactionStatus::RecentFailure {
+                cause:
+                    groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                        conflict,
+                    },
+                ..
+            } if conflict.address.0 == unfunded_target
+                && matches!(
+                    conflict.code,
+                    ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
+                ) =>
             {
                 saw_funding_failure = true;
                 break;

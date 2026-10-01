@@ -403,10 +403,12 @@ mod tests {
         assert_eq!(
             classify_pending_status(&TransactionStatus::RecentFailure {
                 attempt_height: 1.into(),
-                conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
-                    address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
-                    key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
-                    code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
+                cause: groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                    conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
+                        address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
+                        key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
+                        code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
+                    }
                 },
             }),
             PendingStatusClassification::Terminal
@@ -438,12 +440,8 @@ fn describe_status(status: &TransactionStatus) -> String {
         TransactionStatus::Invalid { reason } => format!("rejected by the scheduler: {reason}"),
         TransactionStatus::RecentFailure {
             attempt_height,
-            conflict,
-        } => format!(
-            "dropped during two-phase commit at height {attempt_height:?}: {:?} conflict on \
-             contract {:?}",
-            conflict.code, conflict.address
-        ),
+            cause,
+        } => format!("proposal attempt failed at height {attempt_height:?}: {cause}"),
         TransactionStatus::Unknown => "unknown; not found in the mempool or the indexer".to_owned(),
         _ => "unrecognized status from the node".to_owned(),
     }

@@ -635,6 +635,18 @@ log "Scaffolding counter contract"
 cd "$PROJECT_NAME"
 export GROUNDHOG_PROFILE="$SMOKE_PROFILE"
 
+# Exercise this checkout's RPC client before its matching registry release,
+# just as the generated-project CI job does. SDK dependencies remain published.
+python3 - "$REPO_ROOT/crates/json-rpc/json-rpc-client" <<'PYCLIENT'
+import json
+import pathlib
+import sys
+
+with pathlib.Path(".cargo/config.toml").open("a", encoding="utf-8") as config:
+    config.write('\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\n')
+    config.write(f'groundhog-json-rpc-client = {{ path = {json.dumps(sys.argv[1])} }}\n')
+PYCLIENT
+
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
     SDK_REPO_ROOT="$(cd "$SMOKE_SDK_PATH/../.." && pwd)"

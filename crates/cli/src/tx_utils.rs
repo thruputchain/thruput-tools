@@ -299,19 +299,11 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 },
                 TransactionStatus::RecentFailure {
                     attempt_height,
-                    conflict,
+                    cause,
                 } => CliError::TransactionRecentFailure {
                     tx_hash: format_tx_hash(&tx_hash),
                     attempt_height: *attempt_height,
-                    conflict_address: serde_json::to_value(conflict.address)
-                        .ok()
-                        .and_then(|value| value.as_str().map(str::to_owned))
-                        .unwrap_or_else(|| format!("{:?}", conflict.address)),
-                    conflict_key: format!("0x{}", hex::encode(conflict.key.0)),
-                    conflict_code: serde_json::to_value(conflict.code)
-                        .ok()
-                        .and_then(|value| value.as_str().map(str::to_owned))
-                        .unwrap_or_else(|| format!("{:?}", conflict.code)),
+                    cause,
                 },
                 _ => CliError::ReceiptPollingExhausted,
             }
@@ -472,11 +464,16 @@ mod tests {
                 tx_hash,
                 status: TransactionStatus::RecentFailure {
                     attempt_height: BlockHeight::from(17),
-                    conflict: ConflictDiagnostic {
-                        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
-                        key: HexBytes(vec![0, 0, 0, 1]),
-                        code: ConflictCode::BoundsExceeded,
-                    },
+                    cause:
+                        groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                            conflict: ConflictDiagnostic {
+                                address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+                                    [0x55; 32],
+                                )),
+                                key: HexBytes(vec![0, 0, 0, 1]),
+                                code: ConflictCode::BoundsExceeded,
+                            },
+                        },
                 },
             },
         );
@@ -486,8 +483,40 @@ mod tests {
         assert!(error.hint().expect("hint expected").contains("airdrop"));
         let details = error.details_json().expect("details expected");
         assert_eq!(details["attemptHeight"], 17);
-        assert_eq!(details["conflict"]["key"], "0x00000001");
-        assert_eq!(details["conflict"]["code"], "boundsExceeded");
+        assert_eq!(details["cause"]["conflict"]["key"], "0x00000001");
+        assert_eq!(details["cause"]["conflict"]["code"], "boundsExceeded");
+    }
+
+    #[test]
+    fn contract_rejection_preserves_diagnostic_in_cli_error() {
+        use groundhog_json_rpc_types::transaction::{ContractRejectCode, TransactionFailureCause};
+        let error = map_submit_and_poll_error(
+            groundhog_json_rpc_client::SubmitAndPollError::TransactionStatus {
+                tx_hash: TxHash(groundhog_json_rpc_types::hex::Hex0x(
+                    groundhog_xdr::types::SHA256Hash::from([0x44; 32]),
+                )),
+                status: TransactionStatus::RecentFailure {
+                    attempt_height: 17.into(),
+                    cause: TransactionFailureCause::ContractRejected {
+                        contract_index: 2,
+                        code: ContractRejectCode::GasScheduleMismatch,
+                    },
+                },
+            },
+        );
+        assert_eq!(error.code(), "transaction_recent_failure");
+        assert!(
+            error
+                .to_string()
+                .contains("contract attachment 2 rejected: gasScheduleMismatch")
+        );
+        assert!(error.hint().unwrap().contains("rebuild artifacts"));
+        assert_eq!(
+            error.details_json().unwrap()["cause"],
+            serde_json::json!({
+                "kind": "contractRejected", "contractIndex": 2, "code": "gasScheduleMismatch"
+            })
+        );
     }
 
     #[test]

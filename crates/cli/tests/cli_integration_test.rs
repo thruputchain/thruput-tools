@@ -6861,11 +6861,11 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
     let recent = serde_json::json!({
         "status": "recentFailure",
         "attemptHeight": 43,
-        "conflict": {
+        "cause": { "kind": "dbConflict", "conflict": {
             "address": format!("0x{}", "77".repeat(32)),
             "key": "0x0102",
             "code": "boundsExceeded",
-        },
+        } },
     });
     for (poll, expected_status) in [
         (
@@ -10443,11 +10443,11 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
         serde_json::json!({
             "status": "recentFailure",
             "attemptHeight": 17,
-            "conflict": {
+            "cause": { "kind": "dbConflict", "conflict": {
                 "address": format!("0x{}", "11".repeat(32)),
                 "key": "0xaabb",
                 "code": "boundsExceeded",
-            },
+            } },
         }),
         serde_json::json!({ "status": "unknown" }),
         serde_json::json!({ "status": "futureStatus", "futureField": 1 }),

@@ -759,27 +759,13 @@ pub enum CliError {
     #[hint("check the transaction arguments and signing wallet, then submit a new transaction")]
     #[details]
     TransactionInvalid { tx_hash: String, reason: String },
-    #[error(
-        "transaction {tx_hash} failed at height {attempt_height}: {conflict_code} conflict at {conflict_address}"
-    )]
-    #[hint(expr = Some(recent_failure_hint(conflict_code)))]
-    #[details(
-        expr = Some(json!({
-            "txHash": tx_hash,
-            "attemptHeight": attempt_height,
-            "conflict": {
-                "address": conflict_address,
-                "key": conflict_key,
-                "code": conflict_code,
-            },
-        }))
-    )]
+    #[error("transaction {tx_hash} failed at height {attempt_height}: {cause}")]
+    #[hint(expr = Some(recent_failure_hint(cause)))]
+    #[details]
     TransactionRecentFailure {
         tx_hash: String,
         attempt_height: i64,
-        conflict_address: String,
-        conflict_key: String,
-        conflict_code: String,
+        cause: groundhog_json_rpc_types::transaction::TransactionFailureCause,
     },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,
@@ -937,15 +923,30 @@ fn faucet_service_hint(retry_after_seconds: Option<u64>) -> Cow<'static, str> {
     })
 }
 
-/// Hint for a recently observed commit failure, keyed on the conflict the
-/// chain reported.
-fn recent_failure_hint(conflict_code: &str) -> Cow<'static, str> {
-    Cow::Borrowed(if conflict_code == "boundsExceeded" {
-        "check the signing wallet balance and run `groundhog airdrop` before retrying; \
-         a commit attempt reported insufficient storage-token bounds"
-    } else {
-        "the failure is advisory and the transaction may be retried; check its status \
-         before submitting a replacement"
+/// Hint for an advisory failure of a recent proposal attempt.
+fn recent_failure_hint(
+    cause: &groundhog_json_rpc_types::transaction::TransactionFailureCause,
+) -> Cow<'static, str> {
+    use groundhog_json_rpc_types::transaction::{ConflictCode, TransactionFailureCause};
+    Cow::Borrowed(match cause {
+        TransactionFailureCause::DbConflict { conflict }
+            if matches!(
+                conflict.code,
+                ConflictCode::BoundsExceeded | ConflictCode::InsufficientFunds
+            ) =>
+        {
+            "check the signing wallet balance and run `groundhog airdrop` before retrying; \
+             a commit attempt reported insufficient storage-token bounds"
+        }
+        TransactionFailureCause::ContractRejected { .. } => {
+            "check the rejected contract attachment and deployment inputs; rebuild artifacts for \
+             the target chain if needed; this failure is advisory, so check transaction status \
+             before submitting a replacement"
+        }
+        _ => {
+            "the failure is advisory and the transaction may be retried; check its status \
+              before submitting a replacement"
+        }
     })
 }
 

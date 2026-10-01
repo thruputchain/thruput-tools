@@ -1143,12 +1143,14 @@ mod tests {
     fn canned_failure_diagnostic() -> groundhog_trace::TxFailureDiagnostic {
         groundhog_trace::TxFailureDiagnostic {
             attempt_height: IdxBlockHeight::from(CANNED_FAILURE_HEIGHT),
-            conflict: groundhog_trace::DbConflictDiagnostic {
-                addrkey: groundhog_xdr::types::AddressAndKey {
-                    address: ContractAddress::from(CANNED_FAILURE_ADDRESS),
-                    key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+            cause: groundhog_trace::TxFailureCause::TxFailureDbConflict {
+                conflict: groundhog_trace::DbConflictDiagnostic {
+                    addrkey: groundhog_xdr::types::AddressAndKey {
+                        address: ContractAddress::from(CANNED_FAILURE_ADDRESS),
+                        key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                    },
+                    code: groundhog_trace::DbConflictCode::ExclusiveLockDenied,
                 },
-                code: groundhog_trace::DbConflictCode::ExclusiveLockDenied,
             },
         }
     }
@@ -1530,7 +1532,10 @@ mod tests {
         match status {
             TransactionStatus::RecentFailure {
                 attempt_height,
-                conflict,
+                cause:
+                    groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                        conflict,
+                    },
             } => {
                 assert_eq!(*attempt_height, CANNED_FAILURE_HEIGHT);
                 assert_eq!(

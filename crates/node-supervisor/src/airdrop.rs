@@ -1209,11 +1209,16 @@ mod tests {
             TestBackend::new(vec![Ok(()), Ok(())]).with_status_results(vec![Ok(
                 TransactionStatus::RecentFailure {
                     attempt_height: BlockHeight::from(8),
-                    conflict: ConflictDiagnostic {
-                        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
-                        key: HexBytes(vec![0x01]),
-                        code: ConflictCode::BoundsExceeded,
-                    },
+                    cause:
+                        groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                            conflict: ConflictDiagnostic {
+                                address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+                                    [0x44; 32],
+                                )),
+                                key: HexBytes(vec![0x01]),
+                                code: ConflictCode::BoundsExceeded,
+                            },
+                        },
                 },
             )]),
         );

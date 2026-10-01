@@ -132,6 +132,7 @@ mod tests {
 
             Ok(ViewGatewayResult::ViewGatewayOk {
                 payload: ViewGatewayPayload {
+                    gas_consumed: 0,
                     height: 42.into(),
                     output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![1, 2, 3]),
@@ -185,6 +186,7 @@ mod tests {
         serialized_event.extend_from_slice(&data);
         let result = ViewGatewayResult::ViewGatewayOk {
             payload: ViewGatewayPayload {
+                gas_consumed: 0,
                 height: 42.into(),
                 output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![1, 2, 3]),
@@ -218,6 +220,7 @@ mod tests {
         let metrics = GatewayMetrics::for_tests();
         let result = ViewGatewayResult::ViewGatewayOk {
             payload: ViewGatewayPayload {
+                gas_consumed: 0,
                 height: 7.into(),
                 output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![]),

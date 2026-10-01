@@ -32,7 +32,7 @@ make incompatible XDR schemas compatible.
 
 ## Discovery and protocol safety
 
-Bindings are the workspace's existing **0.42.0** release. No regeneration.
+Bindings use the workspace's pinned protocol-rs release.
 `EventIndexer1`, program `0x4321aaac` version 1, has **no separate intro
 procedure**. Its procedure-10 request contains the protocol token. `discover`
 sends an uninitialized, non-parking pull as the program/protocol probe. This may
