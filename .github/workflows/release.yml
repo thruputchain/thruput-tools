@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/release.yml'
+      - 'scripts/split-release-debuginfo.sh'
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -191,6 +192,18 @@ jobs:
             archive="artifacts/${archive_base}.tar.gz"
             mkdir -p "$package_dir"
             cp "target/release/${app}" "$package_dir/"
+            debug_root="package/${archive_base}-debuginfo"
+            debug_archive="artifacts/${archive_base}-debuginfo.tar.gz"
+            if [ "${{ matrix.platform }}" = linux ]; then
+              bash scripts/split-release-debuginfo.sh "$package_dir/$app" "$debug_root" "$debug_archive"
+            else
+              mkdir -p "$debug_root"
+              dsymutil "target/release/$app" -o "$debug_root/$app.dSYM"
+              strip -S "$package_dir/$app"
+              codesign --force --sign - "$package_dir/$app"
+              codesign --verify --strict "$package_dir/$app"
+              tar -czf "$debug_archive" -C "$debug_root" "$app.dSYM"
+            fi
             cp README.md LICENSE "$package_dir/"
             if [ "$app" = groundhog ]; then
               cp agent-guide.md "$package_dir/"
@@ -224,7 +237,7 @@ jobs:
       - name: Build and package Zen 5 gateway
         if: matrix.platform == 'linux' && matrix.architecture == 'x86_64'
         env:
-          RUSTFLAGS: "-C target-cpu=znver5"
+          RUSTFLAGS: "-C target-cpu=znver5 -C force-frame-pointers=yes -C link-arg=-Wl,--build-id=sha1"
           CARGO_TARGET_DIR: target/znver5
         run: |
           set -euo pipefail
@@ -236,6 +249,8 @@ jobs:
           archive_base="hog-gateway-${release_ref}-x86_64-unknown-linux-gnu-znver5"
           mkdir -p "package/$archive_base"
           cp target/znver5/x86_64-unknown-linux-gnu/release/hog-gateway README.md LICENSE "package/$archive_base/"
+          bash scripts/split-release-debuginfo.sh "package/$archive_base/hog-gateway" \
+            "package/${archive_base}-debuginfo" "artifacts/${archive_base}-debuginfo.tar.gz"
           tar -czf "artifacts/$archive_base.tar.gz" -C package "$archive_base"
 
       - name: Upload release artifacts
@@ -276,7 +291,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
-          test "${#archives[@]}" -eq 12
+          test "${#archives[@]}" -eq 24
           for archive in "${archives[@]}"; do
             test -s "$archive"
           done
