@@ -581,6 +581,7 @@ async fn view_entrypoint_length_validated_for_all_shapes() {
                 entrypoint: HexBytes(vec![0u8; entrypoint_len]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             };
 
             let err = svc
@@ -602,6 +603,7 @@ async fn view_calldata_length_validated_for_all_shapes() {
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
             caller: None,
+            gas_limit: None,
         };
 
         let err = svc
@@ -622,6 +624,7 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
+            gas_limit: None,
         };
 
         let err = svc
@@ -653,6 +656,7 @@ async fn view_success_outputs_round_trip_for_all_shapes() {
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             };
 
             let response = svc

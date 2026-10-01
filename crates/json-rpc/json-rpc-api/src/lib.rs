@@ -19,6 +19,7 @@ use groundhog_json_rpc_types::{
     network_config::NetworkConfigParams,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
+    server_limits::ServerLimits,
     state::StorageItemRead,
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
@@ -29,7 +30,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "7.0.1";
+pub const WIRE_FORMAT_VERSION: &str = "7.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -83,6 +84,13 @@ pub trait GroundhogApi {
     #[method(name = "chainConfig")]
     async fn chain_config(&self) -> RpcResult<NetworkConfigParams>;
 
+    /// Request bounds this endpoint enforces, such as the `view` gas ceiling.
+    /// These are local operator settings, not consensus parameters: they can
+    /// differ between endpoints serving the same chain. Answered without
+    /// contacting a backend.
+    #[method(name = "serverLimits")]
+    async fn server_limits(&self) -> RpcResult<ServerLimits>;
+
     /// Immutable protocol and genesis identity of the network this endpoint serves.
     #[method(name = "networkInfo")]
     async fn network_info(&self) -> RpcResult<NetworkInfo>;
@@ -130,7 +138,9 @@ pub trait GroundhogApi {
 
     /// Execute a sandboxed contract simulation against the latest committed state.
     /// There is no way to select a past height; `height` in the response names the
-    /// snapshot the view ran against.
+    /// snapshot the view ran against. `gasLimit` is optional: absent runs under the
+    /// endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is
+    /// rejected as an invalid parameter.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 

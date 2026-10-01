@@ -21,6 +21,13 @@ pub struct ViewRequest {
     /// Optional simulated caller address observed by `get_msg_sender`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<ContractAddress>,
+
+    /// Optional gas budget for the root invocation. Absent selects the
+    /// server's `maxViewGas` (see `serverLimits`); a value above it, or zero,
+    /// is rejected as an invalid parameter. No gas is charged for a view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub gas_limit: Option<u64>,
 }
 
 /// Result of sandboxed contract simulation.

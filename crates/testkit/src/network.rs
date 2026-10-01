@@ -282,6 +282,7 @@ impl Network {
             entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
             caller: caller.map(Hex0x),
+            gas_limit: None,
         };
         self.require_client("view")?
             .view(request)

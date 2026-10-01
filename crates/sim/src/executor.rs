@@ -2344,6 +2344,7 @@ where
         entrypoint: HexBytes(prepared.view.entrypoint.clone()),
         calldata: HexBytes(prepared.view.calldata.clone()),
         caller: Some(Hex0x(prepared.caller)),
+        gas_limit: None,
     };
     let response = client.view(request).await;
     let latency_ms = duration_ms(started.elapsed());
@@ -2687,6 +2688,7 @@ where
         entrypoint: HexBytes(entry.read_entrypoint.clone()),
         calldata: HexBytes(entry.read_calldata.clone()),
         caller: Some(Hex0x(prepared.caller)),
+        gas_limit: None,
     };
     let response = client
         .view(request)

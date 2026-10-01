@@ -13,7 +13,8 @@ identity resolution, confirmation, runtime and output.
    `resolve_block_expiry_height` can derive expiry from the current chain tip.
 3. `prepare_call(CallRequest, NetworkHash)` returns `UnsignedCall` for inspection.
 4. `UnsignedCall::sign(&impl Signer)` returns `SignedCall`; inspect `tx_hex` and
-   `tx_hash` before submission if needed.
+   `tx_hash` before submission if needed. For native accounts, a mismatched public
+   key is rejected before invoking the signer.
 5. `SignedCall::submit(&client)` returns `SubmittedCall`, rejecting a server hash
    that differs from the locally computed hash. Errors retain the original hash.
 6. `SubmittedCall::wait(&client, PollOptions)` returns a typed receipt, including
@@ -21,11 +22,13 @@ identity resolution, confirmation, runtime and output.
 
 Native calls use `DefaultWallet.execute`; legacy calls use `doAction`. After
 checking receipt success, `SignedCall::decode_return` extracts the single child
-return for the selected wallet. Native accounts supply pubkey authentication;
-legacy addresses remain explicit and are never rederived. Network validation is explicit;
-`prepare_call` and `sign` do not contact the network. Submission is not retried
-by this library. After an ambiguous submission error or receipt timeout, reconcile
-by the retained hash before deciding what to do next.
+return for the selected wallet. Native return decoding bounds the complete encoded
+buffer, including collection framing, to the protocol's return-buffer limit.
+Native accounts supply pubkey authentication; legacy addresses remain explicit and
+are never rederived. Network validation is explicit; `prepare_call` and `sign` do
+not contact the network. Submission is not retried by this library. After an
+ambiguous submission error or receipt timeout, reconcile by the retained hash
+before deciding what to do next.
 
 The `codec` module decodes canonical specs, resolves methods, derives selectors,
 encodes positional arguments and decodes returns/declared aborts. The caller

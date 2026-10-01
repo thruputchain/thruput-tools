@@ -226,6 +226,28 @@ fn single_call_return_rejects_missing_extra_truncated_and_trailing_data() {
 }
 
 #[test]
+fn single_call_return_bounds_the_complete_encoded_buffer() {
+    // One child plus its collection framing fits exactly in the root buffer.
+    let payload = vec![1_u8; 1020];
+    let boundary = xdrs::cxs::encode(&vec![payload.clone()]).unwrap();
+    assert_eq!(boundary.len(), 1024);
+    assert_eq!(
+        decode_default_wallet_call_return(&boundary).unwrap(),
+        payload
+    );
+
+    // The child alone is within the limit, but its framing crosses the boundary.
+    for child_len in [1021, 1024] {
+        let encoded = xdrs::cxs::encode(&vec![vec![1_u8; child_len]]).unwrap();
+        assert_eq!(encoded.len(), child_len + 4);
+        assert!(matches!(
+            decode_default_wallet_call_return(&encoded),
+            Err(SigningError::XdrDecode(_))
+        ));
+    }
+}
+
+#[test]
 fn registered_code_keeps_deployment_effects_and_auth_without_attachment() {
     let account = PubkeyAccount::from_public_key_bytes([0x44; 32], 0);
     let contract = Contract::kRv32 {
