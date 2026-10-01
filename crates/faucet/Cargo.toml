@@ -20,6 +20,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+groundhog-heap-profiling = { path = "../heap-profiling" }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true }
@@ -53,5 +54,3 @@ tower = { workspace = true, features = ["util"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = { version = "0.7", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
-tikv-jemalloc-ctl = { version = "0.7", features = ["profiling", "stats"] }
-jemalloc_pprof = { version = "0.9", features = ["symbolize"] }

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/heap-profiling",
     "crates/build-info",
     "crates/client",
     "crates/bundle-identity",

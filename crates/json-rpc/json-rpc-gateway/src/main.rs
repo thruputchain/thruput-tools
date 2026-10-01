@@ -157,8 +157,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_span_events(span_events)
         .init();
 
-    let heap_profiling = heap_profiling::initialize().await?;
-
     tracing::info!(
         component_version = bundle_identity.build_version().crate_version(),
         source_commit = ?bundle_identity.build_version().source_commit(),
@@ -191,6 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", serde_json::to_string_pretty(&config)?);
         return Ok(());
     }
+    let heap_profiling = heap_profiling::initialize().await?;
 
     tracing::info!(
         network_hash = ?network_info.network_hash,

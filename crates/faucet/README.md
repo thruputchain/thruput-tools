@@ -30,9 +30,11 @@ RUST_LOG=debug cargo run -p thruput-faucet -- --config crates/faucet/faucet.toml
 On Linux, heap profiling is opt-in: set `GROUNDHOG_HEAP_PROFILING=1` and pass
 `--pprof-listen 127.0.0.1:9647` to serve `GET /debug/pprof/heap` on a separate
 private listener. Without the listen option no profile listener is opened;
-without the environment switch the path returns 404. The response is a gzipped
+without the environment switch the path returns 404. The response is an uncompressed
 pprof protobuf with `Content-Type: application/octet-stream`. Profile dumps
 require a writable temporary directory. Use a private address for this listener.
+Dump and conversion run on a blocking worker; a concurrent dump request returns
+HTTP 429. Private dump files use mode 0600 and are removed after each request.
 The environment switch is supported only on Linux; requesting it elsewhere fails
 at startup. Linux builds use jemalloc even with profiling inactive, and compile
 in profiling support with a 512 KiB average allocation sampling interval.

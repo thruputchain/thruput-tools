@@ -1,0 +1,18 @@
+[package]
+name = "groundhog-heap-profiling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemalloc-sys = { version = "0.7", features = ["profiling"] }
