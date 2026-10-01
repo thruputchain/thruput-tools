@@ -129,18 +129,16 @@ fn computed_details_payloads_carry_their_keys() {
         details_of(&CliError::TransactionRecentFailure {
             tx_hash: "0xab".to_owned(),
             attempt_height: 17,
-            conflict_address: "0xcd".to_owned(),
-            conflict_key: "0x00000001".to_owned(),
-            conflict_code: "boundsExceeded".to_owned(),
+            cause:
+                groundhog_json_rpc_types::transaction::TransactionFailureCause::ContractRejected {
+                    contract_index: 2,
+                    code: groundhog_json_rpc_types::transaction::ContractRejectCode::InvalidProgram,
+                },
         }),
         json!({
             "txHash": "0xab",
             "attemptHeight": 17,
-            "conflict": {
-                "address": "0xcd",
-                "key": "0x00000001",
-                "code": "boundsExceeded",
-            },
+            "cause": { "kind": "contractRejected", "contractIndex": 2, "code": "invalidProgram" },
         }),
     );
 

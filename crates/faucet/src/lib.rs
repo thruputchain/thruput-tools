@@ -6,7 +6,6 @@ mod error;
 pub mod key_source;
 pub mod policy;
 mod utils;
-pub mod wallet_create;
 
 use axum::{
     Json, Router,
@@ -30,8 +29,6 @@ pub struct FaucetConfig {
     pub cors_allowed_origins: Vec<HeaderValue>,
     pub network_descriptor: NetworkDescriptor,
     pub airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
-    wallet_prefund_submitter: Arc<dyn airdrop::AirdropSubmitter>,
-    pub wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
     pub policy_config: config::PolicyRuntimeConfig,
     pub policy_store: Arc<dyn policy::FaucetPolicyStore>,
 }
@@ -40,8 +37,6 @@ impl FaucetConfig {
     pub fn new(
         network_descriptor: NetworkDescriptor,
         airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
-        wallet_prefund_submitter: Arc<dyn airdrop::AirdropSubmitter>,
-        wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
     ) -> Result<Self, config::FaucetConfigError> {
         let descriptor_airdrop = network_descriptor
             .airdrop
@@ -61,29 +56,11 @@ impl FaucetConfig {
                 actual: airdrop_submitter.raw_amount(),
             });
         }
-        let descriptor_prefund_raw_amount = network_descriptor
-            .wallet_create
-            .prefund_raw_amount
-            .parse::<u128>()
-            .map_err(|_| config::FaucetConfigError::InvalidDescriptorAmount {
-                field: "walletCreate.prefundRawAmount",
-                value: network_descriptor.wallet_create.prefund_raw_amount.clone(),
-            })?;
-        if wallet_prefund_submitter.raw_amount() != descriptor_prefund_raw_amount {
-            return Err(config::FaucetConfigError::SubmitterAmountMismatch {
-                submitter: "wallet prefund submitter",
-                expected: descriptor_prefund_raw_amount,
-                actual: wallet_prefund_submitter.raw_amount(),
-            });
-        }
-
         Ok(Self {
             listen_address: DEFAULT_LISTEN_ADDRESS.to_owned(),
             cors_allowed_origins: Vec::new(),
             network_descriptor,
             airdrop_submitter,
-            wallet_prefund_submitter,
-            wallet_create_submitter,
             policy_config: config::PolicyRuntimeConfig::default(),
             policy_store: Arc::new(policy::InMemoryFaucetPolicyStore::new()),
         })
@@ -97,8 +74,6 @@ impl fmt::Debug for FaucetConfig {
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("network_descriptor", &self.network_descriptor)
             .field("airdrop_submitter", &"<dyn AirdropSubmitter>")
-            .field("wallet_prefund_submitter", &"<dyn AirdropSubmitter>")
-            .field("wallet_create_submitter", &"<dyn WalletCreateSubmitter>")
             .field("policy_config", &self.policy_config)
             .field("policy_store", &"<dyn FaucetPolicyStore>")
             .finish()
@@ -114,18 +89,11 @@ struct HealthResponse {
 struct AppState {
     network_descriptor: Arc<NetworkDescriptor>,
     airdrop_service: Arc<airdrop::AirdropService>,
-    wallet_create_service: Arc<wallet_create::WalletCreateService>,
 }
 
 impl FromRef<AppState> for Arc<airdrop::AirdropService> {
     fn from_ref(state: &AppState) -> Self {
         state.airdrop_service.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<wallet_create::WalletCreateService> {
-    fn from_ref(state: &AppState) -> Self {
-        state.wallet_create_service.clone()
     }
 }
 
@@ -137,23 +105,14 @@ pub fn app(config: FaucetConfig) -> Router {
         config.policy_store.clone(),
         config.policy_config.clone(),
     ));
-    let wallet_create_service = Arc::new(wallet_create::WalletCreateService::new(
-        config.network_descriptor.clone(),
-        config.wallet_prefund_submitter,
-        config.wallet_create_submitter,
-        config.policy_store,
-        config.policy_config.clone(),
-    ));
     let state = AppState {
         network_descriptor: Arc::new(config.network_descriptor),
         airdrop_service,
-        wallet_create_service,
     };
     let router = Router::new()
         .route("/health", get(health))
         .route("/v1/network", get(network))
         .route("/v1/airdrop", post(airdrop::request_airdrop))
-        .route("/v1/create-wallet", post(wallet_create::create_wallet))
         .with_state(state);
     if cors_allowed_origins.is_empty() {
         router

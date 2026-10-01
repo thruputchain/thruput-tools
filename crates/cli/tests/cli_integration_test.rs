@@ -3197,7 +3197,7 @@ fn status_json_outputs_structured_payload() {
     assert!(stdout["data"]["environment"]["rustToolchain"]["rustSrc"].is_string());
     assert!(stdout["data"]["environment"]["rv32Target"].is_string());
     assert!(stdout["data"]["environment"]["devnode"]["reachable"].is_boolean());
-    assert!(stdout["data"]["environment"]["devWalletArtifact"]["valid"].is_boolean());
+    assert!(stdout["data"]["environment"]["genesisRootArtifact"]["valid"].is_boolean());
     assert!(stdout["data"]["environment"].get("wasm_target").is_none());
     assert!(stdout["data"]["environment"].get("wasm_opt").is_none());
     assert!(stdout["data"].get("credentials").is_none());
@@ -3287,14 +3287,14 @@ fn status_json_reports_reachable_devnode() {
     assert_eq!(status["reachable"], true);
     assert_eq!(status["path"], devnode.display().to_string());
     assert_eq!(status["version"], "0.1.12");
-    let artifact = &stdout["data"]["environment"]["devWalletArtifact"];
+    let artifact = &stdout["data"]["environment"]["genesisRootArtifact"];
     assert_eq!(artifact["available"], true);
     assert_eq!(artifact["valid"], true);
     assert!(
         artifact["path"]
             .as_str()
             .unwrap()
-            .ends_with("contracts/dev_wallet.rv32a")
+            .ends_with("contracts/genesis_root.rv32a")
     );
     assert_eq!(artifact["sha256"].as_str().unwrap().len(), 64);
     assert!(
@@ -3417,7 +3417,7 @@ fn status_human_output_shows_sections() {
     assert!(stderr.contains("Rust Toolchain:"));
     assert!(stderr.contains("RV32 Target:"));
     assert!(stderr.contains("hog-devnode:"));
-    assert!(stderr.contains("Dev Wallet:"));
+    assert!(stderr.contains("Genesis Root:"));
     assert!(!stderr.contains("Wasm Target:"));
     assert!(!stderr.contains("wasm-opt:"));
     assert!(stderr.contains("Global Registry:"));
@@ -5036,14 +5036,11 @@ fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["walletEntrypointId"], "0xf969542572bd6860");
-    assert_eq!(
-        stdout["data"]["walletEntrypointSource"],
-        "network_descriptor"
-    );
+    assert_eq!(stdout["data"]["walletEntrypointId"], "0xadac498222148e4f");
+    assert_eq!(stdout["data"]["walletEntrypointSource"], "legacy_default");
     assert_eq!(
         signed_tx_entrypoint(stdout["data"]["signedTx"].as_str().unwrap()),
-        "0xf969542572bd6860"
+        "0xadac498222148e4f"
     );
 }
 
@@ -6216,7 +6213,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     );
     assert_eq!(
         signed_tx_entrypoint_from_decoded(&signed_tx),
-        "0x646f416374696f6e"
+        "0xc3edb11fdd6d5d58"
     );
     assert_eq!(*signed_tx.tx.uniquifier.block_expiry_height, 1042);
     assert_eq!(
@@ -6312,7 +6309,7 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
     let (target, entrypoint, _) = decode_wallet_action(&signed_tx);
     assert_eq!(
         signed_tx_entrypoint_from_decoded(&signed_tx),
-        "0xa0fff94c64fbaf3c"
+        "0x19846d750fad81d6"
     );
     assert_eq!(target, format!("0x{}01", "00".repeat(31)));
     assert_eq!(entrypoint, "0x63285b3523f9dc3f");
@@ -6864,11 +6861,11 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
     let recent = serde_json::json!({
         "status": "recentFailure",
         "attemptHeight": 43,
-        "conflict": {
+        "cause": { "kind": "dbConflict", "conflict": {
             "address": format!("0x{}", "77".repeat(32)),
             "key": "0x0102",
             "code": "boundsExceeded",
-        },
+        } },
     });
     for (poll, expected_status) in [
         (
@@ -7356,6 +7353,8 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7377,7 +7376,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         .expect("bug: dry-run output includes signed tx");
 
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
-    assert_eq!(signed_tx_entrypoint(signed_tx), "0x6465706c6f794e77");
+    assert_eq!(signed_tx_entrypoint(signed_tx), "0x6be0cb0f6de0917a");
 }
 
 #[test]
@@ -7405,6 +7404,8 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7436,8 +7437,8 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let profile_wallet = advertised_dev_wallet_address(0);
-    let env_wallet = advertised_dev_wallet_address(1);
+    let profile_wallet = advertised_dev_wallet_address(1);
+    let env_wallet = advertised_dev_wallet_address(0);
     let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
     let env_manifest = write_runtime_manifest(tmp.path(), 0, &env_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
@@ -7456,6 +7457,8 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7486,8 +7489,8 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let profile_wallet = advertised_dev_wallet_address(0);
-    let cli_wallet = advertised_dev_wallet_address(1);
+    let profile_wallet = advertised_dev_wallet_address(1);
+    let cli_wallet = advertised_dev_wallet_address(0);
     let env_wallet = advertised_dev_wallet_address(2);
     let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
     let cli_manifest = write_runtime_manifest(tmp.path(), 0, &cli_wallet, None);
@@ -7510,6 +7513,8 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--rpc-url",
             &rpc_url,
@@ -7563,6 +7568,8 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7613,6 +7620,8 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7655,6 +7664,8 @@ fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7680,7 +7691,18 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let advertised_wallet = advertised_dev_wallet_address(0);
+    let signer = groundhog_signing::derive_dev_account_signer("alternate-dev-seed", 0);
+    let advertised_wallet = format!(
+        "0x{}",
+        hex::encode(
+            groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                signer.verifying_key_bytes(),
+                0
+            )
+            .address()
+            .as_ref()
+        )
+    );
     let manifest_path = write_runtime_manifest_with_seed(
         tmp.path(),
         0,
@@ -7703,6 +7725,8 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -7741,6 +7765,8 @@ fn deploy_dev_key_requires_runtime_manifest() {
         .args([
             "--json",
             "deploy",
+            "--fund",
+            "0",
             "--dry-run",
             "--artifact",
             rv32_path.to_str().unwrap(),
@@ -9048,14 +9074,11 @@ fn call_dry_run_uses_hosted_descriptor_entrypoint() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["data"]["walletEntrypointId"], "0xa0fff94c64fbaf3c");
-    assert_eq!(
-        stdout["data"]["walletEntrypointSource"],
-        "network_descriptor"
-    );
+    assert_eq!(stdout["data"]["walletEntrypointId"], "0x19846d750fad81d6");
+    assert_eq!(stdout["data"]["walletEntrypointSource"], "legacy_default");
     assert_eq!(
         signed_tx_entrypoint(stdout["data"]["signedTx"].as_str().unwrap()),
-        "0xa0fff94c64fbaf3c"
+        "0x19846d750fad81d6"
     );
 }
 
@@ -9104,7 +9127,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         .expect("bug: dry-run output includes signed tx");
 
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
-    assert_eq!(signed_tx_entrypoint(signed_tx), "0x646f416374696f6e");
+    assert_eq!(signed_tx_entrypoint(signed_tx), "0xc3edb11fdd6d5d58");
 }
 
 #[test]
@@ -9321,11 +9344,11 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     );
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["entrypointId"],
-        "0x646f416374696f6e"
+        "0xc3edb11fdd6d5d58"
     );
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["entrypointSource"],
-        "runtime_manifest"
+        "native_default_wallet"
     );
     assert_eq!(
         stdout["data"]["diagnostics"]["target"]["entrypointId"],
@@ -10420,11 +10443,11 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
         serde_json::json!({
             "status": "recentFailure",
             "attemptHeight": 17,
-            "conflict": {
+            "cause": { "kind": "dbConflict", "conflict": {
                 "address": format!("0x{}", "11".repeat(32)),
                 "key": "0xaabb",
                 "code": "boundsExceeded",
-            },
+            } },
         }),
         serde_json::json!({ "status": "unknown" }),
         serde_json::json!({ "status": "futureStatus", "futureField": 1 }),
@@ -11174,15 +11197,11 @@ fn tx_list_human_output_marks_exhausted_empty_page() {
 fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
     for target_kind in ["contract", "direct", "dev"] {
         let tmp = TempDir::new().unwrap();
-        let address = format!(
-            "0x{}",
-            match target_kind {
-                "contract" => "71",
-                "direct" => "72",
-                _ => "73",
-            }
-            .repeat(32)
-        );
+        let address = match target_kind {
+            "contract" => format!("0x{}", "71".repeat(32)),
+            "direct" => format!("0x{}", "72".repeat(32)),
+            _ => advertised_dev_wallet_address(1),
+        };
         let target = match target_kind {
             "contract" => "counter".to_owned(),
             "direct" => address.to_uppercase(),
@@ -12026,7 +12045,7 @@ fn events_list_uses_selected_profile_rpc_and_explicit_rpc_precedence() {
 #[test]
 fn events_list_resolves_runtime_manifest_dev_account() {
     let tmp = TempDir::new().unwrap();
-    let address = format!("0x{}", "71".repeat(32));
+    let address = advertised_dev_wallet_address(7);
     let manifest = write_runtime_manifest(tmp.path(), 7, &address, None);
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
@@ -12125,10 +12144,27 @@ fn events_list_resolves_saved_wallet_before_contract_alias_and_alias_without_wal
 fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_account() {
     let tmp = TempDir::new().unwrap();
     let explicit_tmp = TempDir::new().unwrap();
-    let profile_address = format!("0x{}", "75".repeat(32));
-    let explicit_address = format!("0x{}", "76".repeat(32));
+    let profile_address = advertised_dev_wallet_address(7);
+    let explicit_signer = groundhog_signing::derive_dev_account_signer("alternate-event-seed", 7);
+    let explicit_address = format!(
+        "0x{}",
+        hex::encode(
+            groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                explicit_signer.verifying_key_bytes(),
+                0
+            )
+            .address()
+            .as_ref()
+        )
+    );
     let profile_manifest = write_runtime_manifest(tmp.path(), 7, &profile_address, None);
-    let explicit_manifest = write_runtime_manifest(explicit_tmp.path(), 7, &explicit_address, None);
+    let explicit_manifest = write_runtime_manifest_with_seed(
+        explicit_tmp.path(),
+        7,
+        &explicit_address,
+        "alternate-event-seed",
+        None,
+    );
     let (rpc_url, rpc_server) = spawn_events_rpc(
         serde_json::json!({
             "filters": [{
@@ -13366,10 +13402,6 @@ fn spawn_network_descriptor_with_hash(
                 "transferEntrypoint": "0x63285b3523f9dc3f"
             },
             "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
-            "walletCreate": {
-                "prefundRawAmount": "100000000",
-                "walletContractHash": format!("0x{}", "51".repeat(32))
-            },
             "airdrop": {
                 "rawAmount": "25000000",
                 "recipientCooldownSeconds": 60,
@@ -13377,10 +13409,6 @@ fn spawn_network_descriptor_with_hash(
                 "clientQuotaMax": 5,
                 "maxPendingPerRecipient": 1
             },
-            "devWallet": {
-                "deployEntrypoint": "0xf969542572bd6860",
-                "doActionEntrypoint": "0xa0fff94c64fbaf3c"
-            }
         }))
         .unwrap();
         write!(
@@ -13605,7 +13633,15 @@ fn serve_balance(
 }
 
 fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
-    let (stream, request) = read_jsonrpc_request(listener, deadline, "chainTip");
+    let (mut stream, mut request) = read_jsonrpc_request(listener, deadline, "chainTip");
+    if request["method"] == "groundhog_networkInfo" {
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({"networkHash":format!("0x{TEST_NETWORK_HASH}"),"genesisHash":format!("0x{}", "42".repeat(32))}),
+        );
+        (stream, request) = read_jsonrpc_request(listener, deadline, "chainTip");
+    }
     assert_eq!(request["method"], "groundhog_chainTip");
     send_jsonrpc_response(
         stream,
@@ -13846,7 +13882,15 @@ fn spawn_transfer_rpc(
     let (local_hash_tx, local_hash_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        if request["method"] == "groundhog_networkInfo" {
+            send_jsonrpc_response(
+                stream,
+                &request["id"],
+                serde_json::json!({"networkHash":format!("0x{TEST_NETWORK_HASH}"),"genesisHash":format!("0x{}", "42".repeat(32))}),
+            );
+            (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        }
         assert_eq!(request["method"], "groundhog_chainTip");
         send_jsonrpc_response(
             stream,
@@ -14250,9 +14294,11 @@ fn spawn_view_rpc_inner_with_events(
 }
 
 fn advertised_dev_wallet_address(index: u8) -> String {
-    let mut address = [0x77_u8; 32];
-    address[31] = index;
-    format!("0x{}", hex::encode(address))
+    let signer = groundhog_signing::derive_default_dev_account_signer(index as usize);
+    let address =
+        groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+            .address();
+    format!("0x{}", hex::encode(address.as_ref()))
 }
 
 fn assert_split_bootstrap_accounts(manifest_path: &std::path::Path, user_tokens: &str) {
@@ -14298,10 +14344,10 @@ fn write_runtime_manifest_with_seed(
     let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
     let path = dir.join(format!("runtime-manifest-{index}.json"));
     let manifest = serde_json::json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
-        "networkHash": "00".repeat(32),
+        "networkHash": TEST_NETWORK_HASH,
         "protocol": "hogp/test00000000000",
         "genesisHash": format!("0x{}", "42".repeat(32)),
         "producer": {
@@ -14327,14 +14373,6 @@ fn write_runtime_manifest_with_seed(
             }.to_string()
         }],
         "bootstrap": {
-            "devWallet": {
-                "contentHash": format!("0x{}", "51".repeat(32)),
-                "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                "artifactHint": "./dev_wallet.rv32a",
-                "deployEntrypoint": "0x6465706c6f794e77",
-                "createWalletEntrypoint": "0x6372656174655761",
-                "doActionEntrypoint": "0x646f416374696f6e"
-            },
             "storageCostModel": {
                 "hash": format!("0x{}", "53".repeat(32)),
                 "baseDataItemCost": "12000",
@@ -14440,6 +14478,25 @@ fn signed_tx_entrypoint_from_decoded(
 fn decode_wallet_action(
     signed_tx: &groundhog_xdr::transaction::SignedTransaction,
 ) -> (String, String, Vec<u8>) {
+    if signed_tx.tx.invocation.entrypoint
+        == groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+    {
+        type Call = (
+            groundhog_xdr::types::ContractAddress,
+            groundhog_xdr::contract::ContractEntrypointID,
+            u64,
+            Vec<u8>,
+        );
+        let calls: Vec<Call> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata).unwrap();
+        assert_eq!(calls.len(), 1);
+        let (address, entrypoint, gas, calldata) = &calls[0];
+        assert_eq!(*gas, groundhog_signing::DEFAULT_TX_GAS_LIMIT);
+        return (
+            format!("0x{}", hex::encode(address.as_ref())),
+            format!("0x{}", hex::encode(entrypoint.as_ref())),
+            calldata.clone(),
+        );
+    }
     let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
     let (target, entrypoint, gas_limit, calldata): (
         groundhog_xdr::types::ContractAddress,
@@ -14519,17 +14576,7 @@ fn spawn_transaction_rpc(
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
 
-        // 1. chainTip
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
-        assert_eq!(request["method"], "groundhog_chainTip");
-        send_jsonrpc_response(
-            stream,
-            &request["id"],
-            serde_json::json!({
-                "height": height,
-                "blockHash": format!("0x{}", "00".repeat(32)),
-            }),
-        );
+        serve_chain_tip(&listener, deadline, height);
 
         // Contract calls check the sender balance before submission; deploys do not.
         let (mut stream, mut request) =

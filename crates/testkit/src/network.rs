@@ -83,7 +83,6 @@ struct NetworkInner {
     rpc_url: Option<String>,
     client: Option<HttpClient>,
     faucet: tokio::sync::Mutex<Option<crate::manifest::TestAccount>>,
-    do_action_entrypoint: Option<ContractEntrypointID>,
     manual_block_producer: Option<ManualBlockProducer>,
 }
 
@@ -110,20 +109,11 @@ impl Network {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
-        let do_action_entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .do_action_entrypoint_id()
-            .map_err(|source| TestkitError::Manifest {
-                field: "bootstrap.devWallet.doActionEntrypoint",
-                detail: source.to_string(),
-            })?;
         Ok(Self {
             inner: Arc::new(NetworkInner {
                 rpc_url: Some(rpc_url.to_owned()),
                 client: Some(client),
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
-                do_action_entrypoint: Some(do_action_entrypoint),
                 manual_block_producer,
             }),
         })
@@ -136,7 +126,6 @@ impl Network {
                 rpc_url: None,
                 client: None,
                 faucet: tokio::sync::Mutex::new(None),
-                do_action_entrypoint: None,
                 manual_block_producer: None,
             }),
         }
@@ -327,7 +316,6 @@ impl Network {
         })?;
         let (tx_hash, tx_hex) = crate::account::prepare_call(
             faucet,
-            self,
             groundhog_signing::NATIVE_HOG_ADDRESS,
             groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
             &calldata,
@@ -335,12 +323,6 @@ impl Network {
         )?;
         crate::account::submit_signed(self, tx_hash, &tx_hex).await?;
         Ok(SubmittedTransaction::new(self.clone(), tx_hash, tx_hex))
-    }
-
-    pub(crate) fn do_action_entrypoint(&self) -> Result<ContractEntrypointID> {
-        self.inner
-            .do_action_entrypoint
-            .ok_or(TestkitError::Offline { operation: "call" })
     }
 
     fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
@@ -421,10 +403,12 @@ mod tests {
         assert_eq!(
             classify_pending_status(&TransactionStatus::RecentFailure {
                 attempt_height: 1.into(),
-                conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
-                    address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
-                    key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
-                    code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
+                cause: groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                    conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
+                        address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
+                        key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
+                        code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
+                    }
                 },
             }),
             PendingStatusClassification::Terminal
@@ -456,12 +440,8 @@ fn describe_status(status: &TransactionStatus) -> String {
         TransactionStatus::Invalid { reason } => format!("rejected by the scheduler: {reason}"),
         TransactionStatus::RecentFailure {
             attempt_height,
-            conflict,
-        } => format!(
-            "dropped during two-phase commit at height {attempt_height:?}: {:?} conflict on \
-             contract {:?}",
-            conflict.code, conflict.address
-        ),
+            cause,
+        } => format!("proposal attempt failed at height {attempt_height:?}: {cause}"),
         TransactionStatus::Unknown => "unknown; not found in the mempool or the indexer".to_owned(),
         _ => "unrecognized status from the node".to_owned(),
     }

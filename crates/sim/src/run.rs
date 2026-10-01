@@ -551,9 +551,6 @@ async fn run_resolved_target(
         ActorProvisionInputs {
             manifest: &loaded_sim.manifest,
             runtime_manifest: &loaded_runtime.manifest,
-            runtime_manifest_path: &target.runtime_manifest,
-            scenario_path,
-            contract_artifact_root,
         },
         provisioning_sponsor.as_mut(),
         &mut actor_states,
@@ -571,7 +568,6 @@ async fn run_resolved_target(
     let contract_setup = deploy_manifest_contracts(
         client.clone(),
         &loaded_sim.manifest,
-        &loaded_runtime.manifest,
         scenario_path,
         contract_artifact_root,
         &mut actor_states,
@@ -709,7 +705,6 @@ where
             client.clone(),
             ScheduleExecution {
                 manifest: &input.loaded_sim.manifest,
-                runtime_manifest: input.runtime_manifest,
                 schedule,
                 phase_starts: input.phase_starts,
                 actor_states: input.actor_states,
@@ -731,7 +726,6 @@ where
             client.clone(),
             StreamingScheduleExecution {
                 manifest: &input.loaded_sim.manifest,
-                runtime_manifest: input.runtime_manifest,
                 phase_starts: input.phase_starts,
                 actor_states: input.actor_states,
                 event_writer: &mut *input.event_writer,
@@ -1851,7 +1845,7 @@ mod tests {
 
     fn chaos_manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
             "kind": "groundhog-simulation",
             "name": "orchestration-chaos-test",
             "seed": "seed",
@@ -1902,7 +1896,7 @@ mod tests {
 
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -1920,14 +1914,6 @@ mod tests {
             },
             "bootstrapAccounts": [],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": prefixed_hex(0x51),
-                    "deployedCodeHash": prefixed_hex(0x52),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
                 "storageCostModel": {
                     "hash": prefixed_hex(0x53),
                     "baseDataItemCost": "12000",

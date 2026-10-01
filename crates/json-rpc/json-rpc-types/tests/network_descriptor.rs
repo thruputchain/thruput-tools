@@ -1,40 +1,21 @@
-use groundhog_json_rpc_types::hex::HexBytes;
-
-use groundhog_json_rpc_types::network_descriptor::*;
-
-#[test]
-fn dev_wallet_entrypoints_parse_rotated_ids() {
-    let descriptor = DevWalletDescriptor::new(
-        HexBytes(vec![0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]),
-        HexBytes(vec![0xa0, 0xff, 0xf9, 0x4c, 0x64, 0xfb, 0xaf, 0x3c]),
-    );
-
-    assert_eq!(
-        descriptor.deploy_entrypoint_id().unwrap().as_ref(),
-        &[0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]
-    );
-    assert_eq!(
-        descriptor.do_action_entrypoint_id().unwrap().as_ref(),
-        &[0xa0, 0xff, 0xf9, 0x4c, 0x64, 0xfb, 0xaf, 0x3c]
-    );
-}
+use groundhog_json_rpc_types::network_descriptor::{
+    NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
+};
 
 #[test]
-fn dev_wallet_entrypoints_reject_wrong_lengths() {
-    let descriptor = DevWalletDescriptor::new(HexBytes(vec![0xf9; 7]), HexBytes(vec![0xa0; 9]));
-
-    assert!(
-        descriptor
-            .deploy_entrypoint_id()
-            .unwrap_err()
-            .to_string()
-            .contains("got 7")
-    );
-    assert!(
-        descriptor
-            .do_action_entrypoint_id()
-            .unwrap_err()
-            .to_string()
-            .contains("got 9")
-    );
+fn native_descriptor_requires_no_legacy_wallet_metadata() {
+    let value = serde_json::json!({
+        "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+        "kind": "groundhog-network", "networkId": "devnet", "protocol": "x23",
+        "networkHash": format!("0x{}", "00".repeat(32)),
+        "genesisHash": format!("0x{}", "00".repeat(32)),
+        "endpoints": { "rpcUrl": "https://rpc.example" },
+        "nativeHog": { "tokenAddress": format!("0x{}", "00".repeat(32)), "decimals": 7, "transferEntrypoint": "0x63285b3523f9dc3f" },
+        "faucet": { "walletAddress": format!("0x{}", "00".repeat(32)) }
+    });
+    let descriptor: NetworkDescriptor = serde_json::from_value(value).unwrap();
+    let value = serde_json::to_value(descriptor).unwrap();
+    assert_eq!(value["schemaVersion"], 4);
+    assert!(value.get("walletCreate").is_none());
+    assert!(value.get("devWallet").is_none());
 }

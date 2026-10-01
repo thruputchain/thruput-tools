@@ -635,6 +635,18 @@ log "Scaffolding counter contract"
 cd "$PROJECT_NAME"
 export GROUNDHOG_PROFILE="$SMOKE_PROFILE"
 
+# Exercise this checkout's RPC client before its matching registry release,
+# just as the generated-project CI job does. SDK dependencies remain published.
+python3 - "$REPO_ROOT/crates/json-rpc/json-rpc-client" <<'PYCLIENT'
+import json
+import pathlib
+import sys
+
+with pathlib.Path(".cargo/config.toml").open("a", encoding="utf-8") as config:
+    config.write('\n[patch."sparse+https://crates.thruput.network/api/v1/crates/"]\n')
+    config.write(f'groundhog-json-rpc-client = {{ path = {json.dumps(sys.argv[1])} }}\n')
+PYCLIENT
+
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
     SDK_REPO_ROOT="$(cd "$SMOKE_SDK_PATH/../.." && pwd)"
@@ -869,7 +881,7 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     fi
 fi
 
-DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force)"
+DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force --fund 10)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \
     || die "deploy did not return a contract address"
@@ -1105,11 +1117,11 @@ assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
 
 NATIVE_SENDER_BEFORE_JSON="$(run_json "native transfer sender before" "$CLI" --json balance "$USER_KEY")"
 NATIVE_RECIPIENT_BEFORE_JSON="$(run_json "native transfer recipient before" "$CLI" --json balance dev-2)"
-NATIVE_TRANSFER_JSON="$(run_json "native transfer to legacy dev account" "$CLI" --json transfer --force dev-2 1)"
+NATIVE_TRANSFER_JSON="$(run_json "native transfer to bootstrap dev account" "$CLI" --json transfer --force dev-2 1)"
 [[ "$(json_field data.status.result "$NATIVE_TRANSFER_JSON")" == "ok" ]] \
     || die "native transfer did not commit"
 [[ "$(json_field data.sender "$NATIVE_TRANSFER_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.recipient "$NATIVE_TRANSFER_JSON")" == "$RECIPIENT_ADDRESS" ]] \
-    || die "native transfer changed a native or legacy identity"
+    || die "native transfer changed a native or bootstrap identity"
 NATIVE_SENDER_AFTER_JSON="$(run_json "native transfer sender after" "$CLI" --json balance "$USER_KEY")"
 NATIVE_RECIPIENT_AFTER_JSON="$(run_json "native transfer recipient after" "$CLI" --json balance dev-2)"
 assert_transfer_balance_deltas \
@@ -1193,7 +1205,7 @@ WALLET_AFTER_RESTART_JSON="$(run_json "native wallet balance after restart" "$CL
 REPEATED_WALLET_JSON="$(run_json "repeat native wallet creation after restart" "$CLI" --json wallet create --force --key "$USER_KEY")"
 [[ "$(json_field data.wallet "$REPEATED_WALLET_JSON")" == "$WALLET_ADDRESS" && "$(json_field data.created "$REPEATED_WALLET_JSON")" == "false" ]] \
     || die "repeated creation did not retain the saved native identity"
-DEV_RECIPIENT_RESTART_JSON="$(run_json "legacy dev identity after restart" "$CLI" --json balance dev-2)"
+DEV_RECIPIENT_RESTART_JSON="$(run_json "bootstrap dev identity after restart" "$CLI" --json balance dev-2)"
 [[ "$(json_field data.address "$DEV_RECIPIENT_RESTART_JSON")" == "$RECIPIENT_ADDRESS" ]] \
     || die "manifest-backed dev-2 changed identity across restart"
 

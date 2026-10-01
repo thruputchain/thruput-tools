@@ -190,6 +190,19 @@ pub(crate) fn validate_dev_accounts(
         let signer =
             groundhog_signing::derive_dev_account_signer(&config.dev_account_seed, position);
         validate_dev_account_public_key(position, account, &signer)?;
+        let expected_address = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+            signer.verifying_key_bytes(),
+            0,
+        )
+        .address();
+        if account.address.0 != expected_address {
+            return Err(NodeSupervisorError::InvalidRuntimeManifest {
+                program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
+                reason: format!(
+                    "bootstrap account dev-{position} address is not its nonce-zero native account"
+                ),
+            });
+        }
     }
 
     Ok(())
@@ -1994,8 +2007,8 @@ mod tests {
             "0000000000000000000000000000000000000000000000000000000000000000"
         );
         assert_eq!(value["profile"], "local-dev");
-        assert_eq!(value["devWallet"]["profile"], "hog-devnode-default");
-        assert_eq!(value["schemaVersion"], 2);
+        assert!(value.get("devWallet").is_none());
+        assert_eq!(value["schemaVersion"], 3);
         assert_eq!(value["bootstrapFaucet"]["index"], 0);
         assert_eq!(
             value["bootstrapFaucet"]["initialStorageTokens"],
@@ -2503,7 +2516,7 @@ mod tests {
     #[test]
     fn manifest_pointer_fields_do_not_fall_back_to_legacy_readiness() {
         let line = format!(
-            r#"{{"schemaVersion":2,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
+            r#"{{"schemaVersion":3,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
             super::sha256_prefixed_hex(b"missing"),
         );
 
@@ -2527,7 +2540,7 @@ mod tests {
         assert!(matches!(
             err,
             NodeSupervisorError::InvalidReadinessSchemaVersion {
-                expected: 2,
+                expected: 3,
                 actual: 99,
                 ..
             }
@@ -2580,9 +2593,23 @@ mod tests {
         let user_signer = groundhog_signing::derive_default_dev_account_signer(1);
         let accounts = format!(
             r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}},{{"index":1,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
-            "11".repeat(32),
+            hex::encode(
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                    faucet_signer.verifying_key_bytes(),
+                    0
+                )
+                .address()
+                .as_ref()
+            ),
             hex::encode(faucet_signer.verifying_key_bytes()),
-            "12".repeat(32),
+            hex::encode(
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                    user_signer.verifying_key_bytes(),
+                    0
+                )
+                .address()
+                .as_ref()
+            ),
             hex::encode(user_signer.verifying_key_bytes()),
         );
         let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
@@ -2597,7 +2624,17 @@ mod tests {
         assert_eq!(
             serde_json::to_value(readiness.dev_accounts[0].address)
                 .expect("bug: address serializes"),
-            format!("0x{}", "11".repeat(32)),
+            format!(
+                "0x{}",
+                hex::encode(
+                    groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                        faucet_signer.verifying_key_bytes(),
+                        0
+                    )
+                    .address()
+                    .as_ref()
+                )
+            ),
         );
         assert_eq!(
             readiness.dev_accounts[0].public_key.0,
@@ -3331,7 +3368,7 @@ mod tests {
         let manifest_path = manifest_dir.join("runtime-manifest.json");
         let manifest = format!(
             r#"{{
-              "schemaVersion":2,
+              "schemaVersion":3,
               "kind":"hogd-dev-runtime",
               "chainState":"fresh",
               "networkHash":"0000000000000000000000000000000000000000000000000000000000000000",
@@ -3344,14 +3381,6 @@ mod tests {
               }},
               "bootstrapAccounts":{accounts},
               "bootstrap":{{
-                "devWallet":{{
-                  "contentHash":"0x{}",
-                  "deployedCodeHash":"0x{}",
-                  "artifactHint":"./dev_wallet.rv32a",
-                  "deployEntrypoint":"0xadac498222148e4f",
-                  "createWalletEntrypoint":"0x6372656174655761",
-                  "doActionEntrypoint":"0x646f416374696f6e"
-                }},
                 "storageCostModel":{{
                   "hash":"0x{}",
                   "baseDataItemCost":"12000",
@@ -3366,14 +3395,12 @@ mod tests {
               }}
             }}"#,
             "51".repeat(32),
-            "52".repeat(32),
-            "53".repeat(32),
         );
         fs::write(&manifest_path, manifest.as_bytes()).expect("bug: manifest should be written");
         fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600))
             .expect("bug: manifest permissions should be set");
         format!(
-            r#"{{"schemaVersion":2,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+            r#"{{"schemaVersion":3,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
             manifest_path.display(),
             super::sha256_prefixed_hex(manifest.as_bytes()),
         )

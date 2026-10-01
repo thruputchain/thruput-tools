@@ -235,6 +235,14 @@ fn derive_account(
         });
     }
 
+    if groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+        .address()
+        != account.wallet_address.0
+    {
+        return Err(RuntimeManifestError::BootstrapAddressMismatch {
+            index: account.index,
+        });
+    }
     Ok(SimAccount {
         index: account.index,
         signer,
@@ -265,6 +273,10 @@ pub enum RuntimeManifestError {
     UnsupportedDerivationScheme { scheme: String },
     #[error("runtime manifest does not advertise bootstrap account 0 with role `faucet`")]
     MissingProvisioningFaucet,
+    #[error(
+        "runtime manifest bootstrap account {index} address is not its nonce-zero native account"
+    )]
+    BootstrapAddressMismatch { index: u32 },
     #[error("runtime manifest bootstrap account index {index} does not fit this platform")]
     BootstrapAccountIndexTooLarge { index: u32 },
     #[error("runtime manifest bootstrap account {index} public key does not match derivation seed")]
@@ -333,6 +345,13 @@ mod tests {
         local_user.index = 3;
         local_user.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
         local_user.public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
+        local_user.wallet_address = Hex0x(
+            groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                signer.verifying_key_bytes(),
+                0,
+            )
+            .address(),
+        );
         manifest.bootstrap_accounts.push(local_user);
 
         let accounts = derive_accounts(&manifest).expect("local-user account should derive");
@@ -526,7 +545,7 @@ mod tests {
             Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()))
         };
         serde_json::from_value(json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -547,18 +566,10 @@ mod tests {
                 "index": 0,
                 "role": "local_user",
                 "publicKey": public_key,
-                "walletAddress": prefixed_hex(0x22),
+                "walletAddress": format!("0x{}", hex::encode(groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
                 "initialStorageTokens": "1000000000"
             }],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": prefixed_hex(0x33),
-                    "deployedCodeHash": prefixed_hex(0x44),
-                    "artifactHint": "dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
                 "storageCostModel": {
                     "hash": prefixed_hex(0x55),
                     "baseDataItemCost": "1",

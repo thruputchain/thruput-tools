@@ -450,7 +450,7 @@ pub enum ChaosEventState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractDeploymentRecord {
-    /// Native atomic deployment funding; absent for legacy deployment.
+    /// Native atomic deployment funding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collateral: Option<NativeDeploymentCollateral>,
     pub name: String,

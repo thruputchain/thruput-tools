@@ -1,7 +1,6 @@
 use clap::Parser;
 use groundhog_faucet::{
     FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve,
-    wallet_create::RpcWalletCreateSubmitter,
 };
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -63,30 +62,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     let file_config = toml::from_str::<FaucetConfigFile>(&config_toml)?;
     let parts = file_config.into_parts().await?;
-    let wallet_create_submitter = RpcWalletCreateSubmitter::new(
-        &parts.network_descriptor,
-        parts.wallet_create,
-        &parts.airdrop.faucet_secret_key,
-        parts.network_hash.clone(),
-    );
     let airdrop_submitter = RpcAirdropSubmitter::new(
         &parts.network_descriptor,
         &parts.airdrop,
         parts.network_hash.clone(),
     )?;
-    let mut wallet_prefund_config = parts.airdrop.clone();
-    wallet_prefund_config.raw_amount = parts.wallet_create_prefund_raw_amount;
-    let wallet_prefund_submitter = RpcAirdropSubmitter::new(
-        &parts.network_descriptor,
-        &wallet_prefund_config,
-        parts.network_hash,
-    )?;
-    let mut config = FaucetConfig::new(
-        parts.network_descriptor,
-        Arc::new(airdrop_submitter),
-        Arc::new(wallet_prefund_submitter),
-        Arc::new(wallet_create_submitter),
-    )?;
+    let mut config = FaucetConfig::new(parts.network_descriptor, Arc::new(airdrop_submitter))?;
     if let Some(listen) = parts.listen_address {
         config.listen_address = listen;
     }

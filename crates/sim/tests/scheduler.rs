@@ -8,7 +8,7 @@ use groundhog_sim::scheduler::*;
 
 fn manifest() -> SimulationManifest {
     serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "schedule-test",
         "seed": "seed-a",
@@ -77,7 +77,7 @@ fn schedule_cursor_matches_generated_schedule() {
 #[test]
 fn actors_remain_synchronized_without_staggering() {
     let manifest: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "schedule-sync-test",
         "seed": "seed-a",
@@ -119,7 +119,7 @@ fn actors_remain_synchronized_without_staggering() {
 #[test]
 fn staggered_actors_are_spread_across_tick_interval() {
     let manifest: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "schedule-stagger-test",
         "seed": "seed-a",
@@ -179,7 +179,7 @@ fn staggered_actors_are_spread_across_tick_interval() {
 #[test]
 fn schedule_cursor_preserves_tie_breaks_across_phases_and_chaos() {
     let manifest: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "schedule-tie-test",
         "seed": "seed-a",
@@ -219,7 +219,7 @@ fn schedule_cursor_preserves_tie_breaks_across_phases_and_chaos() {
 #[test]
 fn schedule_cursor_orders_chaos_resource_then_actor_at_same_time() {
     let manifest: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "schedule-resource-tie-test",
         "seed": "seed-a",

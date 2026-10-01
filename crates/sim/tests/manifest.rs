@@ -72,7 +72,7 @@ fn parses_optional_observability_without_serializing_empty_object() {
     );
 
     let without_observability: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "unobserved",
         "seed": "seed",
@@ -88,7 +88,7 @@ fn parses_optional_observability_without_serializing_empty_object() {
 #[test]
 fn rejects_unknown_workload_name() {
     let err = serde_json::from_value::<SimulationManifest>(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "bad",
         "seed": "seed",
@@ -104,7 +104,7 @@ fn rejects_unknown_workload_name() {
 #[test]
 fn rejects_wasm_contract_artifact_kind() {
     let err = serde_json::from_value::<SimulationManifest>(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "legacy-artifact",
         "seed": "seed",
@@ -121,7 +121,7 @@ fn rejects_wasm_contract_artifact_kind() {
 #[test]
 fn event_query_defaults_match_first_page_at_end() {
     let manifest: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "events",
         "seed": "seed",
@@ -145,7 +145,7 @@ fn event_query_defaults_match_first_page_at_end() {
 #[test]
 fn default_target_weights_are_not_serialized() {
     let manifest: SimulationManifest = serde_json::from_value(json!({
-        "schemaVersion": 1,
+        "schemaVersion": 3,
         "kind": "groundhog-simulation",
         "name": "weights",
         "seed": "seed",

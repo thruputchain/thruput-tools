@@ -64,7 +64,9 @@ Existing key files and public JSON-RPC wire encodings remain unchanged.
 
 Ordinary keys derive nonce-zero native accounts. `wallet create` saves the empty
 identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
-wallets and dev-N retain identity and format.
+legacy wallets retain identity and format. Schema-3 bootstrap dev-N accounts
+are native pubkey accounts with nonce zero, using the advertised seed and keys.
+Use a matching native runtime; schema-2 state needs its original runtime.
 
 Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
 amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated

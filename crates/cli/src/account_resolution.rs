@@ -149,10 +149,7 @@ pub(crate) fn resolve_sender_account(
             .map(|wallet| native_account_for_binding(name, wallet))
             .transpose()?
             .flatten(),
-        None if dev_keys::dev_key_index(&key_name).is_none() => {
-            Some(default_native_account(&signer))
-        }
-        None => None,
+        None => Some(default_native_account(&signer)),
     };
     Ok(ResolvedSenderAccount {
         native_account,
@@ -612,6 +609,13 @@ fn signer_for_manifest_account(
             ),
         )
     })?;
+    let expected_address = default_native_account(&signer).address();
+    if account.wallet_address.0 != expected_address {
+        return Err(dev_account_error(
+            key_name,
+            "runtime manifest bootstrap address is not its nonce-zero native account",
+        ));
+    }
     Ok(signer)
 }
 
@@ -823,7 +827,9 @@ mod tests {
     fn address_target_resolves_manifest_dev_account() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
-        let expected = groundhog_xdr::types::ContractAddress::from([0x55; 32]);
+        let expected =
+            default_native_account(&groundhog_signing::derive_default_dev_account_signer(1))
+                .address();
         write_test_runtime_manifest_with_accounts(&manifest_path, &[(1, "local_user", expected)]);
         let profile = test_profile("dev-1", Some(manifest_path), BTreeMap::new());
 
@@ -1210,9 +1216,9 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x71; 32]);
+        let wallet_address = default_native_account(&signer).address();
         let manifest = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -1237,14 +1243,6 @@ mod tests {
                 "initialStorageTokens": "1000000000"
             }],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": format!("0x{}", "51".repeat(32)),
-                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
                 "storageCostModel": {
                     "hash": format!("0x{}", "53".repeat(32)),
                     "baseDataItemCost": "12000",
@@ -1297,7 +1295,7 @@ mod tests {
             .expect("bug: project config should write");
         let manifest_path = temp.path().join("runtime-manifest.json");
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x72; 32]);
+        let wallet_address = default_native_account(&signer).address();
         write_test_runtime_manifest(&manifest_path, &signer, wallet_address);
         let profile = ResolvedProfile {
             name: "default".into(),
@@ -1327,7 +1325,9 @@ mod tests {
     fn local_bootstrap_account_requires_faucet_at_index_zero() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");
-        let faucet_wallet = groundhog_xdr::types::ContractAddress::from([0x73; 32]);
+        let faucet_wallet =
+            default_native_account(&groundhog_signing::derive_default_dev_account_signer(0))
+                .address();
         write_test_runtime_manifest_with_accounts(&manifest_path, &[(0, "faucet", faucet_wallet)]);
         let profile = profile_with_manifest(Some(manifest_path));
 
@@ -1429,7 +1429,7 @@ mod tests {
         accounts: &[serde_json::Value],
     ) {
         let manifest = serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -1448,14 +1448,6 @@ mod tests {
             },
             "bootstrapAccounts": accounts,
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": format!("0x{}", "51".repeat(32)),
-                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e"
-                },
                 "storageCostModel": {
                     "hash": format!("0x{}", "53".repeat(32)),
                     "baseDataItemCost": "12000",

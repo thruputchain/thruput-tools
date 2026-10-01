@@ -6,44 +6,6 @@ use std::time::{Duration, SystemTime};
 use axum::http::HeaderMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct WalletCreateAttemptKey {
-    pub network_id: String,
-    pub genesis_hash: String,
-    pub owner_public_key: String,
-    pub client_nonce: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WalletCreateAttemptStatus {
-    Prepared,
-    PrefundPending,
-    PrefundConfirmed,
-    CreatePending,
-    Created,
-    FailedRetryable,
-    FailedTerminal,
-    Expired,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WalletCreateAttempt {
-    pub key: WalletCreateAttemptKey,
-    pub deploy_nonce: String,
-    pub wallet_address: String,
-    pub wallet_contract_hash: String,
-    pub prefund_raw_amount: String,
-    pub status: WalletCreateAttemptStatus,
-    pub prefund_tx_hash: Option<String>,
-    pub prefund_height: Option<i64>,
-    pub create_tx_hash: Option<String>,
-    pub create_height: Option<i64>,
-    pub error_code: Option<String>,
-    pub created_at: SystemTime,
-    pub updated_at: SystemTime,
-    pub expires_at: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AirdropAttemptKey {
     pub network_id: String,
     pub genesis_hash: String,
@@ -86,13 +48,6 @@ pub enum AdmitAirdropAttemptResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InsertWalletCreateAttemptResult {
-    Inserted,
-    Existing(Box<WalletCreateAttempt>),
-    PendingLimitReached,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaCheck {
     pub key: QuotaKey,
     pub max: u32,
@@ -103,8 +58,6 @@ pub struct QuotaCheck {
 pub enum QuotaKey {
     AirdropRecipient(String),
     AirdropClient(ClientIdentity),
-    WalletCreateOwner(String),
-    WalletCreateClient(ClientIdentity),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,11 +79,6 @@ pub enum PolicyStoreError {
     #[error("attempt was not found")]
     AttemptNotFound,
     #[error("attempt transition expected one of {expected:?}, got {current:?}")]
-    InvalidWalletCreateTransition {
-        expected: Vec<WalletCreateAttemptStatus>,
-        current: WalletCreateAttemptStatus,
-    },
-    #[error("attempt transition expected one of {expected:?}, got {current:?}")]
     InvalidAirdropTransition {
         expected: Vec<AirdropAttemptStatus>,
         current: AirdropAttemptStatus,
@@ -142,30 +90,6 @@ pub enum PolicyStoreError {
 }
 
 pub trait FaucetPolicyStore: Send + Sync + 'static {
-    fn get_wallet_create_attempt(
-        &self,
-        key: &WalletCreateAttemptKey,
-    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError>;
-
-    fn put_wallet_create_attempt(
-        &self,
-        attempt: WalletCreateAttempt,
-    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError>;
-
-    fn insert_wallet_create_attempt_if_absent(
-        &self,
-        attempt: WalletCreateAttempt,
-        max_pending_per_owner: u32,
-    ) -> Result<InsertWalletCreateAttemptResult, PolicyStoreError>;
-
-    fn claim_wallet_create_transition(
-        &self,
-        key: &WalletCreateAttemptKey,
-        expected: &[WalletCreateAttemptStatus],
-        next: WalletCreateAttemptStatus,
-        now: SystemTime,
-    ) -> Result<WalletCreateAttempt, PolicyStoreError>;
-
     fn get_airdrop_attempt(
         &self,
         key: &AirdropAttemptKey,
@@ -224,7 +148,6 @@ pub struct InMemoryFaucetPolicyStore {
 
 #[derive(Debug, Default)]
 struct PolicyState {
-    wallet_create_attempts: HashMap<WalletCreateAttemptKey, WalletCreateAttempt>,
     airdrop_attempts: HashMap<AirdropAttemptKey, AirdropAttempt>,
     quota_events: HashMap<QuotaKey, Vec<QuotaEvent>>,
 }
@@ -248,89 +171,6 @@ impl InMemoryFaucetPolicyStore {
 }
 
 impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
-    fn get_wallet_create_attempt(
-        &self,
-        key: &WalletCreateAttemptKey,
-    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError> {
-        Ok(self.lock()?.wallet_create_attempts.get(key).cloned())
-    }
-
-    fn put_wallet_create_attempt(
-        &self,
-        attempt: WalletCreateAttempt,
-    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError> {
-        Ok(self
-            .lock()?
-            .wallet_create_attempts
-            .insert(attempt.key.clone(), attempt))
-    }
-
-    fn insert_wallet_create_attempt_if_absent(
-        &self,
-        attempt: WalletCreateAttempt,
-        max_pending_per_owner: u32,
-    ) -> Result<InsertWalletCreateAttemptResult, PolicyStoreError> {
-        use std::collections::hash_map::Entry;
-
-        let mut state = self.lock()?;
-        if let Some(existing) = state.wallet_create_attempts.get(&attempt.key) {
-            return Ok(InsertWalletCreateAttemptResult::Existing(Box::new(
-                existing.clone(),
-            )));
-        }
-        let pending = state
-            .wallet_create_attempts
-            .values()
-            .filter(|existing| {
-                existing.key.network_id == attempt.key.network_id
-                    && existing.key.genesis_hash == attempt.key.genesis_hash
-                    && existing.key.owner_public_key == attempt.key.owner_public_key
-                    && matches!(
-                        existing.status,
-                        WalletCreateAttemptStatus::Prepared
-                            | WalletCreateAttemptStatus::PrefundPending
-                            | WalletCreateAttemptStatus::PrefundConfirmed
-                            | WalletCreateAttemptStatus::CreatePending
-                    )
-            })
-            .count();
-        if pending >= max_pending_per_owner as usize {
-            return Ok(InsertWalletCreateAttemptResult::PendingLimitReached);
-        }
-        match state.wallet_create_attempts.entry(attempt.key.clone()) {
-            Entry::Occupied(existing) => Ok(InsertWalletCreateAttemptResult::Existing(Box::new(
-                existing.get().clone(),
-            ))),
-            Entry::Vacant(vacant) => {
-                vacant.insert(attempt);
-                Ok(InsertWalletCreateAttemptResult::Inserted)
-            }
-        }
-    }
-
-    fn claim_wallet_create_transition(
-        &self,
-        key: &WalletCreateAttemptKey,
-        expected: &[WalletCreateAttemptStatus],
-        next: WalletCreateAttemptStatus,
-        now: SystemTime,
-    ) -> Result<WalletCreateAttempt, PolicyStoreError> {
-        let mut state = self.lock()?;
-        let attempt = state
-            .wallet_create_attempts
-            .get_mut(key)
-            .ok_or(PolicyStoreError::AttemptNotFound)?;
-        if !expected.contains(&attempt.status) {
-            return Err(PolicyStoreError::InvalidWalletCreateTransition {
-                expected: expected.to_vec(),
-                current: attempt.status,
-            });
-        }
-        attempt.status = next;
-        attempt.updated_at = now;
-        Ok(attempt.clone())
-    }
-
     fn get_airdrop_attempt(
         &self,
         key: &AirdropAttemptKey,
@@ -546,9 +386,6 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
 
     fn expire(&self, now: SystemTime) -> Result<(), PolicyStoreError> {
         let mut state = self.lock()?;
-        state
-            .wallet_create_attempts
-            .retain(|_, attempt| attempt.expires_at.is_none_or(|expires_at| expires_at > now));
         state.airdrop_attempts.retain(|_, attempt| {
             matches!(
                 attempt.status,
@@ -598,81 +435,6 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     use super::*;
-
-    #[test]
-    fn wallet_create_transition_claim_updates_status_atomically() {
-        let store = InMemoryFaucetPolicyStore::new();
-        let now = SystemTime::UNIX_EPOCH;
-        let key = wallet_create_key();
-        store
-            .put_wallet_create_attempt(WalletCreateAttempt {
-                key: key.clone(),
-                deploy_nonce: "0x01".into(),
-                wallet_address: "0x02".into(),
-                wallet_contract_hash: "0x03".into(),
-                prefund_raw_amount: "100000000".into(),
-                status: WalletCreateAttemptStatus::Prepared,
-                prefund_tx_hash: None,
-                prefund_height: None,
-                create_tx_hash: None,
-                create_height: None,
-                error_code: None,
-                created_at: now,
-                updated_at: now,
-                expires_at: None,
-            })
-            .expect("bug: insert should succeed");
-
-        let claimed = store
-            .claim_wallet_create_transition(
-                &key,
-                &[WalletCreateAttemptStatus::Prepared],
-                WalletCreateAttemptStatus::PrefundPending,
-                now + Duration::from_secs(1),
-            )
-            .expect("bug: transition should be valid");
-
-        assert_eq!(claimed.status, WalletCreateAttemptStatus::PrefundPending);
-    }
-
-    #[test]
-    fn wallet_create_transition_rejects_unexpected_status() {
-        let store = InMemoryFaucetPolicyStore::new();
-        let now = SystemTime::UNIX_EPOCH;
-        let key = wallet_create_key();
-        store
-            .put_wallet_create_attempt(WalletCreateAttempt {
-                key: key.clone(),
-                deploy_nonce: "0x01".into(),
-                wallet_address: "0x02".into(),
-                wallet_contract_hash: "0x03".into(),
-                prefund_raw_amount: "100000000".into(),
-                status: WalletCreateAttemptStatus::Created,
-                prefund_tx_hash: None,
-                prefund_height: None,
-                create_tx_hash: None,
-                create_height: None,
-                error_code: None,
-                created_at: now,
-                updated_at: now,
-                expires_at: None,
-            })
-            .expect("bug: insert should succeed");
-
-        let err = store
-            .claim_wallet_create_transition(
-                &key,
-                &[WalletCreateAttemptStatus::Prepared],
-                WalletCreateAttemptStatus::PrefundPending,
-                now,
-            )
-            .expect_err("bug: transition should fail");
-
-        assert!(matches!(
-            err,
-            PolicyStoreError::InvalidWalletCreateTransition { .. }
-        ));
-    }
 
     #[test]
     fn airdrop_transition_claim_updates_status_atomically() {
@@ -1066,30 +828,11 @@ mod tests {
     fn expire_removes_only_attempts_with_elapsed_retention_and_quota_events() {
         let store = InMemoryFaucetPolicyStore::new();
         let now = SystemTime::UNIX_EPOCH;
-        let wallet_key = wallet_create_key();
         let airdrop_key = airdrop_key();
         let stale_airdrop_key = AirdropAttemptKey {
             client_nonce: "0xstale".into(),
             ..airdrop_key.clone()
         };
-        store
-            .put_wallet_create_attempt(WalletCreateAttempt {
-                key: wallet_key.clone(),
-                deploy_nonce: "0x01".into(),
-                wallet_address: "0x02".into(),
-                wallet_contract_hash: "0x03".into(),
-                prefund_raw_amount: "100000000".into(),
-                status: WalletCreateAttemptStatus::Prepared,
-                prefund_tx_hash: None,
-                prefund_height: None,
-                create_tx_hash: None,
-                create_height: None,
-                error_code: None,
-                created_at: now,
-                updated_at: now,
-                expires_at: Some(now + Duration::from_secs(5)),
-            })
-            .expect("bug: insert should succeed");
         store
             .put_airdrop_attempt(AirdropAttempt {
                 key: airdrop_key.clone(),
@@ -1135,12 +878,6 @@ mod tests {
 
         assert!(
             store
-                .get_wallet_create_attempt(&wallet_key)
-                .expect("bug: lookup should succeed")
-                .is_none()
-        );
-        assert!(
-            store
                 .get_airdrop_attempt(&airdrop_key)
                 .expect("bug: lookup should succeed")
                 .is_some()
@@ -1178,15 +915,6 @@ mod tests {
             client_identity(&headers, Some(peer), true),
             ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)))
         );
-    }
-
-    fn wallet_create_key() -> WalletCreateAttemptKey {
-        WalletCreateAttemptKey {
-            network_id: "devnet-preview".into(),
-            genesis_hash: "0xgenesis".into(),
-            owner_public_key: "0xowner".into(),
-            client_nonce: "0xnonce".into(),
-        }
     }
 
     fn airdrop_key() -> AirdropAttemptKey {

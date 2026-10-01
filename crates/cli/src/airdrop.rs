@@ -8,8 +8,7 @@ use groundhog_json_rpc_types::{
     receipt::ExecStatus,
 };
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
+    DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::NetworkHash;
@@ -365,11 +364,6 @@ fn prepare_local_airdrop_plan(
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let manifest = load_configured_runtime_manifest(profile, "faucet")?
         .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
-    manifest
-        .bootstrap
-        .dev_wallet
-        .do_action_entrypoint_id()
-        .map_err(|error| CliError::Other(error.to_string()))?;
     let recipient_wallet = recipient.wallet.clone();
     let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
     let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
@@ -396,21 +390,22 @@ fn prepare_local_airdrop_plan(
     let block_expiry_height =
         runtime.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
     let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
-    let transaction = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-        wallet_address: faucet.wallet_address,
-        wallet_entrypoint: manifest
-            .bootstrap
-            .dev_wallet
-            .do_action_entrypoint_id()
-            .map_err(|error| CliError::Other(error.to_string()))?,
-        target_address: hog::token_address(),
-        target_entrypoint: hog::transfer_entrypoint(),
-        target_calldata: &transfer_calldata,
-        gas_limit: DEFAULT_TX_GAS_LIMIT,
-        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height,
-        nonce: nonce_from_timestamp(),
-    })
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        faucet.signer.verifying_key_bytes(),
+        0,
+    );
+    let transaction = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+            account: &account,
+            target_address: hog::token_address(),
+            target_entrypoint: hog::transfer_entrypoint(),
+            target_calldata: &transfer_calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
+            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height,
+            nonce: nonce_from_timestamp(),
+        },
+    )
     .map_err(|error| CliError::Other(error.to_string()))?;
     Ok(LocalAirdropPlan {
         rpc_url: rpc_url.to_owned(),

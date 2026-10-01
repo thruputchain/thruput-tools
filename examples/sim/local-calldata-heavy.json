@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-calldata-heavy",
   "seed": "sim-local-calldata-heavy",
@@ -10,8 +10,8 @@
     "accounts": 2,
     "accountSeed": "sim-local-calldata-heavy-accounts",
     "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
+    "storageCostProfile": "default",
+    "deploymentCollateralRaw": "100000000"
   },
   "loadShape": [
     {

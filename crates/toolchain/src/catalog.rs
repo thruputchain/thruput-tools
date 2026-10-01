@@ -228,9 +228,6 @@ impl Artifact {
             .iter()
             .any(|file| file.path == "hog-devnode" && file.kind == FileKind::Executable)
             && self.files.iter().any(|file| {
-                file.path == "contracts/dev_wallet.rv32a" && file.kind == FileKind::Artifact
-            })
-            && self.files.iter().any(|file| {
                 file.path == "contracts/genesis_root.rv32a" && file.kind == FileKind::Artifact
             })
     }
@@ -391,7 +388,6 @@ fn validate_compatibility(
 fn validate_files(version: &str, target: HostTarget, files: &[DeclaredFile]) -> Result<()> {
     let mut paths = HashSet::new();
     let mut has_executable = false;
-    let mut has_wallet = false;
     let mut has_genesis_root = false;
     let mut runtime_libraries = 0usize;
 
@@ -405,7 +401,7 @@ fn validate_files(version: &str, target: HostTarget, files: &[DeclaredFile]) -> 
         }
         match (file.path.as_str(), file.kind) {
             ("hog-devnode", FileKind::Executable) => has_executable = true,
-            ("contracts/dev_wallet.rv32a", FileKind::Artifact) => has_wallet = true,
+            ("contracts/dev_wallet.rv32a", FileKind::Artifact) => {}
             ("contracts/genesis_root.rv32a", FileKind::Artifact) => has_genesis_root = true,
             (path, FileKind::RuntimeLibrary)
                 if target.is_macos() && is_macos_runtime_library(path) =>
@@ -421,11 +417,11 @@ fn validate_files(version: &str, target: HostTarget, files: &[DeclaredFile]) -> 
             }
         }
     }
-    if !has_executable || !has_wallet || !has_genesis_root {
+    if !has_executable || !has_genesis_root {
         return Err(invalid_file_set(
             version,
             target,
-            "hog-devnode, contracts/dev_wallet.rv32a, and contracts/genesis_root.rv32a are required",
+            "hog-devnode and contracts/genesis_root.rv32a are required",
         ));
     }
     if target.is_macos() && runtime_libraries == 0 {

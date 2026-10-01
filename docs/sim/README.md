@@ -67,9 +67,16 @@ Native contract deployment requires explicit `accounts.deploymentCollateralRaw`.
 Ambiguous funding or deployment requests retain evidence for reconciliation;
 do not blindly rerun them to retry network writes.
 
-Scenarios without `accounts` retain their legacy bootstrap-wallet behavior.
-Native accounts currently use the existing provider. Do not silently reinterpret
-legacy addresses when changing scenario defaults. Exact account and funding
+Simulator configuration uses schema 3. Update older scenarios explicitly; schema
+2 is rejected because its bootstrap wallets used a different address and ABI.
+Remove `devWalletProfile` and actor-provisioning wallet artifact fields.
+
+Scenarios without `accounts` use the runtime's funded native bootstrap accounts.
+Contract scenarios must set `bootstrap.deploymentCollateralRaw` to the exact raw
+HOG amount atomically attached to each deployment. Actor provisioning derives
+additional empty native accounts; `actorProvisioning.airdropHog` explicitly funds
+them from the bootstrap faucet. There is no wallet artifact or creation transaction.
+Explicit `accounts` currently use the existing provider. Exact account and funding
 rules live in [native.rs](../../crates/sim/src/native.rs) and scenario
 validation.
 

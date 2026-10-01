@@ -144,8 +144,8 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.41.1, standard interfaces 0.1.41, protocol-rs 0.42.0,
-and XDR 0.10.1. Update the SDK and interface dependencies together when
+This CLI uses SDK 0.42.2, standard interfaces 0.1.44, protocol-rs 0.43.0,
+and XDR 0.10.2. Update the SDK and interface dependencies together when
 migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where
@@ -234,7 +234,8 @@ and byte slices expose only a hash, not their preimage.
 Use public package exports and generated bindings, not package internals.
 Connect a cluster-aware client, create or load an account, then bind a wallet.
 One public client supports multiple independent wallet bindings. Pubkey accounts
-use DefaultWallet; local source-address accounts use `devWalletAdapter`.
+use DefaultWallet, including schema-3 bootstrap accounts. Historical saved
+legacy source-address wallets use `devWalletAdapter`; preserve their addresses.
 Do not submit an application invocation directly as the transaction root.
 
 Select an interface version for values; explicit types use the full namespace:
@@ -367,7 +368,9 @@ Existing key files and public JSON-RPC wire encodings remain unchanged.
 
 Ordinary keys derive nonce-zero native accounts. `wallet create` saves the empty
 identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
-wallets and dev-N retain identity and format.
+legacy wallets retain identity and format. Schema-3 bootstrap dev-N accounts
+are native pubkey accounts with nonce zero, using the advertised seed and keys.
+Use a matching native runtime; schema-2 state needs its original runtime.
 
 Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
 amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated

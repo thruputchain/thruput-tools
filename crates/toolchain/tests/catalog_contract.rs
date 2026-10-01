@@ -197,3 +197,27 @@ fn artifact_enforces_its_catalog_runtime_minimum_on_the_current_host() {
         Err(CatalogError::IncompatibleRuntime { .. })
     ));
 }
+
+#[test]
+fn native_bundle_requires_genesis_but_no_dev_wallet() {
+    let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes()).unwrap();
+    let files = value["versions"]["0.1.29-rc.4"]["targets"]["x86_64-unknown-linux-gnu"]["files"]
+        .as_array_mut()
+        .unwrap();
+    files.retain(|file| file["path"] != "contracts/dev_wallet.rv32a");
+    let catalog = Catalog::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(
+        catalog
+            .artifact("0.1.29-rc.4", HostTarget::LinuxX86_64)
+            .unwrap()
+            .has_required_bundle_files()
+    );
+    let files = value["versions"]["0.1.29-rc.4"]["targets"]["x86_64-unknown-linux-gnu"]["files"]
+        .as_array_mut()
+        .unwrap();
+    files.retain(|file| file["path"] != "contracts/genesis_root.rv32a");
+    assert!(matches!(
+        Catalog::parse(&serde_json::to_vec(&value).unwrap()),
+        Err(CatalogError::InvalidFileSet { .. })
+    ));
+}

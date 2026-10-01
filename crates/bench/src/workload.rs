@@ -8,8 +8,7 @@ use groundhog_json_rpc_types::runtime_manifest::{
     RuntimeManifestParseError, parse_runtime_manifest,
 };
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, derive_dev_account_signer,
+    LocalSigner, PubkeyAccount, SignTransactionParams, derive_dev_account_signer,
     sign_and_encode_transaction_hex, transaction_hash,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
@@ -18,6 +17,9 @@ use tokio::io::AsyncReadExt;
 
 use crate::BenchError;
 use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
+
+const HOG_BALANCE_ENTRYPOINT: ContractEntrypointID =
+    ContractEntrypointID::new(0x41ac_95d6_e06e_2620_u64.to_be_bytes());
 
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -46,7 +48,6 @@ pub(super) struct PreparedTransaction {
 pub(super) fn generate_tx_batch(
     count: usize,
     accounts: &[BenchAccount],
-    wallet_entrypoint: ContractEntrypointID,
     network_hash: &NetworkHash,
     nonce_start: u64,
 ) -> Result<Vec<PreparedTransaction>, BenchError> {
@@ -54,19 +55,27 @@ pub(super) fn generate_tx_batch(
         .map(|i| {
             let idx = i % accounts.len();
             let account = &accounts[idx];
-            let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-                wallet_address: account.wallet_address,
-                wallet_entrypoint,
-                target_address: account.wallet_address,
-                target_entrypoint: wallet_entrypoint,
-                target_calldata: &[],
-                gas_limit: 10_000_000,
-                target_gas_limit: 10_000_000,
-                block_expiry_height: 10_000_000,
-                nonce: nonce_start.checked_add(i as u64).ok_or_else(|| {
-                    BenchError::InvalidConfiguration("seed nonce range overflows u64".into())
-                })?,
-            })
+            let native =
+                PubkeyAccount::from_public_key_bytes(account.signer.verifying_key_bytes(), 0);
+            let calldata = xdrs::cxs::encode(&(account.wallet_address,)).map_err(|error| {
+                BenchError::WalletCalldata {
+                    source: groundhog_signing::SigningError::XdrEncode(error.to_string()),
+                }
+            })?;
+            let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+                groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+                    account: &native,
+                    target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+                    target_entrypoint: HOG_BALANCE_ENTRYPOINT,
+                    target_calldata: &calldata,
+                    gas_limit: 20_000_000,
+                    target_gas_limit: 10_000_000,
+                    block_expiry_height: 10_000_000,
+                    nonce: nonce_start.checked_add(i as u64).ok_or_else(|| {
+                        BenchError::InvalidConfiguration("seed nonce range overflows u64".into())
+                    })?,
+                },
+            )
             .map_err(|source| BenchError::WalletCalldata { source })?;
 
             let hash =
@@ -115,6 +124,13 @@ fn manifest_bench_account(
             index: account.index,
         });
     }
+    if PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
+        != account.wallet_address.0
+    {
+        return Err(BenchError::BootstrapAddressMismatch {
+            index: account.index,
+        });
+    }
     Ok(BenchAccount {
         signer,
         wallet_address: account.wallet_address.0,
@@ -125,9 +141,9 @@ pub(super) fn transaction_inputs_for_method(
     method: &str,
     manifest: Option<&RuntimeManifest>,
     num_accounts: usize,
-) -> Result<(Vec<BenchAccount>, ContractEntrypointID), BenchError> {
+) -> Result<Vec<BenchAccount>, BenchError> {
     if method != "sendRawTransaction" {
-        return Ok((Vec::new(), ContractEntrypointID::from([0u8; 8])));
+        return Ok(Vec::new());
     }
     if num_accounts == 0 {
         return Err(BenchError::MissingAccounts);
@@ -142,15 +158,10 @@ pub(super) fn transaction_inputs_for_method(
         });
     }
     accounts.truncate(num_accounts);
-    let entrypoint = manifest
-        .bootstrap
-        .dev_wallet
-        .do_action_entrypoint_id()
-        .map_err(|source| BenchError::Entrypoint { source })?;
     if accounts.is_empty() {
         return Err(BenchError::MissingAccounts);
     }
-    Ok((accounts, entrypoint))
+    Ok(accounts)
 }
 
 pub(super) async fn load_runtime_manifest(
@@ -232,9 +243,7 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 #[cfg(test)]
 mod tests {
     use groundhog_json_rpc_types::{hex::Hex0x, runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION};
-    use groundhog_xdr::types::{
-        ContractAddress as XdrContractAddress, Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash,
-    };
+    use groundhog_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
     use serde_json::json;
 
     use super::*;
@@ -245,11 +254,10 @@ mod tests {
         manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
         manifest.bootstrap_accounts.clear();
 
-        let (accounts, entrypoint) = transaction_inputs_for_method("chainTip", Some(&manifest), 0)
+        let accounts = transaction_inputs_for_method("chainTip", Some(&manifest), 0)
             .expect("bug: read-only manifest should not validate accounts");
 
         assert!(accounts.is_empty());
-        assert_eq!(entrypoint, ContractEntrypointID::from([0u8; 8]));
     }
 
     #[test]
@@ -292,18 +300,28 @@ mod tests {
     }
 
     #[test]
-    fn send_raw_transaction_uses_manifest_do_action_entrypoint() {
-        let (accounts, entrypoint) =
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest()), 1)
-                .expect("bug: valid manifest should provide transaction inputs");
-
-        assert_eq!(accounts.len(), 1);
-        assert_eq!(entrypoint, ContractEntrypointID::from(*b"doAction"));
+    fn send_raw_transaction_uses_native_execute_entrypoint() {
+        let accounts =
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest()), 1).unwrap();
+        let network = manifest().network_hash.to_network_hash();
+        let transactions = generate_tx_batch(1, &accounts, &network, 42).unwrap();
+        let bytes = hex::decode(transactions[0].hex.trim_start_matches("0x")).unwrap();
+        let signed: groundhog_xdr::transaction::SignedTransaction =
+            xdrs::txs::decode(&bytes).unwrap();
+        assert_eq!(
+            signed.tx.invocation.entrypoint,
+            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+        );
+        assert_eq!(
+            signed.tx.invocation.invoked_address,
+            accounts[0].wallet_address
+        );
+        assert_eq!(signed.tx.uniquifier.nonce, 42);
     }
 
     #[test]
     fn send_raw_transaction_uses_the_requested_subset_of_manifest_accounts() {
-        let (accounts, _) = transaction_inputs_for_method(
+        let accounts = transaction_inputs_for_method(
             "sendRawTransaction",
             Some(&manifest_with_accounts(3)),
             2,
@@ -318,7 +336,7 @@ mod tests {
         let mut manifest = manifest_with_accounts(3);
         manifest.bootstrap_accounts[0].role = "faucet".into();
 
-        let (accounts, _) = transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2)
+        let accounts = transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2)
             .expect("bug: two local-user accounts should be available");
 
         assert_eq!(accounts.len(), 2);
@@ -392,18 +410,10 @@ mod tests {
                 "index": 0,
                 "role": "local_user",
                 "publicKey": Hex0x(XdrEd25519PublicKey::from(public_key)),
-                "walletAddress": Hex0x(XdrContractAddress::from([0x71; 32])),
+                "walletAddress": Hex0x(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()),
                 "initialStorageTokens": "1000000000",
             }],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": hash(0x51),
-                    "deployedCodeHash": hash(0x52),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e",
-                },
                 "storageCostModel": {
                     "hash": hash(0x53),
                     "baseDataItemCost": "12000",
@@ -429,8 +439,10 @@ mod tests {
             public_key.copy_from_slice(&signer.verifying_key_bytes());
             let mut account = manifest.bootstrap_accounts[0].clone();
             account.index = u32::try_from(index).expect("bug: test account index should fit");
+            account.wallet_address = Hex0x(
+                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
+            );
             account.public_key = Hex0x(XdrEd25519PublicKey::from(public_key));
-            account.wallet_address = Hex0x(XdrContractAddress::from([index as u8; 32]));
             manifest.bootstrap_accounts.push(account);
         }
         manifest

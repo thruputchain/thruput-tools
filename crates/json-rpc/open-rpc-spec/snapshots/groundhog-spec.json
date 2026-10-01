@@ -604,6 +604,34 @@
         "minItems": 1,
         "type": "array"
       },
+      "ContractRejectCode": {
+        "description": "Reason the executor refused a contract attachment.",
+        "oneOf": [
+          {
+            "enum": [
+              "tooMany",
+              "blobTooLarge",
+              "notDeployable",
+              "duplicate",
+              "malformedArtifact",
+              "unsupportedFormat",
+              "unsupportedAbi",
+              "gasScheduleMismatch",
+              "memoryTooLarge",
+              "codeSizeInvalid",
+              "initialMemoryInvalid",
+              "digestMismatch",
+              "invalidProgram"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Unrecognized rejection code from a newer node.",
+            "type": "string"
+          }
+        ]
+      },
       "EmittedEvent": {
         "description": "A single emitted event, as stored by the hogd indexer.\n\nThe gateway parses hogd's `TxEmittedEvent.serialized_event` into\nseparate topics and data. The serialized format is:\n`topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.\n`num_topics` (0–3) determines the split point. Max total 1024 bytes.\n\nSee `docs/gateway/system-design.md` \"Event Parsing\" for details.",
         "properties": {
@@ -1268,6 +1296,65 @@
         "maxItems": 16,
         "type": "array"
       },
+      "TransactionFailureCause": {
+        "description": "Why a recent proposal attempt failed. This diagnostic is advisory, not final.",
+        "oneOf": [
+          {
+            "description": "Two-phase commit could not apply a storage delta.",
+            "properties": {
+              "conflict": {
+                "$ref": "#/components/schemas/ConflictDiagnostic"
+              },
+              "kind": {
+                "const": "dbConflict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "conflict"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The executor refused a contract attachment before execution.",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ContractRejectCode"
+              },
+              "contractIndex": {
+                "description": "Position in the transaction's contracts-to-deploy list.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "contractRejected",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "contractIndex",
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A cause added by a newer server.",
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "TransactionReceipt": {
         "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasPrice`, `transactionIndex`, `logsBloom`.\n- `gasUsed` is committed by consensus as part of the transaction's event\n  log (`TxEventLog.gas_consumed`).\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
         "properties": {
@@ -1426,15 +1513,15 @@
             "type": "object"
           },
           {
-            "description": "No committed record, but the transaction failed\nnondeterministically during two-phase commit within the last few\nblocks and the indexer still holds the diagnostic.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
+            "description": "No committed record, but a recent proposal attempt failed and the\nindexer still holds its diagnostic. This includes storage conflicts\nduring two-phase commit and contract attachments refused before execution.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
             "properties": {
               "attemptHeight": {
                 "$ref": "#/components/schemas/BlockHeight",
                 "description": "Executing block height of the failed attempt."
               },
-              "conflict": {
-                "$ref": "#/components/schemas/ConflictDiagnostic",
-                "description": "First conflicting storage op reported for the failed attempt."
+              "cause": {
+                "$ref": "#/components/schemas/TransactionFailureCause",
+                "description": "First storage conflict or refused contract attachment."
               },
               "status": {
                 "const": "recentFailure",
@@ -1444,7 +1531,7 @@
             "required": [
               "status",
               "attemptHeight",
-              "conflict"
+              "cause"
             ],
             "type": "object"
           },
@@ -1600,7 +1687,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "7.1.0"
+    "version": "8.0.0"
   },
   "methods": [
     {

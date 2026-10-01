@@ -473,7 +473,7 @@ TransactionInvalid
 TransactionRecentFailure
   code: transaction_recent_failure
   hint: computed
-  details: computed
+  details: txHash, attemptHeight, cause
 
 ReceiptPollingExhausted
   code: receipt_polling_exhausted

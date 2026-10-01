@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::target::TargetProviderSpec;
 
-pub const SIMULATION_SCHEMA_VERSION: u32 = 2;
+pub const SIMULATION_SCHEMA_VERSION: u32 = 3;
 pub const SIMULATION_KIND: &str = "groundhog-simulation";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,26 +102,24 @@ pub struct ClientSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BootstrapSpec {
+    /// Exact atomic funding for each contract deployment by a bootstrap actor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_collateral_raw: Option<String>,
     pub accounts: u32,
     pub account_seed: String,
     pub initial_storage_tokens: String,
-    pub dev_wallet_profile: String,
     pub storage_cost_profile: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_provisioning: Option<ActorProvisioningSpec>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ActorProvisioningSpec {
     #[serde(default, skip_serializing_if = "is_false")]
     pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dev_wallet_artifact: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dev_wallet_artifact_kind: Option<ContractArtifactKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airdrop_hog: Option<String>,
 }
@@ -455,7 +453,7 @@ pub struct ReadAfterWriteSpec {
         skip_serializing_if = "is_default_target_weight"
     )]
     pub weight: u32,
-    /// The state-changing write submitted through dev-wallet `doAction`.
+    /// The state-changing write submitted through native-wallet `execute`.
     pub write: RawWriteSpec,
     /// The view read-back issued after the write commits.
     pub read: RawReadSpec,

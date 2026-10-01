@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-simulation",
   "name": "local-multi-contract-soak",
   "seed": "sim-local-multi-contract-soak",
@@ -10,8 +10,8 @@
     "accounts": 2,
     "accountSeed": "sim-local-multi-contract-soak-accounts",
     "initialStorageTokens": "1000000000",
-    "devWalletProfile": "default",
-    "storageCostProfile": "default"
+    "storageCostProfile": "default",
+    "deploymentCollateralRaw": "100000000"
   },
   "loadShape": [
     {

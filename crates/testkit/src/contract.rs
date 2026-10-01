@@ -190,14 +190,9 @@ impl Contract {
             .return_data
             .as_ref()
             .map_or(&[][..], |data| data.as_ref());
-        if ctx.native_wallet() {
-            let returned =
-                groundhog_signing::default_wallet::decode_default_wallet_call_return(bytes)
-                    .map_err(TestkitError::decode)?;
-            decode_return(&returned)
-        } else {
-            decode_return(bytes)
-        }
+        let returned = groundhog_signing::default_wallet::decode_default_wallet_call_return(bytes)
+            .map_err(TestkitError::decode)?;
+        decode_return(&returned)
     }
 
     /// Simulate a read-only `view` of `method`, decoding the return to `R`.

@@ -827,7 +827,7 @@ network_hash = "0x1234"
             "scheduler": "127.0.0.1:1000",
             "schedulerGateway": "127.0.0.1:1010",
         }));
-        manifest.schema_version = 3;
+        manifest.schema_version = 2;
 
         let err = config
             .apply_runtime_manifest(&manifest)
@@ -835,7 +835,7 @@ network_hash = "0x1234"
 
         assert_eq!(
             err,
-            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 3 }
+            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 2 }
         );
     }
 
@@ -956,7 +956,7 @@ network_hash = "0x1234"
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -973,14 +973,6 @@ network_hash = "0x1234"
             },
             "bootstrapAccounts": [],
             "bootstrap": {
-                "devWallet": {
-                    "contentHash": hash(0x51),
-                    "deployedCodeHash": hash(0x52),
-                    "artifactHint": "./dev_wallet.rv32a",
-                    "deployEntrypoint": "0xadac498222148e4f",
-                    "createWalletEntrypoint": "0x6372656174655761",
-                    "doActionEntrypoint": "0x646f416374696f6e",
-                },
                 "storageCostModel": {
                     "hash": hash(0x53),
                     "baseDataItemCost": "12000",

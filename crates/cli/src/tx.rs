@@ -260,12 +260,12 @@ fn print_show(
         }
         TransactionStatus::RecentFailure {
             attempt_height,
-            conflict,
+            cause,
         } => {
             print.detail("status", "recent failure (advisory)");
             print.detail("attempt height", **attempt_height);
-            if let Ok(conflict) = serde_json::to_string(conflict) {
-                print.detail("conflict", terminal_safe(&conflict));
+            if let Ok(cause) = serde_json::to_string(cause) {
+                print.detail("cause", terminal_safe(&cause));
             }
         }
         TransactionStatus::Unknown => {

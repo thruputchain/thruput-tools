@@ -61,7 +61,7 @@ Leave it running. In another terminal, enter the same project directory and
 deploy and read the counter:
 
 ```sh
-groundhog deploy --profile local
+groundhog deploy --fund 10 --profile local
 groundhog call my-counter get --profile local
 ```
 

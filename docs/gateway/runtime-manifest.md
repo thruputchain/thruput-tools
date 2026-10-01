@@ -67,6 +67,11 @@ includes the producer's recovered/fresh chain state; directory existence alone
 is not evidence of recovery. Ordinary child logs go to stderr and are forwarded
 through Rust tracing, leaving stdout available for startup protocol.
 
+Runtime, bootstrap and readiness manifests use schema 3. Every bootstrap account
+is a native pubkey account with nonce zero; its address must match its public key.
+The seed and derivation scheme still determine the same signing keys. Bootstrap
+metadata contains the storage cost model; native wallets need no RV32 artifact.
+
 The manifest carries bound endpoints, network identity, and bootstrap account
 metadata. Do not construct a runnable manifest by copying an example's ports,
 wallet addresses, or hashes. These are properties of the running producer.
@@ -101,3 +106,9 @@ Use the [CLI node reference](../../crates/cli/README.md#groundhog-node) for
 runtime selection, logging, persistence, and supported overrides. The lifecycle
 implementation is in [process.rs](../../crates/node-supervisor/src/process.rs)
 and [pid_file.rs](../../crates/node-supervisor/src/pid_file.rs).
+
+Schema-2 runtimes and state directories require their original runtime. A native
+runtime refuses old metadata before opening the database and preserves the data.
+Use a new data directory for a native chain; saved legacy wallet identities remain
+explicit CLI bindings. Consumer and catalog promotion must follow publication of
+the matching native producer.

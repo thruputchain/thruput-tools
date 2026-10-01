@@ -9,8 +9,8 @@ use std::{
 use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_json_rpc_types::bootstrap_manifest::{
-    BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestDevWallet,
-    BootstrapManifestFaucet, BootstrapManifestStorageCostModel,
+    BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestFaucet,
+    BootstrapManifestStorageCostModel,
 };
 use groundhog_signing::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
@@ -67,9 +67,6 @@ pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "groundhog-bootstrap";
 
 /// Default bootstrap profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
-
-/// Default dev-wallet profile requested from hog-devnode.
-pub const DEFAULT_HOGD_DEV_WALLET_PROFILE: &str = "hog-devnode-default";
 
 /// Default storage-cost model profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
@@ -560,7 +557,6 @@ impl HogdDevConfig {
             HOGD_DEV_BOOTSTRAP_MANIFEST_KIND,
             network_hash,
             DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE,
-            BootstrapManifestDevWallet::profile(DEFAULT_HOGD_DEV_WALLET_PROFILE),
             BootstrapManifestFaucet::new(
                 LOCAL_FAUCET_INDEX,
                 LOCAL_FAUCET_STORAGE_TOKENS.to_string(),

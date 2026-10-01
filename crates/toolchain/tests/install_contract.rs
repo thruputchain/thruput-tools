@@ -66,7 +66,8 @@ async fn install_verifies_extracts_and_reuses_a_complete_bundle() {
         b"binary"
     );
     assert_eq!(
-        std::fs::read(first.wallet_path()).expect("bug: wallet should read"),
+        std::fs::read(first.path().join("contracts/dev_wallet.rv32a"))
+            .expect("bug: wallet should read"),
         b"wallet"
     );
     assert!(first.path().join(".ok").is_file());
@@ -228,7 +229,12 @@ async fn install_accepts_zero_length_declared_parent_directories() {
         .await
         .expect("bug: declared parent directory should be accepted");
 
-    assert!(installation.wallet_path().is_file());
+    assert!(
+        installation
+            .path()
+            .join("contracts/dev_wallet.rv32a")
+            .is_file()
+    );
 }
 
 #[tokio::test]
@@ -502,7 +508,12 @@ async fn public_bundle_installs_with_the_embedded_catalog() {
         .expect("bug: published bundle should verify and install");
 
     assert!(installation.binary_path().is_file());
-    assert!(installation.wallet_path().is_file());
+    assert!(
+        installation
+            .path()
+            .join("contracts/dev_wallet.rv32a")
+            .is_file()
+    );
     assert!(installation.path().join(".ok").is_file());
 }
 
@@ -984,4 +995,44 @@ fn cancelled_install_does_not_block_the_runtime_or_commit_queued_work() {
                 .is_none()
         );
     });
+}
+
+#[tokio::test]
+async fn native_bundle_installs_without_legacy_wallet_artifact() {
+    let archive = regular_archive(&[
+        ("contracts/genesis_root.rv32a", b"genesis"),
+        ("hog-devnode", b"binary"),
+    ]);
+    let mut value = fixture_catalog();
+    let target = &mut value["versions"]["0.1.13"]["targets"]["x86_64-unknown-linux-gnu"];
+    target["size"] = serde_json::json!(archive.len());
+    target["sha256"] = serde_json::json!(hex::encode(Sha256::digest(&archive)));
+    target["files"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|file| file["path"] != "contracts/dev_wallet.rv32a");
+    let catalog = Catalog::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let installation = Installer::new(cache.path())
+        .install(
+            &catalog,
+            "0.1.13",
+            HostTarget::LinuxX86_64,
+            &MemorySource::new(archive),
+        )
+        .await
+        .unwrap();
+    assert!(installation.binary_path().is_file());
+    assert!(
+        installation
+            .path()
+            .join("contracts/genesis_root.rv32a")
+            .is_file()
+    );
+    assert!(
+        !installation
+            .path()
+            .join("contracts/dev_wallet.rv32a")
+            .exists()
+    );
 }

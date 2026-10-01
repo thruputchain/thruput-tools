@@ -1,8 +1,7 @@
 # Groundhog Faucet
 
-`groundhog-faucet` serves the hosted Devnet network descriptor, airdrops, and
-sponsored wallet creation. The signing key is loaded once at startup and never
-belongs in TOML config, process arguments, or logs.
+`groundhog-faucet` serves the hosted Devnet network descriptor and airdrops.
+The signing key is loaded once at startup and never belongs in TOML config, process arguments, or logs.
 
 ## Run Locally
 
@@ -34,7 +33,6 @@ Start from `faucet.example.toml`. The config includes:
 - `[network]` metadata served by `GET /v1/network`.
 - `[network.faucet]` public faucet wallet metadata.
 - `[airdrop]` transfer settings and `[airdrop.secret_key_source]`.
-- `[wallet_create]` sponsored wallet-create settings.
 - `[policy]` optional private-preview quota overrides. Defaults are used when omitted.
 
 Do not commit real faucet private keys.
@@ -52,7 +50,8 @@ variable = "GROUNDHOG_FAUCET_SECRET_KEY"
 Set the variable to the faucet account's 32-byte Ed25519 secret key as 64 hex
 characters, with an optional `0x` prefix. Its derived public key must equal
 `network.faucet.public_key`; startup fails before serving if they differ. The
-key must control the configured `network.faucet.wallet_address`. Local flows may
+configured `network.faucet.wallet_address` must equal the nonce-zero pubkey account
+derived from that public key; startup rejects a different address. Local flows may
 use the seed-derived `dev-0` wallet that `groundhog` already treats as the
 fallback local faucet sponsor.
 
@@ -87,12 +86,10 @@ but never include the secret payload.
 ## API
 
 - `GET /health` reports service health.
-- `GET /v1/network` returns the public network descriptor.
+- `GET /v1/network` returns the schema-4 public network descriptor.
 - `POST /v1/airdrop` funds an existing address using the configured airdrop amount.
-- `POST /v1/create-wallet` prefunds and sponsors Devnet wallet creation.
 
 `POST /v1/airdrop` requires `clientNonce`, `networkId`, `networkHash`, and
-`genesisHash`. `POST /v1/create-wallet` requires `clientNonce`, `networkId`, and
 `genesisHash`. These identities scope retries to the network and chain instance
 the client validated.
 

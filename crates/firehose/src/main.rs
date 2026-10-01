@@ -539,6 +539,8 @@ mod tests {
             .split_whitespace()
             .collect();
         let block: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
+        // Replay the recorded block with its original protocol identity.
+        let protocol = block.origin.protocol;
         let replies = vec![
             diagnostic(2),
             diagnostic(5),
@@ -556,7 +558,7 @@ mod tests {
         let store = Store::open(dir.path()).unwrap();
         let result = tokio::time::timeout(
             Duration::from_millis(2300),
-            ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off),
+            ingest(&config, protocol, store, &metrics, Tail::Off),
         )
         .await;
         assert!(result.is_err(), "the final pull must remain parked");
@@ -600,6 +602,8 @@ mod tests {
             .split_whitespace()
             .collect();
         let block: EventIndexerPulledBlock = xdrs::txs::decode(&hex::decode(hex).unwrap()).unwrap();
+        // Replay the recorded block with its original protocol identity.
+        let protocol = block.origin.protocol;
         let replies = vec![
             EventIndexerPullResult::EventIndexerPullBlock {
                 pulled_block: block
@@ -611,7 +615,7 @@ mod tests {
         let config = config(&endpoint, dir.path());
         let metrics = Metrics::new().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        let run = ingest(&config, PROTOCOL_VERSION, store, &metrics, Tail::Off);
+        let run = ingest(&config, protocol, store, &metrics, Tail::Off);
         tokio::pin!(run);
         // Start timing at the first replay so filesystem speed cannot affect the bound.
         tokio::select! {

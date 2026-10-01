@@ -134,15 +134,7 @@ impl Fixture {
             .unwrap();
         let server = server.start(module);
         let manifest = tempfile::NamedTempFile::new().unwrap();
-        let mut document: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
-        ))
-        .unwrap();
-        for index in 0..2 {
-            let signer = derive_dev_account_signer("groundhog-dev-accounts", index);
-            document["bootstrapAccounts"][index]["publicKey"] =
-                format!("0x{}", hex::encode(signer.verifying_key_bytes())).into();
-        }
+        let document = native_runtime_document();
         std::fs::write(manifest.path(), serde_json::to_vec(&document).unwrap()).unwrap();
         Self {
             state,
@@ -151,15 +143,37 @@ impl Fixture {
             manifest,
         }
     }
-    async fn scenario(&self, legacy: bool) -> Scenario {
+    async fn scenario(&self, bootstrap: bool) -> Scenario {
         let mut builder = Scenario::builder("native-test")
             .network(NetworkConfig::existing(&self.url, self.manifest.path()))
             .artifact_bytes("counter", [1, 2, 3], ArtifactKind::Rv32);
-        if legacy {
-            builder = builder.legacy_bootstrap_accounts();
+        if bootstrap {
+            builder = builder.bootstrap_accounts();
         }
         builder.build().await.unwrap()
     }
+}
+
+fn native_runtime_document() -> serde_json::Value {
+    let mut document: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
+    ))
+    .unwrap();
+    for index in 0..2 {
+        let signer = derive_dev_account_signer("groundhog-dev-accounts", index);
+        document["bootstrapAccounts"][index]["publicKey"] =
+            format!("0x{}", hex::encode(signer.verifying_key_bytes())).into();
+        document["bootstrapAccounts"][index]["walletAddress"] = format!(
+            "0x{}",
+            hex::encode(
+                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0)
+                    .address()
+                    .as_ref()
+            )
+        )
+        .into();
+    }
+    document
 }
 
 #[tokio::test]
@@ -257,7 +271,12 @@ async fn native_accounts_are_empty_until_explicit_funding_and_calls_unwrap_retur
     assert_eq!(submitted.len(), 2);
     assert_eq!(
         submitted[0].tx.invocation.invoked_address.as_ref(),
-        &[0x71; 32]
+        PubkeyAccount::from_public_key_bytes(
+            derive_dev_account_signer("groundhog-dev-accounts", 0).verifying_key_bytes(),
+            0
+        )
+        .address()
+        .as_ref()
     );
     assert_eq!(
         submitted[1].tx.invocation.entrypoint,
@@ -301,22 +320,28 @@ async fn deployment_has_exact_effects_and_registers_once() {
 }
 
 #[tokio::test]
-async fn deployment_does_not_submit_or_change_legacy_identity() {
+async fn funded_bootstrap_accounts_deploy_through_native_wallet() {
     let fixture = Fixture::new(Outcome::Success).await;
     let scenario = fixture.scenario(true).await;
     scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
-            assert_eq!(ctx.address().as_ref(), &[0x72; 32]);
-            let error = ctx
-                .deploy_artifact("counter", DeployOptions::funded(0))
-                .await
-                .unwrap_err();
-            assert!(matches!(error, TestkitError::LegacyDeploymentUnsupported));
+            let signer = derive_dev_account_signer("groundhog-dev-accounts", 1);
+            assert_eq!(
+                ctx.address(),
+                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
+            );
+            ctx.deploy_artifact("counter", DeployOptions::funded(0))
+                .await?;
             Ok(())
         })])
         .await
         .unwrap();
-    assert!(fixture.state.submitted.lock().unwrap().is_empty());
+    let submitted = fixture.state.submitted.lock().unwrap();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(
+        submitted[0].tx.invocation.entrypoint,
+        DEFAULT_WALLET_DEPLOY_ENTRYPOINT
+    );
 }
 
 #[tokio::test]

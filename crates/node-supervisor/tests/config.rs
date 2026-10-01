@@ -98,13 +98,10 @@ fn hogd_dev_config_lowers_to_bootstrap_manifest() {
     assert_eq!(
         value,
         json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "kind": "groundhog-bootstrap",
             "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
             "profile": "local-dev",
-            "devWallet": {
-                "profile": "hog-devnode-default",
-            },
             "bootstrapFaucet": {
                 "index": 0,
                 "initialStorageTokens": "10000000000000",

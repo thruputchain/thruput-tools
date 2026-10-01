@@ -15,7 +15,7 @@ pub fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
         groundhog_rv32_artifact::DEFAULT_MEMORY_BYTES,
     )
     .unwrap();
-    std::fs::write(contracts.join("dev_wallet.rv32a"), artifact).unwrap();
+    std::fs::write(contracts.join("genesis_root.rv32a"), artifact).unwrap();
     binary
 }
 

@@ -173,7 +173,7 @@ pub(super) fn confirm_submission(
     let url = terminal_safe(&cli.url);
     write!(
         error,
-        "This benchmark will submit signed, state-changing dev-wallet transactions via sendRawTransaction.\nURL: {}\nAccounts: {}\nRate: {rate}\nDuration: {}s plus {}s warmup\nContinue? [y/N] ",
+        "This benchmark will submit signed, native-wallet transactions via sendRawTransaction.\nURL: {}\nAccounts: {}\nRate: {rate}\nDuration: {}s plus {}s warmup\nContinue? [y/N] ",
         url, cli.accounts, cli.duration, cli.warmup
     )
     .and_then(|()| error.flush())

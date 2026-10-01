@@ -78,9 +78,6 @@ impl fmt::Display for AgentFailures {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TestkitError {
-    /// Existing legacy wallet identities cannot use native deployment semantics.
-    #[error("legacy bootstrap accounts support calls only; deploy from a native account")]
-    LegacyDeploymentUnsupported,
     /// The runtime manifest has no faucet account to fund test accounts.
     #[error("runtime manifest has no bootstrap faucet")]
     MissingFaucet,
