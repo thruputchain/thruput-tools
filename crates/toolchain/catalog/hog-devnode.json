@@ -1,25 +1,21 @@
 {
   "component": "hog-devnode",
   "schemaVersion": 1,
-  "defaultVersion": "0.1.29-rc.4",
+  "defaultVersion": "0.1.29-rc.5",
   "versions": {
-    "0.1.29-rc.4": {
+    "0.1.29-rc.5": {
       "source": {
-        "ref": "v0.1.29-rc.4",
+        "ref": "v0.1.29-rc.5",
         "repository": "groundhogchain/hogd"
       },
       "targets": {
         "aarch64-apple-darwin": {
-          "archive": "hog-devnode_0.1.29-rc.4_aarch64-apple-darwin.tar.gz",
+          "archive": "hog-devnode_0.1.29-rc.5_aarch64-apple-darwin.tar.gz",
           "compatibility": {
             "minimumVersion": "26.0",
             "os": "macos"
           },
           "files": [
-            {
-              "kind": "artifact",
-              "path": "contracts/dev_wallet.rv32a"
-            },
             {
               "kind": "artifact",
               "path": "contracts/genesis_root.rv32a"
@@ -70,21 +66,17 @@
             }
           ],
           "layoutVersion": 1,
-          "objectKey": "hog-devnode/0.1.29-rc.4/hog-devnode_0.1.29-rc.4_aarch64-apple-darwin.tar.gz",
-          "sha256": "b3cfe11f1e4b47346389c0005869c58e9cc1eff363f6ef9ac07ab50c920f867e",
-          "size": 10559961
+          "objectKey": "hog-devnode/0.1.29-rc.5/hog-devnode_0.1.29-rc.5_aarch64-apple-darwin.tar.gz",
+          "sha256": "d005167690c95dffd89d38aa6979b2f71fbf3c7a9537bd6135a90011fd03aaff",
+          "size": 10569422
         },
         "aarch64-unknown-linux-gnu": {
-          "archive": "hog-devnode_0.1.29-rc.4_aarch64-unknown-linux-gnu.tar.gz",
+          "archive": "hog-devnode_0.1.29-rc.5_aarch64-unknown-linux-gnu.tar.gz",
           "compatibility": {
             "libc": "glibc",
             "minimumVersion": "2.38"
           },
           "files": [
-            {
-              "kind": "artifact",
-              "path": "contracts/dev_wallet.rv32a"
-            },
             {
               "kind": "artifact",
               "path": "contracts/genesis_root.rv32a"
@@ -95,21 +87,17 @@
             }
           ],
           "layoutVersion": 1,
-          "objectKey": "hog-devnode/0.1.29-rc.4/hog-devnode_0.1.29-rc.4_aarch64-unknown-linux-gnu.tar.gz",
-          "sha256": "6ef94d911d67439766d229a07b918a17a09330570adb392bd40a7d111617eb08",
-          "size": 8897454
+          "objectKey": "hog-devnode/0.1.29-rc.5/hog-devnode_0.1.29-rc.5_aarch64-unknown-linux-gnu.tar.gz",
+          "sha256": "6bda52f4e2b61e3f8f13f7bb33e3f56d34df07ee23ab59f1565790cf101498b2",
+          "size": 8906034
         },
         "x86_64-unknown-linux-gnu": {
-          "archive": "hog-devnode_0.1.29-rc.4_x86_64-unknown-linux-gnu.tar.gz",
+          "archive": "hog-devnode_0.1.29-rc.5_x86_64-unknown-linux-gnu.tar.gz",
           "compatibility": {
             "libc": "glibc",
             "minimumVersion": "2.38"
           },
           "files": [
-            {
-              "kind": "artifact",
-              "path": "contracts/dev_wallet.rv32a"
-            },
             {
               "kind": "artifact",
               "path": "contracts/genesis_root.rv32a"
@@ -120,9 +108,9 @@
             }
           ],
           "layoutVersion": 1,
-          "objectKey": "hog-devnode/0.1.29-rc.4/hog-devnode_0.1.29-rc.4_x86_64-unknown-linux-gnu.tar.gz",
-          "sha256": "70c1311c473743400e0d8107433a56a4758c1609f4279a5adb9b77c635fa2106",
-          "size": 9719031
+          "objectKey": "hog-devnode/0.1.29-rc.5/hog-devnode_0.1.29-rc.5_x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "8946a5e969d605fc331705a05382ac247ef8d89d6556830001fca6a63bcbb488",
+          "size": 9722936
         }
       }
     }
