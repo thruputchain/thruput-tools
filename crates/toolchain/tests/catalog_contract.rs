@@ -42,6 +42,31 @@ fn embedded_catalog_pins_the_published_default_matrix() {
 }
 
 #[test]
+fn embedded_catalog_keeps_the_previous_release_selectable() {
+    let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
+
+    // Users may have saved the previous default as their selected version.
+    assert_eq!(
+        catalog
+            .resolve_version(Some("0.1.29-rc.5"))
+            .expect("bug: previous release should remain selectable"),
+        "0.1.29-rc.5"
+    );
+    for target in [
+        HostTarget::LinuxX86_64,
+        HostTarget::LinuxAarch64,
+        HostTarget::MacosAarch64,
+    ] {
+        assert!(
+            catalog
+                .artifact("0.1.29-rc.5", target)
+                .expect("bug: previous release target should exist")
+                .has_required_bundle_files()
+        );
+    }
+}
+
+#[test]
 fn target_detection_accepts_only_the_managed_v1_matrix() {
     assert_eq!(
         HostTarget::from_os_arch("linux", "x86_64").expect("bug: supported target"),
