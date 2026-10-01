@@ -146,7 +146,7 @@ impl Task {
         let mut scoped = print.clone();
         let policy = print.output_policy();
         scoped.compact_build = print.compact_build && eligible(print, policy);
-        let owner = if animate && eligible(print, policy) {
+        let owner = if animate && !print.verbose_build && eligible(print, policy) {
             OWNER.try_lock().ok()
         } else {
             None

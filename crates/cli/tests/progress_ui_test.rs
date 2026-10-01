@@ -23,6 +23,11 @@ mod queries;
 mod support;
 
 const INTERLEAVED_OUTPUT: &str = r#"
+if [ "$BUILD_UI_MODE" = partial-wait ]; then
+  printf 'waiting-for-input-without-newline'
+  while [ ! -f release-cargo ]; do sleep 0.05; done
+  printf '\n'
+fi
 if [ "$BUILD_UI_MODE" = interleaved ]; then
   printf 'stdout-prefix-\342'
   sleep 0.3
@@ -514,13 +519,13 @@ fn attributes(file: &File) -> libc::termios {
 }
 
 #[test]
-fn inline_build_preserves_both_streams_scrollback_and_artifacts() {
+fn verbose_build_preserves_both_streams_scrollback_and_artifacts() {
     let fixture = Fixture::new();
     let mut command = fixture.verbose_command("flood");
     command.args(["--bindings", "ts", "--show-cargo-commands"]);
     let mut pty = Pty::spawn(command);
     assert!(pty.finish().success());
-    assert!(pty.progress_rows > 0, "must exercise the progress row");
+    assert_eq!(pty.progress_rows, 0, "verbose output bypasses animation");
     let history = pty.history();
     assert!(history.contains("PREEXISTING-SHELL-LINE"));
     for index in 0..300 {
@@ -685,10 +690,7 @@ fn delayed_child_fragments_keep_their_line_boundaries() {
     let mut pty = Pty::spawn(fixture.verbose_command("continued"));
     pty.until(|pty| pty.parser.screen().contents().contains("stdout-prefix-"));
     let rows = pty.progress_rows;
-    assert!(
-        rows > 0,
-        "fixture must start live progress before partial output"
-    );
+    assert_eq!(rows, 0, "verbose output bypasses animation");
     assert!(pty.finish().success());
     let history = pty.history();
     assert!(history.contains("stdout-prefix-✓suffix"), "{history}");
@@ -696,7 +698,7 @@ fn delayed_child_fragments_keep_their_line_boundaries() {
 }
 
 #[test]
-fn interleaved_child_streams_keep_complete_lines_separate() {
+fn verbose_output_preserves_child_interleaving_without_reformatting() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.verbose_command("interleaved"));
     pty.until(|pty| {
@@ -705,33 +707,41 @@ fn interleaved_child_streams_keep_complete_lines_separate() {
             .contents()
             .contains("independent-stderr-line")
     });
-    assert!(!String::from_utf8_lossy(&pty.raw).contains("stdout-prefix-"));
+    assert!(String::from_utf8_lossy(&pty.raw).contains("stdout-prefix-"));
     assert!(pty.finish().success());
     let history = pty.history();
-    for line in [
-        "stdout-prefix-✓suffix",
-        "stderr-prefix-suffix",
-        "independent-stderr-line",
-        "independent-stdout-line",
-    ] {
-        assert!(
-            history.lines().any(|row| row.trim_end() == line),
-            "missing separate line {line}: {history}"
-        );
-    }
+    assert!(history.contains("independent-stderr-line"), "{history}");
+    assert!(
+        history.contains("stderr-prefix-independent-stdout-line"),
+        "{history}"
+    );
+    assert_eq!(pty.progress_rows, 0);
 }
 
 #[test]
-fn another_stream_does_not_join_an_overlong_streamed_fragment() {
+fn verbose_output_retains_overlong_fragments() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.verbose_command("interleaved-long"));
     assert!(pty.finish().success());
     let history = pty.history();
-    assert!(
-        history.lines().any(|row| row == "independent-stderr-line"),
-        "{history}"
-    );
+    assert!(history.contains("independent-stderr-line"), "{history}");
     assert!(history.contains("long-line-suffix"), "{history}");
+}
+
+#[test]
+fn verbose_unfinished_output_is_visible_before_the_child_can_finish() {
+    let fixture = Fixture::new();
+    let mut pty = Pty::spawn(fixture.verbose_command("partial-wait"));
+    pty.until(|pty| {
+        pty.parser
+            .screen()
+            .contents()
+            .contains("waiting-for-input-without-newline")
+    });
+    assert!(pty.child.try_wait().unwrap().is_none());
+    assert_eq!(pty.progress_rows, 0);
+    fs::write(fixture.root.join("release-cargo"), "").unwrap();
+    assert!(pty.finish().success());
 }
 
 #[test]
@@ -1170,18 +1180,18 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
 }
 
 #[test]
-fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
+fn verbose_logs_retain_child_styles_and_diagnostics() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.verbose_command("styled"));
     // Log styling must not infer failure from a line that merely says "error".
     assert!(pty.finish().success());
-    assert!(pty.progress_rows > 0);
-    assert!(pty.style_in_history("Updating fake-registry", 0).0);
-    assert!(pty.style_in_history("Compiling style-fixture", 0).0);
-    assert!(pty.style_in_history("Wrote ", 0).0);
+    assert_eq!(pty.progress_rows, 0);
+    assert!(!pty.style_in_history("Updating fake-registry", 0).0);
+    assert!(!pty.style_in_history("Compiling style-fixture", 0).0);
+    assert!(!pty.style_in_history("Wrote ", 0).0);
     assert_eq!(
         pty.style_in_history("warning: diagnostic-body", 0),
-        (false, vt100::Color::Rgb(251, 191, 36))
+        (false, vt100::Color::Default)
     );
     assert_eq!(
         pty.style_in_history("warning: diagnostic-body", 9),
@@ -1189,7 +1199,7 @@ fn routine_logs_are_muted_and_diagnostics_keep_contrast_in_scrollback() {
     );
     assert_eq!(
         pty.style_in_history("error[E0425]: diagnostic-error", 0),
-        (false, vt100::Color::Rgb(248, 113, 113))
+        (false, vt100::Color::Default)
     );
     assert_eq!(
         pty.style_in_history("error[E0425]: diagnostic-error", 14),
