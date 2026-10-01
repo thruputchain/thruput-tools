@@ -517,21 +517,48 @@ async fn public_bundle_installs_with_the_embedded_catalog() {
     assert!(installation.path().join(".ok").is_file());
 }
 
-// Fixture archives exercise the parser independently of the currently published release.
+// Synthetic bundles declare both contract artifacts so archive-validation tests do not
+// inherit the file inventory or compatibility floor of the current production release.
 fn fixture_catalog() -> serde_json::Value {
-    let mut value: serde_json::Value = serde_json::from_slice(Catalog::embedded_bytes())
-        .expect("bug: embedded catalog should be JSON");
-    let current = value["defaultVersion"].as_str().unwrap().to_string();
-    let mut release = value["versions"][&current].clone();
-    release["source"]["ref"] = serde_json::json!("v0.1.13");
-    for (triple, target) in release["targets"].as_object_mut().unwrap() {
+    let mut targets = serde_json::Map::new();
+    for target in HostTarget::ALL {
+        let triple = target.triple();
         let archive = format!("hog-devnode_0.1.13_{triple}.tar.gz");
-        target["archive"] = serde_json::json!(archive);
-        target["objectKey"] = serde_json::json!(format!("hog-devnode/0.1.13/{archive}"));
+        let mut files = vec![
+            serde_json::json!({"kind": "artifact", "path": "contracts/dev_wallet.rv32a"}),
+            serde_json::json!({"kind": "artifact", "path": "contracts/genesis_root.rv32a"}),
+            serde_json::json!({"kind": "executable", "path": "hog-devnode"}),
+        ];
+        let compatibility = if target == HostTarget::MacosAarch64 {
+            files.push(
+                serde_json::json!({"kind": "runtimeLibrary", "path": "lib/libfixture.dylib"}),
+            );
+            serde_json::json!({"os": "macos", "minimumVersion": "14.0"})
+        } else {
+            serde_json::json!({"libc": "glibc", "minimumVersion": "2.38"})
+        };
+        targets.insert(
+            triple.to_string(),
+            serde_json::json!({
+                "archive": archive,
+                "compatibility": compatibility,
+                "files": files,
+                "layoutVersion": 1,
+                "objectKey": format!("hog-devnode/0.1.13/{archive}"),
+                "sha256": "0".repeat(64),
+                "size": 1,
+            }),
+        );
     }
-    value["defaultVersion"] = serde_json::json!("0.1.13");
-    value["versions"] = serde_json::json!({"0.1.13": release});
-    value
+    serde_json::json!({
+        "component": "hog-devnode",
+        "schemaVersion": 1,
+        "defaultVersion": "0.1.13",
+        "versions": {"0.1.13": {
+            "source": {"ref": "v0.1.13", "repository": "groundhogchain/hogd"},
+            "targets": targets,
+        }},
+    })
 }
 
 fn catalog_for(archive: &[u8]) -> Catalog {
