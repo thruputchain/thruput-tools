@@ -33,6 +33,12 @@ using the binary's GNU build-id. The macOS companion contains a `groundhog.dSYM`
 bundle; its binary is stripped of debug information and re-signed ad hoc.
 Release builds include line tables and force frame pointers.
 
+Install the Linux debuginfo companion with
+`sudo tar -C / -xzf <archive>-debuginfo.tar.gz` to place its files under
+`/usr/lib/debug/.build-id/<xx>/<rest>.debug`, the default build-id debug root
+for gdb, perf, and eBPF profilers. Alternatively, extract it elsewhere and point
+the tool's debug-file directory at the extracted `usr/lib/debug` tree.
+
 Linux apps are `hog-gateway`, `groundhog`, `rv32-lower`, `hogsim`, and
 `groundhog-faucet`. Each archive contains one app binary plus `README.md` and
 `LICENSE`. `hog-gateway`, `hogsim`, and `groundhog-faucet` are binary release
