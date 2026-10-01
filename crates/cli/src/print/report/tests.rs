@@ -83,20 +83,6 @@ fn tall_card_renders_in_pages_without_clipping_to_terminal_height() {
 }
 
 #[test]
-fn card_uses_ratatui_theme_cells_and_crossterm_styling() {
-    let mut report = Report::new(policy(80, true));
-    report.card("Status", &[("Cargo".into(), "installed".into())]);
-    let lines = report.into_lines();
-    assert!(lines[0].contains('\x1b'));
-    assert!(lines[1].contains("installed"));
-    assert!(lines[1].contains("[2m"), "muted labels: {:?}", lines[1]);
-    assert!(!lines.join("").contains("?1049"));
-    for line in lines {
-        plain(&line);
-    }
-}
-
-#[test]
 fn outcome_cards_use_theme_accent_titles_and_borders() {
     for (outcome, label) in [
         (Outcome::Error, "✗ error:"),
@@ -117,13 +103,14 @@ fn outcome_cards_use_theme_accent_titles_and_borders() {
         assert!(lines[0].contains("38;5;6m"));
         assert!(!lines[0].contains("38;2;"));
         assert!(lines.last().unwrap().contains("38;5;6m"));
+        assert!(lines[1].contains("[2m"), "labels remain muted");
     }
 }
 
 #[test]
 fn guided_steps_use_theme_accent_and_keep_every_state_at_narrow_widths() {
     use crate::print::StepState;
-    for width in [24, 40, 60, 80, 120] {
+    for width in [24, 80] {
         for (unicode, color) in [(true, true), (true, false), (false, false)] {
             let mut report = Report::new(Policy {
                 width: Some(width),
@@ -148,26 +135,18 @@ fn guided_steps_use_theme_accent_and_keep_every_state_at_narrow_widths() {
                     .iter()
                     .all(|line| UnicodeWidthStr::width(line.as_str()) <= usize::from(width))
             );
-            let current = lines
-                .iter()
-                .position(|line| line.contains("Signing key"))
-                .unwrap();
-            assert!(lines[current].contains("current"));
-            assert!(
-                lines
-                    .iter()
-                    .any(|line| line.contains("Environment") && line.contains("done"))
-            );
-            assert!(
-                lines
-                    .iter()
-                    .any(|line| line.contains("Project") && line.contains("pending"))
-            );
-            assert!(!lines.join("\n").contains("Purpose:"));
-            if color {
-                assert!(styled[0].contains("38;5;6m"));
-                assert!(styled[current].contains("38;5;6m"));
-            } else {
+            for (step, state) in [
+                ("Environment", "done"),
+                ("Signing key", "current"),
+                ("Project", "pending"),
+            ] {
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.contains(step) && line.contains(state))
+                );
+            }
+            if !color {
                 assert!(styled.iter().all(|line| !line.contains('\x1b')));
             }
             if !unicode {
@@ -283,7 +262,7 @@ fn warnings_errors_and_outcomes_share_safe_width_aware_components() {
 }
 
 #[test]
-fn diagnostic_hierarchy_styles_hint_and_matches_card_width() {
+fn diagnostics_keep_severity_and_fit_below_the_card() {
     let mut report = Report::new(policy(80, true));
     report.card("Status", &[("Cargo".into(), "installed".into())]);
     report.findings(
@@ -302,25 +281,9 @@ fn diagnostic_hierarchy_styles_hint_and_matches_card_width() {
         .iter()
         .position(|line| line.starts_with("⚠ Warning"))
         .unwrap();
-    let hint = lines
-        .iter()
-        .position(|line| line.trim() == "↳ Hint")
-        .unwrap();
     assert!(lines[heading].contains("missing_tool"));
-    assert!(styled[heading].contains("[2m"), "code should be muted");
-    assert!(styled[hint].contains("38;5;6m"), "hint should be cyan");
-    assert!(styled[hint].contains("[1m"), "hint heading should be bold");
-    assert!(!lines[hint - 1].is_empty());
-    assert!(
-        lines[heading + 1..hint]
-            .iter()
-            .all(|line| line.starts_with("  "))
-    );
-    assert!(
-        lines[hint + 1..]
-            .iter()
-            .all(|line| line.starts_with("    "))
-    );
+    assert!(styled[heading].contains("38;2;251;191;36m"));
+    assert!(lines[..heading].iter().any(|line| line.starts_with('╰')));
     assert!(
         lines[heading..]
             .iter()

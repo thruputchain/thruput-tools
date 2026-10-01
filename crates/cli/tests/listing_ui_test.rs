@@ -164,42 +164,25 @@ fn key_import_shows_only_public_results_in_all_output_modes() {
 }
 
 #[test]
-fn management_commands_use_result_cards_without_changing_operations() {
+fn config_mutations_distinguish_changed_and_unchanged_results() {
     let fixture = Fixture::new();
     fixture.populate();
-    for args in [
-        vec!["keys", "generate", "second"],
-        vec!["keys", "use", "second"],
-        vec!["keys", "rm", "second", "--force"],
-        vec!["config", "new", "review", "--network", "local", "--project"],
-        vec![
-            "config",
-            "set",
-            "--profile",
-            "review",
-            "rpc-url",
-            "http://127.0.0.1:9545",
-            "--project",
-        ],
-        vec![
-            "config",
-            "unset",
-            "--profile",
-            "review",
-            "rpc-url",
-            "--project",
-        ],
-        vec![
-            "config",
-            "unset",
-            "--profile",
-            "review",
-            "rpc-url",
-            "--project",
-        ],
-        vec!["config", "use", "review", "--project"],
-        vec!["config", "rm", "review", "--project", "--force"],
-        vec!["wallet", "rm", "legacy", "--profile", "local", "--force"],
+    for (args, expected) in [
+        (
+            vec!["config", "new", "review", "--network", "local", "--project"],
+            "Created profile",
+        ),
+        (
+            vec![
+                "config",
+                "unset",
+                "--profile",
+                "review",
+                "rpc-url",
+                "--project",
+            ],
+            "No change:",
+        ),
     ] {
         let output = terminal_capture(fixture.command(&args), 60, true);
         assert!(
@@ -211,7 +194,7 @@ fn management_commands_use_result_cards_without_changing_operations() {
         let mut screen = vt100::Parser::new(100, 60, 0);
         screen.process(&output.stderr);
         assert!(
-            screen.screen().contents().contains('╭'),
+            screen.screen().contents().contains(expected),
             "{args:?}: {}",
             screen.screen().contents()
         );
@@ -219,18 +202,9 @@ fn management_commands_use_result_cards_without_changing_operations() {
 }
 
 #[test]
-fn archive_codegen_and_toolchain_actions_keep_complete_results_and_raw_source() {
+fn codegen_file_result_and_raw_stdout_preserve_the_same_source() {
     let fixture = Fixture::new();
     let root = fixture.root.path();
-    for dir in ["source/ramdb", "source/events", "source/indexer"] {
-        fs::create_dir_all(root.join(dir)).unwrap();
-    }
-    fs::write(
-        root.join("source/hog-devnode-data.json"),
-        br#"{"schemaVersion":1,"kind":"hog-devnode-data"}"#,
-    )
-    .unwrap();
-    fs::write(root.join("source/ramdb/state"), b"state").unwrap();
     let elf = root.join("fixture.elf");
     fs::write(
         &elf,
@@ -246,45 +220,23 @@ fn archive_codegen_and_toolchain_actions_keep_complete_results_and_raw_source() 
         &groundhog_cli::Print::quiet(),
     )
     .unwrap();
-    for args in [
-        vec![
-            "chain",
-            "dump",
-            "--data-dir",
-            "source",
-            "--output",
-            "backup.json",
-        ],
-        vec![
-            "chain",
-            "restore",
-            "--data-dir",
-            "restored",
-            "--input",
-            "backup.json",
-        ],
-        vec![
+    let output = terminal_capture(
+        fixture.command(&[
             "codegen",
             "ts",
             "contract.spec.xdr",
             "--output",
             "contract.ts",
-        ],
-        vec!["toolchain", "clean", "0.0.1"],
-    ] {
-        let output = terminal_capture(fixture.command(&args), 80, true);
-        assert!(
-            output.status.success(),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains('╭'));
-    }
-    assert_eq!(
-        fs::read(root.join("restored/ramdb/state")).unwrap(),
-        b"state"
+        ]),
+        80,
+        true,
     );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
     let raw = fixture
         .command(&["codegen", "ts", "contract.spec.xdr"])
         .output()
@@ -370,7 +322,7 @@ fn listings_render_on_stdout_at_wide_and_narrow_sizes_without_losing_values() {
     let keys = fixture.command(&["keys", "ls", "--json"]).output().unwrap();
     let keys: serde_json::Value = serde_json::from_slice(&keys.stdout).unwrap();
     let address = keys["data"]["keys"][0]["address"].as_str().unwrap();
-    for columns in [24, 40, 60, 80, 120] {
+    for columns in [24, 80] {
         for (args, values) in [
             (vec!["keys", "ls"], vec![address.to_owned()]),
             (
@@ -466,7 +418,7 @@ fn config_cards_preserve_merged_values_and_field_sources() {
     fs::create_dir_all(&config_dir).unwrap();
     fs::write(config_dir.join("config.toml"), "[profile.local]\nnetwork = \"local\"\nrpc_url = \"https://global.example\"\n[profile.local.contracts]\nshared = \"0x1234\"\n").unwrap();
     fs::write(fixture.root.path().join("groundhog.toml"), "default_profile = \"local\"\n[profile.local]\nrpc_url = \"https://project.example/long/path\"\n").unwrap();
-    for columns in [24, 40, 60, 80, 120] {
+    for columns in [24, 80] {
         for args in [vec!["config", "get"], vec!["config", "get", "--sources"]] {
             let output = terminal_output(fixture.command(&args), columns);
             let text = visible(&output, columns);

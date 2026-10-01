@@ -63,18 +63,7 @@ impl Print {
 
     /// A `Print` that suppresses all status messages.
     pub fn quiet() -> Self {
-        Self {
-            quiet: true,
-            json: false,
-            trace_commands: false,
-            no_ui: false,
-            task: None,
-            verbose_build: false,
-            compact_build: false,
-            diagnostics: std::sync::Arc::default(),
-            group: None,
-            non_interactive: false,
-        }
+        Self::new(true, false)
     }
 
     /// Disable interactive input and terminal rendering without suppressing text.

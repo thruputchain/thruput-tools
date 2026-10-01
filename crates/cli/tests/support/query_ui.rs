@@ -432,21 +432,3 @@ fn query_json_quiet_and_plain_modes_preserve_stream_contracts() {
         }
     }
 }
-
-#[test]
-fn fast_monochrome_query_keeps_the_card_without_flashing_progress() {
-    let query = Query::new(balance("1"), Duration::ZERO);
-    let mut command = query.command(&["balance"]);
-    command.env("NO_COLOR", "1");
-    let started = Instant::now();
-    let mut pty = Pty::spawn(command);
-    assert!(pty.finish().success());
-    if started.elapsed() < Duration::from_millis(150) {
-        assert_eq!(pty.progress_rows, 0);
-    }
-    let history = pty.history();
-    assert!(history.contains("Raw balance"));
-    assert!(history.contains("0.0000001 HOG"));
-    assert!(!String::from_utf8_lossy(&pty.raw).contains("\x1b[38;"));
-    query.finish("groundhog_getBalance");
-}

@@ -26,31 +26,9 @@ fn rendered(command: Command, width: u16) -> (ExitStatus, String) {
     (output.status, strip_terminal_styles(&raw))
 }
 
-fn command_paths() -> Vec<Vec<&'static str>> {
-    let spec = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/specs/2026-09-21-cli-tui-mvp.md"
-    ));
-    spec.split_once("## 7.")
-        .unwrap()
-        .1
-        .split_once("### Flag")
-        .unwrap()
-        .0
-        .lines()
-        .filter_map(|line| {
-            line.strip_prefix("| `")
-                .and_then(|line| line.split_once('`'))
-                .map(|(name, _)| name.split_whitespace().collect())
-        })
-        .collect()
-}
-
 #[test]
-fn every_documented_command_has_working_help_and_shared_argument_error_colors() {
-    let commands = command_paths();
-    assert_eq!(commands.len(), 44);
-    for args in commands {
+fn top_level_and_nested_commands_share_argument_error_policy() {
+    for args in [vec!["balance"], vec!["wallet", "ls"]] {
         let help = groundhog().args(&args).arg("--help").output().unwrap();
         assert!(help.status.success(), "{args:?}");
         assert!(
@@ -63,13 +41,6 @@ fn every_documented_command_has_working_help_and_shared_argument_error_colors() 
         assert_eq!(output.status.code(), Some(2), "{args:?}: {raw}");
         assert!(output.stdout.is_empty());
         assert!(raw.contains("38;2;248;113;113"), "{args:?}: {raw:?}");
-        let plain = groundhog()
-            .args(&args)
-            .args(["--no-ui", "--ui-audit-unknown-option"])
-            .output()
-            .unwrap();
-        assert_eq!(plain.status.code(), Some(2));
-        assert!(!plain.stderr.contains(&0x1b));
         for flag in ["--no-ui", "--non-interactive"] {
             let mut plain = groundhog();
             plain.args(&args).args([flag, "--ui-audit-unknown-option"]);

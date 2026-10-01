@@ -41,24 +41,17 @@ impl Report {
         self.renderer.lines.len()
     }
 
-    pub fn card(&mut self, title: &str, items: &[(String, String)]) {
-        self.card_with_style(title, items, self.renderer.theme.title());
-    }
-
     pub fn outcome_card(&mut self, outcome: Outcome, title: &str, items: &[(String, String)]) {
         if outcome == Outcome::Information {
-            self.card_with_style(title, items, self.renderer.theme.title());
+            self.card(title, items);
             return;
         }
         let prefix = outcome.prefix(self.renderer.policy.unicode);
-        self.card_with_style(
-            &format!("{prefix} {title}"),
-            items,
-            self.renderer.theme.title(),
-        );
+        self.card(&format!("{prefix} {title}"), items);
     }
 
-    fn card_with_style(&mut self, title: &str, items: &[(String, String)], title_style: Style) {
+    pub fn card(&mut self, title: &str, items: &[(String, String)]) {
+        let title_style = self.renderer.theme.title();
         self.summary_width = None;
         let title = terminal_safe(title);
         let items: Vec<_> = items

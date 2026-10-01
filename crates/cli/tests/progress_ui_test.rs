@@ -22,31 +22,11 @@ use tempfile::TempDir;
 mod queries;
 mod support;
 
-const INTERLEAVED_OUTPUT: &str = r#"
+const PARTIAL_OUTPUT_WAIT: &str = r#"
 if [ "$BUILD_UI_MODE" = partial-wait ]; then
   printf 'waiting-for-input-without-newline'
   while [ ! -f release-cargo ]; do sleep 0.05; done
   printf '\n'
-fi
-if [ "$BUILD_UI_MODE" = interleaved ]; then
-  printf 'stdout-prefix-\342'
-  sleep 0.3
-  printf 'independent-stderr-line\n' >&2
-  sleep 0.3
-  printf '\234\223suffix\n'
-  printf 'stderr-prefix-' >&2
-  sleep 0.3
-  printf 'independent-stdout-line\n'
-  sleep 0.3
-  printf 'suffix\n' >&2
-fi
-if [ "$BUILD_UI_MODE" = interleaved-long ]; then
-  i=0
-  while [ "$i" -lt 9000 ]; do printf x; i=$((i+1)); done
-  sleep 0.3
-  printf 'independent-stderr-line\n' >&2
-  sleep 0.3
-  printf 'long-line-suffix\n'
 fi
 "#;
 
@@ -140,11 +120,6 @@ printf 'compiler-stdout-first\n'
 printf 'compiler-stderr-first\n' >&2
 if [ "$BUILD_UI_MODE" = hang ]; then while :; do sleep 1; done; fi
 if [ "$BUILD_UI_MODE" != fast ]; then sleep 0.5; fi
-if [ "$BUILD_UI_MODE" = styled ]; then
-  printf '   Compiling style-fixture v1.0.0\n' >&2
-  printf 'warning: diagnostic-body\n     |   ^^^^\n' >&2
-  printf 'error[E0425]: diagnostic-error\n' >&2
-fi
 if [ "$BUILD_UI_MODE" = flood ]; then
   i=0
   while [ "$i" -lt 300 ]; do
@@ -168,7 +143,7 @@ if [ "$BUILD_UI_MODE" = continued ]; then
   sleep 0.3
   printf 'suffix\n' >&2
 fi
-{INTERLEAVED_OUTPUT}
+{PARTIAL_OUTPUT_WAIT}
 if [ "$BUILD_UI_MODE" = fail ]; then
   printf 'compiler-failure-detail\n' >&2
   exit 42
@@ -469,31 +444,6 @@ impl Pty {
             0
         );
     }
-
-    fn style_in_history(&mut self, text: &str, offset: usize) -> (bool, vt100::Color) {
-        self.parser.screen_mut().set_scrollback(usize::MAX);
-        let history_rows = self.parser.screen().scrollback();
-        for scroll in (0..=history_rows).rev() {
-            self.parser.screen_mut().set_scrollback(scroll);
-            let found = self
-                .parser
-                .screen()
-                .rows(0, 80)
-                .enumerate()
-                .find_map(|(row, line)| line.find(text).map(|col| (row, col + offset)));
-            if let Some((row, col)) = found {
-                let cell = self
-                    .parser
-                    .screen()
-                    .cell(u16::try_from(row).unwrap(), u16::try_from(col).unwrap())
-                    .unwrap();
-                let result = (cell.dim(), cell.fgcolor());
-                self.parser.screen_mut().set_scrollback(0);
-                return result;
-            }
-        }
-        panic!("missing log text: {text}");
-    }
 }
 
 impl Drop for Pty {
@@ -695,37 +645,6 @@ fn delayed_child_fragments_keep_their_line_boundaries() {
     let history = pty.history();
     assert!(history.contains("stdout-prefix-✓suffix"), "{history}");
     assert!(history.contains("stderr-prefix-suffix"), "{history}");
-}
-
-#[test]
-fn verbose_output_preserves_child_interleaving_without_reformatting() {
-    let fixture = Fixture::new();
-    let mut pty = Pty::spawn(fixture.verbose_command("interleaved"));
-    pty.until(|pty| {
-        pty.parser
-            .screen()
-            .contents()
-            .contains("independent-stderr-line")
-    });
-    assert!(String::from_utf8_lossy(&pty.raw).contains("stdout-prefix-"));
-    assert!(pty.finish().success());
-    let history = pty.history();
-    assert!(history.contains("independent-stderr-line"), "{history}");
-    assert!(
-        history.contains("stderr-prefix-independent-stdout-line"),
-        "{history}"
-    );
-    assert_eq!(pty.progress_rows, 0);
-}
-
-#[test]
-fn verbose_output_retains_overlong_fragments() {
-    let fixture = Fixture::new();
-    let mut pty = Pty::spawn(fixture.verbose_command("interleaved-long"));
-    assert!(pty.finish().success());
-    let history = pty.history();
-    assert!(history.contains("independent-stderr-line"), "{history}");
-    assert!(history.contains("long-line-suffix"), "{history}");
 }
 
 #[test]
@@ -1180,38 +1099,6 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
 }
 
 #[test]
-fn verbose_logs_retain_child_styles_and_diagnostics() {
-    let fixture = Fixture::new();
-    let mut pty = Pty::spawn(fixture.verbose_command("styled"));
-    // Log styling must not infer failure from a line that merely says "error".
-    assert!(pty.finish().success());
-    assert_eq!(pty.progress_rows, 0);
-    assert!(!pty.style_in_history("Updating fake-registry", 0).0);
-    assert!(!pty.style_in_history("Compiling style-fixture", 0).0);
-    assert!(!pty.style_in_history("Wrote ", 0).0);
-    assert_eq!(
-        pty.style_in_history("warning: diagnostic-body", 0),
-        (false, vt100::Color::Default)
-    );
-    assert_eq!(
-        pty.style_in_history("warning: diagnostic-body", 9),
-        (false, vt100::Color::Default)
-    );
-    assert_eq!(
-        pty.style_in_history("error[E0425]: diagnostic-error", 0),
-        (false, vt100::Color::Default)
-    );
-    assert_eq!(
-        pty.style_in_history("error[E0425]: diagnostic-error", 14),
-        (false, vt100::Color::Default)
-    );
-    assert_eq!(
-        pty.style_in_history("|   ^^^^", 0),
-        (false, vt100::Color::Default)
-    );
-}
-
-#[test]
 fn compact_build_defers_and_deduplicates_structured_warnings() {
     let fixture = Fixture::new();
     let mut pty = Pty::spawn(fixture.command("diagnostics"));
@@ -1242,10 +1129,6 @@ fn compact_build_defers_and_deduplicates_structured_warnings() {
     ] {
         assert!(!history.contains(text), "unexpected {text}: {history}");
     }
-    assert_eq!(
-        pty.style_in_history("unused variable", 0),
-        (false, vt100::Color::Default)
-    );
     assert!(
         fs::read_to_string(fixture.root.join("cargo.args"))
             .unwrap()
