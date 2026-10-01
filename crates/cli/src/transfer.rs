@@ -4,7 +4,6 @@ use groundhog_json_rpc_client::{
     PollTransactionReceiptError, poll_transaction_receipt_with_client_config,
     submit_transaction_with_client,
 };
-use groundhog_json_rpc_types::error::codes;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
@@ -29,9 +28,9 @@ use crate::transfer_json::{
     TransferDryRunReport, TransferReportCommon, TransferUnconfirmedReport,
 };
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, is_unsupported_rpc_method_error,
-    nonce_from_timestamp, print_receipt_data, resolve_block_expiry_height, rpc_error_message,
-    summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, is_conclusive_send_error,
+    is_unsupported_rpc_method_error, nonce_from_timestamp, print_receipt_data,
+    resolve_block_expiry_height, rpc_error_message, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -358,20 +357,6 @@ async fn poll_local_hash(
             reason: "transaction confirmation ended without a receipt",
         }),
     }
-}
-
-fn is_conclusive_send_error(error: &jsonrpsee::core::client::Error) -> bool {
-    let jsonrpsee::core::client::Error::Call(object) = error else {
-        return false;
-    };
-    matches!(
-        object.code(),
-        codes::INVALID_PARAMS
-            | codes::TX_INVALID
-            | codes::TX_REJECTED
-            | codes::BACKEND_UNAVAILABLE
-            | codes::OVERLOADED
-    )
 }
 
 fn receipt_poll_config() -> (usize, Duration) {

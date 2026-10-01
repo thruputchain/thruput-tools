@@ -202,7 +202,7 @@ pub fn run(
 
     let submitted = match submit_prepared_deploy_and_resolve(&prepared) {
         Ok(submitted) => submitted,
-        Err(error) if prepared.native.is_some() => {
+        Err(error @ CliError::NativeDeploymentUnverified { .. }) if prepared.native.is_some() => {
             let _ = task.finish();
             return report_unverified_native_deploy(&prepared, &error, cmd, print);
         }
@@ -862,10 +862,7 @@ async fn submit_native_deploy(
     let returned =
         groundhog_json_rpc_client::submit_transaction_with_client(client, &prepared.tx_hex)
             .await
-            .map_err(|error| CliError::RpcMethodFailed {
-                method: "sendRawTransaction",
-                message: crate::tx_utils::rpc_error_message(&error),
-            })?;
+            .map_err(|error| native_submission_error(&error))?;
     if returned != prepared.tx_hash {
         return Err(CliError::NativeDeploymentUnverified {
             message: format!(
@@ -882,13 +879,41 @@ async fn submit_native_deploy(
         polling.interval,
     )
     .await
-    .map_err(crate::tx_utils::map_poll_receipt_error)?;
+    .map_err(|error| {
+        let error = crate::tx_utils::map_poll_receipt_error(error);
+        if matches!(error, CliError::TransactionInvalid { .. }) {
+            error
+        } else {
+            CliError::NativeDeploymentUnverified {
+                message: error.to_string(),
+            }
+        }
+    })?;
     if receipt.tx_hash != prepared.tx_hash {
         return Err(CliError::NativeDeploymentUnverified {
             message: "receipt hash does not match the submitted transaction".into(),
         });
     }
     Ok((prepared.tx_hash, receipt))
+}
+
+fn native_submission_error(error: &jsonrpsee::core::ClientError) -> CliError {
+    let message = crate::tx_utils::rpc_error_message(error);
+    if crate::tx_utils::is_unsupported_rpc_method_error(error) {
+        CliError::RpcCapabilityUnsupported {
+            method: "sendRawTransaction",
+            message,
+        }
+    } else if crate::tx_utils::is_conclusive_send_error(error) {
+        CliError::RpcMethodFailed {
+            method: "sendRawTransaction",
+            message,
+        }
+    } else {
+        CliError::NativeDeploymentUnverified {
+            message: format!("sendRawTransaction failed: {message}"),
+        }
+    }
 }
 
 fn resolve_native_deployed_address(
@@ -1098,12 +1123,24 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(submissions.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            error,
+            crate::CliError::NativeDeploymentUnverified { .. }
+        ));
         assert!(
             error
                 .to_string()
                 .contains(&crate::tx_utils::format_tx_hash(&hash))
         );
         handle.stop().unwrap();
+    }
+
+    #[test]
+    fn native_submit_transport_timeout_remains_unverified() {
+        assert!(matches!(
+            super::native_submission_error(&jsonrpsee::core::ClientError::RequestTimeout),
+            crate::CliError::NativeDeploymentUnverified { .. }
+        ));
     }
 
     #[test]

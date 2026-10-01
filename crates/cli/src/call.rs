@@ -200,10 +200,10 @@ pub fn run(
                     print.detail("height", *receipt.height);
                     print.detail("gas used", receipt.gas_used);
                     if decoded_return.is_none()
-                        && let Some(ref data) = receipt.return_data
-                        && !data.0.is_empty()
+                        && let Some(ref data) = child_return
+                        && !data.is_empty()
                     {
-                        print.detail("return", format_args!("0x{}", hex::encode(&data.0)));
+                        print.detail("return", format_args!("0x{}", hex::encode(data)));
                     }
                 }
                 ExecStatus::Reverted { .. } => {

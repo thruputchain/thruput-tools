@@ -9571,6 +9571,66 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
 }
 
 #[test]
+fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
+    for native in [false, true] {
+        for child in [vec![0xde_u8, 0xad, 0xbe, 0xef], vec![]] {
+            let tmp = TempDir::new().unwrap();
+            let config = tmp.path().join("config");
+            let mut receipt = sample_call_receipt(42);
+            let returned = if native {
+                xdrs::cxs::encode(&vec![child.clone()]).unwrap()
+            } else {
+                child.clone()
+            };
+            receipt["returnData"] = serde_json::json!(format!("0x{}", hex::encode(returned)));
+            let (rpc, server) =
+                spawn_transaction_rpc(42, receipt, DevDetailRpcResponse::MethodNotFound);
+            let owner = write_project_config_with_alice_wallet(tmp.path(), &rpc, &config);
+            if native {
+                let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                    groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+                    0,
+                );
+                let path = tmp.path().join("groundhog.toml");
+                let mut document = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .parse::<toml_edit::DocumentMut>()
+                    .unwrap();
+                let wallet = &mut document["profile"]["default"]["wallets"]["alice"];
+                wallet["kind"] = toml_edit::value("native");
+                wallet["account_nonce"] = toml_edit::value(0);
+                wallet["address"] =
+                    toml_edit::value(format!("0x{}", hex::encode(account.address().as_ref())));
+                std::fs::write(path, document.to_string()).unwrap();
+            }
+            let output = groundhog()
+                .args([
+                    "call",
+                    &format!("0x{}", "11".repeat(32)),
+                    "0x0123456789abcdef",
+                    "0x",
+                    "--force",
+                ])
+                .current_dir(tmp.path())
+                .env("XDG_CONFIG_HOME", &config)
+                .output()
+                .unwrap();
+            server.join().unwrap();
+            let text = String::from_utf8(output.stderr).unwrap();
+            assert!(output.status.success(), "{text}");
+            let line = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("return:"));
+            if child.is_empty() {
+                assert!(line.is_none(), "{text}");
+            } else {
+                assert_eq!(line.map(str::trim), Some("return: 0xdeadbeef"), "{text}");
+            }
+        }
+    }
+}
+
+#[test]
 fn call_live_human_appends_transaction_detail_sections() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");

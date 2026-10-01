@@ -11,6 +11,21 @@ use crate::{CliError, Print};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
+/// Submission errors that establish the transaction was not admitted.
+pub(crate) fn is_conclusive_send_error(error: &ClientError) -> bool {
+    let ClientError::Call(object) = error else {
+        return false;
+    };
+    matches!(
+        object.code(),
+        codes::INVALID_PARAMS
+            | codes::TX_INVALID
+            | codes::TX_REJECTED
+            | codes::BACKEND_UNAVAILABLE
+            | codes::OVERLOADED
+    )
+}
+
 /// Human-readable one-line summary of an execution status.
 pub fn summarize_exec_status(status: &ExecStatus) -> String {
     match status {

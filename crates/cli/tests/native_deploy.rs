@@ -147,6 +147,7 @@ async fn unsaved_key_routes_call_transfer_and_deploy_through_native_wallet() {
 enum Outcome {
     Success,
     SendError,
+    Rejected(i32),
     SendHashMismatch,
     LookupError,
     ReceiptHashMismatch,
@@ -158,6 +159,7 @@ enum Outcome {
 struct State {
     outcome: Outcome,
     submissions: Mutex<Vec<String>>,
+    receipt_requests: std::sync::atomic::AtomicUsize,
 }
 fn signed(hex_value: &str) -> SignedTransaction {
     xdrs::txs::decode(&hex::decode(hex_value.trim_start_matches("0x")).unwrap()).unwrap()
@@ -177,6 +179,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
     let state = Arc::new(State {
         outcome,
         submissions: Mutex::new(vec![]),
+        receipt_requests: std::sync::atomic::AtomicUsize::new(0),
     });
     let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", server.local_addr().unwrap());
@@ -194,8 +197,13 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
             let (hash, _) = identity(&signed(&bytes));
             state.submissions.lock().unwrap().push(bytes);
             match state.outcome {
+                Outcome::Rejected(code) => Err(ErrorObjectOwned::owned(
+                    code,
+                    "definite pre-admission rejection",
+                    None::<()>,
+                )),
                 Outcome::SendError => Err(ErrorObjectOwned::owned(
-                    -32000,
+                    groundhog_json_rpc_types::error::codes::BACKEND_TIMEOUT,
                     "post-admission response failure",
                     None::<()>,
                 )),
@@ -205,6 +213,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
         })
         .unwrap();
     module.register_method("groundhog_getTransactionReceipt", |_, state, _| {
+        state.receipt_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if matches!(state.outcome, Outcome::LookupError) { return Err(ErrorObjectOwned::owned(-32000, "receipt unavailable", None::<()>)); }
         let signed = signed(state.submissions.lock().unwrap().first().unwrap());
         let (hash, address) = identity(&signed);
@@ -488,6 +497,54 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
         assert_eq!(
             state.submissions.lock().unwrap().len(),
             usize::from(!dry_run)
+        );
+        handle.stop().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_deploy_reports_definitive_rejections_without_reconciliation() {
+    use groundhog_json_rpc_types::error::codes;
+    for code in [
+        codes::INVALID_PARAMS,
+        codes::TX_INVALID,
+        codes::TX_REJECTED,
+        codes::BACKEND_UNAVAILABLE,
+        codes::OVERLOADED,
+        -32601,
+    ] {
+        let (url, handle, state) = server(Outcome::Rejected(code)).await;
+        let fixture = Fixture::new(&url);
+        let output = fixture.deploy(&["--fund", "5"]);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let report: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(
+            report["error"]["code"],
+            if code == -32601 {
+                "rpc_capability_unsupported"
+            } else {
+                "rpc_method_failed"
+            }
+        );
+        assert!(
+            report["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("definite pre-admission rejection")
+        );
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("reconcile"));
+        assert_eq!(state.submissions.lock().unwrap().len(), 1);
+        assert_eq!(
+            state
+                .receipt_requests
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(
+            fixture.config()["profile"]["default"]
+                .get("contracts")
+                .is_none()
         );
         handle.stop().unwrap();
     }
