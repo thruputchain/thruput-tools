@@ -427,13 +427,7 @@ fn is_insufficient_deploy_funding(
     ) {
         return false;
     }
-    matches!(
-        decoded_abort,
-        Some(Ok(abort))
-            if abort.exception_crate == Some("groundhog-erc20-if")
-                && abort.exception.as_deref() == Some("ERC20Error")
-                && abort.value == json!("TooLarge")
-    )
+    crate::codec::is_erc20_too_large(decoded_abort)
 }
 
 fn deploy_funding_commands(prepared: &PreparedDeploy) -> [String; 2] {
