@@ -308,7 +308,7 @@ owned by the existing operations; make only the adaptations the renderer require
   `--dry-run` is not `view`, and neither is a submitted transaction.
 - Keep available hashes and facts when submission/receipt outcome is uncertain.
   An interrupted wait is “stopped waiting”, not “cancelled transaction”.
-- Preserve multi-step partial results, including wallet prefunding/creation and
+- Preserve multi-step partial results, including native deployment verification and
   deploy success with an alias-save warning. Do not advise resubmission as a UI repair.
 - Keep `CliError` codes/hints/details and existing command-reported failure payloads.
   Central error handling must not duplicate errors already emitted by a command.
@@ -333,7 +333,7 @@ with shared surrounding diagnostics. Progress appears only when real work warran
 | `call` | Review + Result; named/raw entrypoint, typed/raw args, gas/wallet, dry-run/live, failed/uncertain execution. | GH-393 |
 | `transfer` | Review + Result; amount/recipient/source resolution, dry-run/live, self-transfer and execution errors. | GH-393 |
 | `airdrop` | Review + Result; local/hosted faucet, default/explicit recipient and amount, dry-run/live, warnings and attempt recovery. | GH-393 |
-| `wallet create` | Review + Result; key/name, local/remote prefund, dry-run/live, multi-step partial outcomes. | GH-393 |
+| `wallet create` | Review + Result; offline native identity, local binding, dry run, and explicit funding next step. | GH-393 |
 | `view` | Query; metadata/raw calldata, caller override, decoded/raw return/abort/fault/events. | GH-391 |
 | `balance` | Query; default/named/direct/dev target, zero balance versus lookup error. | GH-391 |
 | `storage` | Query; raw address/key/value, absent value and RPC error. | GH-391 |
@@ -395,7 +395,7 @@ Do not claim an exhaustive Cartesian product of every possible flag value.
   verbose/tracing, startup/runtime/shutdown errors. Preserve existing lifecycle.
 - **Transactions:** confirmation before action, force, dry-run, validation failure,
   signed/prepared versus submitted, successful/failed execution, timeout/unknown,
-  local/remote faucet paths, partial prefund/create, and alias-save warnings.
+  local/remote faucet paths, offline native wallet creation, and alias-save warnings.
 - **Raw/framework output:** exported key bytes, generated source, completion scripts,
   toolchain paths, `--help`, `--version`, and `--skill` remain compatible and unframed.
 
@@ -494,7 +494,7 @@ generated guidance or change JSON schema versions solely for human styling.
 
 ## 10. Sources and migration boundaries
 
-- `crates/tools/cli/src/main.rs`: current 44-command argument/dispatch surface.
+- `crates/cli/src/main.rs`: current 44-command argument/dispatch surface.
 - `print.rs`, `print/`, `terminal.rs`: shared facade, Ratatui components, capabilities,
   output formatting, and the live-task output migration boundary.
 - `status.rs`, `checks.rs`: status presentation and authoritative findings.
@@ -503,7 +503,7 @@ generated guidance or change JSON schema versions solely for human styling.
   multi-step outcome semantics; reuse rather than rewrite.
 - `config_cmd.rs`, `keys.rs`, `toolchain_cmd.rs`, `chain.rs`, `codegen_cmd.rs`:
   management, raw data, and artifact paths.
-- `node.rs`, `docs.rs`, `crates/dev/node-supervisor/`: existing service lifetimes,
+- `node.rs`, `docs.rs`, `crates/node-supervisor/`: existing service lifetimes,
   signals, logging, publication, and cleanup.
 - Existing `*_json.rs`, `result.rs`, `error.rs`, and CLI integration tests: machine
   contracts and failure behaviour.

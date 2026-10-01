@@ -101,7 +101,7 @@ fn balance(raw: &str) -> Value {
 }
 
 fn view(output: Value) -> Value {
-    let mut response = json!({"result": {"events": [], "height": 12}});
+    let mut response = json!({"result": {"events": [], "height": 12, "gasUsed": 7}});
     response["result"]["output"] = output;
     response
 }

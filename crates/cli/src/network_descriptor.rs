@@ -41,19 +41,22 @@ pub(crate) struct RemoteAirdropDescriptor {
 
 pub(crate) fn resolve_native_signing_context(
     profile: &ResolvedProfile,
-    configured: &Option<groundhog_xdr::types::NetworkHash>,
+    configured: Option<&groundhog_xdr::types::NetworkHash>,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<WalletSigningContext, CliError> {
     let rpc_url = profile.rpc_endpoint()?;
     let network_info = fetch_rpc_network_info(runtime, rpc_url)?;
     if configured.is_none() {
-        let faucet_url = profile.faucet_url.as_deref().ok_or(CliError::MissingNetworkHash)?;
+        let faucet_url = profile
+            .faucet_url
+            .as_deref()
+            .ok_or(CliError::MissingNetworkHash)?;
         let descriptor = fetch_network_descriptor_value(faucet_url)?;
         validate_descriptor_identity(rpc_url, &descriptor)?;
         validate_network_info(&descriptor, &network_info)?;
     }
     Ok(WalletSigningContext {
-        network_hash: validated_signing_network_hash(configured.as_ref(), &network_info)?,
+        network_hash: validated_signing_network_hash(configured, &network_info)?,
         entrypoints: WalletEntrypoints {
             deploy: groundhog_signing::default_wallet::DEFAULT_WALLET_DEPLOY_ENTRYPOINT,
             do_action: groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT,

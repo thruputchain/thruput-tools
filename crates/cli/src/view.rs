@@ -240,6 +240,7 @@ fn print_view_response(
         ("Contract".into(), prepared.contract_address_hex.clone()),
         ("Entrypoint".into(), prepared.entrypoint_id.clone()),
         ("Height".into(), response.height.to_string()),
+        ("Gas used".into(), response.gas_used.to_string()),
         ("RPC URL".into(), prepared.rpc_url.clone()),
     ];
     if prepared.resolved.metadata.is_some() {

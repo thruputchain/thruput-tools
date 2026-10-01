@@ -329,6 +329,12 @@ information and `--help` for flags. Never use deterministic local keys in produc
 operations require authorized `--force`. Key imports need piped stdin; Cargo/test
 subprocesses cannot read terminal stdin. Use `--json` for machine results.
 
+`--no-ui` selects plain output; `NO_COLOR` disables color. Explicit live-output
+modes stream immediately without animation.
+
+Hosted signing can discover an unconfigured network hash from matching descriptor
+and RPC identities. Configured hashes remain enforced.
+
 Timeout or `unknown` does not prove transaction failure. Inspect the hash before
 retrying. `node --verbose` enables backend logs; restarting an ephemeral node
 loses its state.
@@ -341,24 +347,20 @@ See [Event pages and restart](#event-pages-and-restart) for cursor rules.
 
 ### Key and address interoperability
 
-`groundhog keys import <name>` reads an Ed25519 seed from a hidden terminal
-prompt or piped stdin. It accepts a checksummed Stellar S StrKey or a 32-byte
-hex seed, never a 64-byte stored keypair. Do not put private seeds in command
-arguments. Existing names are not overwritten; `dev-N` names are reserved.
+`groundhog keys import <name>` reads a seed from hidden input or piped stdin:
+a checksummed S StrKey or 32-byte hex, never a 64-byte keypair or CLI argument.
+Existing names are not overwritten; `dev-N` names are reserved.
 Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
 Malformed TOML or an invalid `default_key` is rejected before storing the key.
-If the key is stored but selecting the default fails, import succeeds with a
-warning and a recovery
-command (`groundhog keys use <name>`); do not import it again. `isDefault` is
-null when the configuration cannot be reread to confirm selection.
+If saving succeeds but default selection fails, use `groundhog keys use <name>`;
+do not reimport. `isDefault` is null if configuration cannot be reread.
 
 `groundhog keys export <name> --format strkey` exports the same seed as an S
 StrKey after the normal confirmation gate. The default export remains hex.
 For an authorized non-interactive transfer between key stores, pipe export
 stdout directly to the receiving CLI's stdin rather than capturing it in logs.
 
-A G StrKey is an Ed25519 public key, not a derived Groundhog account or wallet
-address. Key commands display public keys separately from account addresses.
+A G StrKey is an Ed25519 public key, distinct from an account or wallet address.
 C StrKeys and legacy hex are accepted for contract/wallet address inputs,
 including typed contract arguments. Saved wallet owners accept G StrKeys or
 hex public keys. These encodings preserve bytes and do not identify a network.

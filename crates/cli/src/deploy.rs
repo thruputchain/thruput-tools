@@ -168,20 +168,20 @@ pub fn run(
                     plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
                 );
                 print.detail("profile", &plan.profile_name);
-        if let Some(native) = &plan.native {
-            print.detail("RPC", &plan.rpc_url);
-            print.detail("sender", &native.sender);
-            print.detail("network hash", &native.network_hash);
-            print.detail("contract hash", &native.contract_hash);
-            print.detail("deployment nonce", &native.deployment_nonce);
-            print.detail("predicted address", &plan.predicted_address);
-            print.detail("funding HOG", &native.funding_hog);
-            print_initializer(native.initializer.as_ref(), print);
-            print.detail("expiry height", native.expiry_height);
-            print.detail("gas budget", native.gas_limit);
-            print.detail("tx", format_tx_hash(&plan.tx_hash));
-            print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
-        }
+                if let Some(native) = &plan.native {
+                    print.detail("RPC", &plan.rpc_url);
+                    print.detail("sender", &native.sender);
+                    print.detail("network hash", &native.network_hash);
+                    print.detail("contract hash", &native.contract_hash);
+                    print.detail("deployment nonce", &native.deployment_nonce);
+                    print.detail("predicted address", &plan.predicted_address);
+                    print.detail("funding HOG", &native.funding_hog);
+                    print_initializer(native.initializer.as_ref(), print);
+                    print.detail("expiry height", native.expiry_height);
+                    print.detail("gas budget", native.gas_limit);
+                    print.detail("tx", format_tx_hash(&plan.tx_hash));
+                    print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
+                }
             },
         )?
     {
@@ -464,32 +464,32 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     print.group(crate::print::Outcome::DryRun, "Deployment", |print| {
-    print.status(format_args!(
-        "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
-        prepared.artifact.kind.as_str(),
-        prepared.artifact_bytes_len,
-        prepared.rpc_url
-    ));
-    print.status(format_args!(
-        "  predicted address: {}",
-        prepared.predicted_address
-    ));
-    if let Some(native) = &prepared.native {
-        print.detail("sender", &native.sender);
-        print.detail("network hash", &native.network_hash);
-        print.detail("contract hash", &native.contract_hash);
-        print.detail("deployment nonce", &native.deployment_nonce);
-        print.detail("funding HOG", &native.funding_hog);
-        print_initializer(native.initializer.as_ref(), print);
-        print.detail("expiry height", native.expiry_height);
-        print.detail("gas budget", native.gas_limit);
-        print.warn(
-            "Funding is the authorized transfer, not a minimum-cost estimate or final balance.",
-        );
-    }
-    print.detail("tx", format_tx_hash(&prepared.tx_hash));
-    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
-    print.status("  submitted: no (--dry-run)");
+        print.status(format_args!(
+            "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
+            prepared.artifact.kind.as_str(),
+            prepared.artifact_bytes_len,
+            prepared.rpc_url
+        ));
+        print.status(format_args!(
+            "  predicted address: {}",
+            prepared.predicted_address
+        ));
+        if let Some(native) = &prepared.native {
+            print.detail("sender", &native.sender);
+            print.detail("network hash", &native.network_hash);
+            print.detail("contract hash", &native.contract_hash);
+            print.detail("deployment nonce", &native.deployment_nonce);
+            print.detail("funding HOG", &native.funding_hog);
+            print_initializer(native.initializer.as_ref(), print);
+            print.detail("expiry height", native.expiry_height);
+            print.detail("gas budget", native.gas_limit);
+            print.warn(
+                "Funding is the authorized transfer, not a minimum-cost estimate or final balance.",
+            );
+        }
+        print.detail("tx", format_tx_hash(&prepared.tx_hash));
+        print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+        print.status("  submitted: no (--dry-run)");
     });
 
     print.json(&CommandResult::new(

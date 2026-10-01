@@ -3522,7 +3522,7 @@ fn status_dumb_terminal_keeps_plain_report_and_exit_code() {
     assert!(!plain.stderr.contains(&0x1b));
     assert!(String::from_utf8_lossy(&plain.stderr).contains("Cargo: installed"));
     let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(payload["data"]["schemaVersion"], 2);
+    assert_eq!(payload["data"]["schemaVersion"], 3);
 }
 
 #[cfg(unix)]
@@ -6656,6 +6656,46 @@ fn hosted_signing_rejects_profile_network_hash_mismatch() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["error"]["code"], "network_descriptor_mismatch");
     assert_eq!(stderr["error"]["details"]["field"], "networkHash");
+}
+
+#[test]
+fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config");
+    let owner = generate_key_public_key(&config_home, "alice");
+    let owner = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(owner, 0);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    std::fs::write(tmp.path().join("groundhog.toml"), format!(
+        "default_profile = 'devnet'\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = '{rpc_url}'\nfaucet_url = '{faucet_url}'\n"
+    )).unwrap();
+    let output = groundhog()
+        .args([
+            "transfer",
+            &format!("0x{}", "bc".repeat(32)),
+            "0.01",
+            "--dry-run",
+            "--json",
+        ])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+    descriptor_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["sender"],
+        format!("0x{}", hex::encode(account.address().as_ref()))
+    );
+    assert_eq!(report["data"]["submitted"], false);
+    assert!(report["data"]["signedTransaction"].as_str().is_some());
 }
 
 #[test]

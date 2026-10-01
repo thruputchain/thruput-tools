@@ -73,7 +73,7 @@ impl ResolvedTransactionSender {
         if self.native_account.is_some() {
             crate::network_descriptor::resolve_native_signing_context(
                 profile,
-                &self.network_hash,
+                self.network_hash.as_ref(),
                 runtime,
             )
         } else {

@@ -20,7 +20,7 @@ pub fn binary() -> PathBuf {
                     "--example",
                     "fake_hogd_dev",
                 ])
-                .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
+                .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
                 .stderr(Stdio::inherit())
                 .output()
                 .unwrap();

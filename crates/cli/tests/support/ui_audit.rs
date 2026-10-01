@@ -29,7 +29,7 @@ fn rendered(command: Command, width: u16) -> (ExitStatus, String) {
 fn command_paths() -> Vec<Vec<&'static str>> {
     let spec = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../docs/specs/2026-09-21-cli-tui-mvp.md"
+        "/../../docs/specs/2026-09-21-cli-tui-mvp.md"
     ));
     spec.split_once("## 7.")
         .unwrap()
@@ -332,21 +332,17 @@ fn live_call_and_deploy_results_cover_success_and_execution_failure() {
 fn remote_funding_dry_runs_are_explicit_and_do_not_contact_services() {
     let temp = TempDir::new().unwrap();
     std::fs::write(temp.path().join("groundhog.toml"), "default_profile = \"devnet\"\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
-    for args in [
-        vec!["wallet", "create", "--key", "alice", "--dry-run"],
-        vec![
-            "airdrop",
-            "0x1111111111111111111111111111111111111111111111111111111111111111",
-            "--dry-run",
-        ],
-    ] {
-        let mut command = groundhog();
-        command.args(args).current_dir(temp.path());
-        let (status, text) = rendered(command, 60);
-        assert!(status.success(), "{text}");
-        assert!(text.contains("Dry run (not submitted)"), "{text}");
-        assert!(text.contains("submitted: no"), "{text}");
-    }
+    let args = [
+        "airdrop",
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "--dry-run",
+    ];
+    let mut command = groundhog();
+    command.args(args).current_dir(temp.path());
+    let (status, text) = rendered(command, 60);
+    assert!(status.success(), "{text}");
+    assert!(text.contains("Dry run (not submitted)"), "{text}");
+    assert!(text.contains("submitted: no"), "{text}");
 }
 
 #[test]
@@ -443,56 +439,11 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
 }
 
 #[test]
-fn wallet_creation_reports_committed_prefunding_on_partial_failure() {
-    for fail in [false, true] {
+fn native_wallet_creation_reports_offline_save_and_dry_run() {
+    for dry_run in [false, true] {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config");
-        let faucet = advertised_dev_wallet_address(0);
-        let manifest = write_runtime_manifest(temp.path(), 0, &faucet, None);
-        let listener = MockListener::bind();
-        listener.set_nonblocking(true).unwrap();
-        let rpc = format!("http://{}", listener.local_addr().unwrap());
-        let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            for step in 0..if fail { 5 } else { 7 } {
-                let (stream, request) = read_jsonrpc_request(&listener, deadline, "wallet create");
-                let result = match step {
-                    0 | 6 => {
-                        assert_eq!(request["method"], "groundhog_getBalance");
-                        serde_json::json!({"address":request["params"][0],"rawBalance":"100000000000","height":42})
-                    }
-                    1 => {
-                        assert_eq!(request["method"], "groundhog_chainTip");
-                        serde_json::json!({"height":42,"blockHash":format!("0x{}", "00".repeat(32))})
-                    }
-                    2 | 4 => {
-                        assert_eq!(request["method"], "groundhog_sendRawTransaction");
-                        if step == 4 && fail {
-                            send_jsonrpc_error_response(
-                                stream,
-                                &request["id"],
-                                -32000,
-                                "creation failed",
-                            );
-                            continue;
-                        }
-                        serde_json::json!(format!(
-                            "0x{}",
-                            if step == 2 { "11" } else { "22" }.repeat(32)
-                        ))
-                    }
-                    _ => {
-                        assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-                        let mut receipt = sample_call_receipt(42);
-                        receipt["txHash"] = request["params"][0].clone();
-                        receipt
-                    }
-                };
-                send_jsonrpc_response(stream, &request["id"], result);
-            }
-        });
-        std::fs::write(temp.path().join("dev_wallet.rv32a"), b"dev-wallet").unwrap();
-        std::fs::write(temp.path().join("groundhog.toml"), format!("default_profile = \"default\"\n[profile.default]\nrpc_url = \"{rpc}\"\nruntime_manifest = \"{}\"\n", manifest.file_name().unwrap().to_str().unwrap())).unwrap();
+        std::fs::write(temp.path().join("groundhog.toml"), "default_profile = \"default\"\n[profile.default]\nrpc_url = \"http://127.0.0.1:9\"\nfaucet_url = \"http://127.0.0.1:9\"\n").unwrap();
         generate_key_public_key(&config, "owner");
         let mut command = groundhog();
         command
@@ -501,15 +452,20 @@ fn wallet_creation_reports_committed_prefunding_on_partial_failure() {
             ])
             .current_dir(temp.path())
             .env("XDG_CONFIG_HOME", config);
+        if dry_run {
+            command.arg("--dry-run");
+        }
         let (status, text) = rendered(command, 80);
-        server.join().unwrap();
-        assert_eq!(status.success(), !fail, "{text}");
-        assert!(text.contains("Prefund committed"), "{text}");
+        assert!(status.success(), "{text}");
         assert!(
-            text.contains(if fail {
-                "Partially completed"
+            text.contains('╭') && text.contains("Native wallet"),
+            "{text}"
+        );
+        assert!(
+            text.contains(if dry_run {
+                "not saved"
             } else {
-                "Wallet created"
+                "No funding was requested"
             }),
             "{text}"
         );
@@ -521,7 +477,7 @@ fn wallet_creation_reports_committed_prefunding_on_partial_failure() {
                 .get("wallets")
                 .and_then(|wallets| wallets.get("trading"))
                 .is_some(),
-            !fail
+            !dry_run
         );
     }
 }

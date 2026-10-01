@@ -103,12 +103,20 @@ pub fn create(
     }
     let mut created = false;
     if !dry_run {
-        if !print.confirm(
+        if !print.confirm_review(
+            "Review native wallet",
             force,
             "create a wallet",
-            format_args!("Save empty native wallet `{}`?", inputs.wallet_name),
+            &format!("Save empty native wallet `{}`?", inputs.wallet_name),
+            |print| {
+                print.detail("Name", &inputs.wallet_name);
+                print.detail("Key", &inputs.key_name);
+                print.detail("Profile", &inputs.profile.name);
+                print.detail("Address", &binding.address);
+                print.detail("Funding", "Not requested; this only saves a local binding");
+            },
         )? {
-            print.note("Cancelled");
+            print.cancelled();
             return Ok(());
         }
         created = save_native_wallet(
@@ -134,13 +142,7 @@ pub fn create(
             &manifest.to_string_lossy(),
         ));
     }
-    print.status(if dry_run {
-        "Derived native wallet (not saved)."
-    } else {
-        "Saved native wallet. No funding was requested."
-    });
-    print.detail("wallet", &binding.address);
-    print.detail("fund", &funding_command);
+    print_native_wallet(&binding, &funding_command, dry_run, created, print);
     print.json(&CommandResult::new(
         cmd,
         WalletCreateReport {
@@ -159,6 +161,31 @@ pub fn create(
         },
     ))?;
     Ok(())
+}
+
+fn print_native_wallet(
+    binding: &SavedWalletBinding,
+    funding_command: &str,
+    dry_run: bool,
+    created: bool,
+    print: &Print,
+) {
+    let outcome = if dry_run {
+        crate::print::Outcome::DryRun
+    } else if created {
+        crate::print::Outcome::Success
+    } else {
+        crate::print::Outcome::Unchanged
+    };
+    print.group(outcome, "Native wallet", |print| {
+        print.status(if dry_run {
+            "Derived native wallet (not saved)."
+        } else {
+            "Saved native wallet. No funding was requested."
+        });
+        print.detail("wallet", &binding.address);
+        print.detail("fund", funding_command);
+    });
 }
 
 pub fn remove(
@@ -218,20 +245,22 @@ pub fn remove(
             .or_else(|| inherited_profile.and_then(|profile| profile.default_wallet.clone()))
     };
     if !confirm_wallet_removal(name, &profile_name, force, print)? {
-        print.note("Cancelled");
+        print.cancelled();
         return Ok(());
     }
     remove_prepared_profile_wallet(prepared_removal)?;
 
-    print.status(format_args!("Removed wallet `{}`.", name.trim()));
-    if cleared_default
-        && writes_project_profile
-        && let Some(wallet_name) = effective_default_wallet.as_deref()
-    {
-        print.warn(format_args!(
-            "profile `{profile_name}` now inherits default wallet `{wallet_name}` from global config"
-        ));
-    }
+    print.group(crate::print::Outcome::Success, "Wallet removed", |print| {
+        print.status(format_args!("Removed wallet `{}`.", name.trim()));
+        if cleared_default
+            && writes_project_profile
+            && let Some(wallet_name) = effective_default_wallet.as_deref()
+        {
+            print.warn(format_args!(
+                "profile `{profile_name}` now inherits default wallet `{wallet_name}` from global config"
+            ));
+        }
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -280,20 +309,37 @@ pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(
         return Ok(());
     }
 
-    if wallets.is_empty() {
-        println!("No wallets saved.");
-        return Ok(());
-    }
-
-    for wallet in wallets {
-        let marker = if wallet.is_default { "*" } else { " " };
-        println!(
-            "{marker} {} {} owner {}",
-            wallet.name, wallet.address, wallet.owner_public_key
-        );
-    }
-
-    Ok(())
+    let rows: Vec<_> = wallets
+        .iter()
+        .map(|wallet| {
+            vec![
+                if wallet.is_default {
+                    format!("{} (default)", wallet.name)
+                } else {
+                    wallet.name.clone()
+                },
+                wallet.address.clone(),
+                if wallet.owner_public_key.is_empty() {
+                    "Not recorded".into()
+                } else {
+                    wallet.owner_public_key.clone()
+                },
+            ]
+        })
+        .collect();
+    print.data_table(
+        &format!("Wallets: {}", profile.name),
+        &["Name".into(), "Address".into(), "Owner".into()],
+        &rows,
+        "No wallets saved.",
+        wallets.iter().map(|wallet| {
+            let marker = if wallet.is_default { "*" } else { " " };
+            format!(
+                "{marker} {} {} owner {}",
+                wallet.name, wallet.address, wallet.owner_public_key
+            )
+        }),
+    )
 }
 
 pub fn use_wallet(
@@ -311,7 +357,9 @@ pub fn use_wallet(
     resolve_sender_account(&resolved_profile, Some(name))?;
     save_profile_default_wallet(&project_root, Some(&resolved_profile.name), name)?;
 
-    print.status(format_args!("Using wallet `{name}` by default."));
+    print.group(crate::print::Outcome::Success, "Wallet selected", |print| {
+        print.status(format_args!("Using wallet `{name}` by default."));
+    });
     print.json(&CommandResult::new(
         cmd,
         json!({
