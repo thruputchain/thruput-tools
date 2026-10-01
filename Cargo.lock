@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-agent-knowledge"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "hex",
  "serde",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-bench"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
@@ -1457,11 +1457,11 @@ dependencies = [
 
 [[package]]
 name = "groundhog-build-info"
-version = "0.21.0"
+version = "0.22.0"
 
 [[package]]
 name = "groundhog-bundle-identity"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-build-info",
  "hex",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "base64",
@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli-macros"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1541,7 +1541,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-client"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-contract-spec",
  "groundhog-contract-util",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1694,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-firehose"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-hogd-backend"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-json-rpc-server",
  "groundhog-json-rpc-types",
@@ -1740,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-open-rpc",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1867,7 +1867,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "groundhog-bundle-identity",
@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "schemars",
  "serde",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1925,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-artifact"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
@@ -1945,7 +1945,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-lower"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -1975,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "ed25519-dalek",
  "groundhog-domain-separator",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "clap",
  "groundhog-build-info",
@@ -2054,7 +2054,7 @@ checksum = "2a3ea66a777f65492f274751ab4975b9ff11045e134735bf4450e47ce3ccfc36"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "getrandom 0.2.17",
  "groundhog-contract-util",
@@ -2077,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-toolchain"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "flate2",
@@ -2110,7 +2110,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-tx-validation"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-rv32-artifact",
@@ -2134,7 +2134,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "rpc_driver",
