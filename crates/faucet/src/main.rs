@@ -1,4 +1,5 @@
 use clap::Parser;
+mod heap_profiling;
 use std::sync::Arc;
 use thruput_faucet::{FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve};
 use tracing_subscriber::EnvFilter;
@@ -19,6 +20,10 @@ struct Cli {
     /// HTTP listen address.
     #[arg(long)]
     listen: Option<String>,
+
+    /// Private heap profile listen address (Linux; requires `GROUNDHOG_HEAP_PROFILING=1`).
+    #[arg(long)]
+    pprof_listen: Option<String>,
 }
 
 /// Log filter from `RUST_LOG`, defaulting to `info` when unset so operators
@@ -47,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
+    let heap_profiling = heap_profiling::initialize().await?;
     let config_toml = tokio::fs::read_to_string(&cli.config)
         .await
         .map_err(|error| {
@@ -75,15 +81,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.cors_allowed_origins = parts.cors_allowed_origins;
     config.policy_config = parts.policy;
 
-    serve(config).await?;
+    let listener = pprof_listener(cli.pprof_listen.as_deref()).await?;
+    if let Some(listener) = listener {
+        tracing::info!(listen = %listener.local_addr()?, "faucet heap profile server listening");
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let profiles = axum::serve(listener, heap_profiling::routes::<()>(heap_profiling))
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            });
+        let profiles = tokio::spawn(async move { profiles.await });
+        let result = serve(config).await;
+        let _ = shutdown_tx.send(());
+        profiles.await??;
+        result?;
+    } else {
+        serve(config).await?;
+    }
     Ok(())
+}
+
+async fn pprof_listener(address: Option<&str>) -> std::io::Result<Option<tokio::net::TcpListener>> {
+    match address {
+        Some(address) => tokio::net::TcpListener::bind(address).await.map(Some),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use serial_test::serial;
 
     use super::env_filter;
+
+    #[tokio::test]
+    async fn pprof_listener_requires_explicit_address() {
+        let cli =
+            super::Cli::try_parse_from(["groundhog-faucet", "--config", "unused.toml"]).unwrap();
+        assert!(cli.pprof_listen.is_none());
+        assert!(
+            super::pprof_listener(cli.pprof_listen.as_deref())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let cli = super::Cli::try_parse_from([
+            "groundhog-faucet",
+            "--config",
+            "unused.toml",
+            "--pprof-listen",
+            "127.0.0.1:0",
+        ])
+        .unwrap();
+        let listener = super::pprof_listener(cli.pprof_listen.as_deref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(listener.local_addr().unwrap().port() > 0);
+    }
 
     #[test]
     #[serial]

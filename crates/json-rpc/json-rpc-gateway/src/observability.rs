@@ -34,6 +34,7 @@ pub async fn spawn_observability_server(
     health: GatewayHealth,
     metrics: GatewayMetrics,
     shutdown: oneshot::Receiver<()>,
+    heap_profiling: bool,
 ) -> Result<ObservabilityServer, std::io::Error> {
     let listener = TcpListener::bind(listen_address).await?;
     let local_addr = listener.local_addr()?;
@@ -43,6 +44,7 @@ pub async fn spawn_observability_server(
         .route("/readyz", get(readyz))
         .route("/health", get(healthz))
         .route("/metrics", get(metrics_endpoint))
+        .merge(crate::heap_profiling::routes(heap_profiling))
         .fallback(unknown_endpoint)
         .method_not_allowed_fallback(method_not_allowed_endpoint)
         .with_state(state);
@@ -177,7 +179,7 @@ mod tests {
         let metrics =
             GatewayMetrics::new(build_version, None).expect("bug: metrics should register");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
+        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, false)
             .await
             .expect("observability server should bind");
 
@@ -223,6 +225,9 @@ mod tests {
         let unknown = request(server.local_addr, "/missing").await;
         assert!(unknown.starts_with("HTTP/1.1 404 Not Found"), "{unknown}");
 
+        let heap = request(server.local_addr, "/debug/pprof/heap").await;
+        assert!(heap.starts_with("HTTP/1.1 404 Not Found"), "{heap}");
+
         let method_not_allowed = request_with_method(server.local_addr, "POST", "/livez").await;
         assert!(
             method_not_allowed.starts_with("HTTP/1.1 405 Method Not Allowed"),
@@ -262,7 +267,7 @@ mod tests {
 
         let metrics = GatewayMetrics::for_tests();
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx)
+        let server = spawn_observability_server("127.0.0.1:0", health, metrics, shutdown_rx, false)
             .await
             .expect("observability server should bind");
 

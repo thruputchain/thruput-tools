@@ -5,6 +5,7 @@ mod config;
 mod context;
 mod handlers;
 mod health;
+mod heap_profiling;
 mod metrics;
 mod middleware;
 mod observability;
@@ -156,6 +157,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_span_events(span_events)
         .init();
 
+    let heap_profiling = heap_profiling::initialize().await?;
+
     tracing::info!(
         component_version = bundle_identity.build_version().crate_version(),
         source_commit = ?bundle_identity.build_version().source_commit(),
@@ -241,6 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         health,
         metrics.clone(),
         observability_shutdown_rx,
+        heap_profiling,
     )
     .await?;
 
