@@ -168,12 +168,9 @@ pub fn run(
     let decoded_return = child_return
         .as_ref()
         .and_then(|data| decode_return(data, prepared.resolved.metadata.as_ref()));
-    // Native failures originate in the wallet wrapper, not the child's abort enum.
-    let decoded_abort = if prepared.signed.is_native() {
-        None
-    } else {
-        decode_receipt_abort(&receipt, prepared.resolved.metadata.as_ref())
-    };
+    // Native wallets can forward child exceptions. Match the wire selector
+    // against the supplied spec or standard registry, retaining unknown bytes.
+    let decoded_abort = decode_receipt_abort(&receipt, prepared.resolved.metadata.as_ref());
 
     // Print result
     print.group(

@@ -156,6 +156,8 @@ enum Outcome {
     ShortReturn,
     WrongAddress,
     Reverted,
+    FundingRejected,
+    InitializerRejected,
 }
 struct State {
     outcome: Outcome,
@@ -230,6 +232,14 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
             Outcome::ShortReturn => receipt["returnData"] = json!("0x01"),
             Outcome::WrongAddress => receipt["returnData"] = json!(format!("0x{}", "bb".repeat(32))),
             Outcome::Reverted => { receipt["status"] = json!({"result":"reverted"}); receipt.as_object_mut().unwrap().remove("returnData"); },
+            Outcome::FundingRejected | Outcome::InitializerRejected => {
+                let abort = if matches!(state.outcome, Outcome::FundingRejected) {
+                    xdrs::cxs::encode(&(<groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR, groundhog_erc20_if::ERC20Error::TooLarge)).unwrap()
+                } else { xdrs::cxs::encode(&(42u64, 7u64)).unwrap() };
+                receipt["status"] = json!({"result":"reverted"});
+                receipt["abortData"] = json!(format!("0x{}", hex::encode(abort)));
+                receipt.as_object_mut().unwrap().remove("returnData");
+            },
             _ => {}
         }
         Ok::<_,ErrorObjectOwned>(receipt)
@@ -447,6 +457,84 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
         assert!(!bad.status.success());
     }
     assert!(state.submissions.lock().unwrap().is_empty());
+    handle.stop().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_deploy_decodes_funding_errors_without_misattributing_initializer_errors() {
+    for init in [false, true] {
+        let (url, handle, _) = server(Outcome::FundingRejected).await;
+        let fixture = Fixture::new(&url);
+        let before = fixture.config();
+        let mut args = vec!["--fund", "5"];
+        if init {
+            args.extend(["--init", "0x0102030405060708"]);
+        }
+        let output = fixture.deploy(&args);
+        assert!(!output.status.success());
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["error"]["code"],
+            if init {
+                "transaction_reverted"
+            } else {
+                "transaction_insufficient_funds"
+            }
+        );
+        assert_eq!(report["data"]["abortException"], "ERC20Error");
+        assert_eq!(report["data"]["abortValue"], "TooLarge");
+        if init {
+            assert!(report["error"]["hint"].is_null());
+        }
+        assert_eq!(fixture.config(), before);
+        handle.stop().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_deploy_decodes_the_prepared_initializer_spec() {
+    use groundhog_contract_spec::{
+        ContractExceptionType, ContractSpec, ContractSpecInterface, ContractSpecMethod,
+        ContractType,
+    };
+    let (url, handle, _) = server(Outcome::InitializerRejected).await;
+    let fixture = Fixture::new(&url);
+    let spec = ContractSpec {
+        interfaces: vec![ContractSpecInterface {
+            name: "Counter".try_into().unwrap(),
+            vers: "0.1.0".try_into().unwrap(),
+            throws: vec![ContractExceptionType {
+                selector: 42,
+                ty: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+            methods: vec![ContractSpecMethod {
+                name: "initialize".try_into().unwrap(),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::Void,
+            }]
+            .try_into()
+            .unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        type_defs: vec![].try_into().unwrap(),
+        events: vec![].try_into().unwrap(),
+    };
+    std::fs::write(
+        fixture.dir.path().join("counter.spec.xdr"),
+        xdrs::txs::encode(&spec).unwrap(),
+    )
+    .unwrap();
+    let before = fixture.config();
+    let output = fixture.deploy(&["--fund", "5", "--init", "initialize"]);
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "transaction_reverted");
+    assert_eq!(report["data"]["abortValue"], 7);
+    assert!(report["data"].get("abortDecodeError").is_none());
+    assert_eq!(fixture.config(), before);
     handle.stop().unwrap();
 }
 
