@@ -278,7 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_transactions_per_page(ctx.config.max_transactions_per_page)
         .with_max_cursor_bytes(ctx.config.max_cursor_bytes)
         .with_max_view_calldata_bytes(ctx.config.max_view_calldata_bytes)
-        .with_view_gas_limit(ctx.config.view_gas_limit);
+        .with_max_view_gas(ctx.config.max_view_gas);
     let api_impl = GroundhogRpcServer::unified(
         GatewayBackend::new(ctx.clone()),
         network_info,

@@ -1,5 +1,5 @@
-/// Default gas budget for backend `groundhog_view` execution.
-pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 10_000_000;
+/// Default ceiling on `groundhog_view` gas.
+pub const DEFAULT_MAX_VIEW_GAS: u64 = 10_000_000;
 
 /// Server-wide bounds on JSON-RPC requests.  The shared dispatcher
 /// rejects requests that exceed these before they reach a backend.
@@ -28,13 +28,14 @@ pub struct RpcServerConfig {
     /// requests are rejected as `InvalidParam` before backend dispatch.
     pub max_view_calldata_bytes: usize,
 
-    /// Gas budget assigned to backend `groundhog_view` execution.
+    /// Ceiling on `groundhog_view` gas, and the budget a view runs under
+    /// when the request names no `gasLimit`. Requests above it are rejected
+    /// as `InvalidParam`.
     ///
-    /// The shared server validates JSON request shape; concrete backends
-    /// pass this cap into the hogd view invocation once view execution is
-    /// wired. Keep the default bounded so a view-capable backend cannot
-    /// accidentally expose an unbounded root invocation.
-    pub view_gas_limit: u64,
+    /// This is an endpoint-local operator setting, not a consensus
+    /// parameter; clients read it through `serverLimits`. Keep it bounded so
+    /// a view-capable backend cannot expose an unbounded root invocation.
+    pub max_view_gas: u64,
 
     /// How long a chain-tip reading is reused by the `sendRawTransaction`
     /// pre-checks before a submit asks the backend again. Bounds the
@@ -66,7 +67,7 @@ impl Default for RpcServerConfig {
             max_transactions_per_page: 200,
             max_cursor_bytes: 256,
             max_view_calldata_bytes: 64 * 1024,
-            view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
+            max_view_gas: DEFAULT_MAX_VIEW_GAS,
             tip_cache_ttl_ms: 3_000,
             tip_probe_timeout_ms: 2_000,
             tip_refresh_interval_ms: 5_000,
@@ -110,10 +111,10 @@ impl RpcServerConfig {
         self
     }
 
-    /// Override the view execution gas limit.
+    /// Override the view gas ceiling.
     #[must_use]
-    pub fn with_view_gas_limit(mut self, gas_limit: u64) -> Self {
-        self.view_gas_limit = gas_limit;
+    pub fn with_max_view_gas(mut self, max_view_gas: u64) -> Self {
+        self.max_view_gas = max_view_gas;
         self
     }
 

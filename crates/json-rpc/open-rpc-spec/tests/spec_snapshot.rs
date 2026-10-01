@@ -18,7 +18,11 @@ const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
 // `errors: []` array. Add a method here only when it has no backend
 // dispatch and cannot fail. Both current methods are sourced from immutable
 // process state.
-const INFALLIBLE_METHODS: &[&str] = &["groundhog_networkInfo", "groundhog_version"];
+const INFALLIBLE_METHODS: &[&str] = &[
+    "groundhog_networkInfo",
+    "groundhog_serverLimits",
+    "groundhog_version",
+];
 
 #[test]
 fn openrpc_spec_matches_snapshot() {

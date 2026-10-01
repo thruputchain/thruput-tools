@@ -154,6 +154,7 @@ fn prepare_view(
             entrypoint: HexBytes(entrypoint_bytes),
             calldata: HexBytes(calldata_bytes),
             caller,
+            gas_limit: None,
         },
     })
 }
@@ -352,6 +353,7 @@ mod tests {
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             },
         };
         let return_data = xdrs::cxs::encode(&7_u64).expect("bug: u64 should encode");

@@ -15,6 +15,7 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
+    server_limits::ServerLimits,
     state::{StorageItemInfo, StorageItemRead},
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
@@ -542,6 +543,17 @@ where
     }
 
     #[tracing::instrument(skip_all)]
+    async fn server_limits(&self) -> RpcResult<ServerLimits> {
+        Ok(ServerLimits::new(
+            self.config.max_view_gas,
+            self.config.max_view_calldata_bytes as u64,
+            self.config.max_events_per_page,
+            self.config.max_transactions_per_page,
+            self.config.max_cursor_bytes as u64,
+        ))
+    }
+
+    #[tracing::instrument(skip_all)]
     async fn network_info(&self) -> RpcResult<NetworkInfo> {
         Ok(self.network_info.clone())
     }
@@ -672,6 +684,7 @@ where
             ?request.contract,
             entrypoint_len = request.entrypoint.0.len(),
             calldata_len = request.calldata.0.len(),
+            gas_limit = ?request.gas_limit,
         )
     )]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse> {
@@ -695,10 +708,8 @@ where
                     None::<()>,
                 ));
             }
-            Ok(self
-                .view
-                .view(context, request, self.config.view_gas_limit)
-                .await?)
+            let gas_limit = view_gas_limit(request.gas_limit, self.config.max_view_gas)?;
+            Ok(self.view.view(context, request, gas_limit).await?)
         })
         .await
     }
@@ -719,6 +730,22 @@ where
             ))
         })
         .await
+    }
+}
+
+/// Resolve the gas budget for a `groundhog_view` request: the requested
+/// `gasLimit` when it is within `1..=max_view_gas`, else `max_view_gas` when
+/// the request names none.
+fn view_gas_limit(requested: Option<u64>, max_view_gas: u64) -> Result<u64, RpcServerError> {
+    match requested {
+        None => Ok(max_view_gas),
+        Some(0) => Err(RpcServerError::InvalidParam(
+            "view gasLimit must be greater than zero".into(),
+        )),
+        Some(gas_limit) if gas_limit > max_view_gas => Err(RpcServerError::InvalidParam(format!(
+            "view gasLimit {gas_limit} exceeds maximum {max_view_gas}"
+        ))),
+        Some(gas_limit) => Ok(gas_limit),
     }
 }
 
@@ -2176,12 +2203,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(*event_calls.lock().await, 1);
     }
 
-    #[tokio::test]
-    async fn view_passes_configured_gas_limit_to_view_plane() {
+    /// Run one view with `requested` gas against a server whose ceiling is
+    /// `max_view_gas`; return the outcome and the gas limits the view plane saw.
+    async fn view_with_gas(
+        requested: Option<u64>,
+        max_view_gas: u64,
+    ) -> (RpcResult<ViewResponse>, Vec<u64>) {
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let event_calls = Arc::new(Mutex::new(0));
         let view_gas_limits = Arc::new(Mutex::new(Vec::new()));
-        let gas_limit = 123_456;
         let server = GroundhogRpcServer::new(
             SubmitOnly {
                 submitted: submitted.clone(),
@@ -2194,7 +2224,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 view_gas_limits: view_gas_limits.clone(),
             },
             test_network_info(),
-            RpcServerConfig::default().with_view_gas_limit(gas_limit),
+            RpcServerConfig::default().with_max_view_gas(max_view_gas),
             BuildInfo::for_tests(),
         );
 
@@ -2203,16 +2233,68 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
+            gas_limit: requested,
         };
 
-        server
-            .view(request)
-            .await
-            .expect("bug: valid view request should dispatch to view plane");
-
-        assert_eq!(*view_gas_limits.lock().await, vec![gas_limit]);
+        let result = server.view(request).await;
         assert!(submitted.lock().await.is_empty());
         assert_eq!(*event_calls.lock().await, 0);
+        let seen = view_gas_limits.lock().await.clone();
+        (result, seen)
+    }
+
+    #[tokio::test]
+    async fn view_without_gas_limit_runs_under_the_configured_ceiling() {
+        let (result, seen) = view_with_gas(None, 123_456).await;
+        result.expect("bug: valid view request should dispatch to view plane");
+        assert_eq!(seen, vec![123_456]);
+    }
+
+    #[tokio::test]
+    async fn view_passes_requested_gas_limit_within_the_ceiling() {
+        for requested in [1, 1_000, 123_456] {
+            let (result, seen) = view_with_gas(Some(requested), 123_456).await;
+            result.expect("bug: in-range gas limit should dispatch to view plane");
+            assert_eq!(seen, vec![requested]);
+        }
+    }
+
+    #[tokio::test]
+    async fn view_rejects_gas_limit_above_ceiling_or_zero_before_dispatch() {
+        for requested in [0, 123_457, u64::MAX] {
+            let (result, seen) = view_with_gas(Some(requested), 123_456).await;
+            let err = result.expect_err("out-of-range gas limit must be rejected");
+            assert_eq!(err.code(), codes::INVALID_PARAMS, "gasLimit {requested}");
+            assert!(
+                seen.is_empty(),
+                "gasLimit {requested} reached the view plane"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn server_limits_report_the_configured_bounds_without_backend_dispatch() {
+        let mock = Arc::new(MockBackend::default());
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            test_network_info(),
+            RpcServerConfig::default()
+                .with_max_view_gas(42_000)
+                .with_max_view_calldata_bytes(512)
+                .with_max_events_per_page(17)
+                .with_max_transactions_per_page(19)
+                .with_max_cursor_bytes(64),
+            BuildInfo::for_tests(),
+        );
+
+        let limits = server
+            .server_limits()
+            .await
+            .expect("bug: server limits should be infallible");
+
+        assert_eq!(limits, ServerLimits::new(42_000, 512, 17, 19, 64));
+        assert!(mock.submitted.lock().await.is_empty());
+        assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     #[tokio::test]

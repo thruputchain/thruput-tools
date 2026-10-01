@@ -1053,6 +1053,49 @@
           }
         ]
       },
+      "ServerLimits": {
+        "description": "Request bounds this JSON-RPC endpoint enforces. Returned by\n`serverLimits`.\n\nThese are operator settings local to the serving endpoint, not consensus\nparameters: two endpoints for the same chain may report different values,\nand a value may change when the endpoint is reconfigured. Consensus-checked\nexecution parameters are reported by `chainConfig`.",
+        "properties": {
+          "maxCursorBytes": {
+            "description": "Longest opaque pagination cursor accepted, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxEventsPerPage": {
+            "description": "Largest `limit` a `getEvents` page may ask for.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxTransactionsPerPage": {
+            "description": "Largest `limit` a `getTransactionsByAddress` page may ask for.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxViewCalldataBytes": {
+            "description": "Largest `view` calldata, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxViewGas": {
+            "description": "Largest `gasLimit` a `view` request may ask for, and the budget a view\nruns under when it names none.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "maxViewGas",
+          "maxViewCalldataBytes",
+          "maxEventsPerPage",
+          "maxTransactionsPerPage",
+          "maxCursorBytes"
+        ],
+        "type": "object"
+      },
       "StorageItemInfo": {
         "description": "Latest-committed value at a single storage location, presented as\na tagged union so machine consumers can switch on `kind` without\nrunning an XDR codec for the common cases.",
         "oneOf": [
@@ -1509,6 +1552,15 @@
           "entrypoint": {
             "$ref": "#/components/schemas/HexBytes",
             "description": "Contract entrypoint id. Must be exactly 8 bytes."
+          },
+          "gasLimit": {
+            "description": "Optional gas budget for the root invocation. Absent selects the\nserver's `maxViewGas` (see `serverLimits`); a value above it, or zero,\nis rejected as an invalid parameter. No gas is charged for a view.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1548,7 +1600,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "7.0.1"
+    "version": "7.1.0"
   },
   "methods": [
     {
@@ -1747,6 +1799,23 @@
         }
       },
       "summary": "The execution parameters the chain's network config states. Only stated parameters are reported; an unstated one is absent. Served from a tip reading refreshed at most once per cache window. Fails with `BackendUnavailable` when no reading is available or the config version is unreadable.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [],
+      "name": "groundhog_serverLimits",
+      "params": [],
+      "result": {
+        "name": "ServerLimits",
+        "schema": {
+          "$ref": "#/components/schemas/ServerLimits"
+        }
+      },
+      "summary": "Request bounds this endpoint enforces, such as the `view` gas ceiling. These are local operator settings, not consensus parameters: they can differ between endpoints serving the same chain. Answered without contacting a backend.",
       "tags": [
         {
           "name": "Core API"
@@ -2058,7 +2127,7 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter.",
       "tags": [
         {
           "name": "Core API"

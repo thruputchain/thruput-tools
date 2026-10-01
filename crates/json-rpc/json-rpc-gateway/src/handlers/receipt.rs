@@ -764,7 +764,7 @@ mod tests {
                     .with_max_transactions_per_page(config.max_transactions_per_page)
                     .with_max_cursor_bytes(config.max_cursor_bytes)
                     .with_max_view_calldata_bytes(config.max_view_calldata_bytes)
-                    .with_view_gas_limit(config.view_gas_limit),
+                    .with_max_view_gas(config.max_view_gas),
                 BuildInfo::new("test", Some("test")),
             )
             .into_rpc(),

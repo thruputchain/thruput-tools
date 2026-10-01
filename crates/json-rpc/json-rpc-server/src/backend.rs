@@ -289,8 +289,9 @@ pub trait ViewPlane: Send + Sync + 'static {
     /// here are reserved for transport, backend availability, and
     /// request-level failures.
     ///
-    /// `gas_limit` is the server-configured execution cap to put on the
-    /// root view invocation. It is not user supplied and no gas is charged.
+    /// `gas_limit` is the validated budget to put on the root view
+    /// invocation: the request's `gasLimit`, or the server's `max_view_gas`
+    /// when the request names none. No gas is charged.
     ///
     /// Backends should override this once they have a stable hogd view
     /// execution service. The default keeps the public method available

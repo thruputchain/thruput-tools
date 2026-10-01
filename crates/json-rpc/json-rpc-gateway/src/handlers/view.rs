@@ -169,6 +169,7 @@ mod tests {
             entrypoint: HexBytes(vec![8; 8]),
             calldata: HexBytes(vec![1, 2, 3]),
             caller,
+            gas_limit: None,
         }
     }
 

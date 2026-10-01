@@ -2425,6 +2425,7 @@ mod tests {
             entrypoint: HexBytes(vec![0x77; 8]),
             calldata: HexBytes(vec![0x88]),
             caller: None,
+            gas_limit: None,
         }
     }
 
