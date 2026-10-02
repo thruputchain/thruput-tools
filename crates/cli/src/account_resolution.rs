@@ -421,7 +421,7 @@ fn resolve_address_target_with_keys(
     })
 }
 
-/// Resolve an explicit address target or the profile's effective wallet.
+/// Resolve an explicit address target or the profile's effective wallet using public metadata.
 pub(crate) fn resolve_address_target_or_default_wallet(
     profile: &ResolvedProfile,
     target: Option<&str>,
@@ -436,9 +436,16 @@ pub(crate) fn resolve_address_target_or_default_wallet(
             .map(|address| (wallet_name.to_owned(), address));
     }
 
-    let sender = resolve_sender_account(profile, None)?;
-    let target = sender.wallet_name.unwrap_or(sender.key_name);
-    Ok((target, sender.wallet_address))
+    let key_name = resolve_default_key_for_profile(profile)?.ok_or(CliError::MissingSigningKey)?;
+    if let Some(index) = dev_keys::dev_key_index(&key_name) {
+        return lookup_dev_account_address(profile, &key_name, index)
+            .map(|address| (key_name, address.0));
+    }
+    let public_key = crate::keys::load_local_public_key(&key_name)?
+        .ok_or_else(|| CliError::KeyNotFound(key_name.clone()))?;
+    let (wallet_name, address) =
+        resolve_saved_wallet_for_public_key(profile, &key_name, public_key)?;
+    Ok((wallet_name.unwrap_or(key_name), address))
 }
 
 /// Resolve a contract alias or an explicitly prefixed direct address.

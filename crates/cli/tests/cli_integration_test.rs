@@ -5899,6 +5899,7 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
             groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
             0,
         );
+        make_local_keypair_unavailable(&config_home, "alice");
         let faucet_wallet = advertised_dev_wallet_address(0);
         let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
         let (rpc_url, rpc_server) =
@@ -5933,6 +5934,94 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
             report["data"]["recipientWallet"],
             format!("0x{}", hex::encode(account.address().as_ref()))
         );
+    }
+}
+
+#[test]
+fn airdrop_default_submits_without_recipient_signer() {
+    for hosted in [false, true] {
+        for selection in ["unsaved", "legacy", "native"] {
+            let tmp = TempDir::new().unwrap();
+            let project = tmp.path().join("project");
+            let config_home = tmp.path().join("config");
+            std::fs::create_dir_all(&project).unwrap();
+            let owner = generate_key_public_key(&config_home, "alice");
+            let owner_bytes = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+            let nonce = if selection == "native" { 7 } else { 0 };
+            let account =
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
+            let recipient = if selection == "legacy" {
+                format!("0x{}", "ab".repeat(32))
+            } else {
+                format!("0x{}", hex::encode(account.address().as_ref()))
+            };
+            let binding = match selection {
+                "legacy" => format!(
+                    "\n[profile.default.wallets.trading]\naddress = '{recipient}'\nowner_public_key = '{owner}'\n"
+                ),
+                "native" => format!(
+                    "\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '{recipient}'\nowner_public_key = '{owner}'\n"
+                ),
+                _ => String::new(),
+            };
+            make_local_keypair_unavailable(&config_home, "alice");
+            let faucet = advertised_dev_wallet_address(0);
+            let (rpc_url, rpc_server) = if hosted {
+                spawn_airdrop_rpc(&recipient)
+            } else {
+                spawn_local_airdrop_rpc(&faucet, &recipient)
+            };
+            let (profile_fields, descriptor_server) = if hosted {
+                let (faucet_url, server) = spawn_network_descriptor(&rpc_url);
+                (format!("faucet_url = '{faucet_url}'\n"), Some(server))
+            } else {
+                let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+                (
+                    format!("runtime_manifest = '{}'\n", manifest.display()),
+                    None,
+                )
+            };
+            // Hosted cases use the global default key selected during key generation.
+            let default_key = if hosted {
+                ""
+            } else {
+                "default_key = 'alice'\n"
+            };
+            std::fs::write(project.join("groundhog.toml"), format!(
+                "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\n{default_key}{profile_fields}{binding}"
+            )).unwrap();
+            let output = groundhog()
+                .args(["--json", "airdrop", "--force"])
+                .current_dir(&project)
+                .env("XDG_CONFIG_HOME", &config_home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "hosted={hosted}, {selection}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if let Some(server) = descriptor_server {
+                server.join().unwrap();
+            }
+            rpc_server.join().unwrap();
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["data"]["recipientWallet"], recipient);
+            assert_eq!(
+                report["data"]["recipient"],
+                if selection == "unsaved" {
+                    "alice"
+                } else {
+                    "trading"
+                }
+            );
+            assert_eq!(report["ok"], true);
+            assert!(report["data"]["txHash"].is_string());
+            assert_eq!(
+                report["data"]["mode"],
+                if hosted { "remote" } else { "local" }
+            );
+        }
     }
 }
 
@@ -5986,11 +6075,7 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
             _ => String::new(),
         };
         // Explicit recipients use public metadata without constructing a signer.
-        let key_path = config_home.join(format!("groundhog/keys/{key_name}.json"));
-        let mut key: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-        key["keypair_hex"] = serde_json::Value::String("unavailable".into());
-        std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+        make_local_keypair_unavailable(&config_home, key_name);
         let faucet_wallet = advertised_dev_wallet_address(0);
         let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
         let (rpc_url, rpc_server) =
@@ -14115,6 +14200,14 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
 
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "requestAirdrop");
         assert_eq!(request["method"], "groundhog_requestAirdrop");
+        let mut fields = request["params"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        fields.sort_unstable();
+        assert_eq!(fields, ["clientNonce", "recipient"]);
         assert_eq!(request["params"][0]["recipient"], recipient);
         assert_eq!(
             request["params"][0]["clientNonce"].as_str().map(str::len),
@@ -14148,7 +14241,52 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
         let deadline = Instant::now() + Duration::from_secs(5);
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
         serve_chain_tip(&listener, deadline, 42);
-        serve_successful_transaction(&listener, deadline, 43);
+        let signed_tx = serve_successful_transaction(&listener, deadline, 43);
+        assert_eq!(
+            signed_tx.tx.invocation.entrypoint,
+            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+        );
+        let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
+        assert_eq!(
+            target,
+            format!(
+                "0x{}",
+                hex::encode(groundhog_signing::NATIVE_HOG_ADDRESS.as_ref())
+            )
+        );
+        assert_eq!(
+            entrypoint,
+            format!(
+                "0x{}",
+                hex::encode(groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+            )
+        );
+        let (actual_recipient, amount): (groundhog_xdr::types::ContractAddress, u128) =
+            xdrs::cxs::decode(&calldata).unwrap();
+        assert_eq!(
+            format!("0x{}", hex::encode(actual_recipient.as_ref())),
+            recipient
+        );
+        assert_eq!(amount, 100_000_000);
+        assert_eq!(
+            format!(
+                "0x{}",
+                hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
+            ),
+            faucet
+        );
+        let sponsor = groundhog_signing::derive_default_dev_account_signer(0);
+        let network_hash = groundhog_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+            .unwrap()
+            .to_network_hash();
+        let expected = groundhog_signing::sign_transaction(
+            signed_tx.tx.clone(),
+            &sponsor,
+            groundhog_signing::SignTransactionParams::default(),
+            &network_hash,
+        )
+        .unwrap();
+        assert_eq!(signed_tx.signatures, expected.signatures);
 
         for (address, raw_balance) in [(&faucet, "99999999"), (&recipient, "100000000")] {
             serve_balance(&listener, deadline, address, raw_balance, 43);
@@ -14200,7 +14338,11 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
     );
 }
 
-fn serve_successful_transaction(listener: &TcpListener, deadline: Instant, height: i64) {
+fn serve_successful_transaction(
+    listener: &TcpListener,
+    deadline: Instant,
+    height: i64,
+) -> groundhog_xdr::transaction::SignedTransaction {
     let (stream, request) = read_jsonrpc_request(listener, deadline, "sendRawTransaction");
     assert_eq!(request["method"], "groundhog_sendRawTransaction");
     let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
@@ -14223,6 +14365,7 @@ fn serve_successful_transaction(listener: &TcpListener, deadline: Instant, heigh
             "events": [],
         }),
     );
+    signed_tx
 }
 
 fn spawn_balance_then_chain_tip_rpc(
@@ -14979,6 +15122,14 @@ fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_u
         ),
     )
     .unwrap();
+}
+
+fn make_local_keypair_unavailable(config_home: &std::path::Path, name: &str) {
+    let key_path = config_home.join(format!("groundhog/keys/{name}.json"));
+    let mut key: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+    key["keypair_hex"] = serde_json::Value::String("unavailable".into());
+    std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
 }
 
 fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String {
