@@ -123,7 +123,7 @@ jobs:
 
   cli-smoke:
     needs: dependency-policy # Check deps before building anything
-    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test)
+    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test + groundhog test --integration)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
@@ -182,6 +182,13 @@ jobs:
       - name: Contract tests (groundhog test)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: groundhog test
+
+      # Starts an ephemeral hog-devnode from the embedded catalog, deploys the
+      # contract with a native local-user account, and runs tests/integration.rs.
+      # Nothing else exercises the integration deploy end to end.
+      - name: Integration tests (groundhog test --integration)
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
+        run: groundhog test --integration
 
       # A user-level rustflags override makes cargo drop the project's
       # .cargo/config.toml target rustflags (linker script, codegen flags such

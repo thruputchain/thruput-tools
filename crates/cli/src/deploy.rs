@@ -32,6 +32,13 @@ use crate::{CliError, Print};
 /// Current schema version for `deploy --json` data payloads.
 pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
 
+/// HOG that `groundhog test --integration` transfers to the contract it deploys.
+///
+/// Matches the `100_000_000` storage tokens the removed local dev wallet contract
+/// moved to every address it deployed. hogd charges storage to the contract's
+/// own address, so an unfunded contract's initializer would never commit.
+pub(crate) const INTEGRATION_DEPLOY_FUND_HOG: &str = "10";
+
 /// Explicit native deployment funding and initialization.
 #[derive(Debug, Default)]
 pub struct DeploymentOptions<'a> {
@@ -606,7 +613,10 @@ fn prepare_deploy_plan(
     )
 }
 
-/// Build and sign a deploy transaction for a known artifact and RPC endpoint.
+/// Build and sign the deploy transaction `groundhog test --integration` submits.
+///
+/// The local-user sender is a native account, so the deployment funds the new
+/// contract with [`INTEGRATION_DEPLOY_FUND_HOG`].
 pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     artifact_path: &Path,
     rpc_url: &str,
@@ -639,7 +649,10 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         None,
         &profile,
         None,
-        &DeploymentOptions::default(),
+        &DeploymentOptions {
+            fund: Some(INTEGRATION_DEPLOY_FUND_HOG),
+            ..DeploymentOptions::default()
+        },
     )?)
 }
 
@@ -1066,6 +1079,7 @@ mod tests {
         deploy_funding_commands, derive_deploy_address, hex_to_32_bytes, newest_input_mtime,
         resolve_deployed_address, stale_artifact_warning,
     };
+    use super::{INTEGRATION_DEPLOY_FUND_HOG, resolve_native_funding};
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact};
     use groundhog_json_rpc_types::{
         BlockHeight,
@@ -1076,6 +1090,17 @@ mod tests {
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serial_test::serial;
     use tempfile::TempDir;
+
+    #[test]
+    fn integration_deploy_funds_the_contract_like_the_removed_dev_wallet() {
+        // The dev wallet contract that `groundhog test --integration` used to
+        // deploy through transferred 100_000_000 storage tokens (10 HOG) to
+        // every new contract before deploying it. A native deployment has to
+        // keep doing so: hogd charges storage to the contract's own address,
+        // so an unfunded contract cannot commit what its initializer writes.
+        let funding = resolve_native_funding(true, Some(INTEGRATION_DEPLOY_FUND_HOG)).unwrap();
+        assert_eq!(funding, Some(100_000_000));
+    }
 
     #[tokio::test]
     async fn native_poll_timeout_does_not_resubmit() {
