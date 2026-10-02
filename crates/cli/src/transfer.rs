@@ -4,7 +4,6 @@ use groundhog_json_rpc_client::{
     PollTransactionReceiptError, poll_transaction_receipt_with_client_config,
     submit_transaction_with_client,
 };
-use groundhog_json_rpc_types::error::codes;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
@@ -29,9 +28,9 @@ use crate::transfer_json::{
     TransferDryRunReport, TransferReportCommon, TransferUnconfirmedReport,
 };
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, is_unsupported_rpc_method_error,
-    nonce_from_timestamp, print_receipt_data, resolve_block_expiry_height, rpc_error_message,
-    summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, is_conclusive_send_error,
+    is_unsupported_rpc_method_error, nonce_from_timestamp, print_receipt_data,
+    resolve_block_expiry_height, rpc_error_message, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -93,22 +92,37 @@ pub fn run(
         print.require_confirmation_available(force, "transfer HOG")?;
     }
     let plan = prepare_plan(profile, recipient, amount, from)?;
-    if !dry_run {
-        print.detail("recipient", format_contract_address(&plan.recipient));
-        print.detail("amount", format_args!("{} HOG", plan.amount));
-        print.detail("from", format_contract_address(&plan.sender));
-        print.detail("profile", &plan.profile);
-        if !print.confirm(force, "transfer HOG", "Submit this transfer?")? {
-            print.note("Cancelled");
-            return Ok(());
-        }
+    if !dry_run
+        && !print.confirm_review(
+            "Review transfer",
+            force,
+            "transfer HOG",
+            "Submit this transfer?",
+            |print| {
+                print.detail("recipient", format_contract_address(&plan.recipient));
+                print.detail("amount", format_args!("{} HOG", plan.amount));
+                print.detail("from", format_contract_address(&plan.sender));
+                print.detail("profile", &plan.profile);
+            },
+        )?
+    {
+        print.cancelled();
+        return Ok(());
     }
     let prepared = sign_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
 
-    match submit_and_confirm(&prepared)? {
+    print.detail("prepared transaction", format_tx_hash(&prepared.tx_hash));
+    let task = crate::print::progress::Task::start(
+        print,
+        "Submitting transfer and waiting for receipt",
+        true,
+    );
+    let outcome = submit_and_confirm(&prepared)?;
+    let _ = task.finish();
+    match outcome {
         LiveOutcome::Committed(receipt) => print_committed(&prepared, receipt, cmd, print),
         LiveOutcome::Invalid(status) => print_invalid(&prepared, status, cmd, print),
         LiveOutcome::Unavailable {
@@ -134,7 +148,7 @@ fn prepare_plan(
     amount_input: &str,
     from: Option<&str>,
 ) -> Result<TransferPlan, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
 
     let recipient = resolve_address_target(&profile, recipient_input)?;
     let raw_amount = hog::parse_amount(amount_input)?;
@@ -154,7 +168,7 @@ fn prepare_plan(
     let resolved_sender = bind_sender_to_network(&profile, sender_account)?;
     let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
     let wallet_context = resolved_sender.signing_context(&profile, &rt)?;
-    let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
+    let expiry_height = rt.block_on(resolve_block_expiry_height(&rpc_url))?;
 
     let tx = groundhog_client::prepare_call(
         groundhog_client::CallRequest {
@@ -179,7 +193,7 @@ fn prepare_plan(
     );
     Ok(TransferPlan {
         profile: profile.name,
-        rpc_url: rpc_url.to_owned(),
+        rpc_url,
         rpc_url_cli_override: profile.rpc_url_cli_override,
         sender,
         sender_wallet: resolved_sender.wallet_name,
@@ -239,19 +253,21 @@ fn print_dry_run(
     let tx_hash = format_tx_hash(&prepared.tx_hash);
     let signed_transaction = format!("0x{}", hex::encode(&prepared.signed_transaction));
 
-    print.status(format_args!(
-        "Prepared signed dry-run transfer of {} HOG to {}.",
-        prepared.amount, recipient
-    ));
-    print.detail("sender", &sender);
-    print.detail("signer public key", &signer_public_key);
-    print.detail("raw amount", prepared.raw_amount);
-    print.detail("token", &token_address);
-    print.detail("expiry height", prepared.expiry_height);
-    print.detail("tx", &tx_hash);
-    print.detail("signed transaction", &signed_transaction);
-    print.warn("the signed transaction can be submitted until its expiry height");
-    print.status("  submitted: no (--dry-run)");
+    print.group(crate::print::Outcome::DryRun, "Transfer", |print| {
+        print.status(format_args!(
+            "Prepared signed dry-run transfer of {} HOG to {}.",
+            prepared.amount, recipient
+        ));
+        print.detail("sender", &sender);
+        print.detail("signer public key", &signer_public_key);
+        print.detail("raw amount", prepared.raw_amount);
+        print.detail("token", &token_address);
+        print.detail("expiry height", prepared.expiry_height);
+        print.detail("tx", &tx_hash);
+        print.detail("signed transaction", &signed_transaction);
+        print.warn("the signed transaction can be submitted until its expiry height");
+        print.status("  submitted: no (--dry-run)");
+    });
 
     let report = TransferDryRunReport {
         common: report_common(prepared, true, false),
@@ -343,20 +359,6 @@ async fn poll_local_hash(
     }
 }
 
-fn is_conclusive_send_error(error: &jsonrpsee::core::client::Error) -> bool {
-    let jsonrpsee::core::client::Error::Call(object) = error else {
-        return false;
-    };
-    matches!(
-        object.code(),
-        codes::INVALID_PARAMS
-            | codes::TX_INVALID
-            | codes::TX_REJECTED
-            | codes::BACKEND_UNAVAILABLE
-            | codes::OVERLOADED
-    )
-}
-
 fn receipt_poll_config() -> (usize, Duration) {
     let mut attempts = groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS;
     let mut interval = groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL;
@@ -383,16 +385,26 @@ fn print_committed(
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
     let status_summary = terminal_safe(&summarize_exec_status(&receipt.status));
-    if matches!(receipt.status, ExecStatus::Ok) {
-        print.success(format_args!("Transferred {} HOG.", prepared.amount));
-    } else {
-        print.warn(format_args!("Transfer {status_summary}"));
-    }
-    print.detail("recipient", format_contract_address(&prepared.recipient));
-    print.detail("tx", &tx_hash);
-    print.detail("height", *receipt.height);
     let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
-    print_receipt_data(&receipt, decoded_abort.as_ref(), print);
+    print.group(
+        if matches!(receipt.status, ExecStatus::Ok) {
+            crate::print::Outcome::Success
+        } else {
+            crate::print::Outcome::Error
+        },
+        "Transfer",
+        |print| {
+            if matches!(receipt.status, ExecStatus::Ok) {
+                print.success(format_args!("Transferred {} HOG.", prepared.amount));
+            } else {
+                print.warn(format_args!("Transfer {status_summary}"));
+            }
+            print.detail("recipient", format_contract_address(&prepared.recipient));
+            print.detail("tx", &tx_hash);
+            print.detail("height", *receipt.height);
+            print_receipt_data(&receipt, decoded_abort.as_ref(), print);
+        },
+    );
 
     let command_error = command_error_for_exec_status(&receipt.status);
     let report = TransferCommittedReport {
@@ -423,8 +435,10 @@ fn print_invalid(
         TransactionStatus::Invalid { reason } => terminal_safe(reason),
         _ => "invalid".to_owned(),
     };
-    print.warn(format_args!("Transfer was rejected: {reason}"));
-    print.detail("tx", &tx_hash);
+    print.group(crate::print::Outcome::Error, "Transfer rejected", |print| {
+        print.warn(format_args!("Transfer was rejected: {reason}"));
+        print.detail("tx", &tx_hash);
+    });
 
     let report = TransferUnconfirmedReport {
         common: report_common(prepared, false, true),
@@ -448,20 +462,22 @@ fn print_unavailable(
     print: &Print,
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
-    print.warn(format_args!(
-        "Transaction confirmation unavailable: {reason}."
-    ));
-    print.detail("tx", &tx_hash);
-    print.warn("the transaction may still commit; do not blindly resubmit it");
-    let mut next = format!(
-        "groundhog tx show {tx_hash} --profile={}",
-        render_shell_arg(&prepared.profile),
-    );
-    if prepared.rpc_url_cli_override {
-        use std::fmt::Write as _;
-        let _ = write!(next, " --rpc-url={}", render_shell_arg(&prepared.rpc_url));
-    }
-    print.status(format_args!("  next: {next}"));
+    print.group(crate::print::Outcome::Unconfirmed, "Transfer", |print| {
+        print.warn(format_args!(
+            "Transaction confirmation unavailable: {reason}."
+        ));
+        print.detail("tx", &tx_hash);
+        print.warn("the transaction may still commit; do not blindly resubmit it");
+        let mut next = format!(
+            "groundhog tx show {tx_hash} --profile={}",
+            render_shell_arg(&prepared.profile),
+        );
+        if prepared.rpc_url_cli_override {
+            use std::fmt::Write as _;
+            let _ = write!(next, " --rpc-url={}", render_shell_arg(&prepared.rpc_url));
+        }
+        print.status(format_args!("  next: {next}"));
+    });
 
     let report = TransferUnconfirmedReport {
         common: report_common(prepared, false, true),

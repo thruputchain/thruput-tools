@@ -492,10 +492,21 @@ fn run_with_indexer_and_db_gateway(
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
+    let ui_trigger =
+        env::var_os("GROUNDHOG_FAKE_HOGD_DEV_UI_TRIGGER").map(std::path::PathBuf::from);
+    let mut logged = false;
     while !TERMINATED.load(Ordering::SeqCst) {
+        if !logged && ui_trigger.as_ref().is_some_and(|path| path.exists()) {
+            eprintln!(r#"{{"level":"warn","message":"live warning fixture"}}"#);
+            logged = true;
+        }
         thread::sleep(Duration::from_millis(10));
     }
 
+    if ui_trigger.is_some() {
+        eprintln!(r#"{{"level":"warn","message":"shutdown warning fixture"}}"#);
+        thread::sleep(Duration::from_millis(500));
+    }
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
 }
 

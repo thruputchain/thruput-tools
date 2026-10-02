@@ -11,6 +11,18 @@ use crate::{CliError, Print};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
+/// Submission errors that establish the transaction was not admitted.
+/// Backend unavailability can follow dispatch, so it remains uncertain.
+pub(crate) fn is_conclusive_send_error(error: &ClientError) -> bool {
+    let ClientError::Call(object) = error else {
+        return false;
+    };
+    matches!(
+        object.code(),
+        codes::INVALID_PARAMS | codes::TX_INVALID | codes::TX_REJECTED | codes::OVERLOADED
+    )
+}
+
 /// Human-readable one-line summary of an execution status.
 pub fn summarize_exec_status(status: &ExecStatus) -> String {
     match status {
@@ -147,6 +159,21 @@ pub fn format_tx_hash(tx_hash: &TxHash) -> String {
         .unwrap_or_default()
         .trim_matches('"')
         .to_string()
+}
+
+/// Keep the locally prepared hash in scrollback before a potentially interrupted wait.
+/// Presentation is best-effort and never changes submission or validation behavior.
+pub(crate) fn print_prepared_transaction(tx_hex: &str, print: &Print) {
+    if print.is_json() || print.is_quiet() {
+        return;
+    }
+    if let Ok(bytes) = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex))
+        && let Ok(signed) =
+            xdrs::txs::decode::<groundhog_xdr::transaction::SignedTransaction>(&bytes)
+        && let Ok(hash) = groundhog_signing::transaction_hash(&signed.tx)
+    {
+        print.detail("prepared transaction", format_tx_hash(&TxHash(hash.into())));
+    }
 }
 
 pub(crate) fn rpc_error_message(error: &ClientError) -> String {

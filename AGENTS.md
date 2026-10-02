@@ -109,6 +109,10 @@ identity requires a validated installed bundle matching the serving build.
   disables prompts and terminal rendering without granting consent or hiding
   ordinary output. Child runners must not inherit terminal stdin or force
   color in this mode. Explicit piped input is distinct from prompting.
+- Card borders and titles use the terminal accent; standalone outcome messages
+  use semantic colors. Progress must not query the cursor or change input modes.
+  Explicit live-output modes (verbose builds/nodes and test output passthrough)
+  stream immediately without animation or deferred diagnostic collection.
 - Support `--json` through `Print` and `CommandResult`. Stable command reports
   use typed serde/JsonSchema payloads with `camelCase` fields and
   `data.schemaVersion` from v1. Do not version the shared envelope per command.

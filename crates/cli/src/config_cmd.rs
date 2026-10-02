@@ -14,11 +14,6 @@ use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
 use crate::{CliError, Print};
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const YELLOW: &str = "\x1b[33m";
-
 /// Inspect one persisted profile without runtime or signer overlays.
 pub fn get(
     start: &Path,
@@ -41,10 +36,47 @@ pub fn get(
 
     if print.is_json() {
         print.json(&CommandResult::new(cmd, report))?;
-    } else if sources {
-        render_get_with_sources(&report, print.is_human_stdout_tty());
     } else {
-        render_get(&report, print.is_human_stdout_tty());
+        let mut fields = vec![("Profile".into(), report.profile.clone())];
+        if sources {
+            if let Some(source) = &report.selection_source {
+                fields.push(("Selected by".into(), source_kind_label(source).into()));
+            }
+            fields.extend(
+                source_rows(&report)
+                    .into_iter()
+                    .map(|[field, value, source]| {
+                        (
+                            field,
+                            if source == "-" {
+                                value
+                            } else {
+                                format!("{value} ({source})")
+                            },
+                        )
+                    }),
+            );
+        } else {
+            fields.extend(get_fields(&report));
+            for (name, address) in &report.contracts {
+                fields.push((format!("Contract {name}"), address.clone()));
+            }
+            for (name, wallet) in &report.wallets {
+                fields.push((format!("Wallet {name}"), wallet.address.clone()));
+            }
+        }
+        if report.contracts.is_empty() {
+            fields.push(("Contracts".into(), "None".into()));
+        }
+        if report.wallets.is_empty() {
+            fields.push(("Wallets".into(), "None".into()));
+        }
+        let plain = if sources {
+            plain_get_with_sources(&report)
+        } else {
+            plain_get(&report)
+        };
+        print.data_summary("Configuration", &fields, plain.into_iter())?;
     }
     Ok(())
 }
@@ -55,7 +87,67 @@ pub fn profiles(start: &Path, cmd: &'static str, print: &Print) -> Result<(), Cl
     if print.is_json() {
         print.json(&CommandResult::new(cmd, report))?;
     } else {
-        render_profiles(&report, print.is_human_stdout_tty());
+        let rows: Vec<_> = report
+            .profiles
+            .iter()
+            .map(|profile| {
+                vec![
+                    if profile.active {
+                        format!("{} (active)", profile.profile)
+                    } else {
+                        profile.profile.clone()
+                    },
+                    network_table_label(profile.network).into(),
+                    match (profile.global, profile.project) {
+                        (true, true) => "global + project",
+                        (true, false) => "global",
+                        (false, true) => "project",
+                        (false, false) => "Not found",
+                    }
+                    .into(),
+                    match profile.status {
+                        ConfigProfileStatus::Valid => "Valid",
+                        ConfigProfileStatus::Invalid => "Invalid",
+                        ConfigProfileStatus::Missing => "Missing",
+                    }
+                    .into(),
+                ]
+            })
+            .collect();
+        print.data_table(
+            "Profiles",
+            &[
+                "Profile".into(),
+                "Network".into(),
+                "Source".into(),
+                "Status".into(),
+            ],
+            &rows,
+            "No profiles configured.",
+            plain_profiles(&report).into_iter(),
+        )?;
+        let findings: Vec<_> = report
+            .profiles
+            .iter()
+            .filter_map(|profile| {
+                let reason = profile.invalid_reason.as_deref().or_else(|| {
+                    (profile.status == ConfigProfileStatus::Missing).then_some(
+                        "Selected profile was not found in global or project configuration.",
+                    )
+                })?;
+                Some(Finding {
+                    level: FindingLevel::Warn,
+                    code: if profile.status == ConfigProfileStatus::Missing {
+                        "profile_missing"
+                    } else {
+                        "profile_invalid"
+                    },
+                    message: format!("{}: {reason}", profile.profile),
+                    hint: None,
+                })
+            })
+            .collect();
+        print.data_findings(&findings)?;
     }
     Ok(())
 }
@@ -108,7 +200,7 @@ pub fn remove(
                 scope_label(confirmation.scope()),
             ),
         )? {
-            print.note("Cancelled");
+            print.cancelled();
             return Ok(());
         }
         remove_confirmed_profile(confirmation)?
@@ -172,52 +264,66 @@ pub fn use_default(
 }
 
 fn render_mutation(action: &str, report: &ConfigMutationReport, print: &Print) {
-    let state = if report.changed {
-        action
-    } else {
-        "No change for"
-    };
-    let profile = terminal_safe(&report.profile);
-    if let Some(field) = report.field {
-        print.success(format_args!("{state} `{field}` in profile `{profile}`"));
-    } else {
-        print.success(format_args!("{state} default profile `{profile}`"));
-    }
-    print.detail("scope", scope_label(report.scope));
-    print.detail("path", terminal_safe(&report.path.display().to_string()));
+    print.group(
+        if report.changed {
+            crate::print::Outcome::Success
+        } else {
+            crate::print::Outcome::Unchanged
+        },
+        "Configuration",
+        |print| {
+            let state = if report.changed {
+                action
+            } else {
+                "No change for"
+            };
+            let profile = terminal_safe(&report.profile);
+            if let Some(field) = report.field {
+                print.success(format_args!("{state} `{field}` in profile `{profile}`"));
+            } else {
+                print.success(format_args!("{state} default profile `{profile}`"));
+            }
+            print.detail("scope", scope_label(report.scope));
+            print.detail("path", terminal_safe(&report.path.display().to_string()));
+        },
+    );
 }
 
 fn render_new_profile(report: &ConfigNewReport, print: &Print) {
-    print.success(format_args!(
-        "Created profile `{}`",
-        terminal_safe(&report.profile)
-    ));
-    print.detail("scope", scope_label(report.scope));
-    print.detail("path", terminal_safe(&report.path.display().to_string()));
-    print.detail(
-        "fields",
-        report
-            .created_fields
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    if report.selected {
-        print.detail("default", "selected");
-    }
+    print.group(crate::print::Outcome::Success, "Profile created", |print| {
+        print.success(format_args!(
+            "Created profile `{}`",
+            terminal_safe(&report.profile)
+        ));
+        print.detail("scope", scope_label(report.scope));
+        print.detail("path", terminal_safe(&report.path.display().to_string()));
+        print.detail(
+            "fields",
+            report
+                .created_fields
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        if report.selected {
+            print.detail("default", "selected");
+        }
+    });
 }
 
 fn render_remove_profile(report: &ConfigRemoveReport, print: &Print) {
-    print.success(format_args!(
-        "Removed profile `{}`",
-        terminal_safe(&report.profile)
-    ));
-    print.detail("scope", scope_label(report.scope));
-    print.detail("path", terminal_safe(&report.path.display().to_string()));
-    if report.cleared_default {
-        print.note("Default profile selection cleared");
-    }
+    print.group(crate::print::Outcome::Success, "Profile removed", |print| {
+        print.success(format_args!(
+            "Removed profile `{}`",
+            terminal_safe(&report.profile)
+        ));
+        print.detail("scope", scope_label(report.scope));
+        print.detail("path", terminal_safe(&report.path.display().to_string()));
+        if report.cleared_default {
+            print.note("Default profile selection cleared");
+        }
+    });
 }
 
 fn render_inherited_fallback(
@@ -346,57 +452,60 @@ fn scope_label(scope: ConfigScope) -> &'static str {
     }
 }
 
-fn render_get(report: &ConfigGetReport, styled: bool) {
-    print_profile_name(&report.profile, styled);
-    println!();
-    print_detail("Network", &network_label(report.network), styled);
-    print_detail(
-        "RPC URL",
-        &safe_option_label(report.rpc_url.as_deref()),
-        styled,
+fn get_fields(report: &ConfigGetReport) -> Vec<(String, String)> {
+    vec![
+        ("Network".into(), network_label(report.network)),
+        (
+            "RPC URL".into(),
+            safe_option_label(report.rpc_url.as_deref()),
+        ),
+        (
+            "Faucet URL".into(),
+            safe_option_label(report.faucet_url.as_deref()),
+        ),
+        (
+            "Default key".into(),
+            safe_option_label(report.default_key.as_deref()),
+        ),
+        (
+            "Default wallet".into(),
+            safe_option_label(report.default_wallet.as_deref()),
+        ),
+    ]
+}
+
+fn plain_get(report: &ConfigGetReport) -> Vec<String> {
+    let mut lines = vec![
+        format!("Profile: {}", terminal_safe(&report.profile)),
+        String::new(),
+    ];
+    lines.extend(
+        get_fields(report)
+            .into_iter()
+            .map(|(label, value)| format!("{label:<18}{value}")),
     );
-    print_detail(
-        "Faucet URL",
-        &safe_option_label(report.faucet_url.as_deref()),
-        styled,
-    );
-    print_detail(
-        "Default key",
-        &safe_option_label(report.default_key.as_deref()),
-        styled,
-    );
-    print_detail(
-        "Default wallet",
-        &safe_option_label(report.default_wallet.as_deref()),
-        styled,
-    );
-    println!();
-    print_heading("Contracts", styled);
+    lines.extend([String::new(), "Contracts".into()]);
     if report.contracts.is_empty() {
-        print_none(styled);
+        lines.push("  none".into());
     } else {
-        print_name_values(report.contracts.iter(), styled);
+        lines.extend(plain_name_values(report.contracts.iter()));
     }
 
-    println!();
-    print_heading("Wallets", styled);
+    lines.extend([String::new(), "Wallets".into()]);
     if report.wallets.is_empty() {
-        print_none(styled);
+        lines.push("  none".into());
     } else {
-        print_name_values(
+        lines.extend(plain_name_values(
             report
                 .wallets
                 .iter()
                 .map(|(name, wallet)| (name, &wallet.address)),
-            styled,
-        );
+        ));
     }
+    lines
 }
 
-fn render_get_with_sources(report: &ConfigGetReport, styled: bool) {
-    print_profile_name(&report.profile, styled);
-    println!();
-
+fn source_rows(report: &ConfigGetReport) -> Vec<[String; 3]> {
     let sources = report.sources.as_ref();
     let mut rows = vec![
         source_row(
@@ -433,7 +542,7 @@ fn render_get_with_sources(report: &ConfigGetReport, styled: bool) {
             sources.and_then(|sources| sources.wallets.get(name)),
         ));
     }
-    print_source_table(&rows, styled);
+    rows
 }
 
 fn append_map_source_rows(
@@ -451,9 +560,8 @@ fn append_map_source_rows(
     }
 }
 
-fn render_profiles(report: &ConfigProfilesReport, styled: bool) {
-    print_heading("Profiles", styled);
-    println!();
+fn plain_profiles(report: &ConfigProfilesReport) -> Vec<String> {
+    let mut lines = vec!["Profiles".into(), String::new()];
     let profile_width = report
         .profiles
         .iter()
@@ -461,11 +569,7 @@ fn render_profiles(report: &ConfigProfilesReport, styled: bool) {
         .max()
         .unwrap_or(0)
         .max("PROFILE".len());
-    if styled {
-        println!("    {DIM}{:<profile_width$}  NETWORK{RESET}", "PROFILE");
-    } else {
-        println!("    {:<profile_width$}  NETWORK", "PROFILE");
-    }
+    lines.push(format!("    {:<profile_width$}  NETWORK", "PROFILE"));
     for profile in &report.profiles {
         let name = terminal_safe(&profile.profile);
         let value = match profile.status {
@@ -473,81 +577,24 @@ fn render_profiles(report: &ConfigProfilesReport, styled: bool) {
             ConfigProfileStatus::Invalid => "invalid",
             ConfigProfileStatus::Missing => "missing",
         };
-        let marker = profile_marker(profile.active, profile.status, styled);
-        if styled {
-            let value_style = if profile.status == ConfigProfileStatus::Valid {
-                DIM
-            } else {
-                YELLOW
-            };
-            print!("  {marker} ");
-            if profile.active {
-                print!("{BOLD}{name:<profile_width$}{RESET}");
-            } else {
-                print!("{name:<profile_width$}");
-            }
-            println!("  {value_style}{value}{RESET}");
-        } else {
-            println!("  {marker} {name:<profile_width$}  {value}");
-        }
+        let marker = profile_marker(profile.active, profile.status);
+        lines.push(format!("  {marker} {name:<profile_width$}  {value}"));
     }
     for profile in &report.profiles {
         if let Some(reason) = profile.invalid_reason.as_deref() {
-            println!();
+            lines.push(String::new());
             let reason = format!(
                 "{}: {}",
                 terminal_safe(&profile.profile),
                 terminal_safe(reason)
             );
-            if styled {
-                println!("  {DIM}{reason}{RESET}");
-            } else {
-                println!("  {reason}");
-            }
+            lines.push(format!("  {reason}"));
         }
     }
+    lines
 }
 
-fn print_profile_name(profile: &str, styled: bool) {
-    let profile = terminal_safe(profile);
-    if styled {
-        println!("{DIM}Profile:{RESET} {BOLD}{profile}{RESET}");
-    } else {
-        println!("Profile: {profile}");
-    }
-}
-
-fn print_detail(label: &str, value: &str, styled: bool) {
-    const LABEL_WIDTH: usize = 18;
-    if styled {
-        print!("{DIM}{label:<LABEL_WIDTH$}{RESET}");
-        if value == "not set" {
-            println!("{DIM}{value}{RESET}");
-        } else {
-            println!("{value}");
-        }
-    } else {
-        println!("{label:<LABEL_WIDTH$}{value}");
-    }
-}
-
-fn print_heading(heading: &str, styled: bool) {
-    if styled {
-        println!("{BOLD}{heading}{RESET}");
-    } else {
-        println!("{heading}");
-    }
-}
-
-fn print_none(styled: bool) {
-    if styled {
-        println!("  {DIM}none{RESET}");
-    } else {
-        println!("  none");
-    }
-}
-
-fn print_name_values<'a>(rows: impl Iterator<Item = (&'a String, &'a String)>, styled: bool) {
+fn plain_name_values<'a>(rows: impl Iterator<Item = (&'a String, &'a String)>) -> Vec<String> {
     let rows = rows
         .map(|(name, value)| (terminal_safe(name), terminal_safe(value)))
         .collect::<Vec<_>>();
@@ -556,16 +603,17 @@ fn print_name_values<'a>(rows: impl Iterator<Item = (&'a String, &'a String)>, s
         .map(|(name, _)| name.chars().count())
         .max()
         .unwrap_or(0);
-    for (name, value) in &rows {
-        if styled {
-            println!("  {name:<width$}  {DIM}{value}{RESET}");
-        } else {
-            println!("  {name:<width$}  {value}");
-        }
-    }
+    rows.iter()
+        .map(|(name, value)| format!("  {name:<width$}  {value}"))
+        .collect()
 }
 
-fn print_source_table(rows: &[[String; 3]], styled: bool) {
+fn plain_get_with_sources(report: &ConfigGetReport) -> Vec<String> {
+    let rows = source_rows(report);
+    let mut lines = vec![
+        format!("Profile: {}", terminal_safe(&report.profile)),
+        String::new(),
+    ];
     let headers = ["FIELD", "VALUE", "SOURCE"];
     let widths: [usize; 3] = std::array::from_fn(|column| {
         rows.iter()
@@ -574,58 +622,33 @@ fn print_source_table(rows: &[[String; 3]], styled: bool) {
             .unwrap_or(0)
             .max(headers[column].len())
     });
-    if styled {
-        println!(
-            "{DIM}{:<field_width$}  {:<value_width$}  SOURCE{RESET}",
-            headers[0],
-            headers[1],
-            field_width = widths[0],
-            value_width = widths[1]
-        );
-    } else {
-        println!(
-            "{:<field_width$}  {:<value_width$}  SOURCE",
-            headers[0],
-            headers[1],
-            field_width = widths[0],
-            value_width = widths[1]
-        );
-    }
+    lines.push(format!(
+        "{:<field_width$}  {:<value_width$}  SOURCE",
+        headers[0],
+        headers[1],
+        field_width = widths[0],
+        value_width = widths[1]
+    ));
     for row in rows {
-        for (column, value) in row.iter().enumerate() {
-            if column > 0 {
-                print!("  ");
-            }
-            let address =
-                column == 1 && (row[0].starts_with("contracts.") || row[0].starts_with("wallets."));
-            let dim = styled && (column == 2 || value == "not set" || value == "-" || address);
-            if dim {
-                print!("{DIM}");
-            }
-            if column + 1 == row.len() {
-                print!("{value}");
-            } else {
-                print!("{value:<width$}", width = widths[column]);
-            }
-            if dim {
-                print!("{RESET}");
-            }
-        }
-        println!();
+        lines.push(format!(
+            "{:<field_width$}  {:<value_width$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            field_width = widths[0],
+            value_width = widths[1]
+        ));
     }
+    lines
 }
 
-fn profile_marker(active: bool, status: ConfigProfileStatus, styled: bool) -> String {
+fn profile_marker(active: bool, status: ConfigProfileStatus) -> &'static str {
     if active {
-        "*".into()
+        "*"
     } else if status != ConfigProfileStatus::Valid {
-        if styled {
-            format!("{YELLOW}!{RESET}")
-        } else {
-            "!".into()
-        }
+        "!"
     } else {
-        " ".into()
+        " "
     }
 }
 
@@ -669,27 +692,9 @@ mod tests {
 
     #[test]
     fn plain_profile_markers_preserve_active_and_invalid_state() {
-        assert_eq!(profile_marker(true, ConfigProfileStatus::Valid, false), "*");
-        assert_eq!(
-            profile_marker(true, ConfigProfileStatus::Missing, false),
-            "*"
-        );
-        assert_eq!(
-            profile_marker(false, ConfigProfileStatus::Invalid, false),
-            "!"
-        );
-        assert_eq!(
-            profile_marker(false, ConfigProfileStatus::Valid, false),
-            " "
-        );
-    }
-
-    #[test]
-    fn styled_profile_markers_color_only_warnings() {
-        assert_eq!(profile_marker(true, ConfigProfileStatus::Valid, true), "*");
-        assert_eq!(
-            profile_marker(false, ConfigProfileStatus::Invalid, true),
-            format!("{YELLOW}!{RESET}")
-        );
+        assert_eq!(profile_marker(true, ConfigProfileStatus::Valid), "*");
+        assert_eq!(profile_marker(true, ConfigProfileStatus::Missing), "*");
+        assert_eq!(profile_marker(false, ConfigProfileStatus::Invalid), "!");
+        assert_eq!(profile_marker(false, ConfigProfileStatus::Valid), " ");
     }
 }

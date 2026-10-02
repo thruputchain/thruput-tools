@@ -111,12 +111,19 @@ pub fn run(
         gas_limit,
     )?;
     if !dry_run {
-        print.detail("contract", &plan.contract_address_hex);
-        print.detail("method", &plan.method);
-        print.detail("wallet", &plan.wallet_address_hex);
-        print.detail("profile", &plan.profile_name);
-        if !print.confirm(force, "call a contract", "Submit this contract call?")? {
-            print.note("Cancelled");
+        if !print.confirm_review(
+            "Review contract call",
+            force,
+            "call a contract",
+            "Submit this contract call?",
+            |print| {
+                print.detail("contract", &plan.contract_address_hex);
+                print.detail("method", &plan.method);
+                print.detail("wallet", &plan.wallet_address_hex);
+                print.detail("profile", &plan.profile_name);
+            },
+        )? {
+            print.cancelled();
             return Ok(());
         }
         // An underfunded call can be dropped without a receipt; give funding
@@ -128,11 +135,18 @@ pub fn run(
         return print_dry_run(&prepared, cmd, print);
     }
 
-    let task = print.start_task(format_args!("Calling `{}`", prepared.method));
+    print.detail(
+        "prepared transaction",
+        format_tx_hash(&prepared.signed.tx_hash()),
+    );
+    let task = crate::print::progress::Task::start(print, "Submitting contract call", true);
+    task.print()
+        .phase(format_args!("Calling `{}`", prepared.method));
 
     let (tx_hash, receipt) = submit_prepared_call(&prepared)?;
-    task.clear();
-    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
+    let transaction_detail =
+        fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, task.print());
+    let warnings = task.finish();
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let status_summary = summarize_exec_status(&receipt.status);
     let diagnostics = (!matches!(receipt.status, ExecStatus::Ok))
@@ -162,51 +176,64 @@ pub fn run(
     };
 
     // Print result
-    match &receipt.status {
-        ExecStatus::Ok => {
-            print.success("Call succeeded");
-            if prepared.resolved.metadata.is_some() {
-                print.detail("method", &prepared.method);
-                if let Some(ref value) = decoded_return {
-                    print.detail("value", value);
+    print.group(
+        if matches!(receipt.status, ExecStatus::Ok) {
+            crate::print::Outcome::Success
+        } else {
+            crate::print::Outcome::Error
+        },
+        "Contract call",
+        |print| {
+            match &receipt.status {
+                ExecStatus::Ok => {
+                    print.success("Call succeeded");
+                    if prepared.resolved.metadata.is_some() {
+                        print.detail("method", &prepared.method);
+                        if let Some(ref value) = decoded_return {
+                            print.detail("value", value);
+                        }
+                    } else {
+                        print.detail("entrypoint", &prepared.method);
+                    }
+                    print.detail("contract", &prepared.contract_address_hex);
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print.detail("gas used", receipt.gas_used);
+                    if decoded_return.is_none()
+                        && let Some(ref data) = child_return
+                        && !data.is_empty()
+                    {
+                        print.detail("return", format_args!("0x{}", hex::encode(data)));
+                    }
                 }
-            } else {
-                print.detail("entrypoint", &prepared.method);
+                ExecStatus::Reverted { .. } => {
+                    print.warn(format_args!("Call {status_summary}"));
+                    print.detail("method", &prepared.method);
+                    print.detail("contract", &prepared.contract_address_hex);
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
+                    print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
+                }
+                other => {
+                    print.warn(format_args!("Call {}", summarize_exec_status(other)));
+                    print.detail("method", &prepared.method);
+                    print.detail("contract", &prepared.contract_address_hex);
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
+                    print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
+                }
             }
-            print.detail("contract", &prepared.contract_address_hex);
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print.detail("gas used", receipt.gas_used);
-            if decoded_return.is_none()
-                && let Some(ref data) = receipt.return_data
-                && !data.0.is_empty()
-            {
-                print.detail("return", format_args!("0x{}", hex::encode(&data.0)));
-            }
-        }
-        ExecStatus::Reverted { .. } => {
-            print.warn(format_args!("Call {status_summary}"));
-            print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
-            print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
-        }
-        other => {
-            print.warn(format_args!("Call {}", summarize_exec_status(other)));
-            print.detail("method", &prepared.method);
-            print.detail("contract", &prepared.contract_address_hex);
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
-            print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
-        }
-    }
 
-    if let Some(detail) = transaction_detail.as_ref() {
-        print_transaction_detail(detail, print);
-    }
+            if let Some(detail) = transaction_detail.as_ref() {
+                print_transaction_detail(detail, print);
+            }
+            for warning in &warnings {
+                print.warn(warning);
+            }
+        },
+    );
 
     let mut data = json!({
         "schemaVersion": CALL_JSON_SCHEMA_VERSION,
@@ -291,18 +318,20 @@ fn print_dry_run(
     let entrypoint_id = format_entrypoint_id(prepared.resolved.entrypoint);
     let calldata_hex = prefixed_hex(&prepared.calldata);
 
-    print.status(format_args!(
-        "Prepared dry-run call {} on {} via {}.",
-        prepared.method, prepared.contract_address_hex, prepared.rpc_url
-    ));
-    print.status(format_args!(
-        "  selector: {}",
-        selector_summary(&prepared.resolved)
-    ));
-    print.status(format_args!("  entrypoint: {entrypoint_id}"));
-    print.status(format_args!("  calldata: {calldata_hex}"));
-    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
-    print.status("  submitted: no (--dry-run)");
+    print.group(crate::print::Outcome::DryRun, "Contract call", |print| {
+        print.status(format_args!(
+            "Prepared dry-run call {} on {} via {}.",
+            prepared.method, prepared.contract_address_hex, prepared.rpc_url
+        ));
+        print.status(format_args!(
+            "  selector: {}",
+            selector_summary(&prepared.resolved)
+        ));
+        print.status(format_args!("  entrypoint: {entrypoint_id}"));
+        print.status(format_args!("  calldata: {calldata_hex}"));
+        print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+        print.status("  submitted: no (--dry-run)");
+    });
 
     print.json(&CommandResult::new(
         cmd,
@@ -415,13 +444,7 @@ fn prepare_call_plan_with_runtime(
     gas_limit: u64,
     rt: &tokio::runtime::Runtime,
 ) -> Result<CallPlan, CliError> {
-    if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
-        return Err(CliError::MissingRpcUrl);
-    }
-    let rpc_url = resolved_profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = resolved_profile.rpc_endpoint()?;
 
     let contract_address = resolve_contract_target(&resolved_profile, contract)?;
     let contract_address_hex = format_contract_address(&contract_address);

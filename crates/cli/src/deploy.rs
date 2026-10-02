@@ -152,57 +152,67 @@ pub fn run(
         wallet,
         print,
     )?;
-    if !dry_run {
-        print.detail("artifact", plan.artifact.path.display());
-        if let Some(package) = package {
-            print.detail("package", package);
-        }
-        print.detail(
-            "wallet",
-            plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
-        );
-        print.detail("profile", &plan.profile_name);
-        if let Some(native) = &plan.native {
-            print.detail("RPC", &plan.rpc_url);
-            print.detail("sender", &native.sender);
-            print.detail("network hash", &native.network_hash);
-            print.detail("contract hash", &native.contract_hash);
-            print.detail("deployment nonce", &native.deployment_nonce);
-            print.detail("predicted address", &plan.predicted_address);
-            print.detail("funding HOG", &native.funding_hog);
-            print_initializer(native.initializer.as_ref(), print);
-            print.detail("expiry height", native.expiry_height);
-            print.detail("gas budget", native.gas_limit);
-            print.detail("tx", format_tx_hash(&plan.tx_hash));
-            print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
-        }
-        if !print.confirm(force, "deploy a contract", "Deploy this contract?")? {
-            print.note("Cancelled");
-            return Ok(());
-        }
+    if !dry_run
+        && !print.confirm_review(
+            "Review deployment",
+            force,
+            "deploy a contract",
+            "Deploy this contract?",
+            |print| {
+                print.detail("artifact", plan.artifact.path.display());
+                if let Some(package) = package {
+                    print.detail("package", package);
+                }
+                print.detail(
+                    "wallet",
+                    plan.wallet_name.as_deref().unwrap_or(&plan.wallet_address),
+                );
+                print.detail("profile", &plan.profile_name);
+                if let Some(native) = &plan.native {
+                    print.detail("RPC", &plan.rpc_url);
+                    print.detail("sender", &native.sender);
+                    print.detail("network hash", &native.network_hash);
+                    print.detail("contract hash", &native.contract_hash);
+                    print.detail("deployment nonce", &native.deployment_nonce);
+                    print.detail("predicted address", &plan.predicted_address);
+                    print.detail("funding HOG", &native.funding_hog);
+                    print_initializer(native.initializer.as_ref(), print);
+                    print.detail("expiry height", native.expiry_height);
+                    print.detail("gas budget", native.gas_limit);
+                    print.detail("tx", format_tx_hash(&plan.tx_hash));
+                    print.warn("Funding, deployment and optional initialization commit atomically; retained balance depends on storage collateral.");
+                }
+            },
+        )?
+    {
+        print.cancelled();
+        return Ok(());
     }
     let prepared = sign_deploy_plan(plan)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
 
-    let task = print.start_task(format_args!(
+    crate::tx_utils::print_prepared_transaction(&prepared.tx_hex, print);
+    let task = crate::print::progress::Task::start(print, "Submitting deployment", true);
+    task.print().phase(format_args!(
         "Deploying {} artifact",
         prepared.artifact.kind.as_str()
     ));
 
     let submitted = match submit_prepared_deploy_and_resolve(&prepared) {
         Ok(submitted) => submitted,
-        Err(error) if prepared.native.is_some() => {
-            task.clear();
+        Err(error @ CliError::NativeDeploymentUnverified { .. }) if prepared.native.is_some() => {
+            let _ = task.finish();
             return report_unverified_native_deploy(&prepared, &error, cmd, print);
         }
         Err(error) => return Err(error),
     };
-    task.clear();
     let tx_hash = submitted.tx_hash;
     let receipt = submitted.receipt;
-    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
+    let transaction_detail =
+        fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, task.print());
+    let warnings = task.finish();
     let contract_addr_hex = submitted.contract_address;
     let address_source = submitted.address_source;
 
@@ -214,34 +224,53 @@ pub fn run(
         crate::tx_utils::decode_receipt_abort(&receipt, None)
     };
     let insufficient_funding = is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref());
-    match &receipt.status {
-        groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
-            let contract_addr_hex = contract_addr_hex
-                .as_deref()
-                .expect("bug: successful deploy must resolve a contract address");
-            print.success("Deployed contract");
-            print.detail("address", contract_addr_hex);
-            if matches!(address_source, Some(DeployAddressSource::Derived)) {
-                print.warn(
-                    "receipt omitted deploy return_data; address was derived locally from \
+    print.group(
+        if matches!(
+            receipt.status,
+            groundhog_json_rpc_types::receipt::ExecStatus::Ok
+        ) {
+            crate::print::Outcome::Success
+        } else {
+            crate::print::Outcome::Error
+        },
+        "Deployment",
+        |print| {
+            match &receipt.status {
+                groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
+                    let contract_addr_hex = contract_addr_hex
+                        .as_deref()
+                        .expect("bug: successful deploy must resolve a contract address");
+                    print.success("Deployed contract");
+                    print.detail("address", contract_addr_hex);
+                    if matches!(address_source, Some(DeployAddressSource::Derived)) {
+                        print.warn(
+                            "receipt omitted deploy return_data; address was derived locally from \
                      deployer, nonce, and contract hash",
-                );
+                        );
+                    }
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print.detail("gas used", receipt.gas_used);
+                }
+                other => {
+                    if insufficient_funding {
+                        print_insufficient_deploy_funding(&prepared, print);
+                    } else {
+                        print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+                    }
+                    print.detail("tx", &tx_hash_formatted);
+                    print.detail("height", *receipt.height);
+                    print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
+                }
             }
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print.detail("gas used", receipt.gas_used);
-        }
-        other => {
-            if insufficient_funding {
-                print_insufficient_deploy_funding(&prepared, print);
-            } else {
-                print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+            for warning in &warnings {
+                print.warn(warning);
             }
-            print.detail("tx", &tx_hash_formatted);
-            print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
-        }
-    }
+            if let Some(detail) = transaction_detail.as_ref() {
+                print_transaction_detail(detail, print);
+            }
+        },
+    );
 
     // Save contract alias
     let mut alias_warnings: Vec<crate::checks::Finding> = Vec::new();
@@ -301,10 +330,6 @@ pub fn run(
                 ),
             }
         }
-    }
-
-    if let Some(detail) = transaction_detail.as_ref() {
-        print_transaction_detail(detail, print);
     }
 
     let command_error =
@@ -438,32 +463,34 @@ fn print_dry_run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
-        prepared.artifact.kind.as_str(),
-        prepared.artifact_bytes_len,
-        prepared.rpc_url
-    ));
-    print.status(format_args!(
-        "  predicted address: {}",
-        prepared.predicted_address
-    ));
-    if let Some(native) = &prepared.native {
-        print.detail("sender", &native.sender);
-        print.detail("network hash", &native.network_hash);
-        print.detail("contract hash", &native.contract_hash);
-        print.detail("deployment nonce", &native.deployment_nonce);
-        print.detail("funding HOG", &native.funding_hog);
-        print_initializer(native.initializer.as_ref(), print);
-        print.detail("expiry height", native.expiry_height);
-        print.detail("gas budget", native.gas_limit);
-        print.warn(
-            "Funding is the authorized transfer, not a minimum-cost estimate or final balance.",
-        );
-    }
-    print.detail("tx", format_tx_hash(&prepared.tx_hash));
-    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
-    print.status("  submitted: no (--dry-run)");
+    print.group(crate::print::Outcome::DryRun, "Deployment", |print| {
+        print.status(format_args!(
+            "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
+            prepared.artifact.kind.as_str(),
+            prepared.artifact_bytes_len,
+            prepared.rpc_url
+        ));
+        print.status(format_args!(
+            "  predicted address: {}",
+            prepared.predicted_address
+        ));
+        if let Some(native) = &prepared.native {
+            print.detail("sender", &native.sender);
+            print.detail("network hash", &native.network_hash);
+            print.detail("contract hash", &native.contract_hash);
+            print.detail("deployment nonce", &native.deployment_nonce);
+            print.detail("funding HOG", &native.funding_hog);
+            print_initializer(native.initializer.as_ref(), print);
+            print.detail("expiry height", native.expiry_height);
+            print.detail("gas budget", native.gas_limit);
+            print.warn(
+                "Funding is the authorized transfer, not a minimum-cost estimate or final balance.",
+            );
+        }
+        print.detail("tx", format_tx_hash(&prepared.tx_hash));
+        print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+        print.status("  submitted: no (--dry-run)");
+    });
 
     print.json(&CommandResult::new(
         cmd,
@@ -538,10 +565,7 @@ fn prepare_deploy_plan(
     wallet: Option<&str>,
     print: &Print,
 ) -> Result<DeployPlan, CliError> {
-    if resolved.rpc_url.is_none() && resolved.default_key.is_none() {
-        return Err(CliError::MissingRpcUrl);
-    }
-    resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    resolved.rpc_endpoint()?;
 
     let (artifact, package_name) = if let Some(path) = artifact_path {
         (
@@ -623,7 +647,7 @@ fn prepare_deploy_transaction_plan(
     selected_wallet: Option<&str>,
     options: &DeploymentOptions<'_>,
 ) -> Result<DeployPlan, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     if options.init_method.is_none()
         && (!options.init_args.is_empty() || options.init_gas_limit.is_some())
     {
@@ -838,10 +862,7 @@ async fn submit_native_deploy(
     let returned =
         groundhog_json_rpc_client::submit_transaction_with_client(client, &prepared.tx_hex)
             .await
-            .map_err(|error| CliError::RpcMethodFailed {
-                method: "sendRawTransaction",
-                message: crate::tx_utils::rpc_error_message(&error),
-            })?;
+            .map_err(|error| native_submission_error(&error))?;
     if returned != prepared.tx_hash {
         return Err(CliError::NativeDeploymentUnverified {
             message: format!(
@@ -858,13 +879,41 @@ async fn submit_native_deploy(
         polling.interval,
     )
     .await
-    .map_err(crate::tx_utils::map_poll_receipt_error)?;
+    .map_err(|error| {
+        let error = crate::tx_utils::map_poll_receipt_error(error);
+        if matches!(error, CliError::TransactionInvalid { .. }) {
+            error
+        } else {
+            CliError::NativeDeploymentUnverified {
+                message: error.to_string(),
+            }
+        }
+    })?;
     if receipt.tx_hash != prepared.tx_hash {
         return Err(CliError::NativeDeploymentUnverified {
             message: "receipt hash does not match the submitted transaction".into(),
         });
     }
     Ok((prepared.tx_hash, receipt))
+}
+
+fn native_submission_error(error: &jsonrpsee::core::ClientError) -> CliError {
+    let message = crate::tx_utils::rpc_error_message(error);
+    if crate::tx_utils::is_unsupported_rpc_method_error(error) {
+        CliError::RpcCapabilityUnsupported {
+            method: "sendRawTransaction",
+            message,
+        }
+    } else if crate::tx_utils::is_conclusive_send_error(error) {
+        CliError::RpcMethodFailed {
+            method: "sendRawTransaction",
+            message,
+        }
+    } else {
+        CliError::NativeDeploymentUnverified {
+            message: format!("sendRawTransaction failed: {message}"),
+        }
+    }
 }
 
 fn resolve_native_deployed_address(
@@ -1074,12 +1123,24 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(submissions.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            error,
+            crate::CliError::NativeDeploymentUnverified { .. }
+        ));
         assert!(
             error
                 .to_string()
                 .contains(&crate::tx_utils::format_tx_hash(&hash))
         );
         handle.stop().unwrap();
+    }
+
+    #[test]
+    fn native_submit_transport_timeout_remains_unverified() {
+        assert!(matches!(
+            super::native_submission_error(&jsonrpsee::core::ClientError::RequestTimeout),
+            crate::CliError::NativeDeploymentUnverified { .. }
+        ));
     }
 
     #[test]

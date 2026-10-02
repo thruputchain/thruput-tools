@@ -190,12 +190,17 @@ pub fn run(
         return print_remote_dry_run(&prepared, cmd, print);
     }
     let plan = prepare_airdrop_plan(profile, &recipient, amount)?;
-    if !dry_run {
-        print_airdrop_plan(&plan, print);
-        if !print.confirm(force, "request an airdrop", "Request this airdrop?")? {
-            print.note("Cancelled");
-            return Ok(());
-        }
+    if !dry_run
+        && !print.confirm_review(
+            "Review airdrop",
+            force,
+            "request an airdrop",
+            "Request this airdrop?",
+            |print| print_airdrop_plan(&plan, print),
+        )?
+    {
+        print.cancelled();
+        return Ok(());
     }
     let prepared = finalize_airdrop_plan(plan)?;
 
@@ -227,11 +232,7 @@ fn prepare_remote_airdrop_dry_run(
             "remote airdrop amount is set by the faucet service".into(),
         ));
     }
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let faucet_url = profile
         .faucet_url
         .as_deref()
@@ -253,14 +254,28 @@ fn run_local_airdrop(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
+    crate::tx_utils::print_prepared_transaction(&prepared.tx_hex, print);
+    let task = crate::print::progress::Task::start(print, "Requesting airdrop", true);
+    task.print().phase(format_args!(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
     ));
     let (tx_hash, receipt) = submit_and_poll_blocking(&prepared.rpc_url, &prepared.tx_hex)?;
     let tx_hash = format_tx_hash(&tx_hash);
     ensure_local_airdrop_success(prepared, &receipt, &tx_hash)?;
-    print.status(format_args!("Airdrop sent: {tx_hash}"));
+    let _ = task.finish();
+    print.group(
+        crate::print::Outcome::Success,
+        "Airdrop complete",
+        |print| {
+            print.status(format_args!("Airdrop sent: {tx_hash}"));
+            if print.has_human_ui() {
+                print.detail("Recipient", &prepared.recipient_wallet);
+                print.detail("Amount", format_args!("{} HOG", prepared.amount_hog));
+                print.detail("Height", *receipt.height);
+            }
+        },
+    );
     let observations = post_airdrop_observations(prepared, print);
 
     let warnings = low_local_faucet_balance_warning(prepared.funding_projection.projected_balance)
@@ -361,7 +376,7 @@ fn prepare_local_airdrop_plan(
     recipient: &AirdropRecipient,
     amount: Option<&str>,
 ) -> Result<LocalAirdropPlan, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     let manifest = load_configured_runtime_manifest(profile, "faucet")?
         .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
     let recipient_wallet = recipient.wallet.clone();
@@ -480,7 +495,8 @@ fn run_remote_airdrop(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
+    let task = crate::print::progress::Task::start(print, "Requesting remote airdrop", true);
+    task.print().phase(format_args!(
         "Requesting remote airdrop to {}...",
         prepared.recipient_wallet
     ));
@@ -538,7 +554,19 @@ fn run_remote_airdrop(
     }
     let tx_hash = format_tx_hash(&tx_hash);
     remove_remote_airdrop_attempt(prepared)?;
-    print.status(format_args!("Airdrop sent: {tx_hash}"));
+    let _ = task.finish();
+    print.group(
+        crate::print::Outcome::Success,
+        "Airdrop complete",
+        |print| {
+            print.status(format_args!("Airdrop sent: {tx_hash}"));
+            if print.has_human_ui() {
+                print.detail("Recipient", &prepared.recipient_wallet);
+                print.detail("Raw amount", &raw_amount);
+                print.detail("Height", *height);
+            }
+        },
+    );
 
     print.json(&CommandResult::new(
         cmd,
@@ -623,11 +651,7 @@ fn prepare_remote_airdrop_plan(
     profile: ResolvedProfile,
     recipient: &AirdropRecipient,
 ) -> Result<AirdropPlan, CliError> {
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let faucet_url = profile
         .faucet_url
         .as_deref()
@@ -868,16 +892,18 @@ fn print_dry_run(
 ) -> Result<(), CliError> {
     match prepared {
         PreparedAirdrop::Local(prepared) => {
-            print.status(format_args!(
-                "Prepared dry-run airdrop of {} HOG to {}.",
-                prepared.amount_hog, prepared.recipient_wallet
-            ));
-            print.status(format_args!("  raw amount: {}", prepared.raw_amount));
-            print.status(format_args!(
-                "  faucet: {} ({})",
-                prepared.faucet_key_name, prepared.faucet_role
-            ));
-            print.status("  submitted: no (--dry-run)");
+            print.group(crate::print::Outcome::DryRun, "Airdrop", |print| {
+                print.status(format_args!(
+                    "Prepared dry-run airdrop of {} HOG to {}.",
+                    prepared.amount_hog, prepared.recipient_wallet
+                ));
+                print.status(format_args!("  raw amount: {}", prepared.raw_amount));
+                print.status(format_args!(
+                    "  faucet: {} ({})",
+                    prepared.faucet_key_name, prepared.faucet_role
+                ));
+                print.status("  submitted: no (--dry-run)");
+            });
 
             print.json(&CommandResult::new(
                 cmd,
@@ -898,12 +924,14 @@ fn print_dry_run(
             ))?;
         }
         PreparedAirdrop::Remote(prepared) => {
-            print.status(format_args!(
-                "Prepared dry-run remote airdrop to {}.",
-                prepared.recipient_wallet
-            ));
-            print.status(format_args!("  faucet: {}", prepared.faucet_url));
-            print.status("  submitted: no (--dry-run)");
+            print.group(crate::print::Outcome::DryRun, "Remote airdrop", |print| {
+                print.status(format_args!(
+                    "Prepared dry-run remote airdrop to {}.",
+                    prepared.recipient_wallet
+                ));
+                print.status(format_args!("  faucet: {}", prepared.faucet_url));
+                print.status("  submitted: no (--dry-run)");
+            });
 
             print.json(&CommandResult::new(
                 cmd,
@@ -932,12 +960,14 @@ fn print_remote_dry_run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Prepared dry-run remote airdrop to {}.",
-        prepared.recipient_wallet
-    ));
-    print.status(format_args!("  faucet: {}", prepared.faucet_url));
-    print.status("  submitted: no (--dry-run)");
+    print.group(crate::print::Outcome::DryRun, "Remote airdrop", |print| {
+        print.status(format_args!(
+            "Prepared dry-run remote airdrop to {}.",
+            prepared.recipient_wallet
+        ));
+        print.status(format_args!("  faucet: {}", prepared.faucet_url));
+        print.status("  submitted: no (--dry-run)");
+    });
 
     print.json(&CommandResult::new(
         cmd,

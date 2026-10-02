@@ -6,6 +6,7 @@ pub mod airdrop;
 pub mod artifacts;
 pub mod balance;
 pub mod build;
+mod build_output;
 pub mod byte_size;
 pub mod call;
 pub mod chain;
@@ -85,11 +86,14 @@ pub fn require_cargo() -> Result<(), CliError> {
 /// Piping stderr is what lets cargo's output be relayed and kept at the same
 /// time, and it is also what makes cargo drop color, so restore it when our
 /// own stderr is a terminal and the user has not already chosen.
-/// Explicit non-interactive mode disables color even when inherited settings enable it.
+/// Explicit non-interactive mode disables inherited color and input.
 pub(crate) fn keep_cargo_color(cmd: &mut std::process::Command, print: &Print) {
-    if print.is_non_interactive() {
+    if print.is_non_interactive() || print.is_no_ui() || print.is_live() || print.is_compact_build()
+    {
         cmd.env("CARGO_TERM_COLOR", "never");
-    } else if print.is_human_tty() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
+        return;
+    }
+    if print.is_human_tty() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
         cmd.env("CARGO_TERM_COLOR", "always");
     }
 }
@@ -124,17 +128,20 @@ pub(crate) fn stop_cargo(child: &mut std::process::Child) {
 pub(crate) fn capture_cargo_stderr(
     mut pipe: impl std::io::Read,
     relay: bool,
+    print: &Print,
 ) -> std::io::Result<Vec<u8>> {
-    use std::io::Write;
     let mut captured = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
         let read = pipe.read(&mut chunk)?;
         if read == 0 {
+            if relay && print.is_compact_build() {
+                print.collect_build_log(&String::from_utf8_lossy(&captured));
+            }
             return Ok(captured);
         }
-        if relay {
-            std::io::stderr().write_all(&chunk[..read])?;
+        if relay && !print.is_compact_build() {
+            print.relay_output(crate::print::progress::Stream::Stderr, &chunk[..read])?;
         }
         captured.extend_from_slice(&chunk[..read]);
     }
@@ -149,6 +156,9 @@ pub fn run_cargo(
     if print.is_non_interactive() {
         keep_cargo_color(cmd, print);
         cmd.stdin(std::process::Stdio::null());
+    }
+    if print.is_compact_build() {
+        return crate::build_output::run(cmd, print);
     }
     print.trace_command(cmd);
     if print.is_json() {
@@ -171,13 +181,41 @@ pub fn run_cargo(
         // stderr would otherwise turn cargo's color off, so ask for it back
         // when our own stderr is a terminal and the user has not chosen.
         keep_cargo_color(cmd, print);
+        if print.is_live() {
+            cmd.stdout(std::process::Stdio::piped());
+        }
         cmd.stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn()?;
         let stderr_pipe = child
             .stderr
             .take()
             .expect("bug: child stderr is piped above");
-        let captured = match capture_cargo_stderr(stderr_pipe, true) {
+        let captured = match std::thread::scope(|scope| {
+            let stdout = if print.is_live() {
+                child.stdout.take()
+            } else {
+                None
+            }
+            .map(|stdout| {
+                scope.spawn(move || {
+                    crate::print::progress::relay(
+                        stdout,
+                        print,
+                        crate::print::progress::Stream::Stdout,
+                    )
+                })
+            });
+            let captured = capture_cargo_stderr(stderr_pipe, true, print);
+            if captured.is_err() {
+                stop_cargo(&mut child);
+            }
+            if let Some(stdout) = stdout {
+                stdout
+                    .join()
+                    .map_err(|_| std::io::Error::other("cargo stdout reader panicked"))??;
+            }
+            captured
+        }) {
             Ok(captured) => captured,
             Err(error) => {
                 stop_cargo(&mut child);

@@ -21,6 +21,9 @@ use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
 mod support;
+#[cfg(unix)]
+#[path = "support/ui_audit.rs"]
+mod ui_audit;
 
 static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -100,15 +103,6 @@ fn write_global_config(config_home: &std::path::Path, contents: &str) {
     let directory = config_home.join("groundhog");
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(directory.join("config.toml"), contents).unwrap();
-}
-
-fn workspace_root() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("bug: cli crate has parent")
-        .parent()
-        .expect("bug: crates dir has workspace parent")
-        .to_path_buf()
 }
 
 #[cfg(unix)]
@@ -236,65 +230,9 @@ fn chain_restore_help_documents_force_alias() {
     );
 }
 
-/// Builds and returns the `fake_hogd_dev` example binary; `cargo test` builds it
-/// only as a test harness, so a copy on disk may predate a `groundhog-xdr` bump.
-fn fake_hogd_dev_binary() -> std::path::PathBuf {
-    static BINARY: OnceLock<std::path::PathBuf> = OnceLock::new();
-    BINARY.get_or_init(build_fake_hogd_dev_binary).clone()
-}
-
-/// Builds the example with the current cargo and returns the path it reports.
-fn build_fake_hogd_dev_binary() -> std::path::PathBuf {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(&cargo)
-        .args([
-            "build",
-            "--quiet",
-            "--locked",
-            "--message-format=json",
-            "-p",
-            "groundhog-node-supervisor",
-            "--example",
-            "fake_hogd_dev",
-        ])
-        .current_dir(workspace_root())
-        .stderr(Stdio::inherit())
-        .output()
-        .unwrap_or_else(|err| {
-            panic!(
-                "failed to run {} to build the fake_hogd_dev example: {err}",
-                cargo.to_string_lossy()
-            )
-        });
-    assert!(
-        output.status.success(),
-        "failed to build fake_hogd_dev example; status: {}",
-        output.status
-    );
-    let binary = fake_hogd_dev_executable(&output.stdout);
-    assert!(
-        binary.is_file(),
-        "fake_hogd_dev example missing after build at {}",
-        binary.display(),
-    );
-    binary
-}
-
-/// Finds the `fake_hogd_dev` example artifact in cargo's JSON build messages.
-fn fake_hogd_dev_executable(messages: &[u8]) -> std::path::PathBuf {
-    String::from_utf8_lossy(messages)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find(|message| {
-            message["reason"] == "compiler-artifact"
-                && message["target"]["name"] == "fake_hogd_dev"
-                && message["target"]["kind"]
-                    .as_array()
-                    .is_some_and(|kinds| kinds.iter().any(|kind| kind == "example"))
-        })
-        .and_then(|message| message["executable"].as_str().map(std::path::PathBuf::from))
-        .expect("bug: cargo build output should report the fake_hogd_dev example executable")
-}
+#[path = "support/devnode.rs"]
+mod devnode;
+use devnode::binary as fake_hogd_dev_binary;
 
 #[cfg(unix)]
 fn install_fake_managed_toolchain(
@@ -369,17 +307,36 @@ fn spawn_with_terminal(command: Command) -> (std::process::Child, File) {
 
 #[cfg(unix)]
 fn spawn_with_terminal_width(command: Command, columns: u16) -> (std::process::Child, File) {
-    spawn_with_terminal_outputs(command, columns, false)
+    spawn_with_terminal_size(command, columns, 24)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_size(
+    command: Command,
+    columns: u16,
+    rows: u16,
+) -> (std::process::Child, File) {
+    spawn_with_terminal_io(command, columns, rows, false)
 }
 
 #[cfg(unix)]
 fn spawn_with_terminal_outputs(
-    mut command: Command,
+    command: Command,
     columns: u16,
     terminal_stdout: bool,
 ) -> (std::process::Child, File) {
+    spawn_with_terminal_io(command, columns, 24, terminal_stdout)
+}
+
+#[cfg(unix)]
+fn spawn_with_terminal_io(
+    mut command: Command,
+    columns: u16,
+    rows: u16,
+    terminal_stdout: bool,
+) -> (std::process::Child, File) {
     let mut size = libc::winsize {
-        ws_row: 24,
+        ws_row: rows,
         ws_col: columns,
         ws_xpixel: 0,
         ws_ypixel: 0,
@@ -431,6 +388,29 @@ fn read_terminal_output(mut terminal: File) -> String {
         Err(error) => panic!("failed to read pseudo-terminal output: {error}"),
     }
     String::from_utf8(output).expect("bug: CLI terminal output should be UTF-8")
+}
+
+#[cfg(unix)]
+fn strip_terminal_styles(output: &str) -> String {
+    let mut chars = output.chars();
+    let mut plain = String::new();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            let mut escape = String::from(ch);
+            for ch in chars.by_ref() {
+                escape.push(ch);
+                if ch.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            if !escape.ends_with('m') {
+                plain.push_str(&escape);
+            }
+        } else if ch != '\r' {
+            plain.push(ch);
+        }
+    }
+    plain
 }
 
 #[cfg(unix)]
@@ -3108,7 +3088,7 @@ fn init_boxes_respect_stderr_terminal_width() {
         .output()
         .unwrap();
     assert!(setup.status.success(), "{setup:?}");
-    for columns in [0, 40, 80, 120] {
+    for columns in [0, 24, 40, 60, 80, 120] {
         let mut command = groundhog();
         command
             .arg("init")
@@ -3122,11 +3102,36 @@ fn init_boxes_respect_stderr_terminal_width() {
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(output.contains("Groundhog Ready"));
-        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Setup"), columns >= 58);
-        assert_eq!(output.contains("╭─ \x1b[1mGroundhog Ready"), columns >= 100);
-        if columns < 100 {
-            assert!(output.contains(config.to_str().unwrap()));
+        let plain = strip_terminal_styles(&output);
+        assert!(
+            !plain.contains("Groundhog Setup"),
+            "already-ready setup needs no wizard: {plain}"
+        );
+        assert_eq!(plain.contains("╭─ ✓ Ready: Groundhog Ready"), columns >= 29);
+        assert!(
+            !output.contains("\x1b[2J"),
+            "already-ready setup must not take over the screen"
+        );
+        if columns > 0 {
+            use unicode_width::UnicodeWidthStr;
+            for line in plain
+                .lines()
+                .filter(|line| line.starts_with(['╭', '│', '╰']))
+            {
+                assert!(
+                    UnicodeWidthStr::width(line) <= usize::from(columns),
+                    "{line}"
+                );
+            }
         }
+        let values = plain
+            .lines()
+            .map(|line| line.trim_start_matches('│').trim_end_matches('│').trim())
+            .collect::<String>();
+        assert!(
+            values.contains(config.to_str().unwrap()),
+            "complete path missing: {plain}"
+        );
     }
 }
 
@@ -3411,6 +3416,7 @@ fn status_human_output_shows_sections() {
     // Will exit 1 (warnings), but stderr should have
     // human-readable section content.
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Status"));
     assert!(stderr.contains("Cargo: installed"));
@@ -3423,6 +3429,206 @@ fn status_human_output_shows_sections() {
     assert!(stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
     assert!(!stderr.contains("Mock Executor Auth"));
+}
+
+#[cfg(unix)]
+#[test]
+fn status_terminal_report_wraps_complete_values_with_and_without_color() {
+    use unicode_width::UnicodeWidthStr;
+
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("長い-project-directory-".repeat(5));
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\nrpc_url = \"http://127.0.0.1:9545\"\n",
+    ).unwrap();
+    let mut expected_exit = None;
+    for columns in [24, 40, 60, 80, 120] {
+        for no_color in [false, true] {
+            let mut command = groundhog();
+            command
+                .arg("status")
+                .current_dir(&project)
+                .env("CARGO_HOME", tmp.path().join("cargo-home"))
+                .env("TERM", "xterm")
+                .env("LC_ALL", "C.UTF-8")
+                .env_remove("NO_COLOR");
+            if no_color {
+                command.env("NO_COLOR", "1");
+            }
+            let (child, terminal) = spawn_with_terminal_width(command, columns);
+            let reader = terminal_output_reader(&terminal);
+            let exit = wait_child(child, Duration::from_secs(10));
+            assert_eq!(*expected_exit.get_or_insert(exit.code()), exit.code());
+            drop(terminal);
+            let output = reader.join().unwrap();
+            assert_eq!(output.contains('\x1b'), !no_color);
+            let plain = strip_terminal_styles(&output);
+            assert!(!plain.contains('\x1b'), "only style escapes are allowed");
+            assert!(plain.starts_with("╭─ Groundhog Status"));
+            let card = plain
+                .lines()
+                .take_while(|line| !line.starts_with('╰'))
+                .collect::<Vec<_>>();
+            let card_width = UnicodeWidthStr::width(card[0]);
+            assert!(
+                card.iter()
+                    .all(|line| UnicodeWidthStr::width(*line) == card_width),
+                "misaligned borders: {plain}"
+            );
+            assert!(
+                plain
+                    .lines()
+                    .all(|line| UnicodeWidthStr::width(line) <= usize::from(columns).min(100)),
+                "{columns} columns: {plain}"
+            );
+            for label in ["Groundhog Status", "Cargo:", "Keys:", "Project:"] {
+                assert!(plain.contains(label), "{plain}");
+            }
+            let joined = plain
+                .lines()
+                .map(|line| line.trim_start_matches('│').trim_end_matches('│').trim())
+                .collect::<String>();
+            assert!(
+                joined.contains(project.join("groundhog.toml").to_str().unwrap()),
+                "full path missing: {plain}"
+            );
+            assert!(joined.contains("http://127.0.0.1:9545"));
+        }
+    }
+}
+
+#[test]
+fn status_dumb_terminal_keeps_plain_report_and_exit_code() {
+    let tmp = TempDir::new().unwrap();
+    let run = |json: bool| {
+        let mut command = groundhog();
+        command
+            .arg("status")
+            .current_dir(tmp.path())
+            .env("CARGO_HOME", tmp.path().join("cargo-home"))
+            .env("TERM", "dumb");
+        if json {
+            command.arg("--json");
+        }
+        command.output().unwrap()
+    };
+    let plain = run(false);
+    let json = run(true);
+    assert_eq!(plain.status.code(), json.status.code());
+    assert!(plain.stdout.is_empty());
+    assert!(json.stderr.is_empty());
+    assert!(!plain.stderr.contains(&0x1b));
+    assert!(String::from_utf8_lossy(&plain.stderr).contains("Cargo: installed"));
+    let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(payload["data"]["schemaVersion"], 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn status_no_ui_and_ascii_modes_keep_terminal_output_complete() {
+    let tmp = TempDir::new().unwrap();
+    for (no_ui, locale) in [(true, "C.UTF-8"), (false, "C")] {
+        let mut command = groundhog();
+        command
+            .arg("status")
+            .current_dir(tmp.path())
+            .env("CARGO_HOME", tmp.path().join("cargo-home"))
+            .env("TERM", "xterm")
+            .env("LC_ALL", locale)
+            .env("NO_COLOR", "1");
+        if no_ui {
+            command.arg("--no-ui");
+        }
+        let (child, terminal) = spawn_with_terminal_size(command, 40, 4);
+        let reader = terminal_output_reader(&terminal);
+        let status = wait_child(child, Duration::from_secs(10));
+        drop(terminal);
+        let output = reader.join().unwrap();
+        assert!(!status.success());
+        assert!(!output.contains('\x1b'));
+        assert!(!output.contains('╭'));
+        assert_eq!(output.starts_with("+- Groundhog Status"), !no_ui);
+        assert!(
+            output.lines().count() > 4,
+            "must append the entire report, not clip to terminal height"
+        );
+        assert!(output.contains("Contracts:"));
+        assert!(output.contains(if no_ui { "warning:" } else { "Warning" }));
+    }
+}
+
+#[test]
+fn no_ui_preserves_status_json_quiet_and_raw_data() {
+    let tmp = TempDir::new().unwrap();
+    let run = |no_ui, json| {
+        let mut command = groundhog();
+        command
+            .arg("status")
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .env("CARGO_HOME", tmp.path().join("cargo-home"));
+        if no_ui {
+            command.arg("--no-ui");
+        }
+        if json {
+            command.arg("--json");
+        } else {
+            command.arg("--quiet");
+        }
+        command.output().unwrap()
+    };
+    let normal = run(false, true);
+    let plain = run(true, true);
+    assert_eq!(normal.status.code(), plain.status.code());
+    assert_eq!(normal.stdout, plain.stdout);
+    assert!(plain.stderr.is_empty());
+    let quiet = run(true, false);
+    assert!(quiet.stdout.is_empty() && quiet.stderr.is_empty());
+    assert_eq!(quiet.status.code(), normal.status.code());
+    let raw = groundhog().args(["completion", "bash"]).output().unwrap();
+    let plain = groundhog()
+        .args(["--no-ui", "completion", "bash"])
+        .output()
+        .unwrap();
+    assert_eq!(raw.stdout, plain.stdout);
+    assert!(plain.stderr.is_empty());
+}
+
+#[test]
+fn no_ui_does_not_authorize_protected_commands() {
+    let tmp = TempDir::new().unwrap();
+    let generated = groundhog()
+        .args(["keys", "generate", "demo", "--quiet"])
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(generated.status.success());
+    let output = groundhog()
+        .args(["--no-ui", "--json", "keys", "rm", "demo"])
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "confirmation_required");
+}
+
+#[test]
+fn no_ui_disables_parser_styling_even_with_forced_color() {
+    for args in [
+        vec!["--no-ui", "--help"],
+        vec!["--no-ui", "status", "--unknown-option"],
+    ] {
+        let output = groundhog()
+            .args(args)
+            .env("CLICOLOR_FORCE", "1")
+            .output()
+            .unwrap();
+        assert!(!output.stdout.contains(&0x1b));
+        assert!(!output.stderr.contains(&0x1b));
+    }
 }
 
 #[test]
@@ -6316,6 +6522,113 @@ fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
 }
 
 #[test]
+fn initialized_devnet_profile_discovers_signing_identity_for_all_transaction_commands() {
+    for command in ["transfer", "call", "deploy"] {
+        let tmp = TempDir::new().unwrap();
+        let config_home = tmp.path().join("config-home");
+        let owner = generate_key_public_key(&config_home, "alice");
+        let init = groundhog()
+            .args(["init", "--non-interactive", "--json"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        let path = config_home.join("groundhog/config.toml");
+        let mut config = std::fs::read_to_string(&path)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert!(config["profile"]["devnet"].get("network_hash").is_none());
+        let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+        let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+        config["profile"]["devnet"]["rpc_url"] = toml_edit::value(&rpc_url);
+        config["profile"]["devnet"]["faucet_url"] = toml_edit::value(&faucet_url);
+        std::fs::write(&path, config.to_string()).unwrap();
+        std::fs::write(tmp.path().join("groundhog.toml"), format!(
+            "[profile.devnet.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n", "aa".repeat(32)
+        )).unwrap();
+        let target = format!("0x{}", "bc".repeat(32));
+        let artifact = write_opaque_rv32_artifact(tmp.path());
+        let mut invocation = groundhog();
+        invocation
+            .args([command, "--profile", "devnet", "--json", "--dry-run"])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", &config_home);
+        match command {
+            "transfer" => {
+                invocation.args([&target, "0.01"]);
+            }
+            "call" => {
+                invocation.args([&target, "0x0123456789abcdef", "0x0102"]);
+            }
+            "deploy" => {
+                invocation.arg("--artifact").arg(&artifact);
+            }
+            _ => unreachable!(),
+        }
+        let output = invocation.output().unwrap();
+        descriptor_server.join().unwrap();
+        rpc_server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let field = if command == "transfer" {
+            "signedTransaction"
+        } else {
+            "signedTx"
+        };
+        assert!(result["data"][field].as_str().is_some());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), config.to_string());
+    }
+}
+
+#[test]
+fn hosted_signing_without_a_pin_rejects_disagreeing_descriptor_and_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let (rpc_url, rpc_server) = spawn_network_info_rpc(&"42".repeat(32));
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(tmp.path(), &rpc_url, &config_home);
+    add_faucet_to_default_profile(tmp.path(), &faucet_url);
+    let path = tmp.path().join("groundhog.toml");
+    let mut config = std::fs::read_to_string(&path)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    config["profile"]["default"]
+        .as_table_mut()
+        .unwrap()
+        .remove("network_hash");
+    std::fs::write(&path, config.to_string()).unwrap();
+    let output = groundhog()
+        .args([
+            "transfer",
+            &format!("0x{}", "bc".repeat(32)),
+            "1",
+            "--dry-run",
+            "--json",
+        ])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(!output.status.success() && output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "network_descriptor_mismatch");
+    assert_eq!(error["error"]["details"]["field"], "networkHash");
+}
+
+#[test]
 fn hosted_signing_rejects_profile_network_hash_mismatch() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -6343,6 +6656,46 @@ fn hosted_signing_rejects_profile_network_hash_mismatch() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["error"]["code"], "network_descriptor_mismatch");
     assert_eq!(stderr["error"]["details"]["field"], "networkHash");
+}
+
+#[test]
+fn native_wallet_transfer_discovers_unconfigured_hosted_network_identity() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config");
+    let owner = generate_key_public_key(&config_home, "alice");
+    let owner = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(owner, 0);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    std::fs::write(tmp.path().join("groundhog.toml"), format!(
+        "default_profile = 'devnet'\n[profile.devnet]\nnetwork = 'devnet'\nrpc_url = '{rpc_url}'\nfaucet_url = '{faucet_url}'\n"
+    )).unwrap();
+    let output = groundhog()
+        .args([
+            "transfer",
+            &format!("0x{}", "bc".repeat(32)),
+            "0.01",
+            "--dry-run",
+            "--json",
+        ])
+        .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+    descriptor_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["sender"],
+        format!("0x{}", hex::encode(account.address().as_ref()))
+    );
+    assert_eq!(report["data"]["submitted"], false);
+    assert!(report["data"]["signedTransaction"].as_str().is_some());
 }
 
 #[test]
@@ -6947,7 +7300,7 @@ fn transfer_live_lost_submission_response_polls_local_hash() {
 
 #[test]
 fn transfer_live_classifies_send_errors_by_numeric_code() {
-    for code in [-32602, -32000, -32001, -32050, -32053] {
+    for code in [-32602, -32000, -32001, -32053] {
         let output = run_transfer_live_mock(
             TransferRpcMock {
                 submit: TransferSubmitMock::Error(code),
@@ -6981,8 +7334,8 @@ fn transfer_live_classifies_send_errors_by_numeric_code() {
         );
     }
 
-    for code in [-32051, -32123] {
-        let output = run_transfer_live_mock(
+    for code in [-32050, -32051, -32123] {
+        let run = run_transfer_live_mock_with_hash(
             TransferRpcMock {
                 submit: TransferSubmitMock::Error(code),
                 poll: Some(TransferPollMock::Status(
@@ -6991,12 +7344,14 @@ fn transfer_live_classifies_send_errors_by_numeric_code() {
             },
             true,
         );
+        let output = run.output;
         assert!(
             !output.status.success(),
             "code {code} should poll then fail"
         );
         assert!(output.stderr.is_empty());
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(stdout["data"]["txHash"], run.local_hash);
         assert_eq!(
             stdout["error"]["code"],
             "transaction_confirmation_unavailable"
@@ -9215,6 +9570,66 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
             .unwrap()
             .contains("--gas-limit")
     );
+}
+
+#[test]
+fn call_human_raw_return_uses_child_bytes_for_native_and_legacy_wallets() {
+    for native in [false, true] {
+        for child in [vec![0xde_u8, 0xad, 0xbe, 0xef], vec![]] {
+            let tmp = TempDir::new().unwrap();
+            let config = tmp.path().join("config");
+            let mut receipt = sample_call_receipt(42);
+            let returned = if native {
+                xdrs::cxs::encode(&vec![child.clone()]).unwrap()
+            } else {
+                child.clone()
+            };
+            receipt["returnData"] = serde_json::json!(format!("0x{}", hex::encode(returned)));
+            let (rpc, server) =
+                spawn_transaction_rpc(42, receipt, DevDetailRpcResponse::MethodNotFound);
+            let owner = write_project_config_with_alice_wallet(tmp.path(), &rpc, &config);
+            if native {
+                let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+                    groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+                    0,
+                );
+                let path = tmp.path().join("groundhog.toml");
+                let mut document = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .parse::<toml_edit::DocumentMut>()
+                    .unwrap();
+                let wallet = &mut document["profile"]["default"]["wallets"]["alice"];
+                wallet["kind"] = toml_edit::value("native");
+                wallet["account_nonce"] = toml_edit::value(0);
+                wallet["address"] =
+                    toml_edit::value(format!("0x{}", hex::encode(account.address().as_ref())));
+                std::fs::write(path, document.to_string()).unwrap();
+            }
+            let output = groundhog()
+                .args([
+                    "call",
+                    &format!("0x{}", "11".repeat(32)),
+                    "0x0123456789abcdef",
+                    "0x",
+                    "--force",
+                ])
+                .current_dir(tmp.path())
+                .env("XDG_CONFIG_HOME", &config)
+                .output()
+                .unwrap();
+            server.join().unwrap();
+            let text = String::from_utf8(output.stderr).unwrap();
+            assert!(output.status.success(), "{text}");
+            let line = text
+                .lines()
+                .find(|line| line.trim_start().starts_with("return:"));
+            if child.is_empty() {
+                assert!(line.is_none(), "{text}");
+            } else {
+                assert_eq!(line.map(str::trim), Some("return: 0xdeadbeef"), "{text}");
+            }
+        }
+    }
 }
 
 #[test]

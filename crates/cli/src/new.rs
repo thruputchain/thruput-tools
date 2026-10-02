@@ -25,6 +25,17 @@ pub fn run_in(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    run_in_with_warnings(dir, name, template, cmd, print).map(|_| ())
+}
+
+/// Return existing scaffold warnings so an enclosing wizard can retain them on its final view.
+pub(crate) fn run_in_with_warnings(
+    dir: &Path,
+    name: &str,
+    template: &str,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<Vec<Finding>, CliError> {
     // Validate before creating anything, so a rejected name leaves no
     // empty directory behind.
     crate::scaffold::validate_name(name)?;
@@ -38,22 +49,29 @@ pub fn run_in(
         }
         Err(e) => return Err(e.into()),
     }
-    let task = print.start_task(format_args!("Creating project `{name}`"));
+    let task = crate::print::progress::Task::start(print, "Creating project", true);
+    task.print()
+        .phase(format_args!("Creating project `{name}`"));
     crate::scaffold::generate(dir, name, template)?;
-    task.success(format_args!("Created project `{name}`"));
+    let _ = task.finish();
+    if !print.has_human_ui() {
+        print.success(format_args!("Created project `{name}`"));
+    }
 
     let warnings = scaffold_warnings();
-    for warning in &warnings {
-        print.warn(format_args!("{}: {}", warning.code, warning.message));
-        if let Some(hint) = warning.hint.as_deref() {
-            print.status(format_args!("  hint: {hint}"));
+    if !print.has_human_ui() {
+        for warning in &warnings {
+            print.warn(format_args!("{}: {}", warning.code, warning.message));
+            if let Some(hint) = warning.hint.as_deref() {
+                print.status(format_args!("  hint: {hint}"));
+            }
         }
     }
 
-    render_project_ready(dir, name, template, print);
+    render_project_ready(dir, name, template, &warnings, print);
     print.json(&crate::result::CommandResult::with_warnings(
         cmd,
-        warnings,
+        warnings.clone(),
         json!({
             "schemaVersion": NEW_JSON_SCHEMA_VERSION,
             "projectName": name,
@@ -62,7 +80,7 @@ pub fn run_in(
             "configPath": dir.join("groundhog.toml"),
         }),
     ))?;
-    Ok(())
+    Ok(warnings)
 }
 
 /// Environment problems that will break the generated project's first build.
@@ -92,7 +110,13 @@ fn scaffold_warnings() -> Vec<Finding> {
     }]
 }
 
-fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
+fn render_project_ready(
+    dir: &Path,
+    name: &str,
+    template: &str,
+    warnings: &[Finding],
+    print: &Print,
+) {
     if print.is_quiet() || print.is_json() {
         return;
     }
@@ -108,7 +132,16 @@ fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
     ];
 
     print.status("");
-    print.summary_card("Project Ready", &items);
+    if print.has_human_ui() {
+        print.outcome_findings(
+            crate::print::Outcome::Success,
+            "Project Ready",
+            &items,
+            warnings,
+        );
+    } else {
+        print.summary_card("Project Ready", &items);
+    }
 
     let next_steps = vec![
         format!("cd {}", render_shell_arg(&dir.to_string_lossy())),

@@ -402,6 +402,15 @@ pub enum CliError {
          `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`"
     )]
     MissingRpcUrl,
+    #[error(
+        "selected profile `{profile}` uses the local network, but no local node endpoint is available"
+    )]
+    #[code("missing_rpc_url")]
+    #[hint(
+        "start `groundhog node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`"
+    )]
+    #[details(expr = Some(json!({ "profile": profile, "network": "local" })))]
+    LocalNodeUnavailable { profile: String },
     #[error("profile `{profile}` {message}")]
     #[hint(
         "update the selected profile in project or global config, or choose a profile that \

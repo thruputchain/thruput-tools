@@ -75,11 +75,7 @@ pub fn list(
     }
 
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let address = resolve_address_target(&profile, contract_input)?;
     let contract_address = ContractAddress::from(address);
     let filters = EventFiltersReport {
@@ -104,7 +100,9 @@ pub fn list(
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let task = crate::print::progress::Task::start(print, "Reading events", true);
     let page = rt.block_on(fetch_event_page(&rpc_url, query))?;
+    let _ = task.finish();
     let spec_report = event_spec.as_ref().map(|spec| spec.report(selected_event));
     let events = match &event_spec {
         Some(spec) => spec.decode_events(page.events),
@@ -129,7 +127,9 @@ pub fn list(
     };
 
     if !print.is_json() {
-        print_event_list(&report, continuation_requested, print);
+        print.group(crate::print::Outcome::Information, "Events", |print| {
+            print_event_list(&report, continuation_requested, print);
+        });
     }
     print.json(&CommandResult::new(cmd, report))
 }

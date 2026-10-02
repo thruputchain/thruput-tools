@@ -41,11 +41,20 @@ pub(crate) struct RemoteAirdropDescriptor {
 
 pub(crate) fn resolve_native_signing_context(
     profile: &ResolvedProfile,
-    configured: &groundhog_xdr::types::NetworkHash,
+    configured: Option<&groundhog_xdr::types::NetworkHash>,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<WalletSigningContext, CliError> {
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     let network_info = fetch_rpc_network_info(runtime, rpc_url)?;
+    if configured.is_none() {
+        let faucet_url = profile
+            .faucet_url
+            .as_deref()
+            .ok_or(CliError::MissingNetworkHash)?;
+        let descriptor = fetch_network_descriptor_value(faucet_url)?;
+        validate_descriptor_identity(rpc_url, &descriptor)?;
+        validate_network_info(&descriptor, &network_info)?;
+    }
     Ok(WalletSigningContext {
         network_hash: validated_signing_network_hash(configured, &network_info)?,
         entrypoints: WalletEntrypoints {
@@ -59,22 +68,23 @@ pub(crate) fn resolve_native_signing_context(
 pub(crate) fn resolve_wallet_signing_context(
     profile: &ResolvedProfile,
     _key_name: &str,
-    configured_network_hash: groundhog_xdr::types::NetworkHash,
+    configured_network_hash: Option<groundhog_xdr::types::NetworkHash>,
     runtime: &tokio::runtime::Runtime,
 ) -> Result<WalletSigningContext, CliError> {
     let Some(faucet_url) = profile.faucet_url.as_deref() else {
         return Ok(WalletSigningContext {
             entrypoints: legacy_entrypoints(),
-            network_hash: configured_network_hash,
+            network_hash: configured_network_hash.ok_or(CliError::MissingNetworkHash)?,
         });
     };
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     let descriptor = fetch_network_descriptor_value(faucet_url)?;
     let network_info = fetch_rpc_network_info(runtime, rpc_url)?;
     validate_network_info(&descriptor, &network_info)?;
     validate_descriptor_identity(rpc_url, &descriptor)?;
     let entrypoints = legacy_entrypoints();
-    let network_hash = validated_signing_network_hash(&configured_network_hash, &network_info)?;
+    let network_hash =
+        validated_signing_network_hash(configured_network_hash.as_ref(), &network_info)?;
     Ok(WalletSigningContext {
         entrypoints,
         network_hash,
@@ -88,7 +98,7 @@ pub(crate) fn fetch_remote_airdrop_descriptor(
         .faucet_url
         .as_deref()
         .ok_or_else(|| descriptor_invalid("profile.faucetUrl", "is required".into()))?;
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let rpc_url = profile.rpc_endpoint()?;
     let descriptor = fetch_network_descriptor_value(faucet_url)?;
     validate_rpc_network_info(rpc_url, &descriptor)?;
     remote_airdrop_descriptor(rpc_url, descriptor)
@@ -226,14 +236,16 @@ fn validate_network_info(
 }
 
 fn validated_signing_network_hash(
-    configured: &groundhog_xdr::types::NetworkHash,
+    configured: Option<&groundhog_xdr::types::NetworkHash>,
     network_info: &NetworkInfo,
 ) -> Result<groundhog_xdr::types::NetworkHash, CliError> {
-    matches_expected(
-        "networkHash",
-        &prefixed_hex(configured.as_ref()),
-        &prefixed_hex(network_info.network_hash.0.as_ref()),
-    )?;
+    if let Some(configured) = configured {
+        matches_expected(
+            "networkHash",
+            &prefixed_hex(configured.as_ref()),
+            &prefixed_hex(network_info.network_hash.0.as_ref()),
+        )?;
+    }
     Ok(groundhog_xdr::types::NetworkHash::from(
         network_info.network_hash.0,
     ))
@@ -388,10 +400,17 @@ mod tests {
         let configured = groundhog_xdr::types::NetworkHash::from(descriptor.network_hash.0);
         let network_info = NetworkInfo::new(descriptor.network_hash);
 
-        let network_hash = validated_signing_network_hash(&configured, &network_info)
+        let network_hash = validated_signing_network_hash(Some(&configured), &network_info)
             .expect("bug: matching signing identity should resolve");
 
         assert_eq!(network_hash.as_ref(), &[0x42; 32]);
+    }
+
+    #[test]
+    fn hosted_signing_uses_discovered_identity_without_a_profile_pin() {
+        let network_info = NetworkInfo::new(descriptor().network_hash);
+        let hash = validated_signing_network_hash(None, &network_info).unwrap();
+        assert_eq!(hash.as_ref(), &[0x42; 32]);
     }
 
     #[test]
@@ -402,7 +421,7 @@ mod tests {
         );
         let network_info = NetworkInfo::new(descriptor.network_hash);
 
-        let error = validated_signing_network_hash(&configured, &network_info)
+        let error = validated_signing_network_hash(Some(&configured), &network_info)
             .expect_err("bug: stale signing identity should fail before signing");
 
         assert_mismatch_field(error, "networkHash");

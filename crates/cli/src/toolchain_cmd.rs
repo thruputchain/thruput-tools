@@ -110,7 +110,8 @@ pub fn install(
     }
 
     let source = artifact_source()?;
-    print.status(format_args!(
+    let task = crate::print::progress::Task::start(print, "Installing toolchain", true);
+    task.print().phase(format_args!(
         "Installing hog-devnode {} for {}",
         context.version, context.target
     ));
@@ -122,6 +123,7 @@ pub fn install(
         context.target,
         &source,
     ))?;
+    let _ = task.finish();
     let source_kind = if installation.installed_now() {
         ToolchainSourceKind::PublicArtifact
     } else {
@@ -173,17 +175,48 @@ pub fn list(command: &'static str, print: &Print) -> Result<(), CliError> {
     if print.is_json() {
         print.json(&CommandResult::new(command, report))
     } else {
+        let rows: Vec<_> = report
+            .toolchains
+            .iter()
+            .map(|entry| {
+                vec![
+                    format!(
+                        "{}{}",
+                        entry.version,
+                        if entry.active { " (active)" } else { "" }
+                    ),
+                    if entry.installed {
+                        "installed".into()
+                    } else {
+                        "available".into()
+                    },
+                    entry.target.clone(),
+                    entry.path.display().to_string(),
+                ]
+            })
+            .collect();
+        print.data_table(
+            "Toolchains",
+            &[
+                "Version".into(),
+                "State".into(),
+                "Target".into(),
+                "Path".into(),
+            ],
+            &rows,
+            "No toolchains available.",
+            report.toolchains.iter().map(|entry| {
+                let active = if entry.active { " (active)" } else { "" };
+                let state = if entry.installed {
+                    "installed"
+                } else {
+                    "available"
+                };
+                format!("{}{} — {state}", entry.version, active)
+            }),
+        )?;
         if !report.toolchains.iter().any(|entry| entry.active) {
             print.warn(format_args!("Selected hog-devnode {} is absent from this catalog; run `groundhog toolchain use {}` to select its default", report.selected_version, report.default_version));
-        }
-        for entry in &report.toolchains {
-            let active = if entry.active { " (active)" } else { "" };
-            let state = if entry.installed {
-                "installed"
-            } else {
-                "available"
-            };
-            print.data_line(format_args!("{}{} — {state}", entry.version, active))?;
         }
         Ok(())
     }
@@ -328,7 +361,12 @@ fn emit_action(
     if print.is_json() {
         print.json(&CommandResult::new(command, report))
     } else {
-        print.summary_card(
+        print.outcome_card(
+            if report.changed {
+                crate::print::Outcome::Success
+            } else {
+                crate::print::Outcome::Unchanged
+            },
             "hog-devnode toolchain",
             &[
                 ("Version".to_string(), report.version),

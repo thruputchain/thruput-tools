@@ -48,11 +48,7 @@ pub fn transfers(
     let cursor = parse_token_transfer_cursor(cursor_input)?;
     let continuation_requested = cursor_input.is_some();
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
+    let rpc_url = profile.rpc_endpoint()?.to_owned();
     let token_address = ContractAddress::from(resolve_address_target(&profile, token_input)?);
     let from = from_input
         .map(|input| resolve_address_target(&profile, input).map(ContractAddress::from))
@@ -76,7 +72,9 @@ pub fn transfers(
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let task = crate::print::progress::Task::start(print, "Reading token transfers", true);
     let page = rt.block_on(fetch_event_page(&rpc_url, query))?;
+    let _ = task.finish();
     let report = TokenTransfersReport {
         schema_version: TOKEN_TRANSFERS_JSON_SCHEMA_VERSION,
         profile: profile.name,
@@ -95,7 +93,11 @@ pub fn transfers(
     };
 
     if !print.is_json() {
-        print_transfers(&report, continuation_requested, print);
+        print.group(
+            crate::print::Outcome::Information,
+            "Token transfers",
+            |print| print_transfers(&report, continuation_requested, print),
+        );
     }
     print.json(&CommandResult::new(cmd, report))
 }
