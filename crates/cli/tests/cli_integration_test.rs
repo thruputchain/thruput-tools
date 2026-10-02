@@ -5461,16 +5461,16 @@ fn wallet_create_and_use_work_without_private_key_bytes() {
         "{}",
         String::from_utf8_lossy(&selected.stderr)
     );
-    let config: toml::Value =
+    let project_config: toml::Value =
         toml::from_str(&std::fs::read_to_string(project.join("groundhog.toml")).unwrap()).unwrap();
     assert_eq!(
-        config["profile"]["default"]["default_wallet"].as_str(),
+        project_config["profile"]["default"]["default_wallet"].as_str(),
         Some("primary")
     );
 }
 
 #[test]
-fn wallet_use_public_metadata_preserves_legacy_and_native_bindings_and_owner_checks() {
+fn wallet_use_preserves_bindings_and_checks_owner_without_signer() {
     for native in [false, true] {
         let (_tmp, project, config) = empty_wallet_fixture();
         let keyfile: serde_json::Value = serde_json::from_slice(
@@ -5491,7 +5491,11 @@ fn wallet_use_public_metadata_preserves_legacy_and_native_bindings_and_owner_che
             ""
         };
         let original = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
-        std::fs::write(project.join("groundhog.toml"), format!("{original}\n[profile.default.wallets.trading]\n{kind}address = '{address}'\nowner_public_key = '{owner}'\n")).unwrap();
+        let profile_fragment = format!(
+            "{original}\n[profile.default.wallets.trading]\n\
+             {kind}address = '{address}'\nowner_public_key = '{owner}'\n"
+        );
+        std::fs::write(project.join("groundhog.toml"), profile_fragment).unwrap();
         make_local_keypair_unavailable(&config, "owner");
         let output = groundhog()
             .args(["--json", "wallet", "use", "trading"])
@@ -5505,13 +5509,13 @@ fn wallet_use_public_metadata_preserves_legacy_and_native_bindings_and_owner_che
             String::from_utf8_lossy(&output.stderr)
         );
         let before = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
-        let report: toml::Value = toml::from_str(&before).unwrap();
+        let project_config: toml::Value = toml::from_str(&before).unwrap();
         assert_eq!(
-            report["profile"]["default"]["default_wallet"].as_str(),
+            project_config["profile"]["default"]["default_wallet"].as_str(),
             Some("trading")
         );
         assert_eq!(
-            report["profile"]["default"]["wallets"]["trading"]["address"].as_str(),
+            project_config["profile"]["default"]["wallets"]["trading"]["address"].as_str(),
             Some(address.as_str())
         );
         generate_key_public_key(&config, "other");
@@ -8854,7 +8858,21 @@ fn view_json_resolves_contract_alias_and_from_address() {
 
 #[test]
 fn view_json_resolves_named_callers_without_private_key_bytes() {
-    for selection in ["unsaved", "native", "legacy", "key_native", "alias"] {
+    #[derive(Debug)]
+    enum Caller {
+        UnsavedKey,
+        NativeWallet,
+        LegacyWallet,
+        KeyWithNativeWallet,
+        ContractAlias,
+    }
+    for selection in [
+        Caller::UnsavedKey,
+        Caller::NativeWallet,
+        Caller::LegacyWallet,
+        Caller::KeyWithNativeWallet,
+        Caller::ContractAlias,
+    ] {
         let tmp = TempDir::new().unwrap();
         let project = tmp.path().join("project");
         let config = tmp.path().join("config");
@@ -8862,48 +8880,50 @@ fn view_json_resolves_named_callers_without_private_key_bytes() {
         let owner = generate_key_public_key(&config, "owner");
         make_local_keypair_unavailable(&config, "owner");
         let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
-        let nonce = if matches!(selection, "native" | "key_native") {
-            7
-        } else {
-            0
-        };
-        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
-        let caller = if matches!(selection, "legacy" | "alias") {
-            format!("0x{}", "22".repeat(32))
-        } else {
+        let native_address = |nonce| {
+            let account =
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
             format!("0x{}", hex::encode(account.address().as_ref()))
         };
-        let from = match selection {
-            "native" | "legacy" => "primary",
-            "alias" => "viewer",
-            _ => "owner",
+        let alias_address = format!("0x{}", "33".repeat(32));
+        let native_kind = "kind = 'native'\naccount_nonce = 7\n";
+        let (from, caller, binding_kind, alias_name) = match selection {
+            Caller::UnsavedKey => ("owner", native_address(0), None, None),
+            Caller::NativeWallet => (
+                "primary",
+                native_address(7),
+                Some(native_kind),
+                Some("primary"),
+            ),
+            Caller::LegacyWallet => (
+                "primary",
+                format!("0x{}", "22".repeat(32)),
+                Some(""),
+                Some("primary"),
+            ),
+            Caller::KeyWithNativeWallet => ("owner", native_address(7), Some(native_kind), None),
+            Caller::ContractAlias => ("viewer", alias_address.clone(), None, Some("viewer")),
         };
-        let binding = if matches!(selection, "native" | "legacy" | "key_native") {
-            let kind = if selection == "legacy" {
-                ""
-            } else {
-                "kind = 'native'\naccount_nonce = 7\n"
-            };
+        let binding = if let Some(kind) = binding_kind {
             format!(
                 "[profile.default.wallets.primary]\n{kind}address = '{caller}'\nowner_public_key = '{owner}'\n"
             )
         } else {
             String::new()
         };
-        let alias = if selection == "alias" {
-            format!("[profile.default.contracts]\nviewer = '{caller}'\n")
-        } else if matches!(selection, "native" | "legacy") {
-            format!(
-                "[profile.default.contracts]\nprimary = '0x{}'\n",
-                "33".repeat(32)
-            )
+        let alias = if let Some(name) = alias_name {
+            format!("[profile.default.contracts]\n{name} = '{alias_address}'\n")
         } else {
             String::new()
         };
         let address = format!("0x{}", "11".repeat(32));
         let entrypoint = "0x0102030405060708";
         let (rpc_url, server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
-        std::fs::write(project.join("groundhog.toml"), format!("default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\n{binding}{alias}")).unwrap();
+        let project_config = format!(
+            "default_profile = 'default'\n[profile.default]\n\
+             rpc_url = '{rpc_url}'\n{binding}{alias}"
+        );
+        std::fs::write(project.join("groundhog.toml"), project_config).unwrap();
         let output = groundhog()
             .args(["--json", "view", &address, entrypoint, "--from", from])
             .current_dir(&project)
@@ -8913,7 +8933,7 @@ fn view_json_resolves_named_callers_without_private_key_bytes() {
         server.join().unwrap();
         assert!(
             output.status.success(),
-            "{selection}: {}",
+            "{selection:?}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -8950,43 +8970,63 @@ fn view_json_omitted_caller_does_not_use_the_default_wallet() {
 
 #[test]
 fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
+    for collision in ["none", "alias", "wallet", "both"] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
 
-    let address = format!("0x{}", "11".repeat(32));
-    let caller = advertised_dev_wallet_address(0);
-    let entrypoint = "0x0102030405060708";
-    let manifest_path = write_runtime_manifest(tmp.path(), 0, &caller, None);
-    let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+        let address = format!("0x{}", "11".repeat(32));
+        let caller = advertised_dev_wallet_address(0);
+        let entrypoint = "0x0102030405060708";
+        let manifest_path = write_runtime_manifest(tmp.path(), 0, &caller, None);
+        let shadow_address = format!("0x{}", "22".repeat(32));
+        let mut bindings = String::new();
+        if matches!(collision, "alias" | "both") {
+            write!(
+                bindings,
+                "\n[profile.default.contracts]\ndev-0 = '{shadow_address}'\n"
+            )
+            .unwrap();
+        }
+        if matches!(collision, "wallet" | "both") {
+            let owner = "33".repeat(32);
+            write!(
+                bindings,
+                "\n[profile.default.wallets.dev-0]\naddress = '{shadow_address}'\n\
+                 owner_public_key = '0x{owner}'\n"
+            )
+            .unwrap();
+        }
+        let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+        let profile_config = format!(
+            "default_profile = 'default'\n[profile.default]\n\
+             rpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n{bindings}",
             manifest_path.display()
-        ),
-    )
-    .unwrap();
+        );
+        std::fs::write(project.join("groundhog.toml"), profile_config).unwrap();
 
-    let output = groundhog()
-        .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
-        .current_dir(&project)
-        .output()
-        .unwrap();
+        let output = groundhog()
+            .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .env_remove("GROUNDHOG_RUNTIME_MANIFEST")
+            .output()
+            .unwrap();
 
-    rpc_server.join().unwrap();
+        rpc_server.join().unwrap();
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stderr.is_empty());
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
 
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "view");
-    assert_eq!(stdout["data"]["caller"], caller);
+        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(stdout["ok"], true);
+        assert_eq!(stdout["command"], "view");
+        assert_eq!(stdout["data"]["caller"], caller, "{collision}");
+    }
 }
 
 #[test]

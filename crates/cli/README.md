@@ -561,11 +561,12 @@ groundhog view my-counter get --from alice
 ```
 
 `--from` accepts a saved wallet, ordinary key, contract alias, local `dev-N`
-account, or direct address. Saved wallet names take precedence over aliases and
-keys. Native bindings retain their account nonce; legacy bindings retain their
-saved address. Caller resolution uses public metadata, so cached metadata does
-not require usable private key bytes. Omitting `--from` leaves the simulated
-caller unset, even when a default wallet is selected.
+account, or direct address. `dev-N` always selects the manifest's bootstrap
+account, even when a saved wallet or alias has the same name. Other saved wallet
+names take precedence over aliases and keys. Native bindings retain their account
+nonce; legacy bindings retain their saved address. Caller resolution uses public
+metadata, so cached metadata does not require usable private key bytes. Omitting
+`--from` leaves the simulated caller unset, even when a default wallet is selected.
 
 ### `groundhog storage`
 

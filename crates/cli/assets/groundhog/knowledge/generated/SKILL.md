@@ -374,9 +374,10 @@ cached public metadata without a private signer. Older keyfiles derive missing
 metadata from the keypair. Keep metadata consistent: transactions still load the
 signer and validate selected-wallet ownership.
 
-`view --from` accepts wallets, keys, aliases, local dev-N, or literal addresses.
-Saved wallets take precedence and retain their native nonce or legacy address.
-Omission leaves the caller unset.
+`view --from` accepts wallets, keys, aliases, dev-N, or literal addresses.
+Dev-N takes bootstrap precedence; other saved wallets take
+precedence. Bindings retain their native nonce or legacy address. Omission leaves
+the caller unset.
 
 Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2+. Funding is exact;
 zero skips transfer. Use `--init <METHOD>` and repeated `--init-arg <VALUE>` with

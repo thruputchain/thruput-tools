@@ -129,7 +129,7 @@ pub(crate) struct ResolvedSenderAccount {
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
 }
 
-/// Load the effective signer and validate its wallet before binding it to a network.
+/// Load the effective signer and validate its wallet.
 /// Address-only callers should use [`resolve_address_target_or_default_wallet`].
 ///
 /// Signing paths want [`resolve_transaction_sender`] instead, which also
