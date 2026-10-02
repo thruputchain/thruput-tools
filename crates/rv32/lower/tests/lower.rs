@@ -795,9 +795,9 @@ fn rejects_data_section_in_the_null_guard() {
 #[test]
 fn code_at_the_protocol_default_lowers_without_a_warning() {
     let mut spec = happy_spec();
-    spec.text = nops(64 * 1024 / 4);
+    spec.text = nops(256 * 1024 / 4);
     let lowered = lower(&assemble(spec)).expect("at-default .text lowers");
-    assert_eq!(lowered.code.len(), 64 * 1024);
+    assert_eq!(lowered.code.len(), 256 * 1024);
     assert!(lowered.warnings.is_empty(), "{:?}", lowered.warnings);
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
@@ -808,12 +808,12 @@ fn code_over_the_protocol_default_lowers_with_a_warning() {
     // default is a warning, not a refusal: a chain configured above the
     // default admits it, and one that is not rejects it at deploy.
     let mut spec = happy_spec();
-    spec.text = nops(64 * 1024 / 4 + 1);
+    spec.text = nops(256 * 1024 / 4 + 1);
     let lowered = lower(&assemble(spec)).expect("over-default .text lowers");
-    assert_eq!(lowered.code.len(), 65540);
+    assert_eq!(lowered.code.len(), 262_148);
     assert_eq!(
         u32::from_le_bytes(lowered.artifact[52..56].try_into().unwrap()),
-        65540,
+        262_148,
         "code_size header field"
     );
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
@@ -821,10 +821,10 @@ fn code_over_the_protocol_default_lowers_with_a_warning() {
     assert_eq!(lowered.warnings.len(), 1, "{:?}", lowered.warnings);
     let warning = &lowered.warnings[0];
     assert!(
-        warning.contains(".text is 65540 bytes, 4 over"),
+        warning.contains(".text is 262148 bytes, 4 over"),
         "{warning:?}"
     );
-    assert!(warning.contains("65536-byte"), "{warning:?}");
+    assert!(warning.contains("262144-byte"), "{warning:?}");
     assert!(warning.contains("max_rv32_code_bytes"), "{warning:?}");
 }
 

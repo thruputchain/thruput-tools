@@ -36,7 +36,7 @@ use groundhog_xdr::{
 ///
 /// The Rust protocol bindings do not bind that file yet, so the value is
 /// pinned here and held to the artifact crate's restatement of it.
-const DEFAULT_MAX_RV32_CODE_BYTES: u32 = 65_536;
+const DEFAULT_MAX_RV32_CODE_BYTES: u32 = 262_144;
 /// `kDefaultMaxRv32MemoryBytes` from `hog_exec_constants.x`: the guest memory
 /// bound in force for a configuration that does not state one.
 const DEFAULT_MAX_RV32_MEMORY_BYTES: u32 = 65_536;
@@ -649,7 +649,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
     #[test]
     fn rv32_bounds_in_force_are_the_stated_values_or_the_protocol_defaults() {
         let unstated = NetworkConfigParams::default();
-        assert_eq!(max_rv32_code_bytes_in_force(&unstated), 65_536);
+        assert_eq!(max_rv32_code_bytes_in_force(&unstated), 262_144);
         assert_eq!(max_rv32_memory_bytes_in_force(&unstated), 65_536);
 
         let stated = rv32_caps(Some(4096), Some(1 << 20));
@@ -697,8 +697,8 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
             check_transaction(&tx, &NetworkConfigParams::default()),
             Err(TxInvalidDetail::Rv32CodeTooLarge {
                 index: 0,
-                code_bytes: 65_540,
-                max_bytes: 65_536,
+                code_bytes: 262_148,
+                max_bytes: 262_144,
             })
         );
     }
@@ -711,7 +711,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
             DEFAULT_MEMORY_BYTES + 1,
         )]);
         assert_eq!(
-            check_transaction(&large, &rv32_caps(Some(65_540), Some(65_537))),
+            check_transaction(&large, &rv32_caps(Some(262_148), Some(65_537))),
             Ok(())
         );
 

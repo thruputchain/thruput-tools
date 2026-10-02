@@ -198,7 +198,7 @@ Use installed `--help` for paths/options. Regenerate after API changes; never
 maintain a second TypeScript ABI. Plain build warns on codegen-incompatible names;
 `--bindings ts` makes them errors. Rename the reported declarations.
 
-Build is offline. It reports code/memory sizes and warns above the default 64 KiB
+Build is offline. It reports code/memory sizes and warns above the default 256 KiB
 code limit; deployment enforces max_rv32_code_bytes and max_rv32_memory_bytes.
 Guest memory defaults to 64 KiB. Set `initial_memory_bytes` in
 `[package.metadata.groundhog]` (integer or `"128K"`) within the chain's limit.

@@ -57,7 +57,7 @@ use crate::error::{Result, invalid, verify};
 /// `kConfigParamMaxRv32CodeBytes`. The format itself does not cap `code_size`
 /// beyond its 32-bit field, and neither does the lowerer: it warns past this
 /// value and leaves admission to the chain a contract is deployed to.
-pub const DEFAULT_MAX_CODE_BYTES: usize = 64 * 1024;
+pub const DEFAULT_MAX_CODE_BYTES: usize = 256 * 1024;
 /// Guest data address space the lowerer stamps into `memory_bytes` unless
 /// told otherwise, and the size a chain admits unless its configuration
 /// states otherwise: the protocol's `kDefaultMaxRv32MemoryBytes`, the value
