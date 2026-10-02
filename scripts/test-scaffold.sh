@@ -29,6 +29,13 @@ for tmpl in counter stub; do
     echo "==> groundhog test ($tmpl)"
     "$CLI" test
 
+    # Starts an ephemeral hog-devnode (installed from the embedded catalog on
+    # first use), deploys the contract with a native local-user account, and
+    # runs tests/integration.rs. This is the only path that exercises the
+    # integration deploy end to end, so keep it even though it needs network.
+    echo "==> groundhog test --integration ($tmpl)"
+    "$CLI" test --integration
+
     # A user-level rustflags override makes cargo drop the project's
     # .cargo/config.toml target rustflags; the CLI must refuse to build.
     echo "==> RUSTFLAGS guard ($tmpl)"
