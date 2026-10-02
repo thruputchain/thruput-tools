@@ -5899,11 +5899,7 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
             groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
             0,
         );
-        let key_path = config_home.join("groundhog/keys/alice.json");
-        let mut key: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-        key["keypair_hex"] = serde_json::Value::String("unavailable".into());
-        std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+        make_local_keypair_unavailable(&config_home, "alice");
         let faucet_wallet = advertised_dev_wallet_address(0);
         let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
         let (rpc_url, rpc_server) =
@@ -5968,11 +5964,7 @@ fn airdrop_default_submits_without_recipient_signer() {
                 ),
                 _ => String::new(),
             };
-            let key_path = config_home.join("groundhog/keys/alice.json");
-            let mut key: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-            key["keypair_hex"] = serde_json::Value::String("unavailable".into());
-            std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+            make_local_keypair_unavailable(&config_home, "alice");
             let faucet = advertised_dev_wallet_address(0);
             let (rpc_url, rpc_server) = if hosted {
                 spawn_airdrop_rpc(&recipient)
@@ -6083,11 +6075,7 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
             _ => String::new(),
         };
         // Explicit recipients use public metadata without constructing a signer.
-        let key_path = config_home.join(format!("groundhog/keys/{key_name}.json"));
-        let mut key: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-        key["keypair_hex"] = serde_json::Value::String("unavailable".into());
-        std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+        make_local_keypair_unavailable(&config_home, key_name);
         let faucet_wallet = advertised_dev_wallet_address(0);
         let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
         let (rpc_url, rpc_server) =
@@ -14212,7 +14200,14 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
 
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "requestAirdrop");
         assert_eq!(request["method"], "groundhog_requestAirdrop");
-        assert_eq!(request["params"][0].as_object().unwrap().len(), 2);
+        let mut fields = request["params"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        fields.sort_unstable();
+        assert_eq!(fields, ["clientNonce", "recipient"]);
         assert_eq!(request["params"][0]["recipient"], recipient);
         assert_eq!(
             request["params"][0]["clientNonce"].as_str().map(str::len),
@@ -14247,6 +14242,32 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
         serve_chain_tip(&listener, deadline, 42);
         let signed_tx = serve_successful_transaction(&listener, deadline, 43);
+        assert_eq!(
+            signed_tx.tx.invocation.entrypoint,
+            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+        );
+        let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
+        assert_eq!(
+            target,
+            format!(
+                "0x{}",
+                hex::encode(groundhog_signing::NATIVE_HOG_ADDRESS.as_ref())
+            )
+        );
+        assert_eq!(
+            entrypoint,
+            format!(
+                "0x{}",
+                hex::encode(groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+            )
+        );
+        let (actual_recipient, amount): (groundhog_xdr::types::ContractAddress, u128) =
+            xdrs::cxs::decode(&calldata).unwrap();
+        assert_eq!(
+            format!("0x{}", hex::encode(actual_recipient.as_ref())),
+            recipient
+        );
+        assert_eq!(amount, 100_000_000);
         assert_eq!(
             format!(
                 "0x{}",
@@ -15101,6 +15122,14 @@ fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_u
         ),
     )
     .unwrap();
+}
+
+fn make_local_keypair_unavailable(config_home: &std::path::Path, name: &str) {
+    let key_path = config_home.join(format!("groundhog/keys/{name}.json"));
+    let mut key: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+    key["keypair_hex"] = serde_json::Value::String("unavailable".into());
+    std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
 }
 
 fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String {
