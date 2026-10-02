@@ -78,6 +78,7 @@ pub(crate) enum DeployAddressSource {
 /// Fully prepared deploy submission inputs shared by live execution and dry-run flows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedDeploy {
+    initializer_metadata: Option<crate::codec::CallMetadata>,
     tx_hash: TxHash,
     native: Option<NativeDeployment>,
     pub(crate) rpc_url: String,
@@ -95,6 +96,7 @@ pub(crate) struct PreparedDeploy {
 
 #[derive(Debug)]
 struct DeployPlan {
+    initializer_metadata: Option<crate::codec::CallMetadata>,
     tx_hash: TxHash,
     native: Option<NativeDeployment>,
     rpc_url: String,
@@ -218,12 +220,10 @@ pub fn run(
 
     // Print result using the invocation directory retained before submission.
     let tx_hash_formatted = format_tx_hash(&tx_hash);
-    let decoded_abort = if prepared.native.is_some() {
-        None
-    } else {
-        crate::tx_utils::decode_receipt_abort(&receipt, None)
-    };
-    let insufficient_funding = is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref());
+    let decoded_abort =
+        crate::tx_utils::decode_receipt_abort(&receipt, prepared.initializer_metadata.as_ref());
+    let insufficient_funding =
+        is_insufficient_deploy_funding(&receipt, decoded_abort.as_ref(), Some(&prepared));
     print.group(
         if matches!(
             receipt.status,
@@ -378,7 +378,7 @@ fn command_error_for_deploy_receipt(
     decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
     prepared: Option<&PreparedDeploy>,
 ) -> Option<CommandError> {
-    if is_insufficient_deploy_funding(receipt, decoded_abort) {
+    if is_insufficient_deploy_funding(receipt, decoded_abort, prepared) {
         let hint = prepared.map_or_else(
             || {
                 "fund the signing wallet before retrying; when the selected profile has a faucet, run `groundhog airdrop <WALLET>`".to_owned()
@@ -409,20 +409,25 @@ fn command_error_for_deploy_receipt(
 fn is_insufficient_deploy_funding(
     receipt: &TransactionReceipt,
     decoded_abort: Option<&Result<crate::codec::DecodedAbort, crate::codec::AbortDecodeError>>,
+    prepared: Option<&PreparedDeploy>,
 ) -> bool {
+    // Forwarded errors do not identify their stage. An initializer may also
+    // transfer tokens, so its ERC20 error is not proof of a funding failure.
+    if prepared.is_some_and(|prepared| {
+        prepared
+            .native
+            .as_ref()
+            .is_some_and(|native| native.initializer.is_some())
+    }) {
+        return false;
+    }
     if !matches!(
         receipt.status,
         groundhog_json_rpc_types::receipt::ExecStatus::Reverted { .. }
     ) {
         return false;
     }
-    matches!(
-        decoded_abort,
-        Some(Ok(abort))
-            if abort.exception_crate == Some("groundhog-erc20-if")
-                && abort.exception.as_deref() == Some("ERC20Error")
-                && abort.value == json!("TooLarge")
-    )
+    crate::codec::is_erc20_too_large(decoded_abort)
 }
 
 fn deploy_funding_commands(prepared: &PreparedDeploy) -> [String; 2] {
@@ -669,10 +674,13 @@ fn prepare_deploy_transaction_plan(
     if sender.native_account.is_none() && options.init_method.is_some() {
         return Err(CliError::NativeDeploymentOptionsForLegacy);
     }
-    let init_call = options
+    let init_resolved = options
         .init_method
-        .map(|method| {
-            let resolved = crate::call::resolve_artifact_call(&artifact.path, method)?;
+        .map(|method| crate::call::resolve_artifact_call(&artifact.path, method))
+        .transpose()?;
+    let init_call = init_resolved
+        .as_ref()
+        .map(|resolved| {
             let calldata =
                 crate::codec::encode_args(options.init_args, resolved.metadata.as_ref())?;
             Ok::<_, CliError>((resolved.entrypoint, calldata))
@@ -778,6 +786,7 @@ fn prepare_deploy_transaction_plan(
     });
 
     Ok(DeployPlan {
+        initializer_metadata: init_resolved.and_then(|resolved| resolved.metadata),
         tx_hash,
         native,
         rpc_url: rpc_url.to_owned(),
@@ -808,6 +817,7 @@ fn sign_deploy_plan(plan: DeployPlan) -> Result<PreparedDeploy, CliError> {
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
     Ok(PreparedDeploy {
+        initializer_metadata: plan.initializer_metadata,
         tx_hash: plan.tx_hash,
         native: plan.native,
         rpc_url: plan.rpc_url,
@@ -1095,6 +1105,7 @@ mod tests {
         let handle = server.start(module);
         let client = crate::http_client::rpc_client(&url).unwrap();
         let prepared = PreparedDeploy {
+            initializer_metadata: None,
             tx_hash: hash,
             native: None,
             rpc_url: url,
@@ -1287,6 +1298,7 @@ mod tests {
     #[test]
     fn funding_commands_support_option_like_wallet_and_profile_names() {
         let prepared = PreparedDeploy {
+            initializer_metadata: None,
             tx_hash: TxHash(Hex0x(SHA256Hash::from([0; 32]))),
             native: None,
             rpc_url: String::new(),

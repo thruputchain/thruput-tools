@@ -9862,6 +9862,136 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(stderr.contains("wallet: 0x"));
 }
 
+fn write_counter_with_exception_spec(project: &std::path::Path, selector: u64) {
+    use groundhog_contract_spec::{
+        ContractExceptionType, ContractSpec, ContractSpecInterface, ContractSpecMethod,
+        ContractType,
+    };
+    std::fs::write(project.join("Cargo.toml"), "[package]\nname = 'counter'\nversion = '0.1.0'\nedition = '2024'\n[lib]\npath = 'lib.rs'\n").unwrap();
+    std::fs::write(project.join("lib.rs"), "").unwrap();
+    let artifacts = project.join("target/groundhog");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    std::fs::write(artifacts.join("counter.rv32a"), b"test-artifact").unwrap();
+    let spec = ContractSpec {
+        interfaces: vec![ContractSpecInterface {
+            name: "Counter".try_into().unwrap(),
+            vers: "0.1.0".try_into().unwrap(),
+            throws: vec![ContractExceptionType {
+                selector,
+                ty: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+            methods: vec![ContractSpecMethod {
+                name: "get".try_into().unwrap(),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+        }]
+        .try_into()
+        .unwrap(),
+        type_defs: vec![].try_into().unwrap(),
+        events: vec![].try_into().unwrap(),
+    };
+    std::fs::write(
+        artifacts.join("counter.spec.xdr"),
+        xdrs::txs::encode(&spec).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn call_native_decodes_forwarded_aborts_and_preserves_unknown_bytes() {
+    let selector = 42u64;
+    let custom_abort = format!(
+        "0x{}",
+        hex::encode(xdrs::cxs::encode(&(selector, 7u64)).unwrap())
+    );
+    let wallet_abort = format!(
+        "0x{}",
+        hex::encode(xdrs::cxs::encode(&(0x931d_3297_d37d_1bdf_u64, 5i32)).unwrap())
+    );
+    let library_abort = library_abort_hex("NonNegativeIntUnderflow");
+    for (abort, expected) in [
+        (custom_abort.as_str(), Some(serde_json::json!(7))),
+        (
+            library_abort.as_str(),
+            Some(serde_json::json!({"case": "NonNegativeIntUnderflow"})),
+        ),
+        (wallet_abort.as_str(), None),
+        ("0x2bab", None), // Unknown selector.
+        ("0xff", None),   // Truncated selector.
+    ] {
+        for json in [true, false] {
+            let tmp = TempDir::new().unwrap();
+            let project = tmp.path();
+            let config_home = project.join("config-home");
+            generate_key_public_key(&config_home, "alice");
+            let (rpc_url, rpc_server) = spawn_transaction_rpc(
+                42,
+                sample_reverted_call_receipt(42, abort),
+                DevDetailRpcResponse::MethodNotFound,
+            );
+            // An unsaved single-key identity uses the native wallet path.
+            std::fs::write(project.join("groundhog.toml"), format!(
+                "default_profile = 'default'\n[profile.default]\ndefault_key = 'alice'\nrpc_url = '{rpc_url}'\nnetwork_hash = '{TEST_NETWORK_HASH}'\n"
+            )).unwrap();
+            write_counter_with_exception_spec(project, selector);
+            let contract = format!("0x{}", "11".repeat(32));
+            let mut command = groundhog();
+            if json {
+                command.arg("--json");
+            }
+            let output = command
+                .args(["call", &contract, "get", "--force"])
+                .current_dir(project)
+                .env("XDG_CONFIG_HOME", &config_home)
+                .env_remove("CARGO_TARGET_DIR")
+                .output()
+                .unwrap();
+            rpc_server.join().unwrap();
+            assert!(!output.status.success());
+            if json {
+                assert!(
+                    output.stderr.is_empty(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(report["error"]["code"], "transaction_reverted");
+                assert_eq!(
+                    report["data"]["diagnostics"]["wallet"]["entrypointSource"],
+                    "native_default_wallet"
+                );
+                assert_eq!(report["data"]["abortData"], abort);
+                if let Some(value) = &expected {
+                    assert_eq!(&report["data"]["abortValue"], value);
+                    assert!(report["data"].get("abortDecodeError").is_none());
+                } else {
+                    assert!(report["data"]["abortDecodeError"].is_string());
+                    assert!(report["data"].get("abortValue").is_none());
+                }
+            } else {
+                assert!(output.stdout.is_empty());
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(stderr.contains("Call reverted"), "{stderr}");
+                if let Some(value) = &expected {
+                    assert!(
+                        stderr.contains(&format!("abort value: {value}")),
+                        "{stderr}"
+                    );
+                    assert!(!stderr.contains("abort data:"), "{stderr}");
+                } else {
+                    assert!(stderr.contains(&format!("abort data: {abort}")), "{stderr}");
+                    assert!(stderr.contains("abort decode error:"), "{stderr}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn call_live_json_decodes_library_abort() {
     let tmp = TempDir::new().unwrap();
