@@ -349,7 +349,8 @@ groundhog keys use <name>        # set the default signing key
 groundhog keys rm <name>         # remove a stored key (with confirmation)
 ```
 
-The first generated key automatically becomes the default.
+The first generated key automatically becomes the default. Generation and import
+reject `dev-N` names, which are reserved for local bootstrap accounts.
 
 `keys export` prints the 32-byte private key as lowercase, `0x`-prefixed hex.
 With `--json`, read it from `data.key.privateKey`. Treat it as a secret. Do not
@@ -375,6 +376,11 @@ groundhog wallet rm alice
 owner, address, kind and nonce locally. It neither deploys a wallet contract nor
 requests funds. It works without a running node or faucet. `--dry-run` derives
 without saving; `--prefund` is rejected with an explicit airdrop hint.
+
+`wallet create` and `wallet use` read cached public key metadata without loading
+a private signer. Older keyfiles without that metadata derive it from the stored
+keypair. Keep public metadata consistent with the signing key: transaction
+commands still load the signer and reject a selected wallet with a different owner.
 
 An ordinary key with no saved wallet automatically uses its nonce-zero native
 account for calls, transfers and deployments. Saving it with `wallet create` is
@@ -544,6 +550,22 @@ split payload assembly from signing if we want a no-key-required dry run.
 Remaining follow-up: cache repeated embedded-spec loads, tighten the
 union/structured CLI UX, and remove the remaining local-source fallback
 once the spec-driven path has soaked.
+
+### `groundhog view`
+
+Simulate a contract method without signing or submitting a transaction:
+
+```bash
+groundhog view my-counter get
+groundhog view my-counter get --from alice
+```
+
+`--from` accepts a saved wallet, ordinary key, contract alias, local `dev-N`
+account, or direct address. Saved wallet names take precedence over aliases and
+keys. Native bindings retain their account nonce; legacy bindings retain their
+saved address. Caller resolution uses public metadata, so cached metadata does
+not require usable private key bytes. Omitting `--from` leaves the simulated
+caller unset, even when a default wallet is selected.
 
 ### `groundhog storage`
 

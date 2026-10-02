@@ -790,7 +790,7 @@ struct ViewArgs {
     /// Raw calldata for explicit-entrypoint calls
     #[arg(long)]
     calldata: Option<String>,
-    /// Simulated caller address, or dev-N on local dev endpoints
+    /// Simulated caller: saved wallet, key, contract alias, dev-N, or direct address
     #[arg(long = "from")]
     from: Option<String>,
     /// Package whose contract metadata resolves the method (required in workspaces)

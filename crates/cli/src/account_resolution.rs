@@ -129,8 +129,8 @@ pub(crate) struct ResolvedSenderAccount {
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
 }
 
-/// Resolves the sender account for callers that inspect or validate a wallet
-/// binding without signing anything.
+/// Load the effective signer and validate its wallet before binding it to a network.
+/// Address-only callers should use [`resolve_address_target_or_default_wallet`].
 ///
 /// Signing paths want [`resolve_transaction_sender`] instead, which also
 /// resolves the network hash every signature is bound to.
@@ -207,16 +207,22 @@ fn resolve_wallet_selection(
         ));
     }
     if let Some(wallet_name) = selected_wallet {
-        return resolve_selected_wallet(profile, key_name, signer, wallet_name)
-            .map(|address| (Some(wallet_name.to_owned()), address));
+        return resolve_selected_wallet(
+            profile,
+            key_name,
+            signer.verifying_key_bytes(),
+            wallet_name,
+        )
+        .map(|address| (Some(wallet_name.to_owned()), address));
     }
     resolve_saved_wallet_for_public_key(profile, key_name, signer.verifying_key_bytes())
 }
 
-fn resolve_selected_wallet(
+/// Validate a selected binding against the supplied key identity without loading a signer.
+pub(crate) fn resolve_selected_wallet(
     profile: &ResolvedProfile,
     key_name: &str,
-    signer: &LocalSigner,
+    public_key: [u8; 32],
     wallet_name: &str,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
     let wallet = profile
@@ -227,13 +233,12 @@ fn resolve_selected_wallet(
             profile: profile.name.clone(),
         })?;
     let validated = validate_saved_wallet_binding(wallet_name, wallet)?;
-    let local = signer.verifying_key_bytes();
-    if validated.owner_public_key.as_slice() != local.as_slice() {
+    if validated.owner_public_key.as_slice() != public_key.as_slice() {
         return Err(CliError::SavedWalletOwnerMismatch {
             wallet_name: wallet_name.to_owned(),
             key_name: key_name.to_owned(),
             configured: prefixed_hex(&validated.owner_public_key),
-            local: prefixed_hex(local),
+            local: prefixed_hex(public_key),
         });
     }
     Ok(validated.address)
@@ -1132,7 +1137,10 @@ mod tests {
             None,
             BTreeMap::from([("alice".into(), invalid.clone())]),
         );
-        assert!(resolve_selected_wallet(&profile, "alice", &signer, "alice").is_err());
+        assert!(
+            resolve_selected_wallet(&profile, "alice", signer.verifying_key_bytes(), "alice")
+                .is_err()
+        );
         assert!(
             resolve_saved_wallet_for_public_key(&profile, "alice", signer.verifying_key_bytes())
                 .is_err()

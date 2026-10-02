@@ -9,19 +9,19 @@ bootstrap_order = 60
 +++
 ## Local Development
 
-Use `groundhog init --non-interactive --json` for scripted setup. Missing Cargo,
-profile, or stored key exits 1. Key creation requires authorized `--generate-key`;
-existing selections are preserved. `--quiet` does not grant consent. `init` writes;
-`status --json` is read-only. Create projects with `groundhog new`.
+Script setup with `groundhog init --non-interactive --json`. Missing Cargo,
+profile, or stored key exits 1. Authorized `--generate-key` creates an initial key;
+existing selections are preserved. `init` writes; `status --json` is read-only.
+Create projects with `groundhog new`.
 
-Start the local stack with `groundhog node`. Inspect, prefetch, or locate its
-catalog-pinned bundle with `toolchain list`, `toolchain install`, and `toolchain
-which`. `--offline node` forbids managed downloads, not RPC/Cargo elsewhere.
-`GROUNDHOG_DEVNODE_BINARY` selects a matching build. Diagnose compatibility
-failures; do not override protocols. Use `status --json` / `node --json` for runtime
-information and `--help` for flags. Never use deterministic local keys in production.
+Start `groundhog node`. `toolchain list`, `install`, and `which` inspect,
+prefetch, and locate its pinned bundle. `--offline node` forbids managed downloads,
+not other RPC/Cargo access. `GROUNDHOG_DEVNODE_BINARY` selects a matching build.
+Diagnose compatibility failures; do not override protocols. Use `status --json`
+or `node --json` for runtime information and `--help` for flags. Never use
+deterministic local keys in production.
 
-`--non-interactive` disables prompts/UI without granting consent: protected
+`--quiet` does not grant consent. `--non-interactive` disables prompts/UI: protected
 operations require authorized `--force`. Key imports need piped stdin; Cargo/test
 subprocesses cannot read terminal stdin. Use `--json` for machine results.
 
@@ -35,45 +35,49 @@ Timeout or `unknown` does not prove transaction failure. Inspect the hash before
 retrying. `node --verbose` enables backend logs; restarting an ephemeral node
 loses its state.
 
-`events list`, `tx list`, and `token transfers` read newest-first pages.
-Omit `--cursor` to refresh from the head; a continuation goes toward older rows.
-Continue with the returned opaque cursor and the same target/filters. `tx list`
-matches root invocation targets, not every address touched by a transaction.
+`events list`, `tx list`, and `token transfers` return newest-first pages.
+Omit `--cursor` to refresh; use the opaque cursor and unchanged target/filters
+for older rows. `tx list` matches root invocation targets, not every touched address.
 See [Event pages and restart](#event-pages-and-restart) for cursor rules.
 
 ### Key and address interoperability
 
-`groundhog keys import <name>` reads a seed from hidden input or piped stdin:
-a checksummed S StrKey or 32-byte hex, never a 64-byte keypair or CLI argument.
-Existing names are not overwritten; `dev-N` names are reserved.
-Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
-Malformed TOML or an invalid `default_key` is rejected before storing the key.
-If saving succeeds but default selection fails, use `groundhog keys use <name>`;
-do not reimport. `isDefault` is null if configuration cannot be reread.
+`keys import <name>` reads a checksummed S StrKey or 32-byte hex seed from
+hidden input or piped stdin, never a 64-byte keypair or CLI argument. It does not
+overwrite names. Generation and import reject reserved bootstrap `dev-N` names.
+Import JSON is camelCase (`data.schemaVersion = 1`). Malformed TOML or an invalid
+`default_key` is rejected before storing. If default selection fails after saving,
+run `keys use <name>`; do not reimport. `isDefault` is null if config cannot be reread.
 
-`groundhog keys export <name> --format strkey` exports the same seed as an S
-StrKey after the normal confirmation gate. The default export remains hex.
-For an authorized non-interactive transfer between key stores, pipe export
-stdout directly to the receiving CLI's stdin rather than capturing it in logs.
+`keys export <name> --format strkey` exports an S StrKey after confirmation;
+the default is hex. For an authorized key transfer, pipe export stdout directly
+to the receiving CLI's stdin. Do not capture it in logs.
 
-A G StrKey is an Ed25519 public key, distinct from an account or wallet address.
-C StrKeys and legacy hex are accepted for contract/wallet address inputs,
-including typed contract arguments. Saved wallet owners accept G StrKeys or
-hex public keys. These encodings preserve bytes and do not identify a network.
-Existing key files and public JSON-RPC wire encodings remain unchanged.
+G StrKeys identify Ed25519 public keys, not accounts. Address inputs and typed
+arguments accept C StrKeys or legacy hex; wallet owners accept G or hex public
+keys. Encodings preserve bytes, not network identity. Keyfiles and public RPC
+encodings remain unchanged.
 
 ### Native accounts
 
-Ordinary keys derive nonce-zero native accounts. `wallet create` saves the empty
-identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
-legacy wallets retain identity and format. Schema-3 bootstrap dev-N accounts
-are native pubkey accounts with nonce zero, using the advertised seed and keys.
-Use a matching native runtime; schema-2 state needs its original runtime.
+Ordinary keys derive nonce-zero native accounts. `wallet create` saves offline;
+fund with `airdrop`, not `--prefund`. Legacy wallets retain identity and format.
+Schema-3 dev-N accounts use native nonce-zero identities from the advertised seed.
+Use a matching runtime; schema-2 state needs its original runtime.
 
-Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
-amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated
-`--init-arg <VALUE>` using the artifact spec, or a 0x selector and raw hex argument.
-`--init-gas-limit` sets child gas. Init runs as the wallet, discards its return,
-and rolls back with funding/deployment on failure. Dry-run submits nothing.
-Unverified results retain signed identity: inspect before retrying because nonce
-and address change. Aliases require verified success at the predicted address.
+Wallet creation, selection, address inspection, and `status` ownership checks use
+cached public metadata without a private signer. Older keyfiles derive missing
+metadata from the keypair. Keep metadata consistent: transactions still load the
+signer and validate selected-wallet ownership.
+
+`view --from` accepts wallets, keys, aliases, local dev-N, or literal addresses.
+Saved wallets take precedence and retain their native nonce or legacy address.
+Omission leaves the caller unset.
+
+Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2+. Funding is exact;
+zero skips transfer. Use `--init <METHOD>` and repeated `--init-arg <VALUE>` with
+the artifact spec, or a 0x selector and raw hex argument. `--init-gas-limit` sets
+child gas. Init runs as the wallet, discards returns, and rolls back with funding
+and deployment on failure. Dry-run submits nothing. Inspect unverified signed
+identity before retrying: nonce/address change. Aliases require verified success
+at the predicted address.

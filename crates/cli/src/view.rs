@@ -8,16 +8,15 @@ use groundhog_json_rpc_types::{
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 
-use crate::account_resolution::{lookup_dev_account_address, resolve_contract_target};
+use crate::account_resolution::{resolve_address_target, resolve_contract_target};
 use crate::artifacts::ArtifactOptions;
 use crate::call::{ResolvedCall, format_entrypoint_id, resolve_call, selector_json};
 use crate::codec::{
     AbortDecodeError, DecodedAbort, decode_abort, decode_return, encode_args,
-    format_contract_address, parse_contract_address,
+    format_contract_address,
 };
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::dev_detail::format_event;
-use crate::dev_keys;
 use crate::result::CommandResult;
 use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
 use crate::{CliError, Print};
@@ -51,7 +50,6 @@ pub fn run(
         project_start,
         profile,
         overrides,
-        &rt,
     )?;
 
     task.print()
@@ -130,7 +128,6 @@ fn prepare_view(
     project_start: &Path,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
-    rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
     let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let rpc_url = resolved_profile.rpc_endpoint()?;
@@ -140,7 +137,9 @@ fn prepare_view(
     let contract_address_hex = format_contract_address(&contract_address);
     let resolved = resolve_call(project_start, method, package, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
-    let caller = resolve_caller(&resolved_profile, from, rt)?;
+    let caller = from
+        .map(|target| resolve_address_target(&resolved_profile, target).map(ContractAddress::from))
+        .transpose()?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
     let entrypoint_id = format_entrypoint_id(resolved.entrypoint);
     let calldata_hex = prefixed_hex(&calldata_bytes);
@@ -190,22 +189,6 @@ fn parse_calldata(raw: &str) -> Result<Vec<u8>, CliError> {
         .or_else(|| raw.strip_prefix("0X"))
         .unwrap_or(raw);
     hex::decode(stripped).map_err(|e| CliError::InvalidViewCalldata(e.to_string()))
-}
-
-fn resolve_caller(
-    profile: &crate::config::ResolvedProfile,
-    from: Option<&str>,
-    _rt: &tokio::runtime::Runtime,
-) -> Result<Option<ContractAddress>, CliError> {
-    let Some(from) = from else {
-        return Ok(None);
-    };
-    if let Some(index) = dev_keys::dev_key_index(from) {
-        return lookup_dev_account_address(profile, from, index).map(Some);
-    }
-    parse_contract_address(from)
-        .map(ContractAddress::from)
-        .map(Some)
 }
 
 async fn fetch_view(rpc_url: &str, request: ViewRequest) -> Result<ViewResponse, CliError> {

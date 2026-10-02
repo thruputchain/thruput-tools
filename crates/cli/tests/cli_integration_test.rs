@@ -2999,6 +2999,61 @@ fn global_non_interactive_key_import_accepts_piped_seed() {
 }
 
 #[test]
+fn key_generation_rejects_reserved_dev_names_without_mutation() {
+    for name in ["dev-0", "dev-1", "dev-01"] {
+        let tmp = TempDir::new().unwrap();
+        let config = tmp.path().join("groundhog/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let before = "default_key = 'existing'\n[profile.default]\n";
+        std::fs::write(&config, before).unwrap();
+        let output = groundhog()
+            .args(["--json", "keys", "generate", name])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["code"], "reserved_dev_key_name");
+        assert!(!tmp.path().join("groundhog/keys").exists());
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+    }
+}
+
+#[test]
+fn status_checks_wallet_owner_without_private_key_bytes() {
+    let (_tmp, project, config) = empty_wallet_fixture();
+    let owner = generate_key_public_key(&config, "other");
+    let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
+    let original = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "{original}\ndefault_wallet = 'trading'\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
+            hex::encode(account.address().as_ref())
+        ),
+    )
+    .unwrap();
+    make_local_keypair_unavailable(&config, "owner");
+    let output = groundhog()
+        .args(["--json", "status"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| { finding["code"] == "default_wallet_owner_mismatch" })
+    );
+}
+
+#[test]
 fn non_tty_init_ignores_piped_yes_answers_and_shows_setup_sections() {
     let tmp = TempDir::new().unwrap();
     let mut child = groundhog()
@@ -5326,24 +5381,157 @@ fn wallet_create_is_offline_idempotent_and_funding_is_explicit() {
 }
 
 #[test]
-fn wallet_create_derives_from_signer_despite_stale_cached_public_key() {
+fn wallet_create_uses_public_metadata_and_signing_still_checks_ownership() {
     let (_tmp, project, config) = empty_wallet_fixture();
     let first = create_empty_wallet(&project, &config, &["--dry-run"]);
     assert!(first.status.success());
-    let expected: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     let key_path = config.join("groundhog/keys/owner.json");
     let mut key: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-    key["public_key_hex"] = serde_json::Value::String("ab".repeat(32));
+    let public_key = [0xab; 32];
+    key["public_key_hex"] = serde_json::Value::String(hex::encode(public_key));
     std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
     let output = create_empty_wallet(&project, &config, &[]);
     assert!(output.status.success());
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(actual["data"]["wallet"], expected["data"]["wallet"]);
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0);
+    assert_eq!(
+        actual["data"]["wallet"],
+        format!("0x{}", hex::encode(account.address().as_ref()))
+    );
+    assert_ne!(actual["data"]["wallet"], original["data"]["wallet"]);
     assert_eq!(
         actual["data"]["ownerPublicKey"],
-        expected["data"]["ownerPublicKey"]
+        format!("0x{}", hex::encode(public_key))
     );
+    let output = groundhog()
+        .args([
+            "--json",
+            "transfer",
+            "--dry-run",
+            &format!("0x{}", "11".repeat(32)),
+            "1",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(report["error"]["code"], "saved_wallet_owner_mismatch");
+}
+
+#[test]
+fn wallet_create_and_use_work_without_private_key_bytes() {
+    let (_tmp, project, config) = empty_wallet_fixture();
+    let expected = create_empty_wallet(&project, &config, &["--dry-run"]);
+    let expected: serde_json::Value = serde_json::from_slice(&expected.stdout).unwrap();
+    let original = std::fs::read(project.join("groundhog.toml")).unwrap();
+    make_local_keypair_unavailable(&config, "owner");
+    let dry_run = create_empty_wallet(&project, &config, &["--name", "primary", "--dry-run"]);
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&dry_run.stdout).unwrap();
+    assert_eq!(report["data"]["wallet"], expected["data"]["wallet"]);
+    assert_eq!(
+        std::fs::read(project.join("groundhog.toml")).unwrap(),
+        original
+    );
+
+    let created = create_empty_wallet(&project, &config, &["--name", "primary"]);
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
+    assert_eq!(report["data"]["wallet"], expected["data"]["wallet"]);
+    let selected = groundhog()
+        .args(["--json", "wallet", "use", "primary"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(project.join("groundhog.toml")).unwrap()).unwrap();
+    assert_eq!(
+        config["profile"]["default"]["default_wallet"].as_str(),
+        Some("primary")
+    );
+}
+
+#[test]
+fn wallet_use_public_metadata_preserves_legacy_and_native_bindings_and_owner_checks() {
+    for native in [false, true] {
+        let (_tmp, project, config) = empty_wallet_fixture();
+        let keyfile: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(config.join("groundhog/keys/owner.json")).unwrap(),
+        )
+        .unwrap();
+        let owner = keyfile["public_key_hex"].as_str().unwrap();
+        let public_key = groundhog_signing::strkey::parse_public_key(owner).unwrap();
+        let address = if native {
+            let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
+            format!("0x{}", hex::encode(account.address().as_ref()))
+        } else {
+            format!("0x{}", "ab".repeat(32))
+        };
+        let kind = if native {
+            "kind = 'native'\naccount_nonce = 7\n"
+        } else {
+            ""
+        };
+        let original = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+        std::fs::write(project.join("groundhog.toml"), format!("{original}\n[profile.default.wallets.trading]\n{kind}address = '{address}'\nowner_public_key = '{owner}'\n")).unwrap();
+        make_local_keypair_unavailable(&config, "owner");
+        let output = groundhog()
+            .args(["--json", "wallet", "use", "trading"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let before = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+        let report: toml::Value = toml::from_str(&before).unwrap();
+        assert_eq!(
+            report["profile"]["default"]["default_wallet"].as_str(),
+            Some("trading")
+        );
+        assert_eq!(
+            report["profile"]["default"]["wallets"]["trading"]["address"].as_str(),
+            Some(address.as_str())
+        );
+        generate_key_public_key(&config, "other");
+        make_local_keypair_unavailable(&config, "other");
+        let mismatched = before.replace("default_key = 'owner'", "default_key = 'other'");
+        std::fs::write(project.join("groundhog.toml"), &mismatched).unwrap();
+        let output = groundhog()
+            .args(["--json", "wallet", "use", "trading"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["code"], "saved_wallet_owner_mismatch");
+        assert_eq!(
+            std::fs::read_to_string(project.join("groundhog.toml")).unwrap(),
+            mismatched
+        );
+    }
 }
 
 #[test]
@@ -8662,6 +8850,102 @@ fn view_json_resolves_contract_alias_and_from_address() {
     assert_eq!(stdout["command"], "view");
     assert_eq!(stdout["data"]["contract"], address);
     assert_eq!(stdout["data"]["caller"], caller);
+}
+
+#[test]
+fn view_json_resolves_named_callers_without_private_key_bytes() {
+    for selection in ["unsaved", "native", "legacy", "key_native", "alias"] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config = tmp.path().join("config");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config, "owner");
+        make_local_keypair_unavailable(&config, "owner");
+        let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+        let nonce = if matches!(selection, "native" | "key_native") {
+            7
+        } else {
+            0
+        };
+        let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
+        let caller = if matches!(selection, "legacy" | "alias") {
+            format!("0x{}", "22".repeat(32))
+        } else {
+            format!("0x{}", hex::encode(account.address().as_ref()))
+        };
+        let from = match selection {
+            "native" | "legacy" => "primary",
+            "alias" => "viewer",
+            _ => "owner",
+        };
+        let binding = if matches!(selection, "native" | "legacy" | "key_native") {
+            let kind = if selection == "legacy" {
+                ""
+            } else {
+                "kind = 'native'\naccount_nonce = 7\n"
+            };
+            format!(
+                "[profile.default.wallets.primary]\n{kind}address = '{caller}'\nowner_public_key = '{owner}'\n"
+            )
+        } else {
+            String::new()
+        };
+        let alias = if selection == "alias" {
+            format!("[profile.default.contracts]\nviewer = '{caller}'\n")
+        } else if matches!(selection, "native" | "legacy") {
+            format!(
+                "[profile.default.contracts]\nprimary = '0x{}'\n",
+                "33".repeat(32)
+            )
+        } else {
+            String::new()
+        };
+        let address = format!("0x{}", "11".repeat(32));
+        let entrypoint = "0x0102030405060708";
+        let (rpc_url, server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+        std::fs::write(project.join("groundhog.toml"), format!("default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\n{binding}{alias}")).unwrap();
+        let output = groundhog()
+            .args(["--json", "view", &address, entrypoint, "--from", from])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{selection}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["caller"], caller);
+    }
+}
+
+#[test]
+fn view_json_omitted_caller_does_not_use_the_default_wallet() {
+    let (_tmp, project, config) = empty_wallet_fixture();
+    assert!(create_empty_wallet(&project, &config, &[]).status.success());
+    make_local_keypair_unavailable(&config, "owner");
+    let address = format!("0x{}", "11".repeat(32));
+    let entrypoint = "0x0102030405060708";
+    let (rpc_url, server) = spawn_view_rpc(&address, entrypoint, "0x");
+    let profile = project.join("groundhog.toml");
+    let contents = std::fs::read_to_string(&profile).unwrap();
+    std::fs::write(&profile, contents.replace("http://127.0.0.1:1", &rpc_url)).unwrap();
+    let output = groundhog()
+        .args(["--json", "view", &address, entrypoint])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["caller"], serde_json::Value::Null);
 }
 
 #[test]
