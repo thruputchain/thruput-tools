@@ -730,31 +730,13 @@ mod tests {
 
     #[test]
     fn config_rejects_unknown_fields() {
-        let err = toml::from_str::<FaucetConfigFile>(
-            r#"
-            unexpected = true
+        // Start from a complete, valid document so the unknown key is the only
+        // problem the parser can report.
+        let err =
+            toml::from_str::<FaucetConfigFile>(&format!("unexpected = true\n{}", test_config()))
+                .expect_err("bug: unknown fields should fail");
 
-            [network]
-            network_id = "devnet-preview"
-            protocol = "x23"
-            genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
-            network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
-
-            [network.endpoints]
-            rpc_url = "https://rpc.devnet.example"
-
-            [network.native_hog]
-            token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
-            decimals = 7
-            transfer_entrypoint = "0x63285b3523f9dc3f"
-
-            [network.faucet]
-            wallet_address = "0x__FAUCET_ADDRESS__"
-            "#,
-        )
-        .expect_err("bug: unknown fields should fail");
-
-        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 
     #[tokio::test]

@@ -4,7 +4,6 @@ use crate::keys_json::{
 };
 use crate::result::CommandResult;
 use crate::{CliError, Print};
-use getrandom::getrandom;
 use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use groundhog_signing::strkey;
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount};
@@ -73,7 +72,7 @@ pub fn generate(
         print.status(format_args!("Generating key `{name}`"));
     }
     let mut secret = [0u8; 32];
-    getrandom(&mut secret).map_err(|e| CliError::Other(e.to_string()))?;
+    getrandom::fill(&mut secret).map_err(|e| CliError::Other(e.to_string()))?;
     let signing_key = LocalSigner::from_secret_key(secret);
     secret.zeroize();
     let mut info = write_key(name, &signing_key)?;

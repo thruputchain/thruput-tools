@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use getrandom::getrandom;
 use groundhog_json_rpc_client::AirdropApiClient;
 use groundhog_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest},
@@ -782,7 +781,7 @@ fn load_or_create_remote_airdrop_attempt(
     }
 
     let mut client_nonce = [0u8; 16];
-    getrandom(&mut client_nonce).map_err(|error| CliError::Other(error.to_string()))?;
+    getrandom::fill(&mut client_nonce).map_err(|error| CliError::Other(error.to_string()))?;
     let attempt = RemoteAirdropAttempt {
         profile: profile.name.clone(),
         recipient_wallet: recipient_wallet.to_owned(),

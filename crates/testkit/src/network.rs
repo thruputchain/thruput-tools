@@ -311,7 +311,7 @@ impl Network {
         // The bootstrap faucet is shared across scenarios and processes. Its
         // funding transactions must not replay a deterministic scenario nonce.
         let mut nonce = [0; 8];
-        getrandom::getrandom(&mut nonce).map_err(|error| {
+        getrandom::fill(&mut nonce).map_err(|error| {
             TestkitError::signing(format!("generate faucet transaction nonce: {error}"))
         })?;
         let (tx_hash, tx_hex) = crate::account::prepare_call(

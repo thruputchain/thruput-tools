@@ -18,7 +18,7 @@ groundhog-json-rpc-client = { workspace = true }
 groundhog-contract-util = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-xdr = { workspace = true }
-hdrhistogram = "7"
+hdrhistogram = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
 serde = { workspace = true }

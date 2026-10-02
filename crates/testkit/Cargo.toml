@@ -16,7 +16,7 @@ description = "Multi-agent integration-test harness for Groundhog contract appli
 workspace = true
 
 [dependencies]
-getrandom = "0.2.17"
+getrandom = { workspace = true }
 groundhog-contract-util = { workspace = true }
 groundhog-json-rpc-client = { workspace = true }
 groundhog-json-rpc-types = { workspace = true }

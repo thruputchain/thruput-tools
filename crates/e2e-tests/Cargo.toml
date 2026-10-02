@@ -19,7 +19,7 @@ groundhog-xdr = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
 serde_json = { workspace = true }
-getrandom = "0.2.17"
+getrandom = { workspace = true }
 hex = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 jsonrpsee = { workspace = true }
