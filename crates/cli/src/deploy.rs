@@ -34,7 +34,7 @@ pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
 
 /// HOG that `groundhog test --integration` transfers to the contract it deploys.
 ///
-/// Matches the 100_000_000 storage tokens the removed local dev wallet contract
+/// Matches the `100_000_000` storage tokens the removed local dev wallet contract
 /// moved to every address it deployed. hogd charges storage to the contract's
 /// own address, so an unfunded contract's initializer would never commit.
 pub(crate) const INTEGRATION_DEPLOY_FUND_HOG: &str = "10";
