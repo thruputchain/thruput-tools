@@ -1,4 +1,4 @@
-use crate::account_resolution::{resolve_sender_account, validate_saved_wallet_binding};
+use crate::account_resolution::{resolve_selected_wallet, validate_saved_wallet_binding};
 use crate::codec::format_contract_address;
 use crate::config::{
     ProfileOverrides, SavedWalletBinding, WalletKind, find_project_config,
@@ -6,7 +6,7 @@ use crate::config::{
     resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
     save_native_wallet, save_profile_default_wallet,
 };
-use crate::keys::load_local_signer;
+use crate::keys::load_local_public_key;
 use crate::result::CommandResult;
 use crate::{CliError, Print, dev_keys};
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
@@ -81,7 +81,8 @@ pub fn create(
     }
     let cwd = std::env::current_dir()?;
     let inputs = resolve_wallet_create_inputs(&cwd, key_name, wallet_name, profile, overrides)?;
-    let owner = load_local_signer(&inputs.key_name)?.verifying_key_bytes();
+    let owner = load_local_public_key(&inputs.key_name)?
+        .ok_or_else(|| CliError::KeyNotFound(inputs.key_name.clone()))?;
     let account = PubkeyAccount::from_public_key_bytes(owner, DEFAULT_PUBKEY_ACCOUNT_NONCE);
     let binding = SavedWalletBinding {
         address: format_contract_address(&account.address()),
@@ -354,7 +355,17 @@ pub fn use_wallet(
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
     let resolved_profile = resolve_profile(&project_root, profile)?;
-    resolve_sender_account(&resolved_profile, Some(name))?;
+    let key_name =
+        resolve_default_key_for_profile(&resolved_profile)?.ok_or(CliError::MissingSigningKey)?;
+    if dev_keys::is_dev_key(&key_name) {
+        return Err(CliError::DevWalletSelectionUnsupported {
+            key_name,
+            wallet_name: name.to_owned(),
+        });
+    }
+    let public_key =
+        load_local_public_key(&key_name)?.ok_or_else(|| CliError::KeyNotFound(key_name.clone()))?;
+    resolve_selected_wallet(&resolved_profile, &key_name, public_key, name)?;
     save_profile_default_wallet(&project_root, Some(&resolved_profile.name), name)?;
 
     print.group(crate::print::Outcome::Success, "Wallet selected", |print| {

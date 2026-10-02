@@ -403,10 +403,22 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
     let Some(key_name) = key_name else {
         return;
     };
-    let Ok(signer) = crate::keys::load_local_signer(&key_name) else {
-        return;
+    let public_key = match crate::keys::load_local_public_key(&key_name) {
+        Ok(Some(public_key)) => public_key,
+        Ok(None) => return,
+        Err(_) => {
+            findings.push(Finding {
+                level: FindingLevel::Warn,
+                code: "default_wallet_key_unavailable",
+                message: format!("could not read public metadata for effective key `{key_name}`"),
+                hint: Some(Cow::Borrowed(
+                    "inspect stored keys with `groundhog keys ls` and repair the selected key metadata",
+                )),
+            });
+            return;
+        }
     };
-    if validated.owner_public_key.as_slice() != signer.verifying_key_bytes().as_slice() {
+    if validated.owner_public_key.as_slice() != public_key.as_slice() {
         findings.push(Finding {
             level: FindingLevel::Warn,
             code: "default_wallet_owner_mismatch",
