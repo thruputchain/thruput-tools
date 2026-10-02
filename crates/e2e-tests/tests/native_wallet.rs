@@ -96,7 +96,7 @@ async fn qualify_native_deployment(atomic: bool) {
     let replay_cost = costs.base_data_item_cost.parse::<u128>().unwrap()
         + costs.replay_cache_cost_per_entry.parse::<u128>().unwrap();
     let mut secret = [0; 32];
-    getrandom::getrandom(&mut secret).unwrap();
+    getrandom::fill(&mut secret).unwrap();
     let signer = LocalSigner::from_secret_key(secret);
     let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
     assert_eq!(balance(&client, account.address()).await, 0);

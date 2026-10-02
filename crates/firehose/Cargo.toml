@@ -37,6 +37,8 @@ xdrs.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+# The subscription tests drive the server over WebSocket; nothing else does.
+jsonrpsee = { workspace = true, features = ["ws-client"] }
 groundhog-signing.workspace = true
 hex.workspace = true
 tempfile.workspace = true
