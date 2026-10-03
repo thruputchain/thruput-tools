@@ -61,7 +61,7 @@ pub fn generate(
     print: &Print,
 ) -> Result<(), CliError> {
     let name = name.as_deref().unwrap_or(DEFAULT_KEY_NAME);
-    validate_key_name(name)?;
+    validate_stored_key_name(name)?;
 
     let path = key_path(name)?;
     if path.exists() {
@@ -111,10 +111,7 @@ pub fn generate(
 /// Import an S `StrKey` or 32-byte hex seed from a hidden terminal prompt or piped stdin.
 /// No secret command-line argument is accepted and existing keys are never overwritten.
 pub fn import(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    validate_key_name(name)?;
-    if crate::dev_keys::dev_key_index(name).is_some() {
-        return Err(CliError::ReservedDevKeyName);
-    }
+    validate_stored_key_name(name)?;
     if key_path(name)?.exists() {
         return Err(CliError::KeyExists(name.to_owned()));
     }
@@ -404,6 +401,14 @@ fn validate_key_name(name: &str) -> Result<(), CliError> {
         return Err(CliError::KeyNameInvalid);
     }
 
+    Ok(())
+}
+
+fn validate_stored_key_name(name: &str) -> Result<(), CliError> {
+    validate_key_name(name)?;
+    if crate::dev_keys::is_dev_key(name) {
+        return Err(CliError::ReservedDevKeyName);
+    }
     Ok(())
 }
 

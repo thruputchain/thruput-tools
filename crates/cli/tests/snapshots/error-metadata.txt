@@ -205,7 +205,7 @@ InvalidSecretSeed
 
 ReservedDevKeyName
   code: reserved_dev_key_name
-  hint text: choose a name other than dev-N for an imported key
+  hint text: choose a name other than dev-N for a stored key
 
 JsonUnsupported
   code: json_unsupported

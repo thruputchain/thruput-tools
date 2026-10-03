@@ -306,7 +306,7 @@ pub enum CliError {
     )]
     InvalidSecretSeed,
     #[error("dev-N key names are reserved for local bootstrap identities")]
-    #[hint("choose a name other than dev-N for an imported key")]
+    #[hint("choose a name other than dev-N for a stored key")]
     ReservedDevKeyName,
     #[error("`--json` is not supported for `{0}`")]
     #[hint("run `groundhog {0}` without `--json`")]

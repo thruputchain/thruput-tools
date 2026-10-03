@@ -27,6 +27,22 @@ mod ui_audit;
 
 static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// How long the harness waits for the CLI under test to do something it is
+/// expected to do on its own: send a request to a mock endpoint, print its
+/// startup line, open a download connection, exit, or reap the process it
+/// supervises.
+///
+/// A passing test never waits anywhere near this long, so the value only
+/// bounds how quickly a genuinely broken command fails. It is deliberately far
+/// above what any command needs because CI runners pause for seconds at a
+/// time: one ~5 s stall failed every `call_*` test at once while the mock
+/// endpoints gave up after 5 s, and a 2 s exit budget has failed
+/// `config_rm_force_does_not_read_stdin` more than once. Waits that assert the
+/// CLI does *not* do something (`assert_no_follow_up_rpc`,
+/// `spawn_no_request_rpc`) keep their short budgets: a stall can only make
+/// those pass early, never fail.
+const CLI_ACTION_TIMEOUT: Duration = Duration::from_mins(1);
+
 /// Write the `.cargo/contract.toml` overlay every contract build requires at
 /// the cargo workspace root.
 ///
@@ -1608,7 +1624,7 @@ fn config_rm_force_does_not_read_stdin() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let status = wait_child(child, Duration::from_secs(2));
+    let status = wait_child(child, CLI_ACTION_TIMEOUT);
 
     assert!(status.success());
     assert_eq!(
@@ -1908,7 +1924,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .stdout
         .take()
         .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
         .expect("bug: startup JSON should be readable");
     let payload: serde_json::Value =
         serde_json::from_str(&line).expect("bug: startup line should be JSON");
@@ -1971,13 +1987,13 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
     let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
         .expect("groundhog node should leave config readable");
     assert!(!global_config.contains("local_runtime_state"));
     assert!(
-        wait_pid_gone(pid, Duration::from_secs(2)),
+        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
         "fake hogd-dev pid {pid} still alive after CLI exit",
     );
 }
@@ -2032,7 +2048,7 @@ fn node_explicit_managed_version_uses_cache_before_path_offline() {
         .stdout
         .take()
         .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
         .expect("bug: managed startup JSON should be readable");
     let payload: serde_json::Value =
         serde_json::from_str(&line).expect("bug: startup line should be JSON");
@@ -2040,9 +2056,9 @@ fn node_explicit_managed_version_uses_cache_before_path_offline() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
-    assert!(wait_pid_gone(pid, Duration::from_secs(2)));
+    assert!(wait_pid_gone(pid, CLI_ACTION_TIMEOUT));
 }
 
 #[cfg(unix)]
@@ -2126,7 +2142,7 @@ fn node_managed_download_stops_on_sigint() {
         .spawn()
         .unwrap();
     let child = ChildGuard::new(child);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
     let _connection = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
@@ -2141,7 +2157,7 @@ fn node_managed_download_stops_on_sigint() {
         }
     };
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(3));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(
         !status.success(),
         "cancelled acquisition must report that the node never started"
@@ -2188,7 +2204,7 @@ fn node_offline_default_falls_back_to_path_after_managed_cache_miss() {
         .stdout
         .take()
         .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
         .expect("bug: PATH fallback startup JSON should be readable");
     let payload: serde_json::Value =
         serde_json::from_str(&line).expect("bug: startup line should be JSON");
@@ -2196,9 +2212,9 @@ fn node_offline_default_falls_back_to_path_after_managed_cache_miss() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
-    assert!(wait_pid_gone(pid, Duration::from_secs(2)));
+    assert!(wait_pid_gone(pid, CLI_ACTION_TIMEOUT));
 }
 
 #[cfg(unix)]
@@ -2234,7 +2250,7 @@ fn node_human_startup_reports_chain_state() {
         .stderr
         .take()
         .expect("bug: stderr should be piped");
-    let output = read_until_with_timeout(stderr, "dev-key manifest", Duration::from_secs(10))
+    let output = read_until_with_timeout(stderr, "dev-key manifest", CLI_ACTION_TIMEOUT)
         .expect("bug: human startup output should be readable");
 
     assert!(output.contains("chain state"), "startup output: {output}");
@@ -2246,10 +2262,10 @@ fn node_human_startup_reports_chain_state() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
     assert!(
-        wait_pid_gone(pid, Duration::from_secs(2)),
+        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
         "fake hogd-dev pid {pid} still alive after CLI exit",
     );
 }
@@ -2283,7 +2299,7 @@ fn node_hogd_dev_profile_write_failure_stops_supervisor() {
     );
     let pid = read_pid_file(&pid_path);
     assert!(
-        wait_pid_gone(pid, Duration::from_secs(2)),
+        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
         "fake hogd-dev pid {pid} still alive after profile write failure"
     );
 }
@@ -2835,7 +2851,7 @@ fn init_non_interactive_never_waits_for_terminal_answers() {
         }
         let (child, terminal) = spawn_with_terminal(command);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(10));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert_eq!(status.success(), generate, "{output}");
@@ -2872,7 +2888,7 @@ fn global_non_interactive_keeps_terminal_output_plain_and_visible() {
             .env_remove("NO_COLOR");
         let (child, terminal) = spawn_with_terminal_outputs(command, 120, true);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(10));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         if is_status {
@@ -2909,7 +2925,7 @@ fn global_non_interactive_terminal_key_removal_requires_force() {
         }
         let (child, terminal) = spawn_with_terminal(command);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(5));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert_eq!(status.success(), force);
@@ -2944,7 +2960,7 @@ fn key_import_refuses_terminal_input_in_non_interactive_modes() {
             .env("XDG_CONFIG_HOME", tmp.path());
         let (child, terminal) = spawn_with_terminal(command);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(5));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(!status.success());
@@ -2985,6 +3001,61 @@ fn global_non_interactive_key_import_accepts_piped_seed() {
     assert_eq!(report["ok"], true);
     assert_eq!(report["data"]["key"]["name"], "alice");
     assert!(tmp.path().join("groundhog/keys/alice.json").exists());
+}
+
+#[test]
+fn key_generation_rejects_reserved_dev_names_without_mutation() {
+    for name in ["dev-0", "dev-1", "dev-01"] {
+        let tmp = TempDir::new().unwrap();
+        let config = tmp.path().join("groundhog/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let before = "default_key = 'existing'\n[profile.default]\n";
+        std::fs::write(&config, before).unwrap();
+        let output = groundhog()
+            .args(["--json", "keys", "generate", name])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["code"], "reserved_dev_key_name");
+        assert!(!tmp.path().join("groundhog/keys").exists());
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+    }
+}
+
+#[test]
+fn status_checks_wallet_owner_without_private_key_bytes() {
+    let (_tmp, project, config) = empty_wallet_fixture();
+    let owner = generate_key_public_key(&config, "other");
+    let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
+    let original = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "{original}\ndefault_wallet = 'trading'\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '0x{}'\nowner_public_key = '{owner}'\n",
+            hex::encode(account.address().as_ref())
+        ),
+    )
+    .unwrap();
+    make_local_keypair_unavailable(&config, "owner");
+    let output = groundhog()
+        .args(["--json", "status"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| { finding["code"] == "default_wallet_owner_mismatch" })
+    );
 }
 
 #[test]
@@ -3087,7 +3158,7 @@ fn init_boxes_respect_stderr_terminal_width() {
             .env_remove("NO_COLOR");
         let (child, terminal) = spawn_with_terminal_width(command, columns);
         let reader = terminal_output_reader(&terminal);
-        assert!(wait_child(child, Duration::from_secs(10)).success());
+        assert!(wait_child(child, CLI_ACTION_TIMEOUT).success());
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(output.contains("Groundhog Ready"));
@@ -3448,7 +3519,7 @@ fn status_terminal_report_wraps_complete_values_with_and_without_color() {
             }
             let (child, terminal) = spawn_with_terminal_width(command, columns);
             let reader = terminal_output_reader(&terminal);
-            let exit = wait_child(child, Duration::from_secs(10));
+            let exit = wait_child(child, CLI_ACTION_TIMEOUT);
             assert_eq!(*expected_exit.get_or_insert(exit.code()), exit.code());
             drop(terminal);
             let output = reader.join().unwrap();
@@ -3532,7 +3603,7 @@ fn status_no_ui_and_ascii_modes_keep_terminal_output_complete() {
         }
         let (child, terminal) = spawn_with_terminal_size(command, 40, 4);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(10));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(!status.success());
@@ -4328,7 +4399,7 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
             .spawn()
             .unwrap();
         let mut child = ChildGuard::new(child);
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let _connection = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -4354,7 +4425,7 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
             unsafe { libc::kill(child.child().id().try_into().unwrap(), signal) },
             0
         );
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         while child.child_mut().try_wait().unwrap().is_none() {
             assert!(
                 Instant::now() < deadline,
@@ -5315,24 +5386,161 @@ fn wallet_create_is_offline_idempotent_and_funding_is_explicit() {
 }
 
 #[test]
-fn wallet_create_derives_from_signer_despite_stale_cached_public_key() {
+fn wallet_create_uses_public_metadata_and_signing_still_checks_ownership() {
     let (_tmp, project, config) = empty_wallet_fixture();
     let first = create_empty_wallet(&project, &config, &["--dry-run"]);
     assert!(first.status.success());
-    let expected: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let original: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
     let key_path = config.join("groundhog/keys/owner.json");
     let mut key: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-    key["public_key_hex"] = serde_json::Value::String("ab".repeat(32));
+    let public_key = [0xab; 32];
+    key["public_key_hex"] = serde_json::Value::String(hex::encode(public_key));
     std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
     let output = create_empty_wallet(&project, &config, &[]);
     assert!(output.status.success());
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(actual["data"]["wallet"], expected["data"]["wallet"]);
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0);
+    assert_eq!(
+        actual["data"]["wallet"],
+        format!("0x{}", hex::encode(account.address().as_ref()))
+    );
+    assert_ne!(actual["data"]["wallet"], original["data"]["wallet"]);
     assert_eq!(
         actual["data"]["ownerPublicKey"],
-        expected["data"]["ownerPublicKey"]
+        format!("0x{}", hex::encode(public_key))
     );
+    let output = groundhog()
+        .args([
+            "--json",
+            "transfer",
+            "--dry-run",
+            &format!("0x{}", "11".repeat(32)),
+            "1",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(report["error"]["code"], "saved_wallet_owner_mismatch");
+}
+
+#[test]
+fn wallet_create_and_use_work_without_private_key_bytes() {
+    let (_tmp, project, config) = empty_wallet_fixture();
+    let expected = create_empty_wallet(&project, &config, &["--dry-run"]);
+    let expected: serde_json::Value = serde_json::from_slice(&expected.stdout).unwrap();
+    let original = std::fs::read(project.join("groundhog.toml")).unwrap();
+    make_local_keypair_unavailable(&config, "owner");
+    let dry_run = create_empty_wallet(&project, &config, &["--name", "primary", "--dry-run"]);
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&dry_run.stdout).unwrap();
+    assert_eq!(report["data"]["wallet"], expected["data"]["wallet"]);
+    assert_eq!(
+        std::fs::read(project.join("groundhog.toml")).unwrap(),
+        original
+    );
+
+    let created = create_empty_wallet(&project, &config, &["--name", "primary"]);
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
+    assert_eq!(report["data"]["wallet"], expected["data"]["wallet"]);
+    let selected = groundhog()
+        .args(["--json", "wallet", "use", "primary"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
+        .output()
+        .unwrap();
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let project_config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(project.join("groundhog.toml")).unwrap()).unwrap();
+    assert_eq!(
+        project_config["profile"]["default"]["default_wallet"].as_str(),
+        Some("primary")
+    );
+}
+
+#[test]
+fn wallet_use_preserves_bindings_and_checks_owner_without_signer() {
+    for native in [false, true] {
+        let (_tmp, project, config) = empty_wallet_fixture();
+        let keyfile: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(config.join("groundhog/keys/owner.json")).unwrap(),
+        )
+        .unwrap();
+        let owner = keyfile["public_key_hex"].as_str().unwrap();
+        let public_key = groundhog_signing::strkey::parse_public_key(owner).unwrap();
+        let address = if native {
+            let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 7);
+            format!("0x{}", hex::encode(account.address().as_ref()))
+        } else {
+            format!("0x{}", "ab".repeat(32))
+        };
+        let kind = if native {
+            "kind = 'native'\naccount_nonce = 7\n"
+        } else {
+            ""
+        };
+        let original = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+        let profile_fragment = format!(
+            "{original}\n[profile.default.wallets.trading]\n\
+             {kind}address = '{address}'\nowner_public_key = '{owner}'\n"
+        );
+        std::fs::write(project.join("groundhog.toml"), profile_fragment).unwrap();
+        make_local_keypair_unavailable(&config, "owner");
+        let output = groundhog()
+            .args(["--json", "wallet", "use", "trading"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let before = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+        let project_config: toml::Value = toml::from_str(&before).unwrap();
+        assert_eq!(
+            project_config["profile"]["default"]["default_wallet"].as_str(),
+            Some("trading")
+        );
+        assert_eq!(
+            project_config["profile"]["default"]["wallets"]["trading"]["address"].as_str(),
+            Some(address.as_str())
+        );
+        generate_key_public_key(&config, "other");
+        make_local_keypair_unavailable(&config, "other");
+        let mismatched = before.replace("default_key = 'owner'", "default_key = 'other'");
+        std::fs::write(project.join("groundhog.toml"), &mismatched).unwrap();
+        let output = groundhog()
+            .args(["--json", "wallet", "use", "trading"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["code"], "saved_wallet_owner_mismatch");
+        assert_eq!(
+            std::fs::read_to_string(project.join("groundhog.toml")).unwrap(),
+            mismatched
+        );
+    }
 }
 
 #[test]
@@ -5888,6 +6096,7 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
             groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
             0,
         );
+        make_local_keypair_unavailable(&config_home, "alice");
         let faucet_wallet = advertised_dev_wallet_address(0);
         let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
         let (rpc_url, rpc_server) =
@@ -5922,6 +6131,94 @@ fn airdrop_default_uses_unsaved_native_address_without_resolving_key_name_again(
             report["data"]["recipientWallet"],
             format!("0x{}", hex::encode(account.address().as_ref()))
         );
+    }
+}
+
+#[test]
+fn airdrop_default_submits_without_recipient_signer() {
+    for hosted in [false, true] {
+        for selection in ["unsaved", "legacy", "native"] {
+            let tmp = TempDir::new().unwrap();
+            let project = tmp.path().join("project");
+            let config_home = tmp.path().join("config");
+            std::fs::create_dir_all(&project).unwrap();
+            let owner = generate_key_public_key(&config_home, "alice");
+            let owner_bytes = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+            let nonce = if selection == "native" { 7 } else { 0 };
+            let account =
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(owner_bytes, nonce);
+            let recipient = if selection == "legacy" {
+                format!("0x{}", "ab".repeat(32))
+            } else {
+                format!("0x{}", hex::encode(account.address().as_ref()))
+            };
+            let binding = match selection {
+                "legacy" => format!(
+                    "\n[profile.default.wallets.trading]\naddress = '{recipient}'\nowner_public_key = '{owner}'\n"
+                ),
+                "native" => format!(
+                    "\n[profile.default.wallets.trading]\nkind = 'native'\naccount_nonce = 7\naddress = '{recipient}'\nowner_public_key = '{owner}'\n"
+                ),
+                _ => String::new(),
+            };
+            make_local_keypair_unavailable(&config_home, "alice");
+            let faucet = advertised_dev_wallet_address(0);
+            let (rpc_url, rpc_server) = if hosted {
+                spawn_airdrop_rpc(&recipient)
+            } else {
+                spawn_local_airdrop_rpc(&faucet, &recipient)
+            };
+            let (profile_fields, descriptor_server) = if hosted {
+                let (faucet_url, server) = spawn_network_descriptor(&rpc_url);
+                (format!("faucet_url = '{faucet_url}'\n"), Some(server))
+            } else {
+                let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+                (
+                    format!("runtime_manifest = '{}'\n", manifest.display()),
+                    None,
+                )
+            };
+            // Hosted cases use the global default key selected during key generation.
+            let default_key = if hosted {
+                ""
+            } else {
+                "default_key = 'alice'\n"
+            };
+            std::fs::write(project.join("groundhog.toml"), format!(
+                "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\n{default_key}{profile_fields}{binding}"
+            )).unwrap();
+            let output = groundhog()
+                .args(["--json", "airdrop", "--force"])
+                .current_dir(&project)
+                .env("XDG_CONFIG_HOME", &config_home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "hosted={hosted}, {selection}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if let Some(server) = descriptor_server {
+                server.join().unwrap();
+            }
+            rpc_server.join().unwrap();
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(report["data"]["recipientWallet"], recipient);
+            assert_eq!(
+                report["data"]["recipient"],
+                if selection == "unsaved" {
+                    "alice"
+                } else {
+                    "trading"
+                }
+            );
+            assert_eq!(report["ok"], true);
+            assert!(report["data"]["txHash"].is_string());
+            assert_eq!(
+                report["data"]["mode"],
+                if hosted { "remote" } else { "local" }
+            );
+        }
     }
 }
 
@@ -5975,11 +6272,7 @@ fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
             _ => String::new(),
         };
         // Explicit recipients use public metadata without constructing a signer.
-        let key_path = config_home.join(format!("groundhog/keys/{key_name}.json"));
-        let mut key: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
-        key["keypair_hex"] = serde_json::Value::String("unavailable".into());
-        std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+        make_local_keypair_unavailable(&config_home, key_name);
         let faucet_wallet = advertised_dev_wallet_address(0);
         let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
         let (rpc_url, rpc_server) =
@@ -8569,44 +8862,176 @@ fn view_json_resolves_contract_alias_and_from_address() {
 }
 
 #[test]
-fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
+fn view_json_resolves_named_callers_without_private_key_bytes() {
+    #[derive(Debug)]
+    enum Caller {
+        UnsavedKey,
+        NativeWallet,
+        LegacyWallet,
+        KeyWithNativeWallet,
+        ContractAlias,
+    }
+    for selection in [
+        Caller::UnsavedKey,
+        Caller::NativeWallet,
+        Caller::LegacyWallet,
+        Caller::KeyWithNativeWallet,
+        Caller::ContractAlias,
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        let config = tmp.path().join("config");
+        std::fs::create_dir_all(&project).unwrap();
+        let owner = generate_key_public_key(&config, "owner");
+        make_local_keypair_unavailable(&config, "owner");
+        let public_key = groundhog_signing::strkey::parse_public_key(&owner).unwrap();
+        let native_address = |nonce| {
+            let account =
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, nonce);
+            format!("0x{}", hex::encode(account.address().as_ref()))
+        };
+        let alias_address = format!("0x{}", "33".repeat(32));
+        let native_kind = "kind = 'native'\naccount_nonce = 7\n";
+        let (from, caller, binding_kind, alias_name) = match selection {
+            Caller::UnsavedKey => ("owner", native_address(0), None, None),
+            Caller::NativeWallet => (
+                "primary",
+                native_address(7),
+                Some(native_kind),
+                Some("primary"),
+            ),
+            Caller::LegacyWallet => (
+                "primary",
+                format!("0x{}", "22".repeat(32)),
+                Some(""),
+                Some("primary"),
+            ),
+            Caller::KeyWithNativeWallet => ("owner", native_address(7), Some(native_kind), None),
+            Caller::ContractAlias => ("viewer", alias_address.clone(), None, Some("viewer")),
+        };
+        let binding = if let Some(kind) = binding_kind {
+            format!(
+                "[profile.default.wallets.primary]\n{kind}address = '{caller}'\nowner_public_key = '{owner}'\n"
+            )
+        } else {
+            String::new()
+        };
+        let alias = if let Some(name) = alias_name {
+            format!("[profile.default.contracts]\n{name} = '{alias_address}'\n")
+        } else {
+            String::new()
+        };
+        let address = format!("0x{}", "11".repeat(32));
+        let entrypoint = "0x0102030405060708";
+        let (rpc_url, server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+        let project_config = format!(
+            "default_profile = 'default'\n[profile.default]\n\
+             rpc_url = '{rpc_url}'\n{binding}{alias}"
+        );
+        std::fs::write(project.join("groundhog.toml"), project_config).unwrap();
+        let output = groundhog()
+            .args(["--json", "view", &address, entrypoint, "--from", from])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{selection:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["caller"], caller);
+    }
+}
 
+#[test]
+fn view_json_omitted_caller_does_not_use_the_default_wallet() {
+    let (_tmp, project, config) = empty_wallet_fixture();
+    assert!(create_empty_wallet(&project, &config, &[]).status.success());
+    make_local_keypair_unavailable(&config, "owner");
     let address = format!("0x{}", "11".repeat(32));
-    let caller = advertised_dev_wallet_address(0);
     let entrypoint = "0x0102030405060708";
-    let manifest_path = write_runtime_manifest(tmp.path(), 0, &caller, None);
-    let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.display()
-        ),
-    )
-    .unwrap();
-
+    let (rpc_url, server) = spawn_view_rpc(&address, entrypoint, "0x");
+    let profile = project.join("groundhog.toml");
+    let contents = std::fs::read_to_string(&profile).unwrap();
+    std::fs::write(&profile, contents.replace("http://127.0.0.1:1", &rpc_url)).unwrap();
     let output = groundhog()
-        .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
+        .args(["--json", "view", &address, entrypoint])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config)
         .output()
         .unwrap();
-
-    rpc_server.join().unwrap();
-
+    server.join().unwrap();
     assert!(
         output.status.success(),
-        "stderr: {}",
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["data"]["caller"], serde_json::Value::Null);
+}
 
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "view");
-    assert_eq!(stdout["data"]["caller"], caller);
+#[test]
+fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
+    for collision in ["none", "alias", "wallet", "both"] {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        let address = format!("0x{}", "11".repeat(32));
+        let caller = advertised_dev_wallet_address(0);
+        let entrypoint = "0x0102030405060708";
+        let manifest_path = write_runtime_manifest(tmp.path(), 0, &caller, None);
+        let shadow_address = format!("0x{}", "22".repeat(32));
+        let mut bindings = String::new();
+        if matches!(collision, "alias" | "both") {
+            write!(
+                bindings,
+                "\n[profile.default.contracts]\ndev-0 = '{shadow_address}'\n"
+            )
+            .unwrap();
+        }
+        if matches!(collision, "wallet" | "both") {
+            let owner = "33".repeat(32);
+            write!(
+                bindings,
+                "\n[profile.default.wallets.dev-0]\naddress = '{shadow_address}'\n\
+                 owner_public_key = '0x{owner}'\n"
+            )
+            .unwrap();
+        }
+        let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+        let profile_config = format!(
+            "default_profile = 'default'\n[profile.default]\n\
+             rpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n{bindings}",
+            manifest_path.display()
+        );
+        std::fs::write(project.join("groundhog.toml"), profile_config).unwrap();
+
+        let output = groundhog()
+            .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .env_remove("GROUNDHOG_RUNTIME_MANIFEST")
+            .output()
+            .unwrap();
+
+        rpc_server.join().unwrap();
+
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+
+        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(stdout["ok"], true);
+        assert_eq!(stdout["command"], "view");
+        assert_eq!(stdout["data"]["caller"], caller, "{collision}");
+    }
 }
 
 #[test]
@@ -9487,7 +9912,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let rpc_server = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         assert_eq!(request["method"], "groundhog_chainTip");
         send_jsonrpc_response(
@@ -10687,7 +11112,7 @@ fn keys_rm_force_does_not_read_stdin() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let status = wait_child(child, Duration::from_secs(2));
+    let status = wait_child(child, CLI_ACTION_TIMEOUT);
 
     assert!(status.success());
     assert!(!config_home.join("groundhog/keys/alice.json").exists());
@@ -13741,7 +14166,7 @@ fn spawn_tx_list_rpc(
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) =
             read_jsonrpc_request(&listener, deadline, "getTransactionsByAddress");
         assert_eq!(request["method"], "groundhog_getTransactionsByAddress");
@@ -13773,7 +14198,7 @@ fn spawn_events_rpc(
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getEvents");
         assert_eq!(request["method"], "groundhog_getEvents");
         assert_eq!(request["params"], serde_json::json!([expected_query]));
@@ -13806,7 +14231,7 @@ fn spawn_tx_show_rpc(
     listener.set_nonblocking(true).unwrap();
     let tx_hash = tx_hash.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionStatus");
         assert_eq!(request["method"], "groundhog_getTransactionStatus");
         assert_eq!(request["params"], serde_json::json!([tx_hash]));
@@ -13895,7 +14320,7 @@ fn spawn_network_descriptor_with_hash(
     let rpc_url = rpc_url.to_owned();
     let network_hash = network_hash.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
@@ -13965,7 +14390,7 @@ fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>
     listener.set_nonblocking(true).unwrap();
     let network_hash = network_hash.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
         assert_eq!(request["method"], "groundhog_networkInfo");
         send_jsonrpc_response(
@@ -14036,7 +14461,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     listener.set_nonblocking(true).unwrap();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         if request["method"] == "groundhog_networkInfo" {
             send_jsonrpc_response(
@@ -14090,7 +14515,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
     listener.set_nonblocking(true).unwrap();
     let recipient = recipient.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
         assert_eq!(request["method"], "groundhog_networkInfo");
         send_jsonrpc_response(
@@ -14104,6 +14529,14 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
 
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "requestAirdrop");
         assert_eq!(request["method"], "groundhog_requestAirdrop");
+        let mut fields = request["params"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        fields.sort_unstable();
+        assert_eq!(fields, ["clientNonce", "recipient"]);
         assert_eq!(request["params"][0]["recipient"], recipient);
         assert_eq!(
             request["params"][0]["clientNonce"].as_str().map(str::len),
@@ -14134,10 +14567,55 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
     let faucet = faucet.to_owned();
     let recipient = recipient.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
         serve_chain_tip(&listener, deadline, 42);
-        serve_successful_transaction(&listener, deadline, 43);
+        let signed_tx = serve_successful_transaction(&listener, deadline, 43);
+        assert_eq!(
+            signed_tx.tx.invocation.entrypoint,
+            groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
+        );
+        let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
+        assert_eq!(
+            target,
+            format!(
+                "0x{}",
+                hex::encode(groundhog_signing::NATIVE_HOG_ADDRESS.as_ref())
+            )
+        );
+        assert_eq!(
+            entrypoint,
+            format!(
+                "0x{}",
+                hex::encode(groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT.as_ref())
+            )
+        );
+        let (actual_recipient, amount): (groundhog_xdr::types::ContractAddress, u128) =
+            xdrs::cxs::decode(&calldata).unwrap();
+        assert_eq!(
+            format!("0x{}", hex::encode(actual_recipient.as_ref())),
+            recipient
+        );
+        assert_eq!(amount, 100_000_000);
+        assert_eq!(
+            format!(
+                "0x{}",
+                hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
+            ),
+            faucet
+        );
+        let sponsor = groundhog_signing::derive_default_dev_account_signer(0);
+        let network_hash = groundhog_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+            .unwrap()
+            .to_network_hash();
+        let expected = groundhog_signing::sign_transaction(
+            signed_tx.tx.clone(),
+            &sponsor,
+            groundhog_signing::SignTransactionParams::default(),
+            &network_hash,
+        )
+        .unwrap();
+        assert_eq!(signed_tx.signatures, expected.signatures);
 
         for (address, raw_balance) in [(&faucet, "99999999"), (&recipient, "100000000")] {
             serve_balance(&listener, deadline, address, raw_balance, 43);
@@ -14189,7 +14667,11 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
     );
 }
 
-fn serve_successful_transaction(listener: &TcpListener, deadline: Instant, height: i64) {
+fn serve_successful_transaction(
+    listener: &TcpListener,
+    deadline: Instant,
+    height: i64,
+) -> groundhog_xdr::transaction::SignedTransaction {
     let (stream, request) = read_jsonrpc_request(listener, deadline, "sendRawTransaction");
     assert_eq!(request["method"], "groundhog_sendRawTransaction");
     let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
@@ -14212,6 +14694,7 @@ fn serve_successful_transaction(listener: &TcpListener, deadline: Instant, heigh
             "events": [],
         }),
     );
+    signed_tx
 }
 
 fn spawn_balance_then_chain_tip_rpc(
@@ -14225,7 +14708,7 @@ fn spawn_balance_then_chain_tip_rpc(
     let address = address.to_owned();
     let raw_balance = raw_balance.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "groundhog_getBalance");
         assert_eq!(request["params"][0], address);
@@ -14417,7 +14900,7 @@ fn spawn_transfer_rpc(
     listener.set_nonblocking(true).unwrap();
     let (local_hash_tx, local_hash_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         if request["method"] == "groundhog_networkInfo" {
             send_jsonrpc_response(
@@ -14656,7 +15139,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
     let expected_key = key.to_owned();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getStorageAt");
         assert_eq!(request["method"], "groundhog_getStorageAt");
         assert_eq!(request["params"][0], expected_address);
@@ -14687,7 +15170,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
     let raw_balance = raw_balance.to_owned();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "groundhog_getBalance");
         assert_eq!(request["params"][0], expected_address);
@@ -14804,7 +15287,7 @@ fn spawn_view_rpc_inner_with_events(
     let expected_caller = caller.map(ToOwned::to_owned);
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "view");
         assert_eq!(request["method"], "groundhog_view");
         assert_eq!(request["params"][0]["contract"], expected_address);
@@ -14970,6 +15453,14 @@ fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_u
     .unwrap();
 }
 
+fn make_local_keypair_unavailable(config_home: &std::path::Path, name: &str) {
+    let key_path = config_home.join(format!("groundhog/keys/{name}.json"));
+    let mut key: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&key_path).unwrap()).unwrap();
+    key["keypair_hex"] = serde_json::Value::String("unavailable".into());
+    std::fs::write(&key_path, serde_json::to_vec(&key).unwrap()).unwrap();
+}
+
 fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String {
     let output = groundhog()
         .args(["--json", "keys", "generate", name])
@@ -15111,7 +15602,7 @@ fn spawn_transaction_rpc(
     listener.set_nonblocking(true).unwrap();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
 
         serve_chain_tip(&listener, deadline, height);
 

@@ -8,7 +8,7 @@ description: >
 ---
 
 <!-- groundhog-cli-version: 0.22.1 -->
-<!-- skill-source: https://github.com/groundhogchain/agent-skills; revision: f18bc7fcfb6923cc76e5dc0147129e8b1949bd9d; sha256: sha256:e6e49b14075c3474e542e0e5281727199052667fe6855edba50ef76edd24d0ea; dirty: false -->
+<!-- skill-source: https://github.com/groundhogchain/agent-skills; revision: aad9be0621e142af688f0ddc2d432ec08b61b70a; sha256: sha256:53e766647547ee095b194671d71625a47e5cbb2873f3dce9420473d0c393d1c9; dirty: false -->
 
 # Groundhog
 
@@ -109,7 +109,8 @@ See [Event pages and restart](#event-pages-and-restart) for cursor rules.
 
 `groundhog keys import <name>` reads a seed from hidden input or piped stdin:
 a checksummed S StrKey or 32-byte hex, never a 64-byte keypair or CLI argument.
-Existing names are not overwritten; `dev-N` names are reserved.
+Existing names are not overwritten. Generation and import reject `dev-N` names,
+which are reserved for local bootstrap accounts.
 Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
 Malformed TOML or an invalid `default_key` is rejected before storing the key.
 If saving succeeds but default selection fails, use `groundhog keys use <name>`;
@@ -133,6 +134,18 @@ identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
 legacy wallets retain identity and format. Schema-3 bootstrap dev-N accounts
 are native pubkey accounts with nonce zero, using the advertised seed and keys.
 Use a matching native runtime; schema-2 state needs its original runtime.
+
+Wallet creation, selection, address inspection, and `status` ownership checks use
+cached public metadata without loading a private signer. Older keyfiles derive
+missing metadata from the keypair. Keep metadata consistent with the signing
+key: transaction commands still load the signer and check wallet ownership.
+
+`view --from` accepts saved wallets, ordinary keys, contract aliases, local
+`dev-N` accounts, and literal addresses. `dev-N` selects the manifest's bootstrap
+account even when a wallet or alias has the same name. Other saved wallets take
+precedence over aliases and keys. Native bindings retain their account nonce;
+legacy bindings retain their saved address. Omitting `--from` leaves the simulated
+caller unset, even when a default wallet is selected.
 
 Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
 amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated
