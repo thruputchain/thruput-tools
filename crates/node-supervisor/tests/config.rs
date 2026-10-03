@@ -83,46 +83,26 @@ fn manual_block_driver_keeps_default_interval_inert() {
 }
 
 #[test]
-fn hogd_dev_config_lowers_to_bootstrap_manifest() {
+fn hogd_dev_config_lowers_to_public_allocations() {
+    use groundhog_json_rpc_types::{bootstrap_manifest::BootstrapManifestAllocation, hex::Hex0x};
+    let key = Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x42; 32]));
     let config = HogdDevConfig::default()
-        .with_dev_account_count(3)
-        .with_dev_account_seed("bench-seed")
-        .with_dev_account_tokens(42);
-
-    let manifest = config
-        .to_bootstrap_manifest(NetworkHashHex::from([0x51; 32]))
-        .expect("bug: account count fits u32");
-
-    let value = serde_json::to_value(manifest).expect("bug: manifest serializes");
-
+        .with_bootstrap_accounts(vec![BootstrapManifestAllocation::new(key, "42")]);
+    let value =
+        serde_json::to_value(config.to_bootstrap_manifest(NetworkHashHex::from([0x51; 32]), key))
+            .unwrap();
+    assert_eq!(value["schemaVersion"], 4);
     assert_eq!(
-        value,
-        json!({
-            "schemaVersion": 3,
-            "kind": "groundhog-bootstrap",
-            "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
-            "profile": "local-dev",
-            "bootstrapFaucet": {
-                "index": 0,
-                "initialStorageTokens": "10000000000000",
-            },
-            "bootstrapAccounts": {
-                "count": 3,
-                "firstIndex": 1,
-                "seed": "bench-seed",
-                "initialStorageTokens": "42",
-            },
-            "storageCostModel": {
-                "profile": "hogd-default",
-            },
-        })
+        value["bootstrapAccounts"],
+        json!([{ "publicKey": key, "initialStorageTokens": "42" }])
     );
-}
-
-#[test]
-fn hogd_dev_default_funds_each_user_with_one_hundred_hog() {
     assert_eq!(
-        HogdDevConfig::default().dev_account_tokens,
+        value["bootstrapFaucet"]["publicKey"],
+        serde_json::to_value(key).unwrap()
+    );
+    assert!(HogdDevConfig::default().bootstrap_accounts.is_empty());
+    assert_eq!(
+        groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS,
         100 * 10_000_000
     );
 }

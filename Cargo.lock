@@ -1920,6 +1920,7 @@ name = "groundhog-node-supervisor"
 version = "0.22.1"
 dependencies = [
  "async-trait",
+ "getrandom 0.4.3",
  "groundhog-bundle-identity",
  "groundhog-hogd-backend",
  "groundhog-json-rpc-api",
@@ -1950,6 +1951,7 @@ dependencies = [
  "tracing",
  "xdr-common",
  "xdrs",
+ "zeroize",
 ]
 
 [[package]]

@@ -46,6 +46,14 @@ impl fmt::Display for ChildSignal {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum NodeSupervisorError {
+    /// The chain's private faucet state cannot be safely loaded or persisted.
+    #[error("invalid local funding state at {}: {reason}", path.display())]
+    LocalFundingState {
+        /// File or directory whose state failed validation.
+        path: PathBuf,
+        /// Diagnostic without private material.
+        reason: String,
+    },
     /// Local airdrop resource or transfer configuration is invalid.
     #[error("invalid local airdrop configuration: {reason}")]
     InvalidLocalAirdropConfig {

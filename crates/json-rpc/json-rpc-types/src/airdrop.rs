@@ -83,6 +83,73 @@ pub struct AirdropRequest {
     pub client_nonce: ClientNonce,
 }
 
+/// Public parameters for local-only `groundhog_fundAccount`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FundAccountRequest {
+    /// Native HOG transfer recipient.
+    pub recipient: ContractAddress,
+    /// Positive canonical decimal amount in raw HOG units.
+    #[serde(deserialize_with = "positive_raw_amount")]
+    pub raw_amount: String,
+    /// Retained caller-owned idempotency nonce.
+    pub client_nonce: ClientNonce,
+    /// Expected random faucet identity; refuses a different chain at the same URL.
+    pub faucet: ContractAddress,
+}
+
+impl FundAccountRequest {
+    /// Validate an explicitly constructed request's amount too.
+    pub fn amount(&self) -> Result<u128, &'static str> {
+        parse_positive_raw_amount(&self.raw_amount)
+    }
+}
+
+fn parse_positive_raw_amount(text: &str) -> Result<u128, &'static str> {
+    match text.parse::<u128>() {
+        Ok(value) if value > 0 && value.to_string() == text => Ok(value),
+        _ => Err("rawAmount must be a positive canonical decimal u128"),
+    }
+}
+
+fn positive_raw_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    parse_positive_raw_amount(&text).map_err(serde::de::Error::custom)?;
+    Ok(text)
+}
+
+/// Authoritatively admitted (or already committed) local funding submission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct FundAccountResponse {
+    /// Recipient of the retained transfer.
+    pub recipient: ContractAddress,
+    /// Exact requested raw HOG amount.
+    pub raw_amount: String,
+    /// Canonical body hash for status and receipt queries.
+    pub tx_hash: TxHash,
+    /// Signed transaction retained before its first broadcast.
+    pub signed_transaction: HexBytes,
+}
+
+impl FundAccountResponse {
+    /// Construct an admitted local funding response.
+    pub fn new(
+        recipient: ContractAddress,
+        raw_amount: String,
+        tx_hash: TxHash,
+        signed_transaction: HexBytes,
+    ) -> Self {
+        Self {
+            recipient,
+            raw_amount,
+            tx_hash,
+            signed_transaction,
+        }
+    }
+}
+
 /// Hosted faucet request, bound to the gateway's immutable network identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
