@@ -29,7 +29,7 @@ scenario.stop().await?;
 ```
 
 Native deployment uses `DefaultWallet.deploy(nonce, contract_hash, amount, initializer)`.
-Use a native bootstrap runtime emitting schema-3 manifests.
+Local nodes emit schema-4 public allocations. The scenario owns fixture keys derived from its seed and supplies their public allocations before startup. `accounts(count)` selects the fixture count (default 10); `LocalNetworkConfig.initial_account_tokens` selects their initial raw HOG allocation.
 
 Every deploy helper takes `DeployOptions`. Amounts are exact raw HOG units,
 including explicit zero. An optional `WalletInitCall` supplies an entrypoint, gas
@@ -46,9 +46,9 @@ A deployment is accepted only after its successful receipt matches the original
 hash and predicted address. Changing a retained attempt's funding or initializer
 requires resolving that attempt first.
 
-`bootstrap_accounts()` selects the manifest's funded native dev-N accounts and
-supports the same calls and deployments as scenario-derived accounts. Ordinary native accounts use the internal
-bootstrap faucet only when `fund` or `submit_fund` is explicitly called.
+`bootstrap_accounts()` is an explicit hosted schema-3 adapter. Local manifests contain public keys only and cannot supply signing keys. For existing local nodes, use scenario-owned accounts and explicitly call `fund` or `submit_fund` as needed.
+
+Local funding uses `groundhog_fundAccount`. The network handle retains each request before sending. After an uncertain response, retry the same recipient and amount on that handle; a changed amount is refused until the request is reconciled. Keep the handle alive during recovery. The handle retains admitted hash and signed bytes until an authoritative receipt, including errors or cancellation in `fund()`. `SubmittedTransaction` also exposes those bytes. This preserves submit → produce block → receipt in manual mode.
 
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, native calls, manual blocks, and recovery

@@ -79,10 +79,19 @@ impl SubmittedTransaction {
     }
 }
 
+#[derive(Debug)]
+struct LocalFundingAttempt {
+    request: groundhog_json_rpc_types::airdrop::FundAccountRequest,
+    admitted: Option<groundhog_json_rpc_types::airdrop::FundAccountResponse>,
+}
+
 struct NetworkInner {
     rpc_url: Option<String>,
     client: Option<HttpClient>,
     faucet: tokio::sync::Mutex<Option<crate::manifest::TestAccount>>,
+    local_faucet: Option<ContractAddress>,
+    local_funding:
+        tokio::sync::Mutex<std::collections::HashMap<ContractAddress, LocalFundingAttempt>>,
     manual_block_producer: Option<ManualBlockProducer>,
 }
 
@@ -114,6 +123,8 @@ impl Network {
                 rpc_url: Some(rpc_url.to_owned()),
                 client: Some(client),
                 faucet: tokio::sync::Mutex::new(crate::manifest::derive_faucet(manifest)?),
+                local_faucet: local_faucet(manifest)?,
+                local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 manual_block_producer,
             }),
         })
@@ -126,6 +137,8 @@ impl Network {
                 rpc_url: None,
                 client: None,
                 faucet: tokio::sync::Mutex::new(None),
+                local_faucet: None,
+                local_funding: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 manual_block_producer: None,
             }),
         }
@@ -159,10 +172,20 @@ impl Network {
 
     /// Fetch a transaction receipt if it is already available.
     pub async fn receipt(&self, tx_hash: TxHash) -> Result<Option<TransactionReceipt>> {
-        self.require_client("getTransactionReceipt")?
+        let receipt = self
+            .require_client("getTransactionReceipt")?
             .get_transaction_receipt(tx_hash)
             .await
-            .map_err(|e| TestkitError::rpc("getTransactionReceipt", e))
+            .map_err(|e| TestkitError::rpc("getTransactionReceipt", e))?;
+        if receipt.as_ref().is_some_and(|r| r.tx_hash == tx_hash) {
+            self.inner.local_funding.lock().await.retain(|_, attempt| {
+                !attempt
+                    .admitted
+                    .as_ref()
+                    .is_some_and(|admitted| admitted.tx_hash == tx_hash)
+            });
+        }
+        Ok(receipt)
     }
 
     /// Poll for a receipt until it appears or the polling budget elapses.
@@ -304,6 +327,9 @@ impl Network {
         amount: u128,
     ) -> Result<SubmittedTransaction> {
         self.require_client("fund")?;
+        if let Some(faucet) = self.inner.local_faucet {
+            return self.submit_local_fund(recipient, amount, faucet).await;
+        }
         let calldata = groundhog_signing::native_hog_transfer_calldata(&recipient, amount)
             .map_err(TestkitError::signing)?;
         let faucet = self.inner.faucet.lock().await;
@@ -325,12 +351,108 @@ impl Network {
         Ok(SubmittedTransaction::new(self.clone(), tx_hash, tx_hex))
     }
 
+    // Pending intent is retained on this Network handle before sending. Callers
+    // retry on the same handle after uncertainty. Admission and signed bytes are
+    // retained until an authoritative receipt, including cancellation of fund().
+    async fn submit_local_fund(
+        &self,
+        recipient: ContractAddress,
+        amount: u128,
+        faucet: ContractAddress,
+    ) -> Result<SubmittedTransaction> {
+        use groundhog_json_rpc_client::LocalFundingApiClient;
+        use groundhog_json_rpc_types::airdrop::{ClientNonce, FundAccountRequest};
+        if amount == 0 {
+            return Err(TestkitError::signing("funding amount must be positive"));
+        }
+        let mut pending = self.inner.local_funding.lock().await;
+        if let Some(request) = pending.get(&recipient) {
+            if request.request.raw_amount != amount.to_string() {
+                return Err(TestkitError::FundingRequestMismatch { recipient });
+            }
+        } else {
+            let mut nonce = [0; 16];
+            getrandom::fill(&mut nonce).map_err(TestkitError::signing)?;
+            pending.insert(
+                recipient,
+                LocalFundingAttempt {
+                    request: FundAccountRequest {
+                        recipient: Hex0x(recipient),
+                        raw_amount: amount.to_string(),
+                        faucet: Hex0x(faucet),
+                        client_nonce: ClientNonce::new(nonce.to_vec())
+                            .map_err(TestkitError::signing)?,
+                    },
+                    admitted: None,
+                },
+            );
+        }
+        let attempt = pending
+            .get(&recipient)
+            .expect("bug: retained funding intent");
+        let request = attempt.request.clone();
+        let response = if let Some(response) = &attempt.admitted {
+            response.clone()
+        } else {
+            self.require_client("fund")?
+                .fund_account(request.clone())
+                .await
+                .map_err(|e| TestkitError::rpc("fundAccount", e))?
+        };
+        let signed: groundhog_xdr::transaction::SignedTransaction =
+            xdrs::txs::decode(&response.signed_transaction.0).map_err(TestkitError::signing)?;
+        let hash =
+            groundhog_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
+        if response.recipient != request.recipient
+            || response.raw_amount != request.raw_amount
+            || response.tx_hash.0.0 != hash
+        {
+            return Err(TestkitError::signing(
+                "local funding response does not match retained request and signed hash",
+            ));
+        }
+        pending
+            .get_mut(&recipient)
+            .expect("bug: retained funding intent")
+            .admitted = Some(response.clone());
+        Ok(SubmittedTransaction::new(
+            self.clone(),
+            response.tx_hash,
+            groundhog_json_rpc_types::hex::prefixed_hex(&response.signed_transaction.0),
+        ))
+    }
+
     fn require_client(&self, operation: &'static str) -> Result<&HttpClient> {
         self.inner
             .client
             .as_ref()
             .ok_or(TestkitError::Offline { operation })
     }
+}
+
+fn local_faucet(manifest: &RuntimeManifest) -> Result<Option<ContractAddress>> {
+    use groundhog_json_rpc_types::runtime_manifest::{
+        BOOTSTRAP_ACCOUNT_ROLE_FAUCET, HOGD_DEV_RUNTIME_MANIFEST_KIND,
+    };
+    if manifest.kind != HOGD_DEV_RUNTIME_MANIFEST_KIND {
+        return Ok(None);
+    }
+    let mut faucets = manifest
+        .bootstrap_accounts
+        .iter()
+        .filter(|a| a.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
+    let faucet = faucets.next().ok_or(TestkitError::MissingFaucet)?;
+    if faucets.next().is_some()
+        || groundhog_signing::PubkeyAccount::from_public_key_bytes(*faucet.public_key.0, 0)
+            .address()
+            != faucet.wallet_address.0
+    {
+        return Err(TestkitError::Manifest {
+            field: "bootstrapAccounts",
+            detail: "local faucet must uniquely match its public nonce-zero account".into(),
+        });
+    }
+    Ok(Some(faucet.wallet_address.0))
 }
 
 /// Drives the shared receipt poll over a [`Network`].
@@ -516,12 +638,8 @@ pub struct LocalNetworkConfig {
     /// honoring `RUST_LOG`) so the forwarded logs print. Leave `None` for a
     /// quiet node; call [`crate::init_tracing`] directly for finer control.
     pub log_level: Option<LogLevel>,
-    /// Number of funded local-user accounts to bootstrap, excluding the faucet.
-    pub dev_account_count: usize,
-    /// Seed for deterministic dev-account derivation.
-    pub dev_account_seed: String,
-    /// Initial storage-token balance per local-user account.
-    pub dev_account_tokens: u64,
+    /// Initial raw HOG allocation per scenario-owned nonce-zero fixture account.
+    pub initial_account_tokens: u64,
     /// Maximum time to wait for the node to report readiness.
     pub startup_timeout: Duration,
     /// Local block production policy. Defaults to submit-triggered production.
@@ -536,9 +654,7 @@ impl Default for LocalNetworkConfig {
             rpc_port: 0,
             hogd_protocol: None,
             log_level: None,
-            dev_account_count: groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT,
-            dev_account_seed: groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED.to_owned(),
-            dev_account_tokens: groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
+            initial_account_tokens: groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS,
             startup_timeout: Duration::from_secs(10),
             block_driver: BlockDriverConfig::default(),
         }

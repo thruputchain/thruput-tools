@@ -27,13 +27,22 @@ pub struct ScenarioBuilder {
     network: Option<NetworkConfig>,
     artifacts: Vec<ArtifactSpec>,
     use_bootstrap_accounts: bool,
+    accounts: usize,
 }
 
 impl ScenarioBuilder {
-    /// Use the manifest's funded native bootstrap account identities explicitly.
+    /// Use hosted schema-3 deterministic bootstrap accounts. Local schema-4 rejects this adapter.
     #[must_use]
     pub fn bootstrap_accounts(mut self) -> Self {
         self.use_bootstrap_accounts = true;
+        self
+    }
+
+    /// Number of scenario-owned fixture accounts for live targets (default: 10).
+    /// The scenario seed owns these keys; the runtime receives only public allocations.
+    #[must_use]
+    pub fn accounts(mut self, count: usize) -> Self {
+        self.accounts = count;
         self
     }
 
@@ -93,8 +102,13 @@ impl ScenarioBuilder {
     pub async fn build(self) -> Result<Scenario> {
         let config = self.network.ok_or(TestkitError::NoNetwork)?;
         let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
-        let (network, accounts, guard) =
-            acquire_network(config, &self.seed, self.use_bootstrap_accounts).await?;
+        let (network, accounts, guard) = acquire_network(
+            config,
+            &self.seed,
+            self.use_bootstrap_accounts,
+            self.accounts,
+        )
+        .await?;
         Ok(Scenario {
             seed: self.seed,
             network,
@@ -134,6 +148,7 @@ impl Scenario {
             network: None,
             artifacts: Vec::new(),
             use_bootstrap_accounts: false,
+            accounts: 10,
         }
     }
 
@@ -304,6 +319,7 @@ async fn acquire_network(
     config: NetworkConfig,
     seed: &str,
     use_bootstrap_accounts: bool,
+    accounts: usize,
 ) -> Result<(Network, AccountSource, NetworkGuard)> {
     match config {
         NetworkConfig::Existing {
@@ -314,12 +330,37 @@ async fn acquire_network(
             let network = Network::connect(&rpc_url, &manifest, None)?;
             Ok((
                 network,
-                account_source(manifest, seed, use_bootstrap_accounts),
+                account_source(manifest, seed, use_bootstrap_accounts, accounts)?,
                 NetworkGuard::Existing,
             ))
         }
         NetworkConfig::Local(config) => {
-            let handle = start_local(config).await?;
+            if use_bootstrap_accounts {
+                return Err(TestkitError::Manifest {
+                    field: "bootstrapAccounts",
+                    detail:
+                        "Local nodes require scenario-owned accounts; remove bootstrap_accounts()."
+                            .into(),
+                });
+            }
+            if accounts > 1000
+                || config.initial_account_tokens == 0
+                || config.initial_account_tokens > i64::MAX as u64
+            {
+                return Err(TestkitError::Manifest { field: "accounts", detail: "local fixture accounts require count <= 1000 and positive initial_account_tokens fitting i64".into() });
+            }
+            let allocations = crate::manifest::derive_native_accounts(accounts, seed, None)
+                .iter()
+                .map(|account| {
+                    groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                        groundhog_json_rpc_types::hex::Hex0x(
+                            account.signer.verifying_key_bytes().into(),
+                        ),
+                        config.initial_account_tokens.to_string(),
+                    )
+                })
+                .collect();
+            let handle = start_local(config, allocations).await?;
             let rpc_url = format!("http://{}", handle.rpc_addr());
             let manifest = handle
                 .hogd_readiness()
@@ -330,7 +371,7 @@ async fn acquire_network(
             let network = Network::connect(&rpc_url, &manifest, manual_block_producer)?;
             Ok((
                 network,
-                account_source(manifest, seed, use_bootstrap_accounts),
+                account_source(manifest, seed, use_bootstrap_accounts, accounts)?,
                 NetworkGuard::Local(Box::new(handle)),
             ))
         }
@@ -350,23 +391,28 @@ fn account_source(
     manifest: groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
     seed: &str,
     use_bootstrap: bool,
-) -> AccountSource {
-    if use_bootstrap {
+    count: usize,
+) -> Result<AccountSource> {
+    let source = if use_bootstrap {
         AccountSource::Manifest(Box::new(manifest))
     } else {
         AccountSource::Native {
-            count: manifest.bootstrap_accounts.iter().filter(|account| account.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER).count(),
-            seed: seed.to_owned(), network_hash: Some(manifest.network_hash.to_network_hash()),
+            count,
+            seed: seed.to_owned(),
+            network_hash: Some(manifest.network_hash.to_network_hash()),
         }
-    }
+    };
+    source.accounts()?;
+    Ok(source)
 }
 
-async fn start_local(config: LocalNetworkConfig) -> Result<NodeSupervisorHandle> {
+async fn start_local(
+    config: LocalNetworkConfig,
+    allocations: Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
+) -> Result<NodeSupervisorHandle> {
     let block_driver = config.block_driver;
     let mut hogd = HogdDevConfig::default()
-        .with_dev_account_count(config.dev_account_count)
-        .with_dev_account_seed(config.dev_account_seed)
-        .with_dev_account_tokens(config.dev_account_tokens)
+        .with_bootstrap_accounts(allocations)
         .with_startup_timeout(config.startup_timeout)
         .with_contract_artifact_directories(config.contract_artifact_directories);
     if let Some(binary) = config.hog_devnode_binary {

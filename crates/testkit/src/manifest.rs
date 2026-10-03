@@ -82,11 +82,7 @@ pub(crate) fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest> {
 }
 
 fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccount>> {
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
-        return Err(TestkitError::UnsupportedDerivationScheme {
-            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
-        });
-    }
+    let derivation = hosted_derivation(manifest)?;
     if !manifest
         .bootstrap_accounts
         .iter()
@@ -95,17 +91,18 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccoun
         return Err(TestkitError::NoBootstrapAccounts);
     }
 
-    let seed = &manifest.bootstrap_account_derivation.seed;
+    let seed = &derivation.seed;
     manifest
         .bootstrap_accounts
         .iter()
         .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
         .map(|account| {
-            let index = usize::try_from(account.index).unwrap_or(usize::MAX);
+            let account_index = hosted_index(account)?;
+            let index = account_index as usize;
             let signer = derive_dev_account_signer(seed, index);
             if account.public_key.as_ref() != signer.verifying_key_bytes().as_slice() {
                 return Err(TestkitError::BootstrapPublicKeyMismatch {
-                    index: account.index,
+                    index: account_index,
                 });
             }
             if PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
@@ -117,7 +114,7 @@ fn derive_manifest_accounts(manifest: &RuntimeManifest) -> Result<Vec<TestAccoun
                 });
             }
             Ok(TestAccount {
-                index: account.index,
+                index: account_index,
                 signer,
                 wallet_address: account.wallet_address.0,
                 network_hash: Some(manifest.network_hash.to_network_hash()),
@@ -146,23 +143,22 @@ pub(crate) fn derive_native_accounts(
 }
 
 pub(crate) fn derive_faucet(manifest: &RuntimeManifest) -> Result<Option<TestAccount>> {
+    if manifest.kind
+        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+    {
+        return Ok(None);
+    }
     let Some(account) = manifest.bootstrap_accounts.iter().find(|account| {
         account.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
     }) else {
         return Ok(None);
     };
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
-        return Err(TestkitError::UnsupportedDerivationScheme {
-            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
-        });
-    }
-    let signer = derive_dev_account_signer(
-        &manifest.bootstrap_account_derivation.seed,
-        account.index as usize,
-    );
+    let derivation = hosted_derivation(manifest)?;
+    let account_index = hosted_index(account)?;
+    let signer = derive_dev_account_signer(&derivation.seed, account_index as usize);
     if account.public_key.as_ref() != signer.verifying_key_bytes().as_slice() {
         return Err(TestkitError::BootstrapPublicKeyMismatch {
-            index: account.index,
+            index: account_index,
         });
     }
     if PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
@@ -174,9 +170,40 @@ pub(crate) fn derive_faucet(manifest: &RuntimeManifest) -> Result<Option<TestAcc
         });
     }
     Ok(Some(TestAccount {
-        index: account.index,
+        index: account_index,
         signer,
         wallet_address: account.wallet_address.0,
         network_hash: Some(manifest.network_hash.to_network_hash()),
     }))
+}
+
+fn hosted_derivation(
+    manifest: &RuntimeManifest,
+) -> Result<&groundhog_json_rpc_types::runtime_manifest::BootstrapAccountDerivation, TestkitError> {
+    if manifest.kind
+        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+    {
+        return Err(TestkitError::Manifest { field: "bootstrapAccounts", detail: "Local manifests contain public allocations only. Use scenario-owned accounts instead of bootstrap_accounts().".into() });
+    }
+    let derivation = manifest
+        .bootstrap_account_derivation
+        .as_ref()
+        .ok_or_else(|| TestkitError::Manifest {
+            field: "bootstrapAccountDerivation",
+            detail: "hosted bootstrap derivation is missing".into(),
+        })?;
+    if derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
+        return Err(TestkitError::UnsupportedDerivationScheme {
+            scheme: derivation.scheme.clone(),
+        });
+    }
+    Ok(derivation)
+}
+fn hosted_index(
+    account: &groundhog_json_rpc_types::runtime_manifest::BootstrapAccount,
+) -> Result<u32> {
+    account.index.ok_or_else(|| TestkitError::Manifest {
+        field: "bootstrapAccounts.index",
+        detail: "hosted bootstrap index is missing".into(),
+    })
 }
