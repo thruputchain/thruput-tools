@@ -27,6 +27,22 @@ mod ui_audit;
 
 static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// How long the harness waits for the CLI under test to do something it is
+/// expected to do on its own: send a request to a mock endpoint, print its
+/// startup line, open a download connection, exit, or reap the process it
+/// supervises.
+///
+/// A passing test never waits anywhere near this long, so the value only
+/// bounds how quickly a genuinely broken command fails. It is deliberately far
+/// above what any command needs because CI runners pause for seconds at a
+/// time: one ~5 s stall failed every `call_*` test at once while the mock
+/// endpoints gave up after 5 s, and a 2 s exit budget has failed
+/// `config_rm_force_does_not_read_stdin` more than once. Waits that assert the
+/// CLI does *not* do something (`assert_no_follow_up_rpc`,
+/// `spawn_no_request_rpc`) keep their short budgets: a stall can only make
+/// those pass early, never fail.
+const CLI_ACTION_TIMEOUT: Duration = Duration::from_mins(1);
+
 /// Write the `.cargo/contract.toml` overlay every contract build requires at
 /// the cargo workspace root.
 ///
@@ -1627,7 +1643,7 @@ fn config_rm_force_does_not_read_stdin() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let status = wait_child(child, Duration::from_secs(2));
+    let status = wait_child(child, CLI_ACTION_TIMEOUT);
 
     assert!(status.success());
     assert_eq!(
@@ -1928,7 +1944,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .stdout
         .take()
         .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
         .expect("bug: startup JSON should be readable");
     let payload: serde_json::Value =
         serde_json::from_str(&line).expect("bug: startup line should be JSON");
@@ -1990,13 +2006,13 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
     let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
         .expect("groundhog node should leave config readable");
     assert!(!global_config.contains("local_runtime_state"));
     assert!(
-        wait_pid_gone(pid, Duration::from_secs(2)),
+        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
         "fake hogd-dev pid {pid} still alive after CLI exit",
     );
 }
@@ -2051,7 +2067,7 @@ fn node_explicit_managed_version_uses_cache_before_path_offline() {
         .stdout
         .take()
         .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
         .expect("bug: managed startup JSON should be readable");
     let payload: serde_json::Value =
         serde_json::from_str(&line).expect("bug: startup line should be JSON");
@@ -2059,9 +2075,9 @@ fn node_explicit_managed_version_uses_cache_before_path_offline() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
-    assert!(wait_pid_gone(pid, Duration::from_secs(2)));
+    assert!(wait_pid_gone(pid, CLI_ACTION_TIMEOUT));
 }
 
 #[cfg(unix)]
@@ -2145,7 +2161,7 @@ fn node_managed_download_stops_on_sigint() {
         .spawn()
         .unwrap();
     let child = ChildGuard::new(child);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
     let _connection = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
@@ -2160,7 +2176,7 @@ fn node_managed_download_stops_on_sigint() {
         }
     };
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(3));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(
         !status.success(),
         "cancelled acquisition must report that the node never started"
@@ -2207,7 +2223,7 @@ fn node_offline_default_falls_back_to_path_after_managed_cache_miss() {
         .stdout
         .take()
         .expect("bug: stdout should be piped");
-    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+    let line = read_line_with_timeout(stdout, CLI_ACTION_TIMEOUT)
         .expect("bug: PATH fallback startup JSON should be readable");
     let payload: serde_json::Value =
         serde_json::from_str(&line).expect("bug: startup line should be JSON");
@@ -2215,9 +2231,9 @@ fn node_offline_default_falls_back_to_path_after_managed_cache_miss() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
-    assert!(wait_pid_gone(pid, Duration::from_secs(2)));
+    assert!(wait_pid_gone(pid, CLI_ACTION_TIMEOUT));
 }
 
 #[cfg(unix)]
@@ -2253,7 +2269,7 @@ fn node_human_startup_reports_chain_state() {
         .stderr
         .take()
         .expect("bug: stderr should be piped");
-    let output = read_until_with_timeout(stderr, "account manifest", Duration::from_secs(10))
+    let output = read_until_with_timeout(stderr, "account manifest", CLI_ACTION_TIMEOUT)
         .expect("bug: human startup output should be readable");
 
     assert!(output.contains("chain state"), "startup output: {output}");
@@ -2265,10 +2281,10 @@ fn node_human_startup_reports_chain_state() {
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
-    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    let status = wait_child(child.into_inner(), CLI_ACTION_TIMEOUT);
     assert!(status.success(), "groundhog node should stop cleanly");
     assert!(
-        wait_pid_gone(pid, Duration::from_secs(2)),
+        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
         "fake hogd-dev pid {pid} still alive after CLI exit",
     );
 }
@@ -2853,7 +2869,7 @@ fn init_non_interactive_never_waits_for_terminal_answers() {
         }
         let (child, terminal) = spawn_with_terminal(command);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(10));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert_eq!(status.success(), generate, "{output}");
@@ -2890,7 +2906,7 @@ fn global_non_interactive_keeps_terminal_output_plain_and_visible() {
             .env_remove("NO_COLOR");
         let (child, terminal) = spawn_with_terminal_outputs(command, 120, true);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(10));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         if is_status {
@@ -2927,7 +2943,7 @@ fn global_non_interactive_terminal_key_removal_requires_force() {
         }
         let (child, terminal) = spawn_with_terminal(command);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(5));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert_eq!(status.success(), force);
@@ -2962,7 +2978,7 @@ fn key_import_refuses_terminal_input_in_non_interactive_modes() {
             .env("XDG_CONFIG_HOME", tmp.path());
         let (child, terminal) = spawn_with_terminal(command);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(5));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(!status.success());
@@ -3164,7 +3180,7 @@ fn init_boxes_respect_stderr_terminal_width() {
             .env_remove("NO_COLOR");
         let (child, terminal) = spawn_with_terminal_width(command, columns);
         let reader = terminal_output_reader(&terminal);
-        assert!(wait_child(child, Duration::from_secs(10)).success());
+        assert!(wait_child(child, CLI_ACTION_TIMEOUT).success());
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(output.contains("Groundhog Ready"));
@@ -3525,7 +3541,7 @@ fn status_terminal_report_wraps_complete_values_with_and_without_color() {
             }
             let (child, terminal) = spawn_with_terminal_width(command, columns);
             let reader = terminal_output_reader(&terminal);
-            let exit = wait_child(child, Duration::from_secs(10));
+            let exit = wait_child(child, CLI_ACTION_TIMEOUT);
             assert_eq!(*expected_exit.get_or_insert(exit.code()), exit.code());
             drop(terminal);
             let output = reader.join().unwrap();
@@ -3609,7 +3625,7 @@ fn status_no_ui_and_ascii_modes_keep_terminal_output_complete() {
         }
         let (child, terminal) = spawn_with_terminal_size(command, 40, 4);
         let reader = terminal_output_reader(&terminal);
-        let status = wait_child(child, Duration::from_secs(10));
+        let status = wait_child(child, CLI_ACTION_TIMEOUT);
         drop(terminal);
         let output = reader.join().unwrap();
         assert!(!status.success());
@@ -4405,7 +4421,7 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
             .spawn()
             .unwrap();
         let mut child = ChildGuard::new(child);
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let _connection = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -4431,7 +4447,7 @@ fn integration_managed_startup_cancellation_reports_test_schema() {
             unsafe { libc::kill(child.child().id().try_into().unwrap(), signal) },
             0
         );
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         while child.child_mut().try_wait().unwrap().is_none() {
             assert!(
                 Instant::now() < deadline,
@@ -6250,7 +6266,7 @@ fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
     std::fs::write(project.join("groundhog.toml"), format!(
         "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
     let server = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
         let signed = serve_local_funding_transaction_with_receipt_failure(
             &listener, deadline, &faucet, &recipient, true,
@@ -9885,7 +9901,7 @@ fn call_with_insufficient_gas_balance_fails_before_submission() {
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let rpc_server = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         assert_eq!(request["method"], "groundhog_chainTip");
         send_jsonrpc_response(
@@ -11086,7 +11102,7 @@ fn keys_rm_force_does_not_read_stdin() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let status = wait_child(child, Duration::from_secs(2));
+    let status = wait_child(child, CLI_ACTION_TIMEOUT);
 
     assert!(status.success());
     assert!(!config_home.join("groundhog/keys/alice.json").exists());
@@ -14146,7 +14162,7 @@ fn spawn_tx_list_rpc(
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) =
             read_jsonrpc_request(&listener, deadline, "getTransactionsByAddress");
         assert_eq!(request["method"], "groundhog_getTransactionsByAddress");
@@ -14178,7 +14194,7 @@ fn spawn_events_rpc(
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getEvents");
         assert_eq!(request["method"], "groundhog_getEvents");
         assert_eq!(request["params"], serde_json::json!([expected_query]));
@@ -14211,7 +14227,7 @@ fn spawn_tx_show_rpc(
     listener.set_nonblocking(true).unwrap();
     let tx_hash = tx_hash.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionStatus");
         assert_eq!(request["method"], "groundhog_getTransactionStatus");
         assert_eq!(request["params"], serde_json::json!([tx_hash]));
@@ -14300,7 +14316,7 @@ fn spawn_network_descriptor_with_hash(
     let rpc_url = rpc_url.to_owned();
     let network_hash = network_hash.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
@@ -14370,7 +14386,7 @@ fn spawn_network_info_rpc(network_hash: &str) -> (String, thread::JoinHandle<()>
     listener.set_nonblocking(true).unwrap();
     let network_hash = network_hash.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
         assert_eq!(request["method"], "groundhog_networkInfo");
         send_jsonrpc_response(
@@ -14441,7 +14457,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     listener.set_nonblocking(true).unwrap();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         if request["method"] == "groundhog_networkInfo" {
             send_jsonrpc_response(
@@ -14495,7 +14511,7 @@ fn spawn_airdrop_rpc(recipient: &str) -> (String, thread::JoinHandle<()>) {
     listener.set_nonblocking(true).unwrap();
     let recipient = recipient.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "networkInfo");
         assert_eq!(request["method"], "groundhog_networkInfo");
         send_jsonrpc_response(
@@ -14547,7 +14563,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
     let faucet = faucet.to_owned();
     let recipient = recipient.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
         let signed_tx = serve_local_funding_transaction(&listener, deadline, &faucet, &recipient);
         assert_eq!(
@@ -14732,7 +14748,7 @@ fn spawn_balance_then_chain_tip_rpc(
     let address = address.to_owned();
     let raw_balance = raw_balance.to_owned();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "groundhog_getBalance");
         assert_eq!(request["params"][0], address);
@@ -14915,7 +14931,7 @@ fn spawn_transfer_rpc(
     listener.set_nonblocking(true).unwrap();
     let (local_hash_tx, local_hash_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (mut stream, mut request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         if request["method"] == "groundhog_networkInfo" {
             send_jsonrpc_response(
@@ -15154,7 +15170,7 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
     let expected_key = key.to_owned();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getStorageAt");
         assert_eq!(request["method"], "groundhog_getStorageAt");
         assert_eq!(request["params"][0], expected_address);
@@ -15185,7 +15201,7 @@ fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinH
     let raw_balance = raw_balance.to_owned();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
         assert_eq!(request["method"], "groundhog_getBalance");
         assert_eq!(request["params"][0], expected_address);
@@ -15302,7 +15318,7 @@ fn spawn_view_rpc_inner_with_events(
     let expected_caller = caller.map(ToOwned::to_owned);
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "view");
         assert_eq!(request["method"], "groundhog_view");
         assert_eq!(request["params"][0]["contract"], expected_address);
@@ -15624,7 +15640,7 @@ fn spawn_transaction_rpc(
     listener.set_nonblocking(true).unwrap();
 
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
 
         serve_chain_tip(&listener, deadline, height);
 
