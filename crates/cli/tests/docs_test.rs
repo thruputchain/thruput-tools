@@ -136,6 +136,37 @@ fn docs_serves_static_snapshot_and_stops_on_signal() {
 }
 
 #[test]
+fn managed_docs_stops_if_the_starting_process_disappears_before_handoff() {
+    let dir = snapshot();
+    let mut server = Server(
+        Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            .args(["docs", "--managed", "--non-interactive", "--json"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let startup = serde_json::json!({
+        "root": dir.path(), "port": 0, "control": { "token": "a".repeat(64) },
+    });
+    let mut pipe = server.0.stdin.take().unwrap();
+    writeln!(pipe, "{startup}").unwrap();
+    // Closing this pipe models the parent being interrupted before it saves
+    // the managed server's state. There is no controller that can stop it yet.
+    drop(pipe);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = server.0.try_wait().unwrap() {
+            assert!(status.success());
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("abandoned docs startup left an untracked server running");
+}
+
+#[test]
 fn docs_warns_about_guide_version_only_for_explicit_snapshots() {
     let external = snapshot();
     let cache = tempfile::tempdir().unwrap();

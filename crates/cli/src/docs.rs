@@ -124,7 +124,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    serve(dir, port, cmd, print, None)
+    serve(dir, port, cmd, print, None, &std::sync::Arc::default())
 }
 
 pub(crate) fn prepare(dir: Option<&Path>) -> Result<(PathBuf, Snapshot), CliError> {
@@ -145,6 +145,7 @@ pub(crate) fn serve(
     cmd: &'static str,
     print: &Print,
     control: Option<service::Control>,
+    shutdown: &std::sync::Arc<tokio::sync::Notify>,
 ) -> Result<(), CliError> {
     let task = crate::print::progress::Task::start(print, "Preparing documentation", true);
     let external_snapshot = dir.is_some();
@@ -200,7 +201,6 @@ pub(crate) fn serve(
                 markdown_index,
             },
         ))?;
-        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let app = service::routes(control, shutdown.clone()).fallback_service(ServeDir::new(root));
         // Dropping the server on either signal closes outstanding connections too.
         // A stalled local client must not prevent the foreground command stopping.

@@ -17,15 +17,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 const HEALTH: &str = "__groundhog_docs/health";
 const STOP: &str = "__groundhog_docs/stop";
+const HANDOFF: &str = "ready\n";
 
 /// A capability used only by the managed process and its parent controller.
 /// The token is intentionally excluded from Debug output and command arguments.
@@ -310,19 +311,26 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
                 }
                 return Ok(report(state, true));
             }
-            let state = spawn(&cache, root, port, &executable)?;
+            let (state, mut child) = spawn(&cache, root, port, &executable)?;
             let saved = (|| -> Result<(), CliError> {
                 let mut file = tempfile::NamedTempFile::new_in(&cache)?;
                 file.write_all(&serde_json::to_vec(&state).map_err(DocsError::Json)?)?;
                 file.as_file().sync_all()?;
                 file.persist(&state_path).map_err(|error| error.error)?;
+                // The child remains tied to this pipe until its controller state
+                // is durable. Parent interruption before this point closes stdin
+                // and stops the otherwise untracked background process.
+                let mut pipe = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| service_error("missing handoff pipe"))?;
+                pipe.write_all(HANDOFF.as_bytes())?;
                 Ok(())
             })();
             if let Err(error) = saved {
-                let _ = client()?
-                    .post(format!("{}{STOP}", state.report.url))
-                    .bearer_auth(&state.control.token)
-                    .send();
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = fs::remove_file(&state_path);
                 return Err(error);
             }
             Ok(report(state, false))
@@ -341,7 +349,12 @@ fn report(state: State, reused: bool) -> ServiceReport {
 }
 
 #[cfg(unix)]
-fn spawn(cache: &Path, root: PathBuf, port: u16, executable: &Path) -> Result<State, CliError> {
+fn spawn(
+    cache: &Path,
+    root: PathBuf,
+    port: u16,
+    executable: &Path,
+) -> Result<(State, Child), CliError> {
     use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
     let mut token = [0_u8; 32];
     getrandom::fill(&mut token)
@@ -380,12 +393,12 @@ fn spawn(cache: &Path, root: PathBuf, port: u16, executable: &Path) -> Result<St
     }
     let mut child = command.spawn()?;
     let result = (|| {
-        let mut stdin = child
+        let stdin = child
             .stdin
-            .take()
+            .as_mut()
             .ok_or_else(|| service_error("missing startup pipe"))?;
         stdin.write_all(&serde_json::to_vec(&startup).map_err(DocsError::Json)?)?;
-        drop(stdin);
+        stdin.write_all(b"\n")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if child.try_wait()?.is_some() {
@@ -420,15 +433,18 @@ fn spawn(cache: &Path, root: PathBuf, port: u16, executable: &Path) -> Result<St
             std::thread::sleep(Duration::from_millis(50));
         }
     })();
-    if result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
+    match result {
+        Ok(state) => Ok((state, child)),
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error)
+        }
     }
-    result
 }
 
 #[cfg(not(unix))]
-fn spawn(_: &Path, _: PathBuf, _: u16, _: &Path) -> Result<State, CliError> {
+fn spawn(_: &Path, _: PathBuf, _: u16, _: &Path) -> Result<(State, Child), CliError> {
     Err(service_error(
         "background mode requires Unix; use foreground mode on this platform",
     ))
@@ -437,17 +453,25 @@ fn spawn(_: &Path, _: PathBuf, _: u16, _: &Path) -> Result<State, CliError> {
 /// Internal child entry point. Startup configuration is received over a private pipe.
 #[doc(hidden)]
 pub fn managed(print: &Print) -> Result<(), CliError> {
+    let mut pipe = BufReader::new(std::io::stdin());
     let mut input = String::new();
-    std::io::stdin()
-        .take(64 * 1024)
-        .read_to_string(&mut input)?;
+    pipe.by_ref().take(64 * 1024).read_line(&mut input)?;
     let startup: Startup =
         serde_json::from_str(&input).map_err(|_| service_error("invalid startup configuration"))?;
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+    let abandoned = shutdown.clone();
+    std::thread::spawn(move || {
+        let mut handoff = String::new();
+        if pipe.take(32).read_line(&mut handoff).is_err() || handoff != HANDOFF {
+            abandoned.notify_one();
+        }
+    });
     super::serve(
         Some(&startup.root),
         startup.port,
         "docs",
         print,
         Some(startup.control),
+        &shutdown,
     )
 }
