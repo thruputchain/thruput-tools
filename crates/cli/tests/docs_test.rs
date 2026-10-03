@@ -231,7 +231,11 @@ fn docs_defaults_to_bundled_cache_without_network_or_project_setup() {
     assert_eq!(ready["data"]["snapshot"]["sourceDirty"], false);
     let url = ready["data"]["url"].as_str().unwrap();
     let address = url.strip_prefix("http://").unwrap().trim_end_matches('/');
-    assert!(request(address, "GET", "/start/").contains("Start Here"));
+    assert!(request(address, "GET", "/get-started/").contains("Get Started"));
+    assert_eq!(
+        ready["data"]["markdownIndex"],
+        root.join("markdown/index.md").to_str().unwrap()
+    );
     let modified = std::fs::metadata(root.join("index.html"))
         .unwrap()
         .modified()
@@ -268,6 +272,46 @@ fn markdown_snapshot() -> tempfile::TempDir {
     .unwrap();
     std::fs::write(dir.path().join("markdown/all.md"), "# Full docs\n").unwrap();
     dir
+}
+
+#[test]
+fn bundled_markdown_export_contains_every_page_and_section_without_network_access() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("export");
+    let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("HTTPS_PROXY", "http://127.0.0.1:1")
+        .args(["docs", "export", "--offline", "--json", "--output"])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["snapshot"], report["data"]["snapshot"]);
+    assert_eq!(manifest["snapshot"]["sourceDirty"], false);
+    let pages = manifest["pages"].as_array().unwrap();
+    assert!(pages.len() > 50);
+    for page in pages {
+        assert!(output.join(page["path"].as_str().unwrap()).is_file());
+        assert!(
+            output
+                .join("sections")
+                .join(format!("{}.md", page["section"].as_str().unwrap()))
+                .is_file()
+        );
+    }
+    assert!(output.join("index.md").is_file());
+    assert!(output.join("full.md").is_file());
+    let quickstart = std::fs::read_to_string(output.join("pages/get-started/react.md")).unwrap();
+    assert!(quickstart.contains("useContractView"));
+    assert!(quickstart.contains("```tsx"));
 }
 
 #[test]

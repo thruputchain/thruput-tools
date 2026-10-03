@@ -33,6 +33,7 @@ def verify(directory: Path) -> dict:
     paths = set()
     total = 0
     snapshot = None
+    markdown = None
     with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as tar:
         for entry in tar:
             name = entry.name
@@ -47,11 +48,16 @@ def verify(directory: Path) -> dict:
                 raise ValueError("archive exceeds content limits")
             if name == "snapshot.json":
                 snapshot = json.load(tar.extractfile(entry))
+            if name == "markdown/manifest.json":
+                markdown = json.load(tar.extractfile(entry))
     fields = ("schemaVersion", "sourceRevision", "sourceDirty", "agentGuideCliVersion")
     if snapshot != {field: pin[field] for field in fields}:
         raise ValueError("archive manifest differs from pin")
-    if not {"index.html", "start/index.html", "agent-guide.md"} <= paths:
+    if not {"index.html", "start/index.html", "agent-guide.md", "markdown/index.md",
+            "markdown/full.md", "markdown/manifest.json", "llms.txt", "llms-full.txt"} <= paths:
         raise ValueError("archive is missing required documentation")
+    if not isinstance(markdown, dict) or markdown.get("schemaVersion") != 1 or markdown.get("snapshot") != snapshot:
+        raise ValueError("Markdown export identity differs from the snapshot")
     return pin
 
 

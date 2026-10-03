@@ -949,10 +949,10 @@ directory without starting a server. The destination's parent must exist;
 an existing destination is rejected so user files are preserved. The exported
 folder can be copied to an agent on another machine.
 
-The currently selected bundled snapshot predates the Markdown export format.
-Until a new snapshot is imported, use `docs export --dir <snapshot> --output
-<directory>` with a compatible developer-site build. Older snapshots still
-support browser serving; export reports that Markdown is unavailable.
+The bundled snapshot includes individual pages under `pages/`, focused bundles
+under `sections/`, and the complete documentation in `full.md`. Start at
+`index.md` to choose the relevant material. With `--dir`, older snapshots still
+support browser serving; export reports an error if their Markdown set is missing.
 
 Foreground serving remains the default (`--foreground` is explicit).
 Background mode is supported on Unix and does not restart after reboot.

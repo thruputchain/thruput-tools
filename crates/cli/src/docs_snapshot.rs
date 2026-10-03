@@ -31,6 +31,13 @@ struct Pin {
     sha256: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkdownManifest {
+    schema_version: u32,
+    snapshot: Snapshot,
+}
+
 type Files = Vec<(PathBuf, Vec<u8>)>;
 
 fn invalid(message: &str) -> DocsError {
@@ -104,8 +111,21 @@ fn decode(archive: &[u8], pin: &Pin) -> Result<Files, CliError> {
         || !paths.contains("index.html")
         || !paths.contains("start/index.html")
         || !paths.contains("agent-guide.md")
+        || !paths.contains("markdown/index.md")
+        || !paths.contains("markdown/full.md")
+        || !paths.contains("llms.txt")
+        || !paths.contains("llms-full.txt")
     {
         return Err(invalid("archive identity or entry points differ from its pin").into());
+    }
+    let markdown = files
+        .iter()
+        .find(|(path, _)| path == Path::new("markdown/manifest.json"))
+        .ok_or_else(|| invalid("archive has no Markdown manifest"))?;
+    let markdown: MarkdownManifest =
+        serde_json::from_slice(&markdown.1).map_err(|_| invalid("invalid Markdown manifest"))?;
+    if markdown.schema_version != 1 || markdown.snapshot != snapshot {
+        return Err(invalid("Markdown export identity differs from the snapshot").into());
     }
     Ok(files)
 }
@@ -212,6 +232,48 @@ mod tests {
         let mut bytes = ARCHIVE.to_vec();
         bytes[10] ^= 1;
         assert!(decode(&bytes, &pin).is_err());
+    }
+
+    #[test]
+    fn rejects_markdown_from_another_revision_even_when_archive_checksum_matches() {
+        let mut pin: Pin = serde_json::from_str(LOCK).unwrap();
+        let snapshot = serde_json::to_string(&pin.snapshot).unwrap();
+        let mut markdown_snapshot = pin.snapshot.clone();
+        markdown_snapshot.source_revision = "b".repeat(40);
+        let markdown = serde_json::to_string(&serde_json::json!({
+            "schemaVersion": 1, "snapshot": markdown_snapshot,
+        }))
+        .unwrap();
+        let mut tar = tar::Builder::new(Vec::new());
+        for (name, content) in [
+            ("index.html", ""),
+            ("start/index.html", ""),
+            ("agent-guide.md", ""),
+            ("markdown/index.md", ""),
+            ("markdown/full.md", ""),
+            ("llms.txt", ""),
+            ("llms-full.txt", ""),
+            ("snapshot.json", snapshot.as_str()),
+            ("markdown/manifest.json", markdown.as_str()),
+        ] {
+            let mut header = tar::Header::new_ustar();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, name, content.as_bytes())
+                .unwrap();
+        }
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gzip, &tar.into_inner().unwrap()).unwrap();
+        let bytes = gzip.finish().unwrap();
+        pin.archive_bytes = bytes.len();
+        pin.sha256 = hex::encode(Sha256::digest(&bytes));
+        assert!(
+            decode(&bytes, &pin)
+                .unwrap_err()
+                .to_string()
+                .contains("Markdown export identity")
+        );
     }
 
     fn entry_archive(name: &str, kind: tar::EntryType) -> (Vec<u8>, Pin) {

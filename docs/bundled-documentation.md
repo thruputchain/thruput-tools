@@ -37,5 +37,7 @@ The snapshot's existing `snapshot.json` supplies the source revision.
 Older snapshots remain valid for browser serving but cannot be exported as a
 Markdown set. Do not derive Markdown from their generated HTML in the CLI.
 
-The current pin predates this export contract. GH-453 owns the producer and
-must supply a clean snapshot before the default bundled export can ship.
+The site build generates and checks these files together with the HTML. Its
+Markdown manifest records the same source identity as `snapshot.json`; both
+the importer and the CLI verify that they match. Keep the Markdown tree and
+the browser site in the same selected archive.
