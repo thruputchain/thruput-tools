@@ -6,13 +6,6 @@
   "target": {
     "provider": "local"
   },
-  "bootstrap": {
-    "accounts": 1,
-    "accountSeed": "sim-local-counter-read-after-write-smoke-accounts",
-    "initialStorageTokens": "1000000000",
-    "storageCostProfile": "default",
-    "deploymentCollateralRaw": "100000000"
-  },
   "loadShape": [
     {
       "duration": "8s",
@@ -59,5 +52,13 @@
   ],
   "assertions": {
     "maxErrorRate": 0.001
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-counter-read-after-write-smoke:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

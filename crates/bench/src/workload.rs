@@ -95,9 +95,16 @@ pub(super) fn generate_tx_batch(
 }
 
 fn manifest_bench_accounts(manifest: &RuntimeManifest) -> Result<Vec<BenchAccount>, BenchError> {
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
+    if manifest.kind
+        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+    {
+        return Err(BenchError::InvalidConfiguration("Local runtime manifests contain public allocations only; supply --account-seed for benchmark-owned fixtures.".into()));
+    }
+    let derivation = manifest.bootstrap_account_derivation.as_ref().ok_or_else(||
+        BenchError::InvalidConfiguration("Local runtime manifests contain public allocations only; supply --account-seed for benchmark-owned fixtures.".into()))?;
+    if derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
         return Err(BenchError::UnsupportedDerivationScheme {
-            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
+            scheme: derivation.scheme.clone(),
         });
     }
 
@@ -113,22 +120,31 @@ fn manifest_bench_account(
     manifest: &RuntimeManifest,
     account: &BootstrapAccount,
 ) -> Result<BenchAccount, BenchError> {
+    let account_index = account.index.ok_or_else(|| {
+        BenchError::InvalidConfiguration("hosted bootstrap index is missing".into())
+    })?;
     let index =
-        usize::try_from(account.index).map_err(|_| BenchError::BootstrapAccountIndexTooLarge {
-            index: account.index,
+        usize::try_from(account_index).map_err(|_| BenchError::BootstrapAccountIndexTooLarge {
+            index: account_index,
         })?;
-    let signer = dev_signer_from_seed(&manifest.bootstrap_account_derivation.seed, index);
+    let derivation = manifest
+        .bootstrap_account_derivation
+        .as_ref()
+        .ok_or_else(|| {
+            BenchError::InvalidConfiguration("hosted bootstrap derivation is missing".into())
+        })?;
+    let signer = dev_signer_from_seed(&derivation.seed, index);
     let expected_public_key = signer.verifying_key_bytes();
     if account.public_key.as_ref() != expected_public_key.as_slice() {
         return Err(BenchError::BootstrapPublicKeyMismatch {
-            index: account.index,
+            index: account_index,
         });
     }
     if PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address()
         != account.wallet_address.0
     {
         return Err(BenchError::BootstrapAddressMismatch {
-            index: account.index,
+            index: account_index,
         });
     }
     Ok(BenchAccount {
@@ -141,6 +157,7 @@ pub(super) fn transaction_inputs_for_method(
     method: &str,
     manifest: Option<&RuntimeManifest>,
     num_accounts: usize,
+    fixture_seed: Option<&str>,
 ) -> Result<Vec<BenchAccount>, BenchError> {
     if method != "sendRawTransaction" {
         return Ok(Vec::new());
@@ -150,7 +167,23 @@ pub(super) fn transaction_inputs_for_method(
     }
 
     let manifest = manifest.ok_or(BenchError::MissingRuntimeManifest)?;
-    let mut accounts = manifest_bench_accounts(manifest)?;
+    let mut accounts = if let Some(seed) = fixture_seed {
+        if seed.is_empty() || num_accounts > 1000 {
+            return Err(BenchError::InvalidConfiguration(
+                "fixture seed must be nonempty and accounts <= 1000".into(),
+            ));
+        }
+        (0..num_accounts).map(|index| {
+            let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
+            let wallet_address = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address();
+            if !manifest.bootstrap_accounts.iter().any(|a| a.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER && a.public_key.as_ref() == signer.verifying_key_bytes().as_slice() && a.wallet_address.0 == wallet_address) {
+                return Err(BenchError::InvalidConfiguration(format!("fixture account {index} is absent from public initial allocations; start the node with matching --bootstrap-accounts")));
+            }
+            Ok(BenchAccount { signer, wallet_address })
+        }).collect::<Result<Vec<_>, BenchError>>()?
+    } else {
+        manifest_bench_accounts(manifest)?
+    };
     if accounts.len() < num_accounts {
         return Err(BenchError::NotEnoughAccounts {
             requested: num_accounts,
@@ -242,19 +275,60 @@ pub(super) fn validate_method(method: &str) -> Result<(), BenchError> {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::{hex::Hex0x, runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION};
+    use groundhog_json_rpc_types::hex::Hex0x;
     use groundhog_xdr::types::{Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash};
     use serde_json::json;
 
     use super::*;
 
     #[test]
+    fn local_public_allocations_require_matching_owned_fixture_seed() {
+        let seed = "bench-owned";
+        let mut manifest = manifest_with_accounts(2);
+        manifest.kind = "hogd-dev-runtime".into();
+        manifest.schema_version = 4;
+        manifest.bootstrap_account_derivation = None;
+        for (index, account) in manifest.bootstrap_accounts.iter_mut().enumerate() {
+            let signer = derive_dev_account_signer(&format!("groundhog-bench:{seed}"), index);
+            account.index = None;
+            account.public_key = Hex0x(signer.verifying_key_bytes().into());
+            account.wallet_address = Hex0x(
+                PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
+            );
+        }
+        assert!(
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, None).is_err()
+        );
+        assert!(
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, Some("wrong"))
+                .is_err()
+        );
+        let accounts =
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, Some(seed))
+                .unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(
+            accounts[0].wallet_address,
+            manifest.bootstrap_accounts[0].wallet_address.0
+        );
+        assert!(
+            transaction_inputs_for_method("chainTip", Some(&manifest), 2, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn read_only_manifest_does_not_validate_bootstrap_accounts() {
         let mut manifest = manifest();
-        manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
+        manifest
+            .bootstrap_account_derivation
+            .as_mut()
+            .unwrap()
+            .scheme = "future-scheme".into();
         manifest.bootstrap_accounts.clear();
 
-        let accounts = transaction_inputs_for_method("chainTip", Some(&manifest), 0)
+        let accounts = transaction_inputs_for_method("chainTip", Some(&manifest), 0, None)
             .expect("bug: read-only manifest should not validate accounts");
 
         assert!(accounts.is_empty());
@@ -263,12 +337,17 @@ mod tests {
     #[test]
     fn send_raw_transaction_rejects_unsupported_manifest_derivation_scheme() {
         let mut manifest = manifest();
-        manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
+        manifest
+            .bootstrap_account_derivation
+            .as_mut()
+            .unwrap()
+            .scheme = "future-scheme".into();
 
-        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1) {
-            Ok(_) => panic!("bug: unsupported derivation scheme should fail"),
-            Err(error) => error,
-        };
+        let err =
+            match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1, None) {
+                Ok(_) => panic!("bug: unsupported derivation scheme should fail"),
+                Err(error) => error,
+            };
 
         assert!(matches!(
             err,
@@ -278,7 +357,7 @@ mod tests {
 
     #[test]
     fn send_raw_transaction_requires_runtime_manifest() {
-        let err = match transaction_inputs_for_method("sendRawTransaction", None, 1) {
+        let err = match transaction_inputs_for_method("sendRawTransaction", None, 1, None) {
             Ok(_) => panic!("bug: submit benchmark without runtime metadata should fail"),
             Err(error) => error,
         };
@@ -289,12 +368,17 @@ mod tests {
     #[test]
     fn send_raw_transaction_rejects_zero_accounts_before_manifest_validation() {
         let mut manifest = manifest();
-        manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
+        manifest
+            .bootstrap_account_derivation
+            .as_mut()
+            .unwrap()
+            .scheme = "future-scheme".into();
 
-        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 0) {
-            Ok(_) => panic!("bug: zero-account submit benchmark should fail"),
-            Err(error) => error,
-        };
+        let err =
+            match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 0, None) {
+                Ok(_) => panic!("bug: zero-account submit benchmark should fail"),
+                Err(error) => error,
+            };
 
         assert!(matches!(err, BenchError::MissingAccounts));
     }
@@ -302,7 +386,8 @@ mod tests {
     #[test]
     fn send_raw_transaction_uses_native_execute_entrypoint() {
         let accounts =
-            transaction_inputs_for_method("sendRawTransaction", Some(&manifest()), 1).unwrap();
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest()), 1, None)
+                .unwrap();
         let network = manifest().network_hash.to_network_hash();
         let transactions = generate_tx_batch(1, &accounts, &network, 42).unwrap();
         let bytes = hex::decode(transactions[0].hex.trim_start_matches("0x")).unwrap();
@@ -325,6 +410,7 @@ mod tests {
             "sendRawTransaction",
             Some(&manifest_with_accounts(3)),
             2,
+            None,
         )
         .expect("bug: manifest has the requested number of accounts");
 
@@ -336,14 +422,18 @@ mod tests {
         let mut manifest = manifest_with_accounts(3);
         manifest.bootstrap_accounts[0].role = "faucet".into();
 
-        let accounts = transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2)
-            .expect("bug: two local-user accounts should be available");
+        let accounts =
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 2, None)
+                .expect("bug: two local-user accounts should be available");
 
         assert_eq!(accounts.len(), 2);
         assert_eq!(
             accounts[0].signer.verifying_key_bytes(),
-            derive_dev_account_signer(&manifest.bootstrap_account_derivation.seed, 1)
-                .verifying_key_bytes()
+            derive_dev_account_signer(
+                &manifest.bootstrap_account_derivation.as_ref().unwrap().seed,
+                1
+            )
+            .verifying_key_bytes()
         );
     }
 
@@ -353,6 +443,7 @@ mod tests {
             "sendRawTransaction",
             Some(&manifest_with_accounts(2)),
             3,
+            None,
         ) {
             Ok(_) => panic!("bug: account underfill should fail"),
             Err(error) => error,
@@ -372,10 +463,11 @@ mod tests {
         let mut manifest = manifest();
         manifest.bootstrap_accounts[0].public_key = Hex0x(XdrEd25519PublicKey::from([0x99; 32]));
 
-        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1) {
-            Ok(_) => panic!("bug: public key mismatch should fail"),
-            Err(error) => error,
-        };
+        let err =
+            match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1, None) {
+                Ok(_) => panic!("bug: public key mismatch should fail"),
+                Err(error) => error,
+            };
 
         assert!(matches!(
             err,
@@ -389,8 +481,8 @@ mod tests {
         let mut public_key = [0u8; 32];
         public_key.copy_from_slice(&signer.verifying_key_bytes());
         serde_json::from_value(json!({
-            "schemaVersion": RUNTIME_MANIFEST_SCHEMA_VERSION,
-            "kind": "hogd-dev-runtime",
+            "schemaVersion": 3,
+            "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test00000000000",
@@ -433,12 +525,14 @@ mod tests {
     fn manifest_with_accounts(count: usize) -> RuntimeManifest {
         let mut manifest = manifest();
         for index in 1..count {
-            let signer =
-                derive_dev_account_signer(&manifest.bootstrap_account_derivation.seed, index);
+            let signer = derive_dev_account_signer(
+                &manifest.bootstrap_account_derivation.as_ref().unwrap().seed,
+                index,
+            );
             let mut public_key = [0u8; 32];
             public_key.copy_from_slice(&signer.verifying_key_bytes());
             let mut account = manifest.bootstrap_accounts[0].clone();
-            account.index = u32::try_from(index).expect("bug: test account index should fit");
+            account.index = Some(u32::try_from(index).expect("bug: test account index should fit"));
             account.wallet_address = Hex0x(
                 PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address(),
             );

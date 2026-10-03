@@ -174,11 +174,7 @@ pub fn runtime_config_sha256(bytes: &[u8]) -> Result<String, serde_json::Error> 
 pub fn derive_accounts(
     manifest: &RuntimeManifest,
 ) -> Result<Vec<SimAccount>, RuntimeManifestError> {
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
-        return Err(RuntimeManifestError::UnsupportedDerivationScheme {
-            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
-        });
-    }
+    hosted_derivation(manifest)?;
     manifest
         .bootstrap_accounts
         .iter()
@@ -196,7 +192,7 @@ pub fn derive_provisioning_sponsor(
     let account = manifest
         .bootstrap_accounts
         .iter()
-        .find(|account| account.index == 0 && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET)
+        .find(|account| account.index == Some(0) && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET)
         .ok_or(RuntimeManifestError::MissingProvisioningFaucet)?;
     derive_account(manifest, account)
 }
@@ -205,33 +201,30 @@ pub fn derive_provisioned_account_signer(
     manifest: &RuntimeManifest,
     index: u32,
 ) -> Result<LocalSigner, RuntimeManifestError> {
-    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
-        return Err(RuntimeManifestError::UnsupportedDerivationScheme {
-            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
-        });
-    }
+    let derivation = hosted_derivation(manifest)?;
     let index = usize::try_from(index)
         .map_err(|_| RuntimeManifestError::BootstrapAccountIndexTooLarge { index })?;
-    Ok(derive_dev_account_signer(
-        &manifest.bootstrap_account_derivation.seed,
-        index,
-    ))
+    Ok(derive_dev_account_signer(&derivation.seed, index))
 }
 
 fn derive_account(
     manifest: &RuntimeManifest,
     account: &BootstrapAccount,
 ) -> Result<SimAccount, RuntimeManifestError> {
-    let index = usize::try_from(account.index).map_err(|_| {
+    let derivation = hosted_derivation(manifest)?;
+    let account_index = account
+        .index
+        .ok_or(RuntimeManifestError::ExplicitAccountsRequired)?;
+    let index = usize::try_from(account_index).map_err(|_| {
         RuntimeManifestError::BootstrapAccountIndexTooLarge {
-            index: account.index,
+            index: account_index,
         }
     })?;
-    let signer = derive_dev_account_signer(&manifest.bootstrap_account_derivation.seed, index);
+    let signer = derive_dev_account_signer(&derivation.seed, index);
     let expected_public_key = signer.verifying_key_bytes();
     if account.public_key.as_ref() != expected_public_key.as_slice() {
         return Err(RuntimeManifestError::BootstrapPublicKeyMismatch {
-            index: account.index,
+            index: account_index,
         });
     }
 
@@ -240,19 +233,46 @@ fn derive_account(
         != account.wallet_address.0
     {
         return Err(RuntimeManifestError::BootstrapAddressMismatch {
-            index: account.index,
+            index: account_index,
         });
     }
     Ok(SimAccount {
-        index: account.index,
+        index: account_index,
         signer,
         wallet_address: account.wallet_address.0,
         network_hash: manifest.network_hash.to_network_hash(),
     })
 }
 
+fn hosted_derivation(
+    manifest: &RuntimeManifest,
+) -> Result<
+    &groundhog_json_rpc_types::runtime_manifest::BootstrapAccountDerivation,
+    RuntimeManifestError,
+> {
+    if manifest.kind
+        != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+    {
+        return Err(RuntimeManifestError::ExplicitAccountsRequired);
+    }
+    let derivation = manifest
+        .bootstrap_account_derivation
+        .as_ref()
+        .ok_or(RuntimeManifestError::ExplicitAccountsRequired)?;
+    if derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
+        return Err(RuntimeManifestError::UnsupportedDerivationScheme {
+            scheme: derivation.scheme.clone(),
+        });
+    }
+    Ok(derivation)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeManifestError {
+    #[error(
+        "local runtime manifests contain public allocations only; supply explicit scenario-owned native accounts"
+    )]
+    ExplicitAccountsRequired,
     #[error("failed to read runtime manifest {path}: {source}")]
     Read {
         path: String,
@@ -342,7 +362,7 @@ mod tests {
         manifest.bootstrap_accounts[0].role = "faucet".into();
         let signer = derive_dev_account_signer("seed", 3);
         let mut local_user = manifest.bootstrap_accounts[0].clone();
-        local_user.index = 3;
+        local_user.index = Some(3);
         local_user.role = BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER.into();
         local_user.public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         local_user.wallet_address = Hex0x(
@@ -546,7 +566,7 @@ mod tests {
         };
         serde_json::from_value(json!({
             "schemaVersion": 3,
-            "kind": "hogd-dev-runtime",
+            "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": protocol_text(&groundhog_xdr::PROTOCOL_VERSION),

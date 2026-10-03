@@ -6,9 +6,11 @@ use crate::{
     runtime::SimAccount,
     util::write_json_pretty_atomic,
 };
-use groundhog_json_rpc_client::{AirdropApiClient, GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::{
+    AirdropApiClient, GroundhogApiClient, HttpClientBuilder, LocalFundingApiClient,
+};
 use groundhog_json_rpc_types::{
-    airdrop::{AirdropRequest, ClientNonce},
+    airdrop::{AirdropRequest, ClientNonce, FundAccountRequest},
     hex::Hex0x,
     runtime_manifest::RuntimeManifest,
 };
@@ -86,10 +88,40 @@ pub fn execute(
 pub async fn prepare_accounts(
     spec: &NativeAccountsSpec,
     actors: &[ActorState],
+    runtime: &RuntimeManifest,
     rpc_url: &str,
     out_dir: &Path,
     request_timeout: Duration,
 ) -> Result<(), SimError> {
+    if !cfg!(unix)
+        && spec.funding == NativeAccountFunding::Faucet
+        && runtime.kind
+            == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+    {
+        return Err(SimError::Executor(
+            "local faucet setup requires a Unix filesystem for durable funding evidence; pre-fund fixtures on this platform".into(),
+        ));
+    }
+    let evidence = out_dir.join("native-accounts.json");
+    let reservation = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&evidence)
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                SimError::Executor(format!(
+                    "native funding evidence already exists at {}; preserve and reconcile its fundingRequest before starting a new run in a new output directory",
+                    evidence.display()
+                ))
+            } else {
+                SimError::Executor(format!("reserve native funding evidence: {error}"))
+            }
+        })?;
+    reservation.sync_all().await?;
+    #[cfg(unix)]
+    tokio::fs::File::open(out_dir).await?.sync_all().await?;
+    drop(reservation);
     let minimum = spec
         .minimum_balance_raw
         .parse::<u128>()
@@ -102,7 +134,16 @@ pub async fn prepare_accounts(
     for actor in actors {
         records.push(json!({"actorId":actor.actor_id,"accountIndex":actor.account_index,"address":format!("0x{}",hex::encode(actor.wallet_address.as_ref())),"status":"started"}));
         save_accounts(out_dir, &records).await?;
-        let result = prepare_account(spec, actor, &client, minimum, out_dir, &mut records).await;
+        let result = prepare_account(
+            spec,
+            actor,
+            runtime,
+            &client,
+            minimum,
+            out_dir,
+            &mut records,
+        )
+        .await;
         let record = records.last_mut().expect("current actor record");
         match &result {
             Ok(()) => record["status"] = json!("verified"),
@@ -129,6 +170,7 @@ async fn save_accounts(out_dir: &Path, records: &[serde_json::Value]) -> Result<
 async fn prepare_account(
     spec: &NativeAccountsSpec,
     actor: &ActorState,
+    runtime: &RuntimeManifest,
     client: &groundhog_json_rpc_client::HttpClient,
     minimum: u128,
     out_dir: &Path,
@@ -160,6 +202,25 @@ async fn prepare_account(
             balance.raw_balance,
             minimum
         )));
+    }
+    if runtime.kind == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND {
+        fund_local_account(spec, actor, runtime, client, out_dir, records).await?;
+        let balance = tokio::time::timeout(
+            Duration::from_secs(30),
+            verify_funded_balance(client, actor, minimum),
+        )
+        .await
+        .map_err(|_| {
+            SimError::Executor("local funding did not reach the configured minimum in 30s".into())
+        })??;
+        records.last_mut().expect("bug: current actor record")["balance"] = json!(balance);
+        return Ok(());
+    }
+    if spec.funding_amount_raw.is_some() {
+        return Err(SimError::Executor(
+            "fundingAmountRaw requires a local runtime; hosted faucets retain their fixed amount"
+                .into(),
+        ));
     }
     let mut digest = Sha256::new();
     digest.update(b"hogsim-native-funding-v1");
@@ -214,6 +275,94 @@ async fn prepare_account(
     Ok(())
 }
 
+async fn fund_local_account(
+    spec: &NativeAccountsSpec,
+    actor: &ActorState,
+    runtime: &RuntimeManifest,
+    client: &groundhog_json_rpc_client::HttpClient,
+    out_dir: &Path,
+    records: &mut [serde_json::Value],
+) -> Result<(), SimError> {
+    let mut faucets = runtime.bootstrap_accounts.iter().filter(|a| {
+        a.role == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_FAUCET
+    });
+    let faucet = faucets
+        .next()
+        .ok_or_else(|| SimError::Executor("local runtime faucet is missing".into()))?;
+    if faucets.next().is_some()
+        || PubkeyAccount::from_public_key_bytes(*faucet.public_key.0, 0).address()
+            != faucet.wallet_address.0
+    {
+        return Err(SimError::Executor(
+            "local faucet metadata does not match a unique native account".into(),
+        ));
+    }
+    let raw_amount = spec.funding_amount_raw.clone().ok_or_else(|| {
+        SimError::Executor("local faucet setup requires explicit accounts.fundingAmountRaw".into())
+    })?;
+    let mut digest = Sha256::new();
+    digest.update(b"hogsim-local-funding-v1");
+    digest.update(runtime.network_hash.to_network_hash().as_ref());
+    digest.update(faucet.wallet_address.0.as_ref());
+    digest.update(actor.wallet_address.as_ref());
+    digest.update(actor.nonce_namespace.get().to_le_bytes());
+    let request = FundAccountRequest {
+        recipient: Hex0x(actor.wallet_address),
+        raw_amount,
+        faucet: faucet.wallet_address,
+        client_nonce: ClientNonce::new(digest.finalize().to_vec())
+            .map_err(|e| SimError::Executor(e.to_string()))?,
+    };
+    request.amount().map_err(|e| SimError::Executor(e.into()))?;
+    let record = records.last_mut().expect("bug: current actor record");
+    record["networkHash"] = json!(runtime.network_hash);
+    record["fundingRequest"] = json!(request);
+    save_accounts(out_dir, records).await?;
+    let response = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match client.fund_account(request.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(jsonrpsee::core::client::Error::RequestTimeout | jsonrpsee::core::client::Error::Transport(_) | jsonrpsee::core::client::Error::RestartNeeded(_) | jsonrpsee::core::client::Error::ServiceDisconnect) => tokio::time::sleep(Duration::from_millis(250)).await,
+                Err(error) => return Err(SimError::Executor(format!("local funding: {error}; retained request is in native-accounts.json"))),
+            }
+        }
+    }).await.map_err(|_| SimError::Executor("local funding response remained uncertain; reconcile the retained request in native-accounts.json".into()))??;
+    let signed: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&response.signed_transaction.0)
+            .map_err(|e| SimError::Executor(e.to_string()))?;
+    let hash = groundhog_signing::transaction_hash(&signed.tx)
+        .map_err(|e| SimError::Executor(e.to_string()))?;
+    if response.recipient != request.recipient
+        || response.raw_amount != request.raw_amount
+        || response.tx_hash.0.0 != hash
+    {
+        return Err(SimError::Executor(
+            "local funding response does not match the retained request/hash".into(),
+        ));
+    }
+    records.last_mut().expect("bug: current actor record")["funding"] = json!(response);
+    save_accounts(out_dir, records).await?;
+    let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+        client,
+        response.tx_hash,
+        120,
+        Duration::from_millis(250),
+    )
+    .await
+    .map_err(|e| SimError::Executor(format!("local funding receipt: {e}")))?;
+    if receipt.tx_hash != response.tx_hash
+        || !matches!(
+            receipt.status,
+            groundhog_json_rpc_types::receipt::ExecStatus::Ok
+        )
+    {
+        return Err(SimError::Executor(
+            "local funding receipt failed or mismatched".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn verify_funded_balance(
     client: &groundhog_json_rpc_client::HttpClient,
     actor: &ActorState,
@@ -250,6 +399,167 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    fn hosted_runtime() -> RuntimeManifest {
+        serde_json::from_str(include_str!(
+            "../../testkit/tests/fixtures/hosted-runtime.json"
+        ))
+        .expect("hosted fixture")
+    }
+
+    fn local_runtime() -> RuntimeManifest {
+        let mut runtime = hosted_runtime();
+        runtime.kind = "hogd-dev-runtime".into();
+        runtime.schema_version = 4;
+        runtime.bootstrap_account_derivation = None;
+        runtime.bootstrap_accounts.truncate(1);
+        let faucet = derive_dev_account_signer("local-faucet-fixture", 0);
+        let allocation = &mut runtime.bootstrap_accounts[0];
+        allocation.index = None;
+        allocation.public_key = Hex0x(faucet.verifying_key_bytes().into());
+        allocation.wallet_address =
+            Hex0x(PubkeyAccount::from_public_key_bytes(faucet.verifying_key_bytes(), 0).address());
+        runtime
+    }
+
+    fn local_funding_response(
+        request: &FundAccountRequest,
+    ) -> groundhog_json_rpc_types::airdrop::FundAccountResponse {
+        use groundhog_signing::{
+            SignTransactionParams, sign_and_encode_transaction_hex, transaction_hash,
+        };
+        let faucet = derive_dev_account_signer("local-faucet-fixture", 0);
+        let calldata = groundhog_signing::native_hog_transfer_calldata(
+            &request.recipient.0,
+            request.amount().unwrap(),
+        )
+        .unwrap();
+        let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+            groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+                account: &PubkeyAccount::from_public_key_bytes(faucet.verifying_key_bytes(), 0),
+                target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+                target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+                target_calldata: &calldata,
+                gas_limit: 20_000_000,
+                target_gas_limit: 10_000_000,
+                block_expiry_height: 1000,
+                nonce: 123,
+            },
+        )
+        .unwrap();
+        let hash =
+            groundhog_json_rpc_types::transaction::TxHash(Hex0x(transaction_hash(&tx).unwrap()));
+        let encoded = sign_and_encode_transaction_hex(
+            tx,
+            &faucet,
+            SignTransactionParams::default(),
+            &NetworkHash::new([0; 32].into()),
+        )
+        .unwrap();
+        groundhog_json_rpc_types::airdrop::FundAccountResponse::new(
+            request.recipient,
+            request.raw_amount.clone(),
+            hash,
+            groundhog_json_rpc_types::hex::HexBytes(
+                hex::decode(encoded.trim_start_matches("0x")).unwrap(),
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn repeated_output_directory_preserves_unresolved_funding_evidence() {
+        let dir = tempfile::tempdir().expect("directory");
+        let path = dir.path().join("native-accounts.json");
+        let original =
+            br#"{"accounts":[{"fundingRequest":{"clientNonce":"0x1234"},"status":"failed"}]}"#;
+        tokio::fs::write(&path, original).await.expect("evidence");
+        let spec = NativeAccountsSpec {
+            seed: "explicit-fixture".into(),
+            funding: NativeAccountFunding::Faucet,
+            minimum_balance_raw: "1".into(),
+            funding_amount_raw: Some("1000000".into()),
+            deployment_collateral_raw: None,
+            kind: crate::manifest::NativeAccountKind::Native,
+        };
+        let error = prepare_accounts(
+            &spec,
+            &[],
+            &local_runtime(),
+            "http://127.0.0.1:1",
+            dir.path(),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect_err("existing evidence");
+        assert!(error.to_string().contains("preserve and reconcile"));
+        assert_eq!(tokio::fs::read(path).await.expect("evidence"), original);
+    }
+
+    #[tokio::test]
+    async fn local_funding_persists_request_and_retries_the_same_nonce_after_lost_response() {
+        let actor = actor();
+        let address = actor.wallet_address;
+        let out = tempfile::tempdir().unwrap();
+        let artifact = out.path().join("native-accounts.json");
+        let requests = Arc::new(std::sync::Mutex::new(Vec::<FundAccountRequest>::new()));
+        let server = jsonrpsee::server::ServerBuilder::default()
+            .build("127.0.0.1:0")
+            .await
+            .unwrap();
+        let url = format!("http://{}", server.local_addr().unwrap());
+        let mut module = jsonrpsee::RpcModule::new(requests.clone());
+        module.register_method("groundhog_getBalance", move |_, requests, _| json!({"address":Hex0x(address),"rawBalance":if requests.lock().unwrap().is_empty(){"0"}else{"100"},"height":3})).unwrap();
+        module
+            .register_async_method("groundhog_fundAccount", move |params, requests, _| {
+                let artifact = artifact.clone();
+                async move {
+                    let request: FundAccountRequest = params.one()?;
+                    let saved: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&artifact).unwrap()).unwrap();
+                    assert_eq!(saved["accounts"][0]["fundingRequest"], json!(request));
+                    let first = {
+                        let mut seen = requests.lock().unwrap();
+                        seen.push(request.clone());
+                        seen.len() == 1
+                    };
+                    if first {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Ok::<_, jsonrpsee::types::ErrorObjectOwned>(local_funding_response(&request))
+                }
+            })
+            .unwrap();
+        module.register_method("groundhog_getTransactionReceipt", |params, _, _| {
+            let hash: groundhog_json_rpc_types::transaction::TxHash = params.one()?;
+            Ok::<_, jsonrpsee::types::ErrorObjectOwned>(json!({"txHash":hash,"height":3,"status":{"result":"ok"},"events":[],"gasUsed":1}))
+        }).unwrap();
+        let handle = server.start(module);
+        let spec = serde_json::from_value(json!({"kind":"native","seed":"fixture","funding":"faucet","fundingAmountRaw":"100","minimumBalanceRaw":"50"})).unwrap();
+        let runtime = local_runtime();
+        prepare_accounts(
+            &spec,
+            &[actor],
+            &runtime,
+            &url,
+            out.path(),
+            Duration::from_millis(30),
+        )
+        .await
+        .unwrap();
+        {
+            let seen = requests.lock().unwrap();
+            assert_eq!(seen.len(), 2);
+            assert_eq!(seen[0], seen[1]);
+            assert_eq!(seen[0].faucet, runtime.bootstrap_accounts[0].wallet_address);
+        }
+        let saved: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(out.path().join("native-accounts.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["accounts"][0]["status"], "verified");
+        assert!(saved["accounts"][0]["funding"]["signedTransaction"].is_string());
+        handle.stop().unwrap();
+    }
 
     pub fn actor() -> ActorState {
         let signer = derive_dev_account_signer("native-test", 0);
@@ -328,6 +638,7 @@ mod tests {
             let result = prepare_accounts(
                 &spec,
                 std::slice::from_ref(&actor),
+                &hosted_runtime(),
                 &url,
                 out.path(),
                 Duration::from_secs(10),
@@ -384,9 +695,16 @@ mod tests {
                 serde_json::from_value(json!({"kind":"native","seed":"test","funding":"faucet"}))
                     .expect("spec");
             assert!(
-                prepare_accounts(&spec, &[actor], &url, out.path(), Duration::from_secs(10))
-                    .await
-                    .is_err()
+                prepare_accounts(
+                    &spec,
+                    &[actor],
+                    &hosted_runtime(),
+                    &url,
+                    out.path(),
+                    Duration::from_secs(10)
+                )
+                .await
+                .is_err()
             );
             let evidence: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(artifact).expect("artifact")).expect("JSON");
@@ -457,7 +775,15 @@ mod tests {
             let spec =
                 serde_json::from_value(json!({"kind":"native","seed":"test","funding":"faucet"}))
                     .expect("spec");
-            let result = prepare_accounts(&spec, &[actor], &url, out.path(), request_timeout).await;
+            let result = prepare_accounts(
+                &spec,
+                &[actor],
+                &hosted_runtime(),
+                &url,
+                out.path(),
+                request_timeout,
+            )
+            .await;
             assert_eq!(result.is_ok(), !invalid_balance);
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             let evidence: serde_json::Value = serde_json::from_slice(
@@ -494,9 +820,16 @@ mod tests {
         .expect("config");
         let (url, server, calls) = funding_server(actor.wallet_address, 0).await;
         let out = tempfile::tempdir().expect("output");
-        prepare_accounts(&spec, &[actor], &url, out.path(), Duration::from_secs(10))
-            .await
-            .expect("funded actor");
+        prepare_accounts(
+            &spec,
+            &[actor],
+            &hosted_runtime(),
+            &url,
+            out.path(),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("funded actor");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let records: serde_json::Value = serde_json::from_slice(
             &std::fs::read(out.path().join("native-accounts.json")).expect("account artifact"),

@@ -250,6 +250,7 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
         },
         manifest,
         cli.accounts,
+        cli.account_seed.as_deref(),
     )?;
     let stdin = io::stdin();
     let stderr = io::stderr();
@@ -538,6 +539,10 @@ async fn run(cli: Cli) -> Result<(), BenchError> {
             outstanding: cli.outstanding,
             effective_max_inflight,
             accounts: if needs_transactions { cli.accounts } else { 0 },
+            account_fixture_sha256: cli
+                .account_seed
+                .as_ref()
+                .map(|seed| groundhog_json_rpc_types::hex::sha256_prefixed_hex(seed.as_bytes())),
             transaction_batch_size,
             max_skew_seconds: cli.max_skew,
             request_timeout_ms: cli.request_timeout_ms,

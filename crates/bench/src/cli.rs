@@ -27,9 +27,14 @@ pub(super) struct Cli {
     #[arg(long, default_value = "http://127.0.0.1:9545")]
     pub(super) url: String,
 
-    /// Runtime manifest used to derive benchmark account signers. Required for sendRawTransaction.
+    /// Public runtime manifest for transaction benchmarks; hosted schema-3 retains its explicit adapter.
     #[arg(long)]
     pub(super) runtime_manifest: Option<std::path::PathBuf>,
+
+    /// Explicit public deterministic fixture seed for local schema-4 accounts.
+    /// These keys are for disposable test chains only. They must match public initial allocations.
+    #[arg(long, requires = "runtime_manifest")]
+    pub(super) account_seed: Option<String>,
 
     /// Target requests per second (open-loop, default 100).
     #[arg(long, conflicts_with_all = ["outstanding", "unthrottled"])]

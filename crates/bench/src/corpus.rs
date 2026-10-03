@@ -171,8 +171,12 @@ async fn prepare_inner(
             )
         })?;
         let manifest = manifest.ok_or(BenchError::MissingRuntimeManifest)?;
-        let accounts =
-            transaction_inputs_for_method("sendRawTransaction", Some(manifest), cli.accounts)?;
+        let accounts = transaction_inputs_for_method(
+            "sendRawTransaction",
+            Some(manifest),
+            cli.accounts,
+            cli.account_seed.as_deref(),
+        )?;
         let first_nonce = match cli.seed_nonce_start {
             Some(value) => value,
             None => u64::try_from(
