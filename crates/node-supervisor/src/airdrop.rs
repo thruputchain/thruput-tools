@@ -1169,7 +1169,10 @@ mod tests {
             tasks.spawn(async move { rpc.request_airdrop(test_request(1, 1)).await });
         }
         tokio::time::timeout(Duration::from_secs(5), async {
-            while rpc.admission.available_permits() != 0 {
+            // Admission precedes journal registration on a blocking worker.
+            // Wait for both before checking the retained attempt or cancelling callers.
+            while rpc.admission.available_permits() != 0 || rpc.attempts.lock().unwrap().len() != 1
+            {
                 tokio::task::yield_now().await;
             }
         })
