@@ -1,33 +1,25 @@
 {
-  "schemaVersion": 1,
-  "id": "groundhog",
-  "owners": [
-    "groundhog-rpc"
-  ],
-  "compatibility": {
-    "groundhog-cli": "0.22.1"
-  },
-  "records": [
-    "groundhog.local-development",
-    "groundhog.orientation",
-    "groundhog.programming-model",
-    "groundhog.rust-contract",
-    "groundhog.sources",
-    "groundhog.typescript-application",
-    "groundhog.typescript-codegen"
-  ],
   "artifacts": {
     "agentGuide": {
       "path": "generated/agent-guide.md",
-      "sha256": "sha256:ee8d04d0116f84b57a8d04e07b2e3d7839ac214d1b2c0fc3fe8e47a02d5732e4"
+      "sha256": "sha256:ffd8192783aed1db74efe368a6b955143125b2cad996811b0e700e07f8eeb8e1"
     },
     "records": {
       "path": "generated/records.jsonl",
-      "sha256": "sha256:19108a2f49ff37e4324653250c998d1ddf22c9d1e851b71ba2229189d1f6ff48"
+      "sha256": "sha256:237eecb6f43cc73be59ae5dc8678501f03ae70c9d41497b3358e2619cb9d67fa"
     },
     "skillTemplate": {
       "path": "generated/SKILL.md",
-      "sha256": "sha256:9fdc7a26b87f412df12c508a217d3b74076508f86257d6087b6228ef6100e0d0"
+      "sha256": "sha256:b6fe4c139b9cee6dcebc85591f2aa05c5cc077940f992de41795e0a3fa18ca84"
     }
-  }
+  },
+  "compatibility": {
+    "groundhog-cli": "0.22.1"
+  },
+  "id": "groundhog",
+  "repository": "https://github.com/groundhogchain/agent-skills",
+  "schemaVersion": 1,
+  "sourceDirty": false,
+  "sourceRevision": "f18bc7fcfb6923cc76e5dc0147129e8b1949bd9d",
+  "sourceSha256": "sha256:e6e49b14075c3474e542e0e5281727199052667fe6855edba50ef76edd24d0ea"
 }

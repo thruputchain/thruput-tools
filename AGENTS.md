@@ -177,11 +177,13 @@ Report checks actually run and any environment blockers.
 ## Bundled knowledge and releases
 
 For Groundhog programming-model or developer-workflow changes, load the
-checkout's bundled guidance with `cargo run -p groundhog-cli -- --skill`.
+checkout's bundled guidance with `cargo run -p groundhog-cli -- skill show --all`.
 If building is unavailable, read
 `crates/cli/assets/groundhog/knowledge/generated/agent-guide.md`.
-Editable sources are `knowledge/bundle.toml` and its records; generated files
-must be assembled, not edited. Review the bundle on workspace/CLI version
+Editable skill sources live in `groundhogchain/agent-skills`. Import a selected
+clean revision with `cargo run -p groundhog-agent-knowledge -- import /path/to/agent-skills`.
+The checked-in `knowledge/skill-source.json` is an imported snapshot; generated
+files must be assembled, not edited. Review the bundle on workspace/CLI version
 bumps and changes to CLI, scaffold, SDK, bindings, client, wallets, or public
 RPC workflows. Verify claims against current APIs, examples, and installable
 versions, then run:

@@ -90,7 +90,7 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
     assert_contains_all(
         &agents,
         &[
-            "groundhog --skill",
+            "groundhog skill show contracts",
             "release-matched guidance",
             "project-local scaffold invariants",
             "groundhog build",

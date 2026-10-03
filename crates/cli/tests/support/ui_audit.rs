@@ -240,7 +240,10 @@ fn framework_payloads_stay_raw_and_all_completion_shells_match_json() {
         );
         assert!(!plain.stdout.contains(&0x1b));
     }
-    let skill = groundhog().arg("--skill").output().unwrap();
+    let skill = groundhog()
+        .args(["skill", "show", "--all"])
+        .output()
+        .unwrap();
     assert!(skill.status.success() && skill.stderr.is_empty());
     assert!(skill.stdout.starts_with(b"---\nname: groundhog\n"));
 }

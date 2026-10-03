@@ -32,7 +32,7 @@ As of CLI 0.18.0:
 - There is no template catalog command or prompt-driven creation mode.
 
 Existing foundations include `groundhog build --bindings ts`, the TypeScript
-client, local-node tooling, structured CLI output, and `groundhog --skill`.
+client, local-node tooling, structured CLI output, and `groundhog skill show`.
 Reuse these public interfaces rather than recreating their behavior in templates.
 
 ## 3. Product decisions
@@ -269,7 +269,7 @@ The target flow is:
 2. Establish the requested scope and resolve material ambiguity through questions
    or recorded assumptions. An AMM prompt does not define fees or pool behavior.
 3. Create a known-good base project.
-4. Supply the prompt, `groundhog --skill`, project instructions, template catalog,
+4. Supply the prompt, `groundhog skill show`, project instructions, template catalog,
    dependency versions, and verification commands to the agent.
 5. Let the agent implement the contract, tests, and application when requested.
 6. Run the relevant checks and report their actual results.

@@ -153,8 +153,8 @@ jobs:
 
       - name: Verify release agent guidance
         run: |
-          cargo run --locked -p groundhog-agent-knowledge -- check
-          target/release/groundhog --skill > agent-guide.md
+          cargo run --locked -p groundhog-agent-knowledge -- check-release
+          target/release/groundhog skill show --all > agent-guide.md
           cmp agent-guide.md crates/cli/assets/groundhog/knowledge/generated/agent-guide.md
 
       - name: Verify macOS CLI portability
@@ -205,7 +205,7 @@ jobs:
             test -f "$verify_dir/$archive_base/README.md"
             test -f "$verify_dir/$archive_base/LICENSE"
             if [ "$app" = groundhog ]; then
-              "$verify_dir/$archive_base/$app" --skill > "$verify_dir/rendered-guide.md"
+              "$verify_dir/$archive_base/$app" skill show --all > "$verify_dir/rendered-guide.md"
               cmp "$verify_dir/rendered-guide.md" "$verify_dir/$archive_base/agent-guide.md"
             fi
             expected_version=${EXPECTED_BINARY_VERSION}

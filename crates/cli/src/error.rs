@@ -84,6 +84,9 @@ pub enum CliError {
     #[error(transparent)]
     #[code("docs_error")]
     Docs(#[from] crate::docs::DocsError),
+    #[error(transparent)]
+    #[code("skill_error")]
+    Skill(#[from] crate::skill::SkillError),
     #[error("cargo not found on PATH")]
     #[hint("install Rust and ensure `cargo` is on your PATH")]
     CargoNotFound,

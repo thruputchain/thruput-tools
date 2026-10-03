@@ -561,14 +561,14 @@ fn help_shows_subcommands() {
         );
     }
     assert!(stdout.contains("completion"));
-    assert!(stdout.contains("--skill"));
+    assert!(stdout.contains("skill"));
 }
 
 #[test]
-fn skill_flag_prints_release_matched_markdown_outside_a_project() {
+fn skill_show_prints_release_matched_markdown_outside_a_project() {
     let directory = TempDir::new().unwrap();
     let output = groundhog()
-        .arg("--skill")
+        .args(["skill", "show", "--all"])
         .current_dir(directory.path())
         .output()
         .unwrap();
@@ -588,22 +588,11 @@ fn skill_flag_prints_release_matched_markdown_outside_a_project() {
 }
 
 #[test]
-fn skill_flag_rejects_commands_and_output_modifiers() {
-    for arguments in [
-        &["--skill", "status"][..],
-        &["--skill", "--json"][..],
-        &["--skill", "--quiet"][..],
-    ] {
-        let output = groundhog().args(arguments).output().unwrap();
-
-        assert!(!output.status.success(), "arguments {arguments:?}");
-        assert!(output.stdout.is_empty(), "arguments {arguments:?}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("cannot be used with"),
-            "arguments {arguments:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+fn legacy_skill_flag_is_not_supported() {
+    let output = groundhog().arg("--skill").output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
 }
 
 #[test]
@@ -10320,7 +10309,7 @@ fn completion_json_outputs_structured_payload() {
     assert_eq!(stdout["data"]["shell"], "bash");
     let script = stdout["data"]["script"].as_str().unwrap();
     assert!(script.contains("groundhog"));
-    assert!(script.contains("--skill"));
+    assert!(script.contains("skill"));
     assert!(script.contains("--version"));
 }
 

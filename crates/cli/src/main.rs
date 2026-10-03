@@ -1,4 +1,4 @@
-use clap::{Arg, ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::result::CommandResult;
 use groundhog_cli::{CliError, Print};
@@ -120,6 +120,11 @@ enum Command {
     New(NewArgs),
     /// Serve the bundled developer documentation on localhost
     Docs(DocsArgs),
+    /// Install, update, or read Groundhog coding-agent guidance
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
     /// Set up profiles and a signing key, with optional interactive scaffolding
     #[command(long_about = "Initialize global profiles and check setup readiness. \
         Interactive sessions offer key generation and optional scaffolding.\n\n\
@@ -279,7 +284,13 @@ impl Command {
             Self::View(..) => "view",
             Self::Storage(..) => "storage",
             Self::Node(..) => "node",
-            Self::Docs(..) => "docs",
+            Self::Docs(args) => match args.command {
+                Some(DocsCommand::Export { .. }) => "docs export",
+                Some(DocsCommand::Status) => "docs status",
+                Some(DocsCommand::Stop) => "docs stop",
+                None => "docs",
+            },
+            Self::Skill { command } => command.command_name(),
             Self::Chain { command } => command.command_name(),
             Self::Config { command } => command.command_name(),
             Self::Toolchain { command } => command.command_name(),
@@ -297,6 +308,7 @@ impl Command {
         match self {
             Self::New(args) => args.run(ctx),
             Self::Docs(args) => args.run(ctx),
+            Self::Skill { command } => command.run(ctx),
             Self::Init(args) => args.run(ctx),
             Self::Status(args) => args.run(ctx),
             Self::Config { command } => command.run(ctx),
@@ -343,7 +355,18 @@ impl NewArgs {
 }
 
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 struct DocsArgs {
+    #[command(subcommand)]
+    command: Option<DocsCommand>,
+    /// Start a background server and return once it is ready
+    #[arg(long, conflicts_with = "foreground")]
+    background: bool,
+    /// Serve in the foreground (the default)
+    #[arg(long)]
+    foreground: bool,
+    #[arg(long, hide = true, conflicts_with_all = ["background", "foreground", "dir", "port"])]
+    managed: bool,
     /// Override the bundled docs with a trusted local snapshot directory
     #[arg(long, value_name = "DIRECTORY")]
     dir: Option<PathBuf>,
@@ -352,8 +375,127 @@ struct DocsArgs {
     port: u16,
 }
 
+#[derive(Subcommand)]
+enum DocsCommand {
+    /// Export a portable Markdown set into a new directory without running a server
+    Export {
+        #[arg(long)]
+        output: PathBuf,
+        /// Use a trusted local snapshot instead of the bundled snapshot
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Inspect the current user's background docs server
+    Status,
+    /// Stop the current user's background docs server
+    Stop,
+}
+
+#[derive(Subcommand)]
+enum SkillCommand {
+    /// Install the latest maintained skill through npx skills (requires Node/npm)
+    Install {
+        #[arg(long)]
+        global: bool,
+        #[arg(long, action = ArgAction::Append)]
+        agent: Vec<String>,
+        /// Authorize npm package execution and skill installation without prompting
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Update only the installed Groundhog skill in the selected scope
+    Update {
+        #[arg(long)]
+        global: bool,
+        /// Authorize npm package execution and updates without prompting
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Print release-matched bundled Markdown without network access
+    Show {
+        topic: Option<String>,
+        /// Print the entry and every reference
+        #[arg(long, conflicts_with = "topic")]
+        all: bool,
+    },
+    /// List topics bundled with this CLI
+    List,
+}
+
+impl SkillCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Install { .. } => "skill install",
+            Self::Update { .. } => "skill update",
+            Self::Show { .. } => "skill show",
+            Self::List => "skill list",
+        }
+    }
+
+    fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        use groundhog_cli::skill::{self, InstallOptions};
+        match self {
+            Self::Show { topic, all } => {
+                skill::show(topic.as_deref(), all, false, ctx.cmd_name, &ctx.print)
+            }
+            Self::List => skill::show(None, false, true, ctx.cmd_name, &ctx.print),
+            Self::Install { global, agent, yes } => skill::install(
+                false,
+                &InstallOptions {
+                    global,
+                    agents: agent,
+                    yes,
+                    offline: ctx.offline,
+                },
+                ctx.cmd_name,
+                &ctx.print,
+            ),
+            Self::Update { global, yes } => skill::install(
+                true,
+                &InstallOptions {
+                    global,
+                    yes,
+                    offline: ctx.offline,
+                    ..Default::default()
+                },
+                ctx.cmd_name,
+                &ctx.print,
+            ),
+        }
+    }
+}
+
 impl DocsArgs {
     fn run(self, ctx: &Ctx) -> Result<(), CliError> {
+        use groundhog_cli::docs::{
+            self,
+            service::{self, Action},
+        };
+        if let Some(command) = self.command {
+            return match command {
+                DocsCommand::Export { output, dir } => {
+                    docs::export(dir.as_deref(), &output, ctx.cmd_name, &ctx.print)
+                }
+                DocsCommand::Status => {
+                    service::run(Action::Status, None, self.port, ctx.cmd_name, &ctx.print)
+                }
+                DocsCommand::Stop => {
+                    service::run(Action::Stop, None, self.port, ctx.cmd_name, &ctx.print)
+                }
+            };
+        }
+        if self.managed {
+            return service::managed(&ctx.print);
+        }
+        if self.background {
+            return service::run(
+                Action::Start,
+                self.dir.as_deref(),
+                self.port,
+                ctx.cmd_name,
+                &ctx.print,
+            );
+        }
         groundhog_cli::docs::run(self.dir.as_deref(), self.port, ctx.cmd_name, &ctx.print)
     }
 }
@@ -1748,28 +1890,13 @@ impl TokenCommand {
     }
 }
 
-const SKILL_ARG_ID: &str = "skill";
-
 fn cli_command(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> clap::Command {
     Cli::command()
         .styles(Print::command_styles())
         .version(bundle_identity.to_string())
-        .subcommand_required(false)
-        .arg(
-            Arg::new(SKILL_ARG_ID)
-                .long("skill")
-                .help("Print release-matched instructions for coding agents")
-                .action(ArgAction::SetTrue)
-                .exclusive(true),
-        )
 }
 
-enum ParsedCli {
-    Skill,
-    Command(Box<Cli>),
-}
-
-fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> ParsedCli {
+fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Cli {
     // Clap can print help/errors before Print exists. Honor the global plain-output
     // switch here too, but do not inspect arguments forwarded after `--`.
     let no_ui = std::env::args_os()
@@ -1794,34 +1921,12 @@ fn parse_cli(bundle_identity: &groundhog_bundle_identity::BundleIdentity) -> Par
             error.exit()
         }
     };
-    if matches.get_flag(SKILL_ARG_ID)
-        && let Some(subcommand) = matches.subcommand_name()
-    {
-        cli_command(bundle_identity)
-            .error(
-                clap::error::ErrorKind::ArgumentConflict,
-                format!("the argument '--skill' cannot be used with the '{subcommand}' subcommand"),
-            )
-            .exit();
-    }
-    if matches.get_flag(SKILL_ARG_ID) {
-        ParsedCli::Skill
-    } else {
-        ParsedCli::Command(Box::new(
-            Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit()),
-        ))
-    }
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
 }
 
 fn main() {
     let bundle_identity = groundhog_cli::bundle_identity();
-    let cli = match parse_cli(&bundle_identity) {
-        ParsedCli::Skill => {
-            print!("{}", groundhog_cli::skill::render());
-            return;
-        }
-        ParsedCli::Command(cli) => *cli,
-    };
+    let cli = parse_cli(&bundle_identity);
     let ctx = Ctx {
         print: Print::new(cli.global.quiet, cli.global.json)
             .with_no_ui(cli.global.no_ui)

@@ -243,7 +243,7 @@ This conservative choice must not suppress data or reinterpret command results.
   Never place secret material in cards, progress, logs, or retained UI state.
 - `codegen ts` without `--output`: generated source remains raw stdout; with a file
   destination, use the common written-file result card.
-- `completion`, `--skill`, and `--version`: preserve their script/document/version
+- `completion`, `skill show`, and `--version`: preserve their script/document/version
   outputs. Do not wrap payloads in cards or add success chatter.
 - `toolchain which`: preserve the directly usable path on stdout.
 - Clap help/usage/parser errors retain their syntax, streams, and exit behaviour;
@@ -397,7 +397,7 @@ Do not claim an exhaustive Cartesian product of every possible flag value.
   signed/prepared versus submitted, successful/failed execution, timeout/unknown,
   local/remote faucet paths, offline native wallet creation, and alias-save warnings.
 - **Raw/framework output:** exported key bytes, generated source, completion scripts,
-  toolchain paths, `--help`, `--version`, and `--skill` remain compatible and unframed.
+  toolchain paths, `--help`, `--version`, and `skill show` remain unframed.
 
 A complex mode may intentionally use the new shared append-only renderer rather
 than animate. Its final results, warnings, and errors still use shared components/

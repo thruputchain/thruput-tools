@@ -8,51 +8,143 @@ description: >
 ---
 
 <!-- groundhog-cli-version: {{GROUNDHOG_CLI_VERSION}} -->
+<!-- skill-source: https://github.com/groundhogchain/agent-skills; revision: f18bc7fcfb6923cc76e5dc0147129e8b1949bd9d; sha256: sha256:e6e49b14075c3474e542e0e5281727199052667fe6855edba50ef76edd24d0ea; dirty: false -->
 
 # Groundhog
 
 Groundhog is not EVM-compatible. Do not infer its execution, storage, account,
-transaction, gas, or ABI behaviour from Ethereum, Solana, or another chain.
-Use the installed CLI and the project's public Groundhog dependencies as the
-authority for this release.
+transaction, gas, or ABI behavior from Ethereum, Solana, or another chain.
 
-## Start Here
+## Start here
 
-Before editing a Groundhog project:
-
-1. Read the project's `AGENTS.md` and `groundhog.toml` when present.
-2. Run `groundhog --version` and the relevant command's `--help`.
-3. Run `groundhog status --json` when environment, toolchain, project, profile,
-   key, or local-node state matters.
-4. Identify which Groundhog layer owns the task before reading source.
-5. Prefer public APIs, generated bindings, and current examples. Inspect
+1. Read the project's `AGENTS.md` and manifests when present.
+2. Identify the task and read the relevant reference below.
+3. If the task uses the CLI, run `groundhog --version` and the relevant
+   command's `--help`. Use `groundhog status --json` when local setup matters.
+4. Prefer public APIs, generated bindings, and current examples. Inspect
    `node_modules`, Cargo registry source, or Groundhog implementation
    repositories only after those public surfaces are insufficient.
 
-Do not guess an installed command's syntax from this skill. The installed
-binary's `--help` output wins when it differs.
+Application reads do not require a Rust toolchain, wallet, or local node.
+Use the dependencies and network selected by the project.
 
-## Know the Layers
+## Choose a reference
 
-| Layer | Owns |
-|---|---|
-| Rust contract | Methods, events, exceptions, authorization, and persistent state |
-| Rust SDK | Contract macros, storage types, generated contract clients, and native testing |
-| Contract build | The deployable `.rv32a` artifact and canonical `.spec.xdr` interface |
-| Generated TypeScript binding | Typed method and event descriptors derived from `.spec.xdr` |
-| TypeScript client | RPC transport, clusters, accounts, wallets, transactions, receipts, and events |
-| Wallet | The authorized root invocation around one or more application calls |
-| Groundhog CLI | Scaffolding, builds, tests, local nodes, keys, deployment, calls, inspection, and codegen |
-| JSON-RPC | The public network boundary used by the CLI and TypeScript client |
+| Task | Read | Bundled CLI access |
+| --- | --- | --- |
+| Contract logic, storage, native and RV32 tests | [Contracts](#contracts) | `groundhog skill show contracts` |
+| Generated bindings, application reads, wallet execution, events | [TypeScript](#typescript) | `groundhog skill show typescript` |
+| React application state and reads | [React](#react) | `groundhog skill show react` |
+| CLI setup, keys, wallets, deployment, local nodes | [CLI](#cli) | `groundhog skill show cli` |
+| Errors, version disagreements, uncertain submissions | [Troubleshooting](#troubleshooting) | `groundhog skill show troubleshooting` |
 
-Keep these boundaries explicit. In particular:
+Read references as needed. Use `groundhog skill show --all` when you need
+the complete bundled guide.
+
+## Shared rules
 
 - A generated TypeScript binding describes a contract. It is not a connected
   contract instance and its methods are not direct RPC functions.
-- The application invocation is normally a child of a wallet root invocation.
-- The CLI and TypeScript client consume the public RPC API. Do not bypass them
-  by constructing internal protocol messages unless the task specifically
-  requires protocol work.
+- Application invocations normally execute as children of a wallet root
+  invocation. Use the public client or CLI to prepare and submit transactions.
+- Submission, commitment, and successful execution are different states.
+  After a timeout, inspect the original transaction hash before retrying.
+- Gas meters computation and bounds call depth. It has no token price and
+  is not burned. Declared root gas reserves scheduling capacity against free
+  HOG; storage funding is separate.
+- Never print, log, store, or paste private signing material. Use public
+  addresses, transaction hashes, and redacted configuration in reports.
+
+## Documentation and versions
+
+Start at <https://docs.groundhog.dev/> for product documentation. The installed
+CLI's `groundhog docs` serves its selected documentation snapshot locally.
+Check command help for Markdown export and background-server support before
+using them with an older release.
+
+The installed skill follows the latest maintained source. CLI-bundled guidance
+is selected separately for that CLI release. Neither overrides the project's
+installed API. When sources disagree, identify the versions and exact
+disagreement rather than combining APIs from different releases.
+
+<!-- references/cli.md -->
+
+# CLI
+
+## Local Development
+
+Use `groundhog init --non-interactive --json` for scripted setup. Missing Cargo,
+profile, or stored key exits 1. Key creation requires authorized `--generate-key`;
+existing selections are preserved. `--quiet` does not grant consent. `init` writes;
+`status --json` is read-only. Create projects with `groundhog new`.
+
+Start the local stack with `groundhog node`. Inspect, prefetch, or locate its
+catalog-pinned bundle with `toolchain list`, `toolchain install`, and `toolchain
+which`. `--offline node` forbids managed downloads, not RPC/Cargo elsewhere.
+`GROUNDHOG_DEVNODE_BINARY` selects a matching build. Diagnose compatibility
+failures; do not override protocols. Use `status --json` / `node --json` for runtime
+information and `--help` for flags. Never use deterministic local keys in production.
+
+`--non-interactive` disables prompts/UI without granting consent: protected
+operations require authorized `--force`. Key imports need piped stdin; Cargo/test
+subprocesses cannot read terminal stdin. Use `--json` for machine results.
+
+`--no-ui` selects plain output; `NO_COLOR` disables color. Explicit live-output
+modes stream immediately without animation.
+
+Hosted signing can discover an unconfigured network hash from matching descriptor
+and RPC identities. Configured hashes remain enforced.
+
+Timeout or `unknown` does not prove transaction failure. Inspect the hash before
+retrying. `node --verbose` enables backend logs; restarting an ephemeral node
+loses its state.
+
+`events list`, `tx list`, and `token transfers` read newest-first pages.
+Omit `--cursor` to refresh from the head; a continuation goes toward older rows.
+Continue with the returned opaque cursor and the same target/filters. `tx list`
+matches root invocation targets, not every address touched by a transaction.
+See [Event pages and restart](#event-pages-and-restart) for cursor rules.
+
+### Key and address interoperability
+
+`groundhog keys import <name>` reads a seed from hidden input or piped stdin:
+a checksummed S StrKey or 32-byte hex, never a 64-byte keypair or CLI argument.
+Existing names are not overwritten; `dev-N` names are reserved.
+Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
+Malformed TOML or an invalid `default_key` is rejected before storing the key.
+If saving succeeds but default selection fails, use `groundhog keys use <name>`;
+do not reimport. `isDefault` is null if configuration cannot be reread.
+
+`groundhog keys export <name> --format strkey` exports the same seed as an S
+StrKey after the normal confirmation gate. The default export remains hex.
+For an authorized non-interactive transfer between key stores, pipe export
+stdout directly to the receiving CLI's stdin rather than capturing it in logs.
+
+A G StrKey is an Ed25519 public key, distinct from an account or wallet address.
+C StrKeys and legacy hex are accepted for contract/wallet address inputs,
+including typed contract arguments. Saved wallet owners accept G StrKeys or
+hex public keys. These encodings preserve bytes and do not identify a network.
+Existing key files and public JSON-RPC wire encodings remain unchanged.
+
+### Native accounts
+
+Ordinary keys derive nonce-zero native accounts. `wallet create` saves the empty
+identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
+legacy wallets retain identity and format. Schema-3 bootstrap dev-N accounts
+are native pubkey accounts with nonce zero, using the advertised seed and keys.
+Use a matching native runtime; schema-2 state needs its original runtime.
+
+Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
+amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated
+`--init-arg <VALUE>` using the artifact spec, or a 0x selector and raw hex argument.
+`--init-gas-limit` sets child gas. Init runs as the wallet, discards its return,
+and rolls back with funding/deployment on failure. Dry-run submits nothing.
+Unverified results retain signed identity: inspect before retrying because nonce
+and address change. Aliases require verified success at the predicted address.
+
+<!-- references/contracts.md -->
+
+# Contracts
 
 ## Programming Model
 
@@ -144,9 +236,10 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.42.2, standard interfaces 0.1.44, protocol-rs 0.43.0,
-and XDR 0.10.2. Update the SDK and interface dependencies together when
-migrating an existing Rust project.
+These examples use the Groundhog CLI 0.22.1 dependency set: SDK 0.42.2,
+standard interfaces 0.1.44, protocol-rs 0.43.0, and XDR 0.10.2. Check the
+project's actual dependencies before applying them. Update the SDK and
+interface dependencies together when migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where
 `NNInt` is appropriate. Do not copy this storage choice for token balances or
@@ -183,6 +276,64 @@ Update native and RV32 tests with behaviour changes.
 
 Before inventing a macro attribute or test helper, inspect the scaffold and the
 public Rustdoc for the SDK version the project actually uses.
+
+<!-- references/react.md -->
+
+# React
+
+Use `@groundhogchain/react` and its supported client dependency. Check the
+installed package exports and declarations before selecting provider or hook
+names. Do not invent a hook based on another blockchain's React library.
+
+Start with a read-only screen against the project's selected network and
+contract. Show loading, error, and empty states, then add refresh behavior.
+A read-only application does not need a signing key, wallet connection,
+Rust toolchain, or deployed contract of its own.
+
+Keep the client and network configuration stable across renders. Use the
+library's read lifecycle and cancellation support. Keep large quantities as
+`bigint` until formatting them for display. Avoid converting token quantities
+to JavaScript `number`.
+
+For writes, obtain explicit user intent, prepare the typed application call,
+and submit through the supported wallet integration. Show submission,
+commitment, and execution results separately. Preserve the transaction hash
+when observation fails; do not automatically sign a replacement transaction.
+
+Verify the page with real data, an unavailable endpoint, and a refresh while
+a request is in flight. Use the project's existing tests and build command.
+
+<!-- references/troubleshooting.md -->
+
+# Troubleshooting
+
+## Sources and Escalation
+
+Use this source order:
+
+1. Project `AGENTS.md`, manifests, generated artifacts, and current code.
+2. Installed `groundhog` help and structured output.
+3. Public SDK Rustdoc, TypeScript declarations, generated bindings, and
+   Groundhog developer documentation matching the installed versions.
+4. Current blessed examples.
+5. Public implementation source when a documented contract is incomplete.
+6. Dependency internals only when debugging the dependency itself or when the
+   public contract cannot answer the question.
+
+When sources disagree, stop and identify the versions and exact disagreement.
+Do not silently combine APIs from different Groundhog releases. Prefer the
+installed scaffold and the public dependencies selected by that project.
+
+Never print, log, store, or paste private signing material. Use public
+addresses, transaction hashes, and redacted configuration when reporting a
+problem.
+
+<!-- references/typescript.md -->
+
+# TypeScript
+
+For read-only application work, start with the TypeScript application section.
+Contract builds and code generation apply when you own the contract interface.
 
 ## Build Artifacts and TypeScript Codegen
 
@@ -232,7 +383,8 @@ and byte slices expose only a hash, not their preimage.
 ## TypeScript Application Path
 
 Use public package exports and generated bindings, not package internals.
-Connect a cluster-aware client, create or load an account, then bind a wallet.
+For reads, connect a cluster-aware client to the selected network and contract.
+For signed execution, create or load an account, then bind a wallet.
 One public client supports multiple independent wallet bindings. Pubkey accounts
 use DefaultWallet, including schema-3 bootstrap accounts. Historical saved
 legacy source-address wallets use `devWalletAdapter`; preserve their addresses.
@@ -310,95 +462,3 @@ requests; abort cancels an in-flight read.
   cursors; do not silently restart.
 
 See the [restart walkthrough](https://docs.groundhog.dev/tutorials/add-events-to-a-contract/#resume-without-missing-events).
-
-## Local Development
-
-Use `groundhog init --non-interactive --json` for scripted setup. Missing Cargo,
-profile, or stored key exits 1. Key creation requires authorized `--generate-key`;
-existing selections are preserved. `--quiet` does not grant consent. `init` writes;
-`status --json` is read-only. Create projects with `groundhog new`.
-
-Start the local stack with `groundhog node`. Inspect, prefetch, or locate its
-catalog-pinned bundle with `toolchain list`, `toolchain install`, and `toolchain
-which`. `--offline node` forbids managed downloads, not RPC/Cargo elsewhere.
-`GROUNDHOG_DEVNODE_BINARY` selects a matching build. Diagnose compatibility
-failures; do not override protocols. Use `status --json` / `node --json` for runtime
-information and `--help` for flags. Never use deterministic local keys in production.
-
-`--non-interactive` disables prompts/UI without granting consent: protected
-operations require authorized `--force`. Key imports need piped stdin; Cargo/test
-subprocesses cannot read terminal stdin. Use `--json` for machine results.
-
-`--no-ui` selects plain output; `NO_COLOR` disables color. Explicit live-output
-modes stream immediately without animation.
-
-Hosted signing can discover an unconfigured network hash from matching descriptor
-and RPC identities. Configured hashes remain enforced.
-
-Timeout or `unknown` does not prove transaction failure. Inspect the hash before
-retrying. `node --verbose` enables backend logs; restarting an ephemeral node
-loses its state.
-
-`events list`, `tx list`, and `token transfers` read newest-first pages.
-Omit `--cursor` to refresh from the head; a continuation goes toward older rows.
-Continue with the returned opaque cursor and the same target/filters. `tx list`
-matches root invocation targets, not every address touched by a transaction.
-See [Event pages and restart](#event-pages-and-restart) for cursor rules.
-
-### Key and address interoperability
-
-`groundhog keys import <name>` reads a seed from hidden input or piped stdin:
-a checksummed S StrKey or 32-byte hex, never a 64-byte keypair or CLI argument.
-Existing names are not overwritten; `dev-N` names are reserved.
-Import JSON uses a versioned camelCase report (`data.schemaVersion = 1`).
-Malformed TOML or an invalid `default_key` is rejected before storing the key.
-If saving succeeds but default selection fails, use `groundhog keys use <name>`;
-do not reimport. `isDefault` is null if configuration cannot be reread.
-
-`groundhog keys export <name> --format strkey` exports the same seed as an S
-StrKey after the normal confirmation gate. The default export remains hex.
-For an authorized non-interactive transfer between key stores, pipe export
-stdout directly to the receiving CLI's stdin rather than capturing it in logs.
-
-A G StrKey is an Ed25519 public key, distinct from an account or wallet address.
-C StrKeys and legacy hex are accepted for contract/wallet address inputs,
-including typed contract arguments. Saved wallet owners accept G StrKeys or
-hex public keys. These encodings preserve bytes and do not identify a network.
-Existing key files and public JSON-RPC wire encodings remain unchanged.
-
-### Native accounts
-
-Ordinary keys derive nonce-zero native accounts. `wallet create` saves the empty
-identity offline; fund explicitly with `airdrop`. `--prefund` is rejected. Saved
-legacy wallets retain identity and format. Schema-3 bootstrap dev-N accounts
-are native pubkey accounts with nonce zero, using the advertised seed and keys.
-Use a matching native runtime; schema-2 state needs its original runtime.
-
-Native deploy requires `--fund <HOG>` and hogd 0.1.29-rc.2 or later. The exact
-amount is not an estimate; zero skips transfer. Add `--init <METHOD>` and repeated
-`--init-arg <VALUE>` using the artifact spec, or a 0x selector and raw hex argument.
-`--init-gas-limit` sets child gas. Init runs as the wallet, discards its return,
-and rolls back with funding/deployment on failure. Dry-run submits nothing.
-Unverified results retain signed identity: inspect before retrying because nonce
-and address change. Aliases require verified success at the predicted address.
-
-## Sources and Escalation
-
-Use this source order:
-
-1. Project `AGENTS.md`, manifests, generated artifacts, and current code.
-2. Installed `groundhog` help and structured output.
-3. Public SDK Rustdoc, TypeScript declarations, generated bindings, and
-   Groundhog developer documentation matching the installed versions.
-4. Current blessed examples.
-5. Public implementation source when a documented contract is incomplete.
-6. Dependency internals only when debugging the dependency itself or when the
-   public contract cannot answer the question.
-
-When sources disagree, stop and identify the versions and exact disagreement.
-Do not silently combine APIs from different Groundhog releases. Prefer the
-installed scaffold and the public dependencies selected by that project.
-
-Never print, log, store, or paste private signing material. Use public
-addresses, transaction hashes, and redacted configuration when reporting a
-problem.

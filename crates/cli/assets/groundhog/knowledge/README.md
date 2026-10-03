@@ -1,69 +1,54 @@
-# Agent knowledge bundle
+# Bundled agent guidance
 
-This directory is the canonical source for the knowledge embedded in the
-Groundhog CLI. Do not edit files under `generated/` directly.
+The maintained source is
+[groundhogchain/agent-skills](https://github.com/groundhogchain/agent-skills).
+Edit `skills/groundhog/SKILL.md` and its references there. This directory
+contains an imported snapshot and generated CLI artifacts.
 
-Build and verify the bundle from the workspace root:
+## Select a skill revision
 
-```console
+Check out the intended commit in the skill repository, then run:
+
+```sh
+cargo run -p groundhog-agent-knowledge -- import /path/to/agent-skills
+cargo run -p groundhog-agent-knowledge -- check
+cargo test -p groundhog-cli skill
+cargo test -p groundhog-agent-knowledge
+```
+
+Import requires a clean checkout whose origin is the maintained repository.
+`--allow-dirty` permits a local preview, recording `dirty: true` and a null
+revision for an unborn repository. Before release, commit and publish the
+source and import it again without that option.
+The release workflow runs `check-release`, which rejects preview snapshots.
+
+`skill-source.json` records the source repository, revision, dirty state,
+content digest, and complete skill files. Do not edit this imported file.
+Ordinary CLI builds use these bytes without network or repository access.
+
+## Generate release artifacts
+
+```sh
 cargo run -p groundhog-agent-knowledge -- build
 cargo run -p groundhog-agent-knowledge -- check
 ```
 
-The build is deterministic. It emits:
+The build emits the full guide (`generated/SKILL.md`), its
+concrete CLI-version form (`generated/agent-guide.md`), source-file records,
+and a manifest with artifact hashes. Generation is deterministic. The CLI's
+`skill show` and `skill list` read the imported files;
+`skill show --all` prints the full guide.
 
-- `generated/records.jsonl`: normalized records sorted by stable ID;
-- `generated/manifest.json`: owners, compatibility, record IDs, and artifact
-  SHA-256 hashes;
-- `generated/SKILL.md`: bootstrap records ordered by `bootstrap_order`;
-- `generated/agent-guide.md`: the same bootstrap with the concrete CLI version,
-  ready for a pre-install web entry point. Its hash is included in the manifest.
+Installed skills update independently through `npx skills`. They can be newer
+than this CLI bundle. Neither source overrides the project's installed APIs.
 
-## Source contract
+## Hosting handoff
 
-`bundle.toml` declares the bundle ID, allowed record owners, compatibility
-components, and skill identity. The generated manifest records the concrete
-Cargo package version. `{{GROUNDHOG_CLI_VERSION}}` remains in the generated
-skill template and is replaced by the released CLI.
-
-Local records live in `records/*.md`. Each starts with TOML frontmatter:
-
-```toml
-+++
-schema_version = 1
-id = "groundhog.example"
-owner = "groundhog-rpc"
-kind = "guide"
-audience = ["coding-agent"]
-components = ["groundhog-cli"]
-bootstrap_order = 10
-+++
-```
-
-The Markdown after the frontmatter is the record content. A record without
-`bootstrap_order` remains available to the normalized bundle but is omitted
-from the compact skill.
-
-Future repository producers emit one normalized JSON object per line under
-`imports/*.jsonl`. Imported records use the fields in `generated/records.jsonl`
-and are validated against the same owners, components, stable IDs, and schema
-version. Their `source` is an owner-qualified canonical relative path such as
-`sdk_rs:crates/sdk/src/lib.rs`. The assembly step rejects duplicate IDs and
-bootstrap order values.
-
-Each fact has one owning record. Other documentation and delivery adapters
-should link to or render that record instead of maintaining another copy.
-
-## Release and hosting handoff
-
-The release workflow checks these snapshots and compares `agent-guide.md`
-byte-for-byte with the release binary's `groundhog --skill` output. The guide
-ships inside each CLI archive and as a standalone release asset.
+The release workflow compares `agent-guide.md` byte-for-byte with the release
+binary's `groundhog skill show --all` output. It ships with the CLI archives and as a
+standalone release asset.
 
 A docs publisher should retain each released guide at
 `/agents/<groundhog-cli-version>/agent-guide.md` and promote the selected,
-qualified release to `/agent-guide.md`. Copy the release artifact unchanged;
-do not regenerate it with a newer checkout or choose the newest prerelease
-implicitly. Historical version URLs must retain their original bytes.
-This repository prepares the artifact; publishing those public URLs belongs
-to the developer site's deployment.
+qualified release to `/agent-guide.md`. Copy the release artifact unchanged.
+Historical version URLs must retain their original bytes.

@@ -12,9 +12,23 @@ use std::{
 };
 use tower_http::services::ServeDir;
 
+mod export;
+pub mod service;
+pub use export::export;
+
 /// Failures preparing or serving a local documentation snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum DocsError {
+    #[error("cannot encode documentation report: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error(
+        "this snapshot has no Markdown export; use --dir with a snapshot containing markdown/index.md"
+    )]
+    MarkdownUnavailable,
+    #[error("docs service: {0}")]
+    Service(String),
+    #[error("export destination already exists: {}; select a new --output directory", .0.display())]
+    ExportExists(PathBuf),
     #[error(
         "bundled documentation is invalid: {0}; reinstall the CLI or use --dir \
          with a trusted snapshot"
@@ -110,20 +124,35 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    serve(dir, port, cmd, print, None)
+}
+
+pub(crate) fn prepare(dir: Option<&Path>) -> Result<(PathBuf, Snapshot), CliError> {
+    let root = match dir {
+        Some(dir) => dir.to_owned(),
+        None => crate::docs_snapshot::bundled()?,
+    };
+    let root = root
+        .canonicalize()
+        .map_err(|source| DocsError::Read { path: root, source })?;
+    let snapshot = read_snapshot(&root)?;
+    Ok((root, snapshot))
+}
+
+pub(crate) fn serve(
+    dir: Option<&Path>,
+    port: u16,
+    cmd: &'static str,
+    print: &Print,
+    control: Option<service::Control>,
+) -> Result<(), CliError> {
     let task = crate::print::progress::Task::start(print, "Preparing documentation", true);
     let external_snapshot = dir.is_some();
-    let bundled;
-    let dir = if let Some(dir) = dir {
-        dir
-    } else {
-        bundled = crate::docs_snapshot::bundled()?;
-        &bundled
-    };
-    let root = dir.canonicalize().map_err(|source| DocsError::Read {
-        path: dir.to_path_buf(),
-        source,
-    })?;
-    let snapshot = read_snapshot(&root)?;
+    let (root, snapshot) = prepare(dir)?;
+    let markdown_index = root
+        .join("markdown/index.md")
+        .is_file()
+        .then(|| root.join("markdown/index.md"));
     let runtime =
         tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     runtime.block_on(async {
@@ -139,6 +168,12 @@ pub fn run(
             print.detail("snapshot", root.display());
             print.detail("source", &snapshot.source_revision);
             print.detail("agent guide CLI", &snapshot.agent_guide_cli_version);
+            if let Some(index) = &markdown_index {
+                print.detail("Markdown index", index.display());
+                print.detail("Markdown pages", root.join("markdown").display());
+            } else {
+                print.status("This snapshot predates Markdown exports.");
+            }
             // The bundled snapshot is selected by the CLI release; a differing guide
             // version is provenance, not an actionable warning for its users.
             if external_snapshot && !guide_matches_cli {
@@ -162,14 +197,17 @@ pub fn run(
                 snapshot,
                 cli_version: env!("CARGO_PKG_VERSION").to_owned(),
                 guide_matches_cli,
+                markdown_index,
             },
         ))?;
-        let app = axum::Router::new().fallback_service(ServeDir::new(root));
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let app = service::routes(control, shutdown.clone()).fallback_service(ServeDir::new(root));
         // Dropping the server on either signal closes outstanding connections too.
         // A stalled local client must not prevent the foreground command stopping.
         tokio::select! {
             result = axum::serve(listener, app) => result?,
             result = stop => result?,
+            () = shutdown.notified() => {},
         }
         print.service_stopped("Documentation server stopped.");
         Ok(())
