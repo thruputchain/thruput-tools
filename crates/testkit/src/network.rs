@@ -83,6 +83,31 @@ impl SubmittedTransaction {
 struct LocalFundingAttempt {
     request: groundhog_json_rpc_types::airdrop::FundAccountRequest,
     admitted: Option<groundhog_json_rpc_types::airdrop::FundAccountResponse>,
+    evidence: Option<groundhog_json_rpc_types::airdrop::LocalFundingErrorData>,
+}
+
+impl LocalFundingAttempt {
+    fn retain_error_evidence(&mut self, error: &jsonrpsee::core::client::Error) -> Result<()> {
+        if let jsonrpsee::core::client::Error::Call(call) = error
+            && call.code() == groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+            && let Some(data) = call.data()
+        {
+            let evidence: groundhog_json_rpc_types::airdrop::LocalFundingErrorData =
+                serde_json::from_str(data.get()).map_err(TestkitError::signing)?;
+            validate_funding_evidence(&evidence)?;
+            if self
+                .evidence
+                .as_ref()
+                .is_some_and(|original| original != &evidence)
+            {
+                return Err(TestkitError::signing(
+                    "local funding replaced retained signed evidence",
+                ));
+            }
+            self.evidence = Some(evidence);
+        }
+        Ok(())
+    }
 }
 
 struct NetworkInner {
@@ -183,6 +208,10 @@ impl Network {
                     .admitted
                     .as_ref()
                     .is_some_and(|admitted| admitted.tx_hash == tx_hash)
+                    && !attempt
+                        .evidence
+                        .as_ref()
+                        .is_some_and(|evidence| evidence.tx_hash == tx_hash)
             });
         }
         Ok(receipt)
@@ -384,6 +413,7 @@ impl Network {
                             .map_err(TestkitError::signing)?,
                     },
                     admitted: None,
+                    evidence: None,
                 },
             );
         }
@@ -394,10 +424,29 @@ impl Network {
         let response = if let Some(response) = &attempt.admitted {
             response.clone()
         } else {
-            self.require_client("fund")?
+            match self
+                .require_client("fund")?
                 .fund_account(request.clone())
                 .await
-                .map_err(|e| TestkitError::rpc("fundAccount", e))?
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    let attempt = pending
+                        .get_mut(&recipient)
+                        .expect("bug: retained funding intent");
+                    attempt.retain_error_evidence(&error)?;
+                    return Err(match &attempt.evidence {
+                        Some(evidence) => TestkitError::Submission {
+                            tx_hash: evidence.tx_hash,
+                            signed_transaction: groundhog_json_rpc_types::hex::prefixed_hex(
+                                &evidence.signed_transaction.0,
+                            ),
+                            detail: error.to_string(),
+                        },
+                        None => TestkitError::rpc("fundAccount", error),
+                    });
+                }
+            }
         };
         let signed: groundhog_xdr::transaction::SignedTransaction =
             xdrs::txs::decode(&response.signed_transaction.0).map_err(TestkitError::signing)?;
@@ -409,6 +458,19 @@ impl Network {
         {
             return Err(TestkitError::signing(
                 "local funding response does not match retained request and signed hash",
+            ));
+        }
+        let evidence = groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
+            response.tx_hash,
+            response.signed_transaction.clone(),
+        );
+        if pending
+            .get(&recipient)
+            .and_then(|attempt| attempt.evidence.as_ref())
+            .is_some_and(|original| original != &evidence)
+        {
+            return Err(TestkitError::signing(
+                "local funding replaced retained signed evidence",
             ));
         }
         pending
@@ -428,6 +490,20 @@ impl Network {
             .as_ref()
             .ok_or(TestkitError::Offline { operation })
     }
+}
+
+fn validate_funding_evidence(
+    evidence: &groundhog_json_rpc_types::airdrop::LocalFundingErrorData,
+) -> Result<()> {
+    let signed: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&evidence.signed_transaction.0).map_err(TestkitError::signing)?;
+    let hash = groundhog_signing::transaction_hash(&signed.tx).map_err(TestkitError::signing)?;
+    if evidence.tx_hash.0.0 != hash {
+        return Err(TestkitError::signing(
+            "local funding evidence hash does not match signed bytes",
+        ));
+    }
+    Ok(())
 }
 
 fn local_faucet(manifest: &RuntimeManifest) -> Result<Option<ContractAddress>> {

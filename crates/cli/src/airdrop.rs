@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_client::{AirdropApiClient, LocalFundingApiClient};
 use groundhog_json_rpc_types::{
-    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest},
+    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, LocalFundingErrorData},
     receipt::ExecStatus,
 };
 use groundhog_xdr::types::NetworkHash;
@@ -243,6 +243,8 @@ struct LocalFundingAttempt {
     rpc_url: String,
     network_hash: String,
     request: FundAccountRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transaction: Option<LocalFundingErrorData>,
 }
 
 fn local_funding_attempt_path(
@@ -295,6 +297,7 @@ fn retain_local_funding_request(
             rpc_url: prepared.rpc_url.clone(),
             network_hash,
             request: request.clone(),
+            transaction: None,
         },
     )?;
     Ok((path, lock, request))
@@ -315,28 +318,37 @@ fn run_local_airdrop(
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let (tx_hash, receipt) = runtime.block_on(async {
         let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
-        let response = client
-            .fund_account(request.clone())
-            .await
-            .map_err(|error| CliError::RpcMethodFailed {
-                method: "groundhog_fundAccount",
-                message: error.to_string(),
-            })?;
+        let response = match client.fund_account(request.clone()).await {
+            Ok(response) => response,
+            Err(error) => {
+                if let jsonrpsee::core::client::Error::Call(call) = &error
+                    && call.code()
+                        == groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+                    && let Some(data) = call.data()
+                {
+                    let evidence: LocalFundingErrorData = serde_json::from_str(data.get())
+                        .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
+                    retain_local_funding_evidence(&path, &evidence)?;
+                }
+                return Err(local_funding_recovery_error(
+                    &path,
+                    CliError::RpcMethodFailed {
+                        method: "groundhog_fundAccount",
+                        message: error.to_string(),
+                    },
+                )?);
+            }
+        };
         if response.recipient != request.recipient || response.raw_amount != request.raw_amount {
             return Err(CliError::LocalFundingAttempt(
                 "funding response does not match the retained request".into(),
             ));
         }
-        let signed: groundhog_xdr::transaction::SignedTransaction =
-            xdrs::txs::decode(&response.signed_transaction.0)
-                .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?;
-        let hash = groundhog_signing::transaction_hash(&signed.tx)
-            .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?;
-        if response.tx_hash != groundhog_json_rpc_types::transaction::TxHash(hash.into()) {
-            return Err(CliError::LocalFundingAttempt(
-                "funding response hash does not match its signed bytes".into(),
-            ));
-        }
+        // Retain acknowledged evidence before the next await or fallible observation.
+        retain_local_funding_evidence(
+            &path,
+            &LocalFundingErrorData::new(response.tx_hash, response.signed_transaction.clone()),
+        )?;
         let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
             &client,
             response.tx_hash,
@@ -344,7 +356,11 @@ fn run_local_airdrop(
             groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
         )
         .await
-        .map_err(crate::tx_utils::map_poll_receipt_error)?;
+        .map_err(|error| CliError::LocalFundingUnresolved {
+            tx_hash: format_tx_hash(&response.tx_hash),
+            attempt_path: path.display().to_string(),
+            message: crate::tx_utils::map_poll_receipt_error(error).to_string(),
+        })?;
         Ok::<_, CliError>((response.tx_hash, receipt))
     })?;
     // A receipt closes this attempt even when execution failed. Uncertain outcomes keep it.
@@ -389,6 +405,58 @@ fn run_local_airdrop(
             "observations": observations,
         }),
     ))
+}
+
+fn retain_local_funding_evidence(
+    path: &Path,
+    evidence: &LocalFundingErrorData,
+) -> Result<(), CliError> {
+    let signed: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&evidence.signed_transaction.0)
+            .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
+    let hash = groundhog_signing::transaction_hash(&signed.tx)
+        .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
+    if evidence.tx_hash != groundhog_json_rpc_types::transaction::TxHash(hash.into()) {
+        return Err(CliError::LocalFundingAttempt(
+            "retained funding hash does not match signed bytes".into(),
+        ));
+    }
+    let unresolved = |error: CliError| CliError::LocalFundingUnresolved {
+        tx_hash: format_tx_hash(&evidence.tx_hash),
+        attempt_path: path.display().to_string(),
+        message: error.to_string(),
+    };
+    let mut attempt = read_attempt::<LocalFundingAttempt>(path)
+        .map_err(&unresolved)?
+        .ok_or_else(|| {
+            unresolved(CliError::LocalFundingAttempt(
+                "retained request disappeared".into(),
+            ))
+        })?;
+    if attempt
+        .transaction
+        .as_ref()
+        .is_some_and(|original| original != evidence)
+    {
+        return Err(CliError::LocalFundingAttempt(
+            "funding response replaced the retained transaction".into(),
+        ));
+    }
+    attempt.transaction = Some(evidence.clone());
+    write_attempt(path, &attempt).map_err(unresolved)
+}
+
+fn local_funding_recovery_error(path: &Path, error: CliError) -> Result<CliError, CliError> {
+    Ok(
+        match read_attempt::<LocalFundingAttempt>(path)?.and_then(|attempt| attempt.transaction) {
+            Some(evidence) => CliError::LocalFundingUnresolved {
+                tx_hash: format_tx_hash(&evidence.tx_hash),
+                attempt_path: path.display().to_string(),
+                message: error.to_string(),
+            },
+            None => error,
+        },
+    )
 }
 
 fn ensure_local_airdrop_success(

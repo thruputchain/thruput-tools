@@ -727,7 +727,11 @@ The local-only `groundhog_fundAccount` accepts an exact positive raw amount,
 recipient, caller nonce and public faucet address. Persist the request before
 sending. After a timeout, retry that request; changing the amount or nonce can
 create a second transfer. Admission returns the hash and exact signed bytes;
-execution requires an authoritative receipt. The existing airdrop remains fixed
+execution requires an authoritative receipt. Unresolved errors return retained
+`txHash` and `signedTransaction` evidence, which does not prove admission or
+execution. The CLI saves this evidence and reports the hash and attempt path if
+receipt lookup fails. Inspect the hash with `groundhog tx show`, then retry the
+original recipient and amount. The existing airdrop remains fixed
 at 10 HOG. Funding storage is bounded to 1024 retained attempts per chain and
 never evicts them; a full journal rejects new requests while reconciling old ones.
 

@@ -6229,6 +6229,62 @@ fn airdrop_default_submits_without_recipient_signer() {
 }
 
 #[test]
+fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config");
+    let cache_home = tmp.path().join("cache");
+    std::fs::create_dir_all(&project).unwrap();
+    let owner = generate_key_public_key(&config_home, "alice");
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+        0,
+    );
+    let recipient = format!("0x{}", hex::encode(account.address().as_ref()));
+    let faucet = advertised_dev_wallet_address(0);
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let rpc_url = format!("http://{addr}");
+    let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+    std::fs::write(project.join("groundhog.toml"), format!(
+        "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        serve_balance(&listener, deadline, &faucet, "200012006", 41);
+        let signed = serve_local_funding_transaction_with_receipt_failure(
+            &listener, deadline, &faucet, &recipient, true,
+        );
+        assert_no_follow_up_rpc(&listener);
+        signed
+    });
+    let output = groundhog()
+        .args(["--json", "airdrop", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let signed = server.join().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let hash = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::transaction_hash(&signed.tx).unwrap())
+    );
+    assert_eq!(report["error"]["code"], "local_funding_unresolved");
+    assert_eq!(report["error"]["details"]["txHash"], hash);
+    let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
+    let attempt: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(attempt["transaction"]["txHash"], hash);
+    assert_eq!(
+        attempt["transaction"]["signedTransaction"],
+        format!("0x{}", hex::encode(xdrs::txs::encode(&signed).unwrap()))
+    );
+    assert!(attempt["request"]["clientNonce"].is_string());
+}
+
+#[test]
 fn airdrop_explicit_key_respects_saved_wallet_and_alias_precedence() {
     let bare_address = "ab".repeat(32);
     let prefixed_address = format!("0x{bare_address}");
@@ -14554,6 +14610,18 @@ fn serve_local_funding_transaction(
     faucet: &str,
     recipient: &str,
 ) -> groundhog_xdr::transaction::SignedTransaction {
+    serve_local_funding_transaction_with_receipt_failure(
+        listener, deadline, faucet, recipient, false,
+    )
+}
+
+fn serve_local_funding_transaction_with_receipt_failure(
+    listener: &TcpListener,
+    deadline: Instant,
+    faucet: &str,
+    recipient: &str,
+    fail_receipt: bool,
+) -> groundhog_xdr::transaction::SignedTransaction {
     let (stream, request) = read_jsonrpc_request(listener, deadline, "fundAccount");
     assert_eq!(request["method"], "groundhog_fundAccount");
     assert_eq!(request["params"][0]["faucet"], faucet);
@@ -14599,11 +14667,15 @@ fn serve_local_funding_transaction(
     let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
     assert_eq!(request["method"], "groundhog_getTransactionReceipt");
     assert_eq!(request["params"][0], tx_hash);
-    send_jsonrpc_response(
-        stream,
-        &request["id"],
-        serde_json::json!({ "txHash":tx_hash,"height":43,"gasUsed":1500,"status":{"result":"ok"},"events":[] }),
-    );
+    if fail_receipt {
+        send_jsonrpc_error_response(stream, &request["id"], -32050, "receipt read unavailable");
+    } else {
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({ "txHash":tx_hash,"height":43,"gasUsed":1500,"status":{"result":"ok"},"events":[] }),
+        );
+    }
     signed_tx
 }
 

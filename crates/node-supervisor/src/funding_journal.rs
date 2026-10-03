@@ -143,6 +143,21 @@ impl FundingJournal {
         &self.data.records
     }
 
+    /// Do not expose a newly signed record while its persistence remains uncertain.
+    pub(crate) fn durable_signed(
+        &self,
+        request: &FundAccountRequest,
+    ) -> Option<RetainedFundingTransaction> {
+        if self.dirty {
+            return None;
+        }
+        self.data
+            .records
+            .iter()
+            .find(|record| record.request == *request)
+            .and_then(|record| record.signed.clone())
+    }
+
     /// A record remains for the chain's lifetime, including completed transfers.
     pub(crate) fn register(
         &mut self,

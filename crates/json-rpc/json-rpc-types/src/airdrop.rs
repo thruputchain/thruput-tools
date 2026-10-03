@@ -11,6 +11,28 @@ use crate::{BlockHeight, ContractAddress, NetworkHash, SHA256Hash};
 /// Maximum size of an airdrop idempotency nonce.
 pub const MAX_CLIENT_NONCE_BYTES: usize = 32;
 
+/// Retained transaction evidence returned when local funding cannot resolve an outcome.
+/// This does not prove admission or execution. Reconcile this hash and reuse the original request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct LocalFundingErrorData {
+    /// Canonical hash of the retained transaction body.
+    pub tx_hash: TxHash,
+    /// Exact signed bytes persisted before the first submission.
+    pub signed_transaction: HexBytes,
+}
+
+impl LocalFundingErrorData {
+    /// Construct retained evidence without asserting an outcome.
+    pub fn new(tx_hash: TxHash, signed_transaction: HexBytes) -> Self {
+        Self {
+            tx_hash,
+            signed_transaction,
+        }
+    }
+}
+
 /// Opaque idempotency nonce supplied by an airdrop caller.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClientNonce(Vec<u8>);

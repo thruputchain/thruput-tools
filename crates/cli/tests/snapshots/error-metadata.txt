@@ -403,6 +403,11 @@ LocalFundingAttempt
   code: local_funding_attempt
   hint text: retry the original request to reconcile its outcome; do not delete an uncertain attempt
 
+LocalFundingUnresolved
+  code: local_funding_unresolved
+  hint text: inspect this hash with groundhog tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it
+  details: txHash, attemptPath
+
 LocalRuntimeUnavailable
   code: local_runtime_unavailable
   hint text: use a current local runtime manifest; old local state requires the previous runtime and tooling

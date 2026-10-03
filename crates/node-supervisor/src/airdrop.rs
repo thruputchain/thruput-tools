@@ -13,7 +13,10 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     ContractAddress,
-    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},
+    airdrop::{
+        AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse,
+        LocalFundingErrorData,
+    },
     hex::Hex0x,
     receipt::ExecStatus,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, RuntimeManifest},
@@ -344,7 +347,27 @@ impl LocalAirdropRpc {
             RpcServerError::Overloaded("local funding admission capacity reached".into())
         })?;
         let context = RpcRequestContext::new(Some(self.timeout));
-        within_request_deadline(context, self.fund_admitted(request, context)).await
+        within_request_deadline(context, self.fund_admitted(request.clone(), context))
+            .await
+            .map_err(|error| {
+                // Do not extend the request deadline waiting for a persistence worker.
+                // A retry can recover evidence if that worker still holds the journal.
+                let evidence = self
+                    .journal
+                    .try_lock()
+                    .ok()
+                    .and_then(|journal| journal.durable_signed(&request));
+                match evidence {
+                    Some(retained) => RpcServerError::LocalFundingUnresolved {
+                        reason: error.to_string(),
+                        evidence: LocalFundingErrorData::new(
+                            retained.tx_hash,
+                            retained.signed_transaction,
+                        ),
+                    },
+                    None => error,
+                }
+            })
     }
 
     async fn fund_admitted(
@@ -1774,7 +1797,7 @@ mod tests {
         let request = funding_request("42");
         assert!(matches!(
             rpc.fund(request.clone()).await,
-            Err(RpcServerError::BackendUnavailable(_))
+            Err(RpcServerError::LocalFundingUnresolved { .. })
         ));
         let retained = backend.submissions.lock().unwrap()[0].clone();
         drop(rpc);
@@ -1820,6 +1843,30 @@ mod tests {
         let restarted = durable_rpc(dir.path(), false, backend.clone());
         let error = restarted.fund(request).await.unwrap_err();
         assert!(error.to_string().contains("expired"));
+        let object: jsonrpsee::types::ErrorObjectOwned = error.into();
+        assert_eq!(
+            object.code(),
+            groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+        );
+        let evidence: LocalFundingErrorData =
+            serde_json::from_str(object.data().unwrap().get()).unwrap();
+        assert_eq!(evidence.tx_hash, signed.tx_hash);
+        let original = FundingJournal::open(
+            dir.path(),
+            [0; 32].into(),
+            funding_request("42").faucet,
+            false,
+            &fixture_signer(),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.signed_transaction,
+            original.records()[0]
+                .signed
+                .as_ref()
+                .unwrap()
+                .signed_transaction
+        );
         assert!(backend.submissions.lock().unwrap().is_empty());
     }
 
@@ -1854,6 +1901,24 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(rpc.fund(request).await.is_err());
+        assert!(backend.submissions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_signed_persistence_does_not_expose_restart_unstable_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(TestBackend::new(vec![]));
+        let rpc = durable_rpc(dir.path(), true, backend.clone());
+        let request = funding_request("42");
+        rpc.find_or_admit(request.clone()).await.unwrap();
+        let path = dir.path().join(crate::LOCAL_FUNDING_ATTEMPTS_FILE);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = rpc.fund(request.clone()).await.unwrap_err();
+        assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
+        let journal = rpc.journal.lock().unwrap();
+        assert!(journal.records()[0].signed.is_some());
+        assert!(journal.durable_signed(&request).is_none());
         assert!(backend.submissions.lock().unwrap().is_empty());
     }
 

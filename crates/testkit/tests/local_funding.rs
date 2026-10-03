@@ -30,6 +30,19 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
             let mut seen = requests.lock().unwrap();
             seen.push(request.clone());
             if seen.len() == 1 {
+                let response = funding_response(request, &faucet);
+                return Err(ErrorObjectOwned::owned(
+                    groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
+                    "receipt unavailable after durable signing",
+                    Some(
+                        groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
+                            response.tx_hash,
+                            response.signed_transaction,
+                        ),
+                    ),
+                ));
+            }
+            if seen.len() == 2 {
                 return Err(ErrorObjectOwned::owned(
                     -32000,
                     "lost admission response",
@@ -51,17 +64,7 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
                     None::<()>,
                 ));
             }
-            Ok(Some(
-                groundhog_json_rpc_types::receipt::TransactionReceipt {
-                    tx_hash: hash,
-                    height: 3.into(),
-                    status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
-                    events: vec![],
-                    return_data: None,
-                    abort_data: None,
-                    gas_used: 123,
-                },
-            ))
+            Ok(Some(successful_receipt(hash)))
         })
         .unwrap();
     let handle = server.start(module);
@@ -81,7 +84,14 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
         .unwrap();
     scenario
         .run_agents([Agent::new("alice", move |ctx| async move {
-            assert!(ctx.submit_fund(12345).await.is_err());
+            let first = ctx.submit_fund(12345).await.unwrap_err();
+            let TestkitError::Submission { tx_hash, signed_transaction, .. } = first else {
+                panic!("expected typed unresolved transaction evidence");
+            };
+            assert!(signed_transaction.starts_with("0x"));
+            let second = ctx.submit_fund(12345).await.unwrap_err();
+            assert!(matches!(second, TestkitError::Submission { tx_hash: retry_hash, signed_transaction: retry_bytes, .. }
+                if retry_hash == tx_hash && retry_bytes == signed_transaction));
             assert!(matches!(
                 ctx.submit_fund(67890).await,
                 Err(TestkitError::FundingRequestMismatch { .. })
@@ -98,14 +108,116 @@ async fn lost_response_reuses_request_and_returns_admitted_bytes_without_receipt
         })])
         .await
         .unwrap();
-    assert_eq!(requests.lock().unwrap().len(), 3);
+    assert_eq!(requests.lock().unwrap().len(), 4);
     {
         let seen = requests.lock().unwrap();
         assert_eq!(seen[0], seen[1]);
-        assert_ne!(seen[1].client_nonce, seen[2].client_nonce);
+        assert_eq!(seen[1], seen[2]);
+        assert_ne!(seen[2].client_nonce, seen[3].client_nonce);
     }
     scenario.stop().await.unwrap();
     handle.stop().unwrap();
+}
+
+#[tokio::test]
+async fn evidence_only_attempt_can_be_reconciled_by_explicit_raw_submission() {
+    let faucet = LocalSigner::from_secret_key([42; 32]);
+    let faucet_public_key = faucet.verifying_key_bytes();
+    let faucet_address = PubkeyAccount::new(faucet.public_key(), 0).address();
+    let requests = Arc::new(Mutex::new(Vec::<FundAccountRequest>::new()));
+    let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", server.local_addr().unwrap());
+    let mut module = RpcModule::new(requests.clone());
+    module
+        .register_method("groundhog_fundAccount", move |params, requests, _| {
+            let request: FundAccountRequest = params.one()?;
+            let response = funding_response(request.clone(), &faucet);
+            let mut seen = requests.lock().unwrap();
+            seen.push(request);
+            if seen.len() == 1 {
+                return Err(ErrorObjectOwned::owned(
+                    groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED,
+                    "admission unverified",
+                    Some(
+                        groundhog_json_rpc_types::airdrop::LocalFundingErrorData::new(
+                            response.tx_hash,
+                            response.signed_transaction,
+                        ),
+                    ),
+                ));
+            }
+            Ok(response)
+        })
+        .unwrap();
+    let submitted_hash = Arc::new(Mutex::new(None::<TxHash>));
+    let submitted = submitted_hash.clone();
+    module
+        .register_method("groundhog_sendRawTransaction", move |params, _, _| {
+            let bytes: String = params.one()?;
+            let signed: groundhog_xdr::transaction::SignedTransaction =
+                xdrs::txs::decode(&hex::decode(bytes.strip_prefix("0x").unwrap()).unwrap())
+                    .unwrap();
+            let hash = TxHash(Hex0x(transaction_hash(&signed.tx).unwrap()));
+            *submitted.lock().unwrap() = Some(hash);
+            Ok::<_, ErrorObjectOwned>(hash)
+        })
+        .unwrap();
+    module
+        .register_method("groundhog_getTransactionReceipt", move |params, _, _| {
+            let hash: TxHash = params.one()?;
+            assert_eq!(*submitted_hash.lock().unwrap(), Some(hash));
+            Ok::<_, ErrorObjectOwned>(Some(successful_receipt(hash)))
+        })
+        .unwrap();
+    let handle = server.start(module);
+    let manifest = local_manifest(faucet_public_key, faucet_address);
+    let scenario = Scenario::builder("explicit-recovery")
+        .accounts(1)
+        .network(NetworkConfig::existing(&url, manifest.path()))
+        .build()
+        .await
+        .unwrap();
+    scenario
+        .run_agents([Agent::new("alice", |ctx| async move {
+            let error = ctx.submit_fund(12345).await.unwrap_err();
+            let TestkitError::Submission {
+                tx_hash,
+                signed_transaction,
+                ..
+            } = error
+            else {
+                panic!("expected typed unresolved evidence");
+            };
+            assert!(matches!(
+                ctx.submit_fund(67890).await,
+                Err(TestkitError::FundingRequestMismatch { .. })
+            ));
+            assert_eq!(ctx.network().submit_raw(signed_transaction).await?, tx_hash);
+            assert!(ctx.network().receipt(tx_hash).await?.is_some());
+            let _next = ctx.submit_fund(67890).await?;
+            Ok(())
+        })])
+        .await
+        .unwrap();
+    {
+        let seen = requests.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].client_nonce, seen[1].client_nonce);
+    }
+    scenario.stop().await.unwrap();
+    handle.stop().unwrap();
+}
+
+fn successful_receipt(tx_hash: TxHash) -> groundhog_json_rpc_types::receipt::TransactionReceipt {
+    groundhog_json_rpc_types::receipt::TransactionReceipt {
+        tx_hash,
+        height: 3.into(),
+        status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+        events: vec![],
+        return_data: None,
+        abort_data: None,
+        gas_used: 123,
+    }
 }
 
 fn funding_response(request: FundAccountRequest, faucet: &LocalSigner) -> FundAccountResponse {

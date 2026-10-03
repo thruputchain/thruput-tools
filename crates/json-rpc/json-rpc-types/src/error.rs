@@ -21,6 +21,9 @@ pub mod codes {
     /// Transaction hash not found in mempool or indexer.
     pub const TX_NOT_FOUND: i32 = -32002;
 
+    /// Local funding has retained signed evidence but no resolved outcome.
+    pub const LOCAL_FUNDING_UNRESOLVED: i32 = -32003;
+
     /// Block height out of range (negative, or beyond current tip).
     pub const BLOCK_NOT_FOUND: i32 = -32010;
 
@@ -46,6 +49,7 @@ pub mod codes {
         TX_INVALID,
         TX_REJECTED,
         TX_NOT_FOUND,
+        LOCAL_FUNDING_UNRESOLVED,
         BLOCK_NOT_FOUND,
         BACKEND_UNAVAILABLE,
         BACKEND_TIMEOUT,
@@ -69,6 +73,12 @@ pub struct RpcErrorInfo {
 
 /// Public JSON-RPC error codes known to the Groundhog API surface.
 pub const ERROR_INFOS: &[RpcErrorInfo] = &[
+    RpcErrorInfo {
+        name: "LocalFundingUnresolved",
+        code: codes::LOCAL_FUNDING_UNRESOLVED,
+        message: "Local funding unresolved",
+        description: "Local funding retained a signed transaction but could not resolve its outcome. Data contains its transaction hash and exact signed bytes, not proof of admission or execution. Reconcile that hash and retry the original request; do not create a replacement transfer.",
+    },
     RpcErrorInfo {
         name: "InvalidParams",
         code: codes::INVALID_PARAMS,

@@ -2,7 +2,9 @@
 
 Run concurrent contract tests against an existing RPC or a harness-owned local
 node. Each agent receives a deterministic native account derived from the
-scenario seed. Accounts start empty; funding is explicit.
+scenario seed. Managed local nodes allocate the configured genesis balance to
+these accounts (100 HOG by default). On existing networks, accounts start empty
+and funding is explicit.
 
 ```rust,no_run
 use groundhog_testkit::{Agent, DeployOptions, LocalNetworkConfig, NetworkConfig, Scenario};
@@ -48,7 +50,7 @@ requires resolving that attempt first.
 
 `bootstrap_accounts()` is an explicit hosted schema-3 adapter. Local manifests contain public keys only and cannot supply signing keys. For existing local nodes, use scenario-owned accounts and explicitly call `fund` or `submit_fund` as needed.
 
-Local funding uses `groundhog_fundAccount`. The network handle retains each request before sending. After an uncertain response, retry the same recipient and amount on that handle; a changed amount is refused until the request is reconciled. Keep the handle alive during recovery. The handle retains admitted hash and signed bytes until an authoritative receipt, including errors or cancellation in `fund()`. `SubmittedTransaction` also exposes those bytes. This preserves submit → produce block → receipt in manual mode.
+Local funding uses `groundhog_fundAccount`. The network handle retains each request before sending. After an uncertain response, retry the same recipient and amount on that handle; a changed amount is refused until the request is reconciled. Keep the handle alive during recovery. The handle retains admitted hash and signed bytes until an authoritative receipt, including errors or cancellation in `fund()`. `SubmittedTransaction` also exposes those bytes. Unresolved funding errors expose retained hash and exact bytes through `TestkitError::Submission`; this evidence does not prove admission. This preserves submit → produce block → receipt in manual mode.
 
 The live tests in `tests/contract_smoke.rs` cover atomic initialization,
 registration and hash-only deployment, native calls, manual blocks, and recovery

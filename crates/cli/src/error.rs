@@ -620,6 +620,16 @@ pub enum CliError {
         "retry the original request to reconcile its outcome; do not delete an uncertain attempt"
     )]
     LocalFundingAttempt(String),
+    #[error("local funding transaction {tx_hash} is unresolved: {message}")]
+    #[hint(
+        "inspect this hash with groundhog tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it"
+    )]
+    #[details(tx_hash, attempt_path)]
+    LocalFundingUnresolved {
+        tx_hash: String,
+        attempt_path: String,
+        message: String,
+    },
     #[error("local runtime for `{key_name}` is unavailable: {message}")]
     #[hint(
         "use a current local runtime manifest; old local state requires the previous runtime and tooling"
