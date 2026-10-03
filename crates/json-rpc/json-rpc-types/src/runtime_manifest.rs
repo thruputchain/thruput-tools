@@ -217,8 +217,8 @@ pub struct BootstrapAccount {
     /// Hosted schema-3 fixture derivation index; absent on local schema 4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<u32>,
-    /// Account role discriminator. Local runtimes use `faucet` for index 0 and
-    /// `local_user` for ordinary workload accounts.
+    /// Account role discriminator. Local runtimes use `faucet` for the service
+    /// account and `local_user` for ordinary workload accounts.
     pub role: String,
     /// Public key authorized for the wallet.
     pub public_key: Ed25519PublicKey,

@@ -729,9 +729,7 @@ pub fn save_profile_default_wallet(
 ///
 /// Prefers `groundhog.toml` when the profile specifies
 /// `default_key`, otherwise falls back to the global default
-/// selected via `keys use`. Profiles targeting the active runtime
-/// started by `groundhog node` use the lowest-index local-user signer when
-/// neither selection is present.
+/// selected via `keys use`. No selection leaves the default key unset.
 pub fn resolve_default_key(
     start: &Path,
     explicit_profile: Option<&str>,

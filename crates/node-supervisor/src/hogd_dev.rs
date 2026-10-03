@@ -97,7 +97,7 @@ pub struct HogdDevEndpoints {
     pub dev_control: Option<SocketAddr>,
 }
 
-/// Public dev-account metadata advertised by hog-devnode readiness.
+/// Public native account metadata advertised by hog-devnode readiness.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
 pub(crate) struct HogdDevReadyAccount {
@@ -129,7 +129,7 @@ pub struct HogdDevReadiness {
     pub protocol: Option<String>,
     /// x23 endpoints available after startup.
     pub endpoints: HogdDevEndpoints,
-    /// Public dev-account metadata advertised by hogd-dev.
+    /// Public native account metadata advertised by hogd-dev.
     #[serde(default)]
     pub(crate) dev_accounts: Vec<HogdDevReadyAccount>,
     /// Full runtime manifest loaded from the advertised readiness pointer.
