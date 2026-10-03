@@ -4,6 +4,7 @@
 //! in a JSON file under the cache directory with a lock beside it.
 
 use std::fs::{File, OpenOptions};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt as _;
@@ -41,7 +42,9 @@ pub(crate) fn lock_attempt(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options.open(&lock_path)?;
     file.try_lock_exclusive().map_err(|error| {
@@ -62,11 +65,30 @@ pub(crate) fn lock_attempt(
 
 /// Read the attempt at `path`, or `None` when no attempt was recorded.
 pub(crate) fn read_attempt<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, CliError> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = match options.open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
+    if !file.metadata()?.is_file() {
+        return Err(CliError::LocalFundingAttempt(
+            "attempt must be a regular file".into(),
+        ));
+    }
+    let mut contents = String::new();
+    file.take(64 * 1024 + 1).read_to_string(&mut contents)?;
+    if contents.len() > 64 * 1024 {
+        return Err(CliError::LocalFundingAttempt(
+            "attempt exceeds 64 KiB".into(),
+        ));
+    }
     serde_json::from_str(&contents)
         .map(Some)
         .map_err(|error| CliError::Other(format!("failed to parse `{}`: {error}", path.display())))
@@ -79,7 +101,16 @@ pub(crate) fn write_attempt<T: Serialize>(path: &Path, attempt: &T) -> Result<()
     }
     let contents =
         serde_json::to_vec_pretty(attempt).map_err(|error| CliError::Other(error.to_string()))?;
-    std::fs::write(path, contents)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| CliError::LocalFundingAttempt("attempt path has no parent".into()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&contents)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .map_err(|error| CliError::Io(error.error))?;
+    File::open(parent)?.sync_all()?;
     Ok(())
 }
 

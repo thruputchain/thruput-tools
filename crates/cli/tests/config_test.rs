@@ -996,7 +996,7 @@ default_key = "project-key"
 
 #[test]
 #[serial]
-fn resolve_default_key_uses_builtin_dev_key_for_local_profile() {
+fn resolve_default_key_does_not_infer_key_from_local_runtime() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let runtime_manifest = tmp.path().join("runtime-manifest.json");
@@ -1020,7 +1020,7 @@ network = "local"
     .unwrap();
 
     let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
-    assert_eq!(resolved.as_deref(), Some("dev-1"));
+    assert_eq!(resolved, None);
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

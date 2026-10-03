@@ -5,7 +5,7 @@ pub use groundhog_json_rpc_types as types;
 
 pub mod receipt;
 
-pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient};
+pub use groundhog_json_rpc_api::{AirdropApiClient, GroundhogApiClient, LocalFundingApiClient};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use jsonrpsee::core::client::ClientT;

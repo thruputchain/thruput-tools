@@ -230,9 +230,7 @@ pub fn check_project(
                     "global"
                 }
             });
-            if let Some(ref key_name) = profile_key
-                && !crate::dev_keys::is_dev_key(key_name)
-            {
+            if let Some(ref key_name) = profile_key {
                 let key_path = crate::config::keys_dir()?.join(format!("{key_name}.json"));
                 if !key_path.exists() {
                     findings.push(Finding {
@@ -338,25 +336,6 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
     let key_name = crate::config::resolve_default_key_for_profile(profile)
         .ok()
         .flatten();
-    let uses_dev_key = key_name
-        .as_deref()
-        .and_then(crate::dev_keys::dev_key_index)
-        .is_some();
-    if uses_dev_key {
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "default_wallet_with_dev_key",
-            message: format!(
-                "profile `{}` selects wallet `{wallet_name}` for manifest-backed key `{}`",
-                profile.name,
-                key_name.as_deref().expect("bug: dev key must be present")
-            ),
-            hint: Some(Cow::Borrowed(
-                "remove default_wallet; manifest-backed dev keys use their fixed wallet",
-            )),
-        });
-        return;
-    }
     let Some(wallet) = profile.wallets.get(wallet_name) else {
         findings.push(Finding {
             level: FindingLevel::Warn,
@@ -443,7 +422,7 @@ pub fn collect_report(
     add_environment_findings(&environment, &project, &mut findings);
 
     let (effective_default_key, effective_default_key_source) =
-        resolve_effective_key(project_start, explicit_profile, &project, &keys)?;
+        resolve_effective_key(&project, &keys);
 
     add_key_findings(
         &keys,
@@ -1380,21 +1359,15 @@ fn read_probe_output(
 }
 
 fn resolve_effective_key(
-    project_start: &Path,
-    explicit_profile: Option<&str>,
     project: &ProjectContext,
     keys: &KeyStatus,
-) -> Result<(Option<String>, Option<&'static str>), CliError> {
+) -> (Option<String>, Option<&'static str>) {
     if let Some(profile_key) = project.profile_key.clone() {
-        Ok((Some(profile_key), Some("profile")))
+        (Some(profile_key), Some("profile"))
     } else if let Some(global_key) = keys.global_default_key.clone() {
-        Ok((Some(global_key), Some("global")))
-    } else if project.network == Some(crate::config::Network::Local) {
-        let key = crate::config::resolve_default_key(project_start, explicit_profile)?;
-        let source = key.as_ref().map(|_| "local built-in");
-        Ok((key, source))
+        (Some(global_key), Some("global"))
     } else {
-        Ok((None, None))
+        (None, None)
     }
 }
 
@@ -1404,14 +1377,11 @@ fn add_key_findings(
     effective_default_key: Option<&str>,
     findings: &mut Vec<Finding>,
 ) {
-    // Dev keys are derived, regardless of whether a profile, global config, or
-    // the local default selected them. Runtime-manifest checks happen at use.
-    let uses_dev_key = effective_default_key.is_some_and(crate::dev_keys::is_dev_key);
     let has_profile_key_warning = project.findings.iter().any(|f| f.code == "key_not_on_disk");
     let effective_default_exists =
         effective_default_key_summary(&keys.keys, effective_default_key).is_some();
 
-    if keys.keys.is_empty() && !uses_dev_key {
+    if keys.keys.is_empty() {
         add_missing_keys_finding(findings);
         if let Some(selected) = effective_default_key
             && !effective_default_exists
@@ -1437,7 +1407,6 @@ fn add_key_findings(
             )),
         });
     } else if let Some(selected) = effective_default_key
-        && !uses_dev_key
         && !effective_default_exists
         && !has_profile_key_warning
     {
@@ -1528,7 +1497,7 @@ mod tests {
     }
 
     #[test]
-    fn default_wallet_check_rejects_selection_for_dev_key() {
+    fn default_wallet_check_accepts_stored_dev_named_key() {
         let mut wallets = std::collections::BTreeMap::new();
         wallets.insert(
             "trading".into(),
@@ -1559,8 +1528,7 @@ mod tests {
 
         check_default_wallet(&profile, &mut findings);
 
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].code, "default_wallet_with_dev_key");
+        assert!(findings.is_empty());
     }
 
     #[test]
@@ -2047,8 +2015,8 @@ mod tests {
         let project = tmp.path().join("project");
         std::fs::create_dir(&project).unwrap();
         for (key, missing) in [
-            ("dev-1", false),
-            ("dev-99", false),
+            ("dev-1", true),
+            ("dev-99", true),
             ("alice", true),
             ("dev-", true),
             ("dev-abc", true),
@@ -2085,8 +2053,8 @@ mod tests {
                 global_default_key: None,
             };
             for (key, missing) in [
-                ("dev-1", false),
-                ("dev-99", false),
+                ("dev-1", true),
+                ("dev-99", true),
                 ("alice", true),
                 ("dev-", true),
                 ("dev-abc", true),

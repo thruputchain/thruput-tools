@@ -742,40 +742,14 @@ pub fn resolve_default_key(
 
 /// Resolve the effective default key from an already resolved profile.
 ///
-/// The implicit local-user signer is available only when the profile still
-/// targets the active local runtime recorded by `groundhog node`. Explicit
-/// project or CLI target overrides must select a key themselves.
+/// Project or profile selection takes precedence over the stored global default.
 pub fn resolve_default_key_for_profile(
     profile: &ResolvedProfile,
 ) -> Result<Option<String>, CliError> {
-    if let Some(key) = &profile.default_key {
-        return Ok(Some(key.clone()));
+    match &profile.default_key {
+        Some(key) => Ok(Some(key.clone())),
+        None => load_default_key(),
     }
-
-    if let Some(key) = load_default_key()? {
-        return Ok(Some(key));
-    }
-
-    if profile.network != Some(Network::Local) {
-        return Ok(None);
-    }
-
-    let local_runtime_state = load_local_runtime_state()?;
-    let uses_active_local_runtime = local_runtime_state.is_some_and(|state| {
-        profile.rpc_url.as_deref() == Some(state.rpc_url.as_str())
-            && profile.runtime_manifest.as_deref() == Some(state.runtime_manifest.as_path())
-    });
-
-    if !uses_active_local_runtime {
-        return Ok(None);
-    }
-
-    let Some(manifest) =
-        crate::runtime_manifest::load_configured_runtime_manifest(profile, "local_user")?
-    else {
-        return Ok(None);
-    };
-    Ok(crate::runtime_manifest::lowest_local_user_key(&manifest))
 }
 
 /// Resolve the active profile and apply transient local-node state.

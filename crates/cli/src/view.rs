@@ -8,9 +8,7 @@ use groundhog_json_rpc_types::{
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 
-use crate::account_resolution::{
-    lookup_dev_account_address, resolve_address_target, resolve_contract_target,
-};
+use crate::account_resolution::{resolve_address_target, resolve_contract_target};
 use crate::artifacts::ArtifactOptions;
 use crate::call::{ResolvedCall, format_entrypoint_id, resolve_call, selector_json};
 use crate::codec::{
@@ -21,7 +19,7 @@ use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::dev_detail::format_event;
 use crate::result::CommandResult;
 use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
-use crate::{CliError, Print, dev_keys};
+use crate::{CliError, Print};
 
 /// Resolve inputs, call `groundhog_view`, and print the view output.
 #[allow(clippy::too_many_arguments)]
@@ -140,13 +138,7 @@ fn prepare_view(
     let resolved = resolve_call(project_start, method, package, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
     let caller = from
-        .map(|target| {
-            if let Some(index) = dev_keys::dev_key_index(target) {
-                lookup_dev_account_address(&resolved_profile, target, index)
-            } else {
-                resolve_address_target(&resolved_profile, target).map(ContractAddress::from)
-            }
-        })
+        .map(|target| resolve_address_target(&resolved_profile, target).map(ContractAddress::from))
         .transpose()?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
     let entrypoint_id = format_entrypoint_id(resolved.entrypoint);
