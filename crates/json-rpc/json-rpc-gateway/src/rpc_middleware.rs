@@ -66,6 +66,9 @@ where
             }
             let started_at = Instant::now();
             let response = inner.batch(batch).await;
+            if let Some(code) = response.as_error_code() {
+                metrics.observe_rpc_batch_error(code);
+            }
             tracing::debug!(
                 batch_len,
                 duration_ms = started_at.elapsed().as_millis(),
@@ -285,7 +288,54 @@ mod tests {
             "groundhog_gateway_rpc_requests_total{method=\"unknown\",outcome=\"not_implemented\"} 1"
         ));
         assert!(body.contains("groundhog_gateway_rpc_batch_size_bucket{le=\"2\"} 1"));
+        assert!(!body.contains("groundhog_gateway_rpc_batch_errors_total"));
         assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0"));
+    }
+
+    #[tokio::test]
+    async fn aggregate_overflow_records_batch_error_without_relabeling_completed_calls() {
+        let metrics = GatewayMetrics::for_tests();
+        let inner = MockRpcService::default();
+        let service = RpcMetricsService::new(
+            groundhog_json_rpc_server::batch::ConcurrentBatchService::new(
+                RpcCallMetricsService::new(inner.clone(), metrics.clone()),
+                60,
+                groundhog_json_rpc_server::batch::RpcBatchConcurrency::default(),
+            ),
+            metrics.clone(),
+        );
+        let mut batch = Batch::new();
+        for id in 0..3 {
+            batch.push(Request::borrowed(
+                "groundhog_chainTip",
+                None,
+                Id::Number(id),
+            ));
+        }
+
+        let response = service.batch(batch).await;
+        assert_eq!(response.as_error_code(), Some(-32011));
+        assert_eq!(inner.completed.lock().unwrap().len(), 2);
+
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics.gather(&snapshot).unwrap();
+        assert!(
+            body.contains("groundhog_gateway_rpc_batch_errors_total{outcome=\"internal_error\"} 1")
+        );
+        assert!(body.contains(
+            "groundhog_gateway_rpc_requests_total{method=\"groundhog_chainTip\",outcome=\"ok\"} 2"
+        ));
+        assert_eq!(
+            body.lines()
+                .filter(|line| line.starts_with("groundhog_gateway_rpc_requests_total{"))
+                .count(),
+            1
+        );
+        assert!(body.contains(
+            "groundhog_gateway_rpc_request_duration_seconds_count{method=\"groundhog_chainTip\",result=\"ok\"} 2"
+        ));
+        assert!(body.contains("groundhog_gateway_rpc_in_flight{method=\"groundhog_chainTip\"} 0"));
+        assert!(body.contains("groundhog_gateway_rpc_batch_size_count 1"));
     }
 
     #[tokio::test]

@@ -143,6 +143,7 @@ struct MetricsInner {
     rpc_request_duration_seconds: HistogramVec,
     rpc_in_flight: GaugeVec,
     rpc_batch_size: Histogram,
+    rpc_batch_errors_total: IntCounterVec,
     rpc_connections_limit: Gauge,
     http_requests_total: IntCounterVec,
     http_request_duration_seconds: HistogramVec,
@@ -271,6 +272,13 @@ impl GatewayMetrics {
             )
             .buckets(RPC_BATCH_SIZE_BUCKETS.to_vec()),
         )?;
+        let rpc_batch_errors_total = IntCounterVec::new(
+            Opts::new(
+                "groundhog_gateway_rpc_batch_errors_total",
+                "Total JSON-RPC batch-level errors by bounded outcome, excluding individual call errors.",
+            ),
+            &["outcome"],
+        )?;
         let rpc_connections_limit = Gauge::with_opts(Opts::new(
             "groundhog_gateway_rpc_connections_limit",
             "Configured maximum accepted gateway JSON-RPC transport connections.",
@@ -353,6 +361,7 @@ impl GatewayMetrics {
         registry.register(Box::new(rpc_request_duration_seconds.clone()))?;
         registry.register(Box::new(rpc_in_flight.clone()))?;
         registry.register(Box::new(rpc_batch_size.clone()))?;
+        registry.register(Box::new(rpc_batch_errors_total.clone()))?;
         registry.register(Box::new(rpc_connections_limit.clone()))?;
         registry.register(Box::new(http_requests_total.clone()))?;
         registry.register(Box::new(http_request_duration_seconds.clone()))?;
@@ -391,6 +400,7 @@ impl GatewayMetrics {
                 rpc_request_duration_seconds,
                 rpc_in_flight,
                 rpc_batch_size,
+                rpc_batch_errors_total,
                 rpc_connections_limit,
                 http_requests_total,
                 http_request_duration_seconds,
@@ -499,6 +509,13 @@ impl GatewayMetrics {
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn observe_rpc_batch_size(&self, size: usize) {
         self.inner.rpc_batch_size.observe(size as f64);
+    }
+
+    pub(crate) fn observe_rpc_batch_error(&self, code: i32) {
+        self.inner
+            .rpc_batch_errors_total
+            .with_label_values(&[groundhog_json_rpc_types::error::outcome_for_code(code)])
+            .inc();
     }
 
     pub(crate) fn set_rpc_connections_limit(&self, limit: u32) {
