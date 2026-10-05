@@ -220,6 +220,15 @@ pub trait ChainPlane: Send + Sync + 'static {
 /// Backend plane for transaction, event, and storage reads.
 #[async_trait]
 pub trait ReadPlane: Send + Sync + 'static {
+    /// Read rules at one committed snapshot. None means no configuration-read
+    /// capability; operational failures must remain errors.
+    async fn execution_config(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
+        Ok(None)
+    }
+
     /// Return a committed transaction receipt, if available.
     async fn transaction_receipt(
         &self,

@@ -1621,12 +1621,11 @@ mod tests {
     impl DbGateway_DbGateway1 for SaturatedDbGateway {
         async fn dbgateway_get_config(
             &self,
-        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
-            Err(ProgramError::msg(
-                "configuration RPC is not supported by this test server",
-            ))
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+            Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
+                error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+            })
         }
-
         async fn dbgateway_intro(
             &self,
             _protocol: Protocol,
@@ -1944,12 +1943,11 @@ mod tests {
     impl DbGateway_DbGateway1 for LifecycleDbGateway {
         async fn dbgateway_get_config(
             &self,
-        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
-            Err(ProgramError::msg(
-                "configuration RPC is not supported by this test server",
-            ))
+        ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+            Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
+                error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+            })
         }
-
         async fn dbgateway_intro(
             &self,
             _protocol: Protocol,

@@ -652,6 +652,104 @@
         ],
         "type": "object"
       },
+      "ChainConfig": {
+        "description": "Chain configuration with an optional authoritative execution reading.",
+        "properties": {
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent when the backend cannot supply authoritative execution rules."
+          },
+          "maxAuthTokenDepth": {
+            "description": "Levels of node nesting an auth token may carry.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxBytestringLen": {
+            "description": "Bytes one bytestring storage item may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxContractSizeBytes": {
+            "description": "Bytes one attached contract's code blob may hold. The protocol fixes\n`kDefaultMaxContractSizeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxCrossInvokeDepth": {
+            "description": "Invocation frames one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxNewContractsPerTx": {
+            "description": "Contracts one transaction may attach in `contractsToDeploy`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32CodeBytes": {
+            "description": "Code bytes an RV32 artifact may carry to be attached. The protocol\nfixes `kDefaultMaxRv32CodeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32MemoryBytes": {
+            "description": "Guest data memory bytes an RV32 artifact may declare to be attached.\nThe protocol fixes `kDefaultMaxRv32MemoryBytes` as the value in force\nwhen unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSavepointDepth": {
+            "description": "Storage savepoints one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSha256Buffers": {
+            "description": "Concurrently open incremental SHA-256 buffers permitted per\ninvocation frame.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ChainTip": {
         "description": "Current chain tip. Returned by chainTip.",
         "properties": {
@@ -1045,6 +1143,34 @@
           }
         ]
       },
+      "ExecutionConfig": {
+        "description": "Rules fetched during this request, without stale-cache fallback.\nApply to execution following `observedTip`; later inclusion can use newer rules.",
+        "properties": {
+          "configHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Consensus commitment to the stated configuration and storage model."
+          },
+          "effectiveLimits": {
+            "$ref": "#/components/schemas/NetworkConfigParams",
+            "description": "Runtime-resolved limits; omissions are unavailable, never zero."
+          },
+          "observedTip": {
+            "$ref": "#/components/schemas/ChainTip",
+            "description": "Committed snapshot read together with these rules."
+          },
+          "storageCosts": {
+            "$ref": "#/components/schemas/StorageCosts",
+            "description": "Active storage collateral schedule in native-HOG base units."
+          }
+        },
+        "required": [
+          "observedTip",
+          "configHash",
+          "effectiveLimits",
+          "storageCosts"
+        ],
+        "type": "object"
+      },
       "FundAccountRequest": {
         "additionalProperties": false,
         "description": "Public parameters for local-only `groundhog_fundAccount`.",
@@ -1401,6 +1527,54 @@
           "maxEventsPerPage",
           "maxTransactionsPerPage",
           "maxCursorBytes"
+        ],
+        "type": "object"
+      },
+      "StorageCosts": {
+        "description": "Integer native-HOG base units (10,000,000 per HOG), encoded as decimal strings.\nStorage collateral is separate from gas capacity. A first credit pays the\nrecipient's balance deposit; code storage is charged to the deployed address.",
+        "properties": {
+          "authPerKeyCost": {
+            "description": "Added to the ordinary base for each authorization key.",
+            "type": "string"
+          },
+          "balanceCost": {
+            "description": "Entire balance-item deposit, deducted once from the first credit (no ordinary base).",
+            "type": "string"
+          },
+          "baseContractDeploymentCost": {
+            "description": "RV32 deployment base; does not include the new address's balance deposit.",
+            "type": "string"
+          },
+          "baseDataItemCost": {
+            "description": "Base charge for an ordinary data item; balance and deployment have separate bases.",
+            "type": "string"
+          },
+          "bytestringCostPerByte": {
+            "description": "Added to the ordinary base for each byte of a bytestring value (u32).",
+            "type": "string"
+          },
+          "contractDeploymentCostPerByte": {
+            "description": "Added per byte of ContractBlob.data, including the full RV32 artifact.",
+            "type": "string"
+          },
+          "rcqCostPerEntry": {
+            "description": "Added to the ordinary base per live queue entry; an empty queue costs zero.",
+            "type": "string"
+          },
+          "replayCacheCostPerEntry": {
+            "description": "Added to the ordinary base per replay-cache entry, charged to its owner.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "baseDataItemCost",
+          "bytestringCostPerByte",
+          "baseContractDeploymentCost",
+          "contractDeploymentCostPerByte",
+          "authPerKeyCost",
+          "rcqCostPerEntry",
+          "replayCacheCostPerEntry",
+          "balanceCost"
         ],
         "type": "object"
       },
@@ -2194,12 +2368,12 @@
       "name": "groundhog_chainConfig",
       "params": [],
       "result": {
-        "name": "NetworkConfigParams",
+        "name": "ChainConfig",
         "schema": {
-          "$ref": "#/components/schemas/NetworkConfigParams"
+          "$ref": "#/components/schemas/ChainConfig"
         }
       },
-      "summary": "The execution parameters the chain's network config states. Only stated parameters are reported; an unstated one is absent. Served from a tip reading refreshed at most once per cache window. Fails with `BackendUnavailable` when no reading is available or the config version is unreadable.",
+      "summary": "Stated execution parameters, plus an authoritative `execution` reading when supported. Top-level omissions mean unspecified. `execution` pairs resolved limits and storage prices with the committed tip observed during this request; it is never served from a stale cache. Without that capability, stated fields use the tip cache. Unavailable or unreadable readings fail with `BackendUnavailable`.",
       "tags": [
         {
           "name": "Core API"

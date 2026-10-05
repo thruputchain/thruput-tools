@@ -54,6 +54,12 @@ const TOOLCHAIN_RETRY_HINT: &str =
 ///   their `camelCase` keys. A variant with no `#[details]` carries none.
 #[derive(Error, Debug, ErrorMeta)]
 pub enum CliError {
+    #[error("deployment funding unavailable: {message}")]
+    #[hint(
+        "use an RPC endpoint with authoritative chainConfig execution rules; explicit --fund <HOG> remains available"
+    )]
+    #[details]
+    DeploymentFunding { message: String },
     #[error("invalid wallet `{wallet_name}`: {message}")]
     #[details]
     InvalidWalletBinding {

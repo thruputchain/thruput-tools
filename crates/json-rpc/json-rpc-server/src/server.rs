@@ -572,9 +572,14 @@ where
     }
 
     #[tracing::instrument(skip_all)]
-    async fn chain_config(&self) -> RpcResult<NetworkConfigParams> {
+    async fn chain_config(
+        &self,
+    ) -> RpcResult<groundhog_json_rpc_types::network_config::ChainConfig> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
+            if let Some(config) = self.read.execution_config(context).await? {
+                return Ok(config);
+            }
             // Same rate-limited reading as the submit pre-checks: one tip
             // fetch per TTL window.
             let Some(state) = self.cached_tip_state(context).await.state else {
@@ -589,7 +594,7 @@ where
                 )
                 .into());
             };
-            Ok(params)
+            Ok(params.into())
         })
         .await
     }
@@ -1831,9 +1836,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .await
             .expect("bug: config should be readable");
 
-        assert_eq!(config.max_new_contracts_per_tx, Some(3));
+        assert_eq!(config.stated.max_new_contracts_per_tx, Some(3));
         assert_eq!(
-            config,
+            config.stated,
             NetworkConfigParams {
                 max_new_contracts_per_tx: Some(3),
                 ..NetworkConfigParams::default()
@@ -1906,9 +1911,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .await
             .expect("bug: config should be readable");
 
-        assert_eq!(first.max_new_contracts_per_tx, Some(1));
+        assert_eq!(first.stated.max_new_contracts_per_tx, Some(1));
         assert_eq!(
-            second.max_new_contracts_per_tx,
+            second.stated.max_new_contracts_per_tx,
             Some(2),
             "an expired window fetches the tip again and reports the upgraded config"
         );
@@ -1976,12 +1981,14 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             first
                 .expect("bug: the caller that fetched sees its reading")
+                .stated
                 .max_new_contracts_per_tx,
             Some(3)
         );
         assert_eq!(
             second
                 .expect("bug: a caller arriving mid-fetch waits for that reading")
+                .stated
                 .max_new_contracts_per_tx,
             Some(3)
         );

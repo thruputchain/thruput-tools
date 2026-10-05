@@ -781,7 +781,7 @@ async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
             .expect("bug: chain_config must dispatch through chain plane");
 
         // The mock's config states nothing, so no parameters come back.
-        assert_eq!(config.max_contract_size_bytes, None);
+        assert_eq!(config.stated.max_contract_size_bytes, None);
     }
 }
 

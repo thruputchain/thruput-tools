@@ -1,3 +1,8 @@
+DeploymentFunding
+  code: deployment_funding
+  hint text: use an RPC endpoint with authoritative chainConfig execution rules; explicit --fund <HOG> remains available
+  details: message
+
 InvalidWalletBinding
   code: invalid_wallet_binding
   details: walletName, message

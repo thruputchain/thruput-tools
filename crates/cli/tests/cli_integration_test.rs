@@ -8043,6 +8043,87 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
 }
 
 #[test]
+fn deploy_estimate_needs_no_signer_and_never_invents_missing_prices() {
+    for available in [true, false] {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("groundhog.toml"),
+            "default_profile = 'default'\n[profile.default]\n",
+        )
+        .unwrap();
+        let artifact = groundhog_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
+        let path = tmp.path().join("estimate.rv32a");
+        std::fs::write(&path, &artifact).unwrap();
+        let listener = MockListener::bind();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, request) = read_jsonrpc_request(
+                &listener,
+                Instant::now() + CLI_ACTION_TIMEOUT,
+                "chainConfig",
+            );
+            assert_eq!(request["method"], "groundhog_chainConfig");
+            let result = if available {
+                serde_json::json!({
+                    "execution": {
+                        "observedTip": { "height": "7", "blockHash": format!("0x{}", "11".repeat(32)) },
+                        "configHash": format!("0x{}", "22".repeat(32)),
+                        "effectiveLimits": { "maxContractSizeBytes": 1_000_000 },
+                        "storageCosts": {
+                            "baseDataItemCost": "100", "bytestringCostPerByte": "1",
+                            "baseContractDeploymentCost": "200", "contractDeploymentCostPerByte": "2",
+                            "authPerKeyCost": "1", "rcqCostPerEntry": "1", "replayCacheCostPerEntry": "1",
+                            "balanceCost": "30"
+                        }
+                    }
+                })
+            } else {
+                serde_json::json!({})
+            };
+            send_jsonrpc_response(stream, &request["id"], result);
+        });
+        let output = groundhog()
+            .args([
+                "--json",
+                "--non-interactive",
+                "deploy",
+                "--estimate",
+                "--artifact",
+            ])
+            .arg(&path)
+            .args(["--rpc-url", &format!("http://{addr}")])
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .output()
+            .unwrap();
+        if available {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(json["data"]["schemaVersion"], 1);
+            assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
+            assert_eq!(
+                json["data"]["minimumFundingRaw"],
+                (230 + artifact.len() * 2).to_string()
+            );
+            assert_eq!(json["data"]["execution"]["observedTip"]["height"], "7");
+            assert!(json["data"].get("signedTx").is_none());
+            assert!(output.stderr.is_empty());
+        } else {
+            assert!(!output.status.success());
+            let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(json["error"]["code"], "deployment_funding");
+            assert!(output.stdout.is_empty());
+        }
+        server.join().unwrap();
+    }
+}
+
+#[test]
 fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

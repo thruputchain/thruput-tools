@@ -902,6 +902,15 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     fi
 fi
 
+FUNDING_JSON="$(run_json "deployment funding estimate" "$CLI" --json deploy --estimate)"
+MINIMUM_DEPLOY_JSON="$(run_json "minimum-funded deployment" "$CLI" --json deploy --force --fund minimum --alias minimum-counter)"
+[[ "$(json_field data.nativeDeployment.fundingRawAmount "$MINIMUM_DEPLOY_JSON")" == "$(json_field data.minimumFundingRaw "$FUNDING_JSON")" ]] \
+    || die "minimum-funded deployment did not use the quoted storage collateral"
+MINIMUM_ADDRESS="$(json_field data.address "$MINIMUM_DEPLOY_JSON")"
+MINIMUM_BALANCE="$(run_json "minimum-funded contract balance" "$CLI" --json balance "$MINIMUM_ADDRESS")"
+[[ "$(json_field data.rawBalance "$MINIMUM_BALANCE")" == "0" ]] \
+    || die "minimum funding should leave zero free balance after storage collateral"
+
 DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy --force --fund 10)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \

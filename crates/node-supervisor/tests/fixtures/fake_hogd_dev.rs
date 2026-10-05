@@ -1021,6 +1021,12 @@ fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> SHA256Hash {
 
 #[async_trait]
 impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
+    async fn schedcoord_lookup_transaction_outcomes(
+        &self,
+        _hashes: groundhog_xdr::transaction::TransactionHashBatch,
+    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+        Err(ProgramError::msg("not implemented in fake hogd-dev"))
+    }
     async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
         Ok(())
     }
@@ -1394,12 +1400,11 @@ struct FakeDbGateway {
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_get_config(
         &self,
-    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, ProgramError> {
-        Err(ProgramError::msg(
-            "configuration RPC is not supported by this test server",
-        ))
+    ) -> Result<groundhog_db_gateway::DbGatewayConfigResult, rpc_driver::ProgramError> {
+        Ok(groundhog_db_gateway::DbGatewayConfigResult::Default {
+            error: groundhog_scheduler::RPCError::kRPCUnimplemented.0,
+        })
     }
-
     async fn dbgateway_intro(
         &self,
         _arg0: ProtocolCommit,

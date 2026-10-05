@@ -279,13 +279,13 @@ async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         .await
         .expect("bug: chainConfig should dispatch to fake scheduler");
     assert_eq!(
-        chain_config.max_sha256_buffers,
+        chain_config.stated.max_sha256_buffers,
         Some(0),
         "chainConfig should report the parameters the fake scheduler's genesis config states"
     );
-    assert_eq!(chain_config.max_cross_invoke_depth, Some(0));
+    assert_eq!(chain_config.stated.max_cross_invoke_depth, Some(0));
     assert_eq!(
-        chain_config.max_contract_size_bytes, None,
+        chain_config.stated.max_contract_size_bytes, None,
         "a parameter the genesis config does not state is absent, not defaulted"
     );
     assert_eq!(

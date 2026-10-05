@@ -16,6 +16,49 @@ use groundhog_scheduler::RPCError;
 use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::types::{StorageKey, StorageKeyContractData};
 
+/// Project one snapshot-bound rules reading without supplying missing defaults.
+pub fn chain_config(
+    service: &str,
+    result: groundhog_db_gateway::DbGatewayConfigResult,
+) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError> {
+    use groundhog_json_rpc_types::network_config::{
+        ChainConfig, ExecutionConfig, NetworkConfigParams,
+    };
+    if matches!(&result, groundhog_db_gateway::DbGatewayConfigResult::Default { error } if *error == RPCError::kRPCUnimplemented.0)
+    {
+        return Ok(None);
+    }
+    let groundhog_db_gateway::DbGatewayConfigResult::kRPCNone { config } = result else {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "{service}: configuration unavailable"
+        )));
+    };
+    if config.storage_cost_model.ext != groundhog_xdr::types::ExtensionPoint::_0 {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "{service}: unsupported storage cost model"
+        )));
+    }
+    let stated = NetworkConfigParams::from_network_config(&config.tip.network_config)
+        .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+    let effective = NetworkConfigParams::from_network_config(&config.effective_config)
+        .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+    let tip = crate::scheduler::chain_tip(service, &config.tip.value)?;
+    if *tip.height < 0 {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "{service}: no committed configuration"
+        )));
+    }
+    Ok(Some(ChainConfig::with_execution(
+        stated,
+        ExecutionConfig::new(
+            tip,
+            groundhog_json_rpc_types::hex::Hex0x(*config.tip.value.proposal_header.config_hash),
+            effective,
+            (&config.storage_cost_model).into(),
+        ),
+    )))
+}
+
 /// The storage key for one 32-byte contract-data slot.
 pub fn contract_data_key(key: [u8; 32]) -> StorageKey {
     StorageKey::ContractData {
@@ -150,6 +193,32 @@ fn stored_item(
                 "{service} returned an unsupported per-item result variant; regenerate the \
                  DbGateway client for this protocol"
             )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicitly_unsupported_readings_allow_stated_only_fallback() {
+        use groundhog_db_gateway::DbGatewayConfigResult;
+        assert!(
+            chain_config(
+                "test",
+                DbGatewayConfigResult::Default {
+                    error: RPCError::kRPCUnimplemented.0,
+                }
+            )
+            .unwrap()
+            .is_none()
+        );
+        for error in [RPCError::kRPCNotFound.0, RPCError::kRPCUnrecoverable.0, 999] {
+            assert!(matches!(
+                chain_config("test", DbGatewayConfigResult::Default { error }),
+                Err(RpcServerError::BackendUnavailable(_))
+            ));
         }
     }
 }
