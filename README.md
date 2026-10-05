@@ -44,7 +44,7 @@ Install the CLI's selected runtime bundle, then create and build a project:
 ```sh
 groundhog toolchain install
 groundhog init
-groundhog new my-counter
+groundhog new my-counter --template counter
 cd my-counter
 groundhog status
 groundhog build

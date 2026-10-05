@@ -14,10 +14,14 @@ CLI="$REPO_ROOT/target/debug/groundhog"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-for tmpl in counter stub; do
+for tmpl in counter minimal; do
     echo "==> Scaffolding template: $tmpl"
     cd "$WORK"
-    "$CLI" new "test-$tmpl" --template "$tmpl"
+    if [[ "$tmpl" == minimal ]]; then
+        "$CLI" new "test-$tmpl"
+    else
+        "$CLI" new "test-$tmpl" --template "$tmpl"
+    fi
     cd "test-$tmpl"
 
     echo "==> cargo check ($tmpl)"

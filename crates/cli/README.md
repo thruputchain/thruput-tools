@@ -50,7 +50,7 @@ in generated projects).
 groundhog init
 
 # Create a new contract project (counter template)
-groundhog new my-counter && cd my-counter
+groundhog new my-counter --template counter && cd my-counter
 
 # Build the RV32 contract artifact
 groundhog build
@@ -237,14 +237,24 @@ groundhog status --quiet      # exit code only (for CI)
 groundhog status --profile p  # check a specific profile
 ```
 
-### `groundhog new <name>`
+### `groundhog new [name]`
 
-Create a new contract project in a subdirectory.
+Create a minimal contract project. Omit the name in an interactive terminal for
+a short name, destination, and template flow. Creating files requires neither
+`groundhog init` nor a running node.
 
 ```bash
-groundhog new my-counter                    # counter template (default)
-groundhog new my-contract --template stub   # minimal template
+groundhog new my-contract                   # minimal contract (default)
+groundhog new my-counter --template counter # counter example
+groundhog new my-contract --path .          # current directory must be empty
+groundhog templates list                    # offline template discovery
+groundhog templates show counter            # contents, prerequisites, next steps
 ```
+
+Explicit names skip prompts. `--path` selects the destination; existing directories
+must be empty and files are never overwritten. `--template stub` now explains how
+to use the minimal default. Creation JSON uses `data.schemaVersion = 2` and
+`template: null` for the minimal scaffold. Template discovery JSON uses schema v1.
 
 ### `groundhog build`
 

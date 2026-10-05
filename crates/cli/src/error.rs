@@ -161,7 +161,9 @@ pub enum CliError {
     #[hint("use an empty directory, or pick a different target path")]
     DirNotEmpty,
     #[error("unknown template: {0}")]
-    #[hint("available templates: `counter`, `stub`")]
+    #[hint(
+        "run `groundhog templates list` for available templates; omit --template for a minimal contract"
+    )]
     UnknownTemplate(String),
     #[error(transparent)]
     #[code("io_error")]

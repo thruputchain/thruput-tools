@@ -275,7 +275,7 @@ fn handle_scaffold_step(
         } else {
             let dir = project_start.join(name);
             ui.warnings.extend(crate::new::run_in_with_warnings(
-                &dir, name, "counter", "new", ui.print,
+                &dir, name, None, "new", ui.print,
             )?);
             ui.finish_step(InitStep::Project, StepState::Done);
             Some(ProjectContext {

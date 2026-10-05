@@ -1,27 +1,7 @@
 use crate::CliError;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-
-const BUILD_RS: &str = include_str!("../templates/build.rs.tmpl");
-const CARGO_TOML: &str = include_str!("../templates/Cargo.toml.tmpl");
-const CARGO_CONFIG: &str = include_str!("../templates/config.toml.tmpl");
-const CONTRACT_TOML: &str = include_str!("../templates/contract.toml.tmpl");
-const AGENTS_MD: &str = include_str!("../templates/agents.md.tmpl");
-const GITIGNORE: &str = include_str!("../templates/gitignore.tmpl");
-const GROUNDHOG_TOML: &str = include_str!("../templates/groundhog.toml.tmpl");
-const INTEGRATION_TEST: &str = include_str!("../templates/integration.rs.tmpl");
-const RUST_TOOLCHAIN: &str = include_str!("../templates/rust-toolchain.toml.tmpl");
-const RV32_MAIN: &str = include_str!("../templates/main.rs.tmpl");
-
-const COUNTER_LIB: &str = include_str!("../templates/counter/lib.rs.tmpl");
-const COUNTER_IMPL: &str = include_str!("../templates/counter/implementation.rs.tmpl");
-const COUNTER_TEST: &str = include_str!("../templates/counter/test.rs.tmpl");
-const COUNTER_TEST_RV32: &str = include_str!("../templates/counter/test_rv32.rs.tmpl");
-
-const STUB_LIB: &str = include_str!("../templates/stub/lib.rs.tmpl");
-const STUB_IMPL: &str = include_str!("../templates/stub/implementation.rs.tmpl");
-const STUB_TEST: &str = include_str!("../templates/stub/test.rs.tmpl");
-const STUB_TEST_RV32: &str = include_str!("../templates/stub/test_rv32.rs.tmpl");
 
 /// SDK version exact-pinned into both scaffold target dependencies.
 ///
@@ -186,41 +166,22 @@ pub fn validate_name(name: &str) -> Result<(), CliError> {
 }
 
 /// Generate a contract project from a template.
-pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> {
+pub fn generate(dir: &Path, name: &str, template: Option<&str>) -> Result<(), CliError> {
     validate_name(name)?;
-
-    let (lib_tmpl, impl_tmpl, test_tmpl, test_rv32_tmpl) = match template {
-        "counter" => (COUNTER_LIB, COUNTER_IMPL, COUNTER_TEST, COUNTER_TEST_RV32),
-        "stub" => (STUB_LIB, STUB_IMPL, STUB_TEST, STUB_TEST_RV32),
-        other => {
-            return Err(CliError::UnknownTemplate(other.to_string()));
+    let files = template
+        .map(crate::templates::lookup)
+        .transpose()?
+        .map_or(crate::templates::MINIMAL, |recipe| recipe.files);
+    for (path, contents) in crate::templates::BASE.iter().chain(files) {
+        let path = dir.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
         }
-    };
-
-    fs::create_dir_all(dir.join("src"))?;
-    fs::create_dir_all(dir.join("tests"))?;
-    fs::create_dir_all(dir.join(".cargo"))?;
-
-    fs::write(dir.join("Cargo.toml"), apply(CARGO_TOML, name))?;
-    fs::write(dir.join("build.rs"), BUILD_RS)?;
-    fs::write(dir.join(".gitignore"), GITIGNORE)?;
-    let agents = apply(AGENTS_MD, name)
-        .replace("{{CLI_VERSION}}", env!("CARGO_PKG_VERSION"))
-        .replace("{{TEMPLATE_NAME}}", template);
-    fs::write(dir.join("AGENTS.md"), agents)?;
-    fs::write(dir.join("groundhog.toml"), apply(GROUNDHOG_TOML, name))?;
-    fs::write(dir.join("rust-toolchain.toml"), apply(RUST_TOOLCHAIN, name))?;
-    fs::write(dir.join(".cargo/config.toml"), apply(CARGO_CONFIG, name))?;
-    fs::write(dir.join(".cargo/contract.toml"), apply(CONTRACT_TOML, name))?;
-    fs::write(dir.join("src/lib.rs"), apply(lib_tmpl, name))?;
-    fs::write(dir.join("src/implementation.rs"), apply(impl_tmpl, name))?;
-    fs::write(dir.join("src/main.rs"), apply(RV32_MAIN, name))?;
-    fs::write(
-        dir.join("tests/integration.rs"),
-        apply(INTEGRATION_TEST, name),
-    )?;
-    fs::write(dir.join("tests/test.rs"), apply(test_tmpl, name))?;
-    fs::write(dir.join("tests/test_rv32.rs"), apply(test_rv32_tmpl, name))?;
-
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?
+            .write_all(apply(contents, name).as_bytes())?;
+    }
     Ok(())
 }

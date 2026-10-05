@@ -14,7 +14,7 @@ fn new_creates_subdirectory_and_scaffolds() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("my-project");
 
-    groundhog_cli::new::run_in(&dir, "my-project", "counter", "new", &quiet()).unwrap();
+    groundhog_cli::new::run_in(&dir, "my-project", Some("counter"), "new", &quiet()).unwrap();
 
     assert!(dir.join("Cargo.toml").exists());
     assert!(dir.join(".gitignore").exists());
@@ -42,7 +42,7 @@ fn new_fails_if_dir_exists() {
     let dir = tmp.path().join("existing");
     fs::create_dir(&dir).unwrap();
 
-    let result = groundhog_cli::new::run_in(&dir, "existing", "counter", "new", &quiet());
+    let result = groundhog_cli::new::run_in(&dir, "existing", Some("counter"), "new", &quiet());
     assert!(result.is_err());
 }
 
@@ -270,7 +270,7 @@ fn new_rejects_reserved_name_without_creating_directory() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path().join("test");
 
-    let result = groundhog_cli::new::run_in(&dir, "test", "counter", "new", &quiet());
+    let result = groundhog_cli::new::run_in(&dir, "test", Some("counter"), "new", &quiet());
 
     assert!(result.is_err());
     assert!(

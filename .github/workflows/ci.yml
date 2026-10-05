@@ -133,7 +133,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        template: [counter, stub]
+        template: [counter, minimal]
     steps:
       - name: Checkout
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
@@ -153,7 +153,12 @@ jobs:
       # config rather than inheriting the workspace.
       - name: Scaffold project (groundhog new)
         working-directory: ${{ runner.temp }}
-        run: groundhog new my-${{ matrix.template }} --template ${{ matrix.template }}
+        run: |
+          if [ '${{ matrix.template }}' = minimal ]; then
+            groundhog new my-minimal
+          else
+            groundhog new my-${{ matrix.template }} --template ${{ matrix.template }}
+          fi
 
       # A release PR advances the scaffold to a client version that does not
       # exist in the registry until after merge. Exercise that exact source
