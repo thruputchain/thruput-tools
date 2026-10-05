@@ -12,6 +12,23 @@ fn cli(root: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn discovery_preserves_human_data_on_stdout_in_quiet_mode() {
+    for args in [
+        vec!["templates", "list"],
+        vec!["templates", "show", "counter"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            .args(args)
+            .arg("--quiet")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("counter"));
+    }
+}
+
+#[test]
 fn minimal_scaffold_is_offline_and_has_no_template() {
     let tmp = TempDir::new().unwrap();
     let output = cli(tmp.path(), &["new", "minimal"]);

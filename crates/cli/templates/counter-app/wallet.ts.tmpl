@@ -1,0 +1,43 @@
+import {
+  createGroundhogClient,
+  createPubkeyAccount,
+  createWalletClient,
+  localnet,
+  PrivateKeySigner,
+  addressFromHex,
+} from "@groundhogchain/client";
+
+// One promise per page load also prevents React remounts from creating extra wallets.
+let session: ReturnType<typeof connect> | undefined;
+
+async function connect() {
+  const response = await fetch("/deployment.json", { cache: "no-store" });
+  if (!response.ok)
+    throw new Error(
+      "Start this project with npm run dev to deploy its contract.",
+    );
+  const config: unknown = await response.json();
+  if (
+    !config ||
+    typeof config !== "object" ||
+    !("contractAddress" in config) ||
+    typeof config.contractAddress !== "string"
+  ) {
+    throw new Error("Missing contract address. Restart npm run dev.");
+  }
+  const contract = addressFromHex(config.contractAddress);
+  const client = await createGroundhogClient({
+    cluster: localnet({ rpcUrl: new URL("/rpc", window.location.origin).href }),
+  });
+  const signer = new PrivateKeySigner(
+    crypto.getRandomValues(new Uint8Array(32)),
+  );
+  const account = createPubkeyAccount({ signer, nonce: 0n });
+  const wallet = createWalletClient({ client, account });
+  await wallet.requestAirdrop();
+  return { client, wallet, contract, contractAddress: config.contractAddress };
+}
+
+export function getSession() {
+  return (session ??= connect());
+}

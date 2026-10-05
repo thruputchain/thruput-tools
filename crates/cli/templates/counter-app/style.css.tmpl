@@ -1,0 +1,128 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #202022;
+  background: #fff;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  isolation: isolate;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+h1 {
+  font-size: 2.25rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin: 0.75rem 0;
+}
+p {
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.eyebrow,
+.label {
+  color: #526058;
+}
+section {
+  margin: 2.5rem 0;
+  padding: 2rem 0;
+  border-block: 1px solid rgb(24 24 27 / 12%);
+}
+.label {
+  margin: 0;
+}
+.value {
+  font-size: 4rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 1.5rem;
+}
+.actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+button {
+  position: relative;
+  border: 1px solid rgb(24 24 27 / 20%);
+  border-radius: 0.375rem;
+  background: white;
+  color: #202022;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+button.primary {
+  background: #176044;
+  border-color: #176044;
+  color: white;
+}
+button:hover:not(:disabled) {
+  background: #f0f4f1;
+}
+button.primary:hover:not(:disabled) {
+  background: #104a33;
+}
+button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+[role="status"],
+[role="alert"] {
+  min-height: 3rem;
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+[role="alert"] {
+  color: #a32424;
+}
+dl {
+  display: grid;
+  gap: 1.25rem;
+}
+dt {
+  font-weight: 500;
+}
+dd {
+  margin: 0.375rem 0 0;
+  color: #5c5c63;
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+.note {
+  color: #5c5c63;
+  margin-top: 2rem;
+}
+@media (pointer: coarse) {
+  button::after {
+    content: "";
+    position: absolute;
+    inset: -0.5rem 0;
+    min-height: 3rem;
+  }
+}
+@media (min-width: 40rem) {
+  main {
+    padding: 5rem 2rem;
+  }
+  h1 {
+    font-size: 2.75rem;
+  }
+  dd,
+  .note {
+    font-size: 0.875rem;
+  }
+}

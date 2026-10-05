@@ -1,0 +1,152 @@
+import { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  gasAmount,
+  toHex0x,
+  TransactionObservationError,
+} from "@groundhogchain/client";
+import { Counter } from "./generated/counter";
+import { getSession } from "./wallet";
+import "./style.css";
+
+type Session = Awaited<ReturnType<typeof getSession>>;
+
+function App() {
+  const [session, setSession] = useState<Session>();
+  const [value, setValue] = useState<bigint>();
+  const [pending, setPending] = useState(true);
+  const [message, setMessage] = useState(
+    "Creating and funding a local wallet…",
+  );
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void getSession()
+      .then(async (connected) => {
+        const result = await Counter.v0_1.get.view({
+          client: connected.client,
+          contract: connected.contract,
+          caller: connected.wallet.account.address,
+        });
+        if (active) {
+          setSession(connected);
+          setValue(result.value);
+          setMessage(
+            "Ready. Changes are signed by your temporary local wallet.",
+          );
+        }
+      })
+      .catch((cause: unknown) => {
+        if (active)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Could not connect to the local node.",
+          );
+      })
+      .finally(() => {
+        if (active) setPending(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function update(direction: "increment" | "decrement") {
+    if (!session || pending) return;
+    setPending(true);
+    setError("");
+    setMessage("Submitting transaction and waiting for execution…");
+    try {
+      const invocation = Counter.v0_1[direction].invocation(
+        session.contract,
+        gasAmount(1_000_000n),
+        { amount: 1n },
+      );
+      await session.wallet.executeAndWait({
+        invocation,
+        gasLimit: gasAmount(5_000_000n),
+      });
+      setMessage("Transaction executed successfully.");
+      try {
+        const result = await Counter.v0_1.get.view({
+          client: session.client,
+          contract: session.contract,
+          caller: session.wallet.account.address,
+        });
+        setValue(result.value);
+      } catch {
+        setError(
+          "Transaction executed successfully, but the value could not be refreshed. Reload to read it again.",
+        );
+      }
+    } catch (cause) {
+      setMessage("");
+      setError(
+        cause instanceof TransactionObservationError
+          ? `Confirmation unknown for ${toHex0x(cause.txHash)}. Inspect this transaction before submitting again.`
+          : cause instanceof Error
+            ? cause.message
+            : "The operation failed.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <main>
+      <p className="eyebrow">Groundhog · Local development</p>
+      <h1>Your first counter</h1>
+      <p>
+        A Rust contract, generated TypeScript bindings, and a wallet in your
+        browser.
+      </p>
+      <section aria-label="Counter">
+        <p className="label">On-chain value</p>
+        <p className="value" aria-live="polite" data-testid="counter-value">
+          {value?.toString() ?? "—"}
+        </p>
+        <div className="actions">
+          <button
+            disabled={pending || !session}
+            onClick={() => void update("decrement")}
+          >
+            Decrement
+          </button>
+          <button
+            className="primary"
+            disabled={pending || !session}
+            onClick={() => void update("increment")}
+          >
+            Increment
+          </button>
+        </div>
+        {error ? <p role="alert">{error}</p> : <p role="status">{message}</p>}
+      </section>
+      {session ? (
+        <dl>
+          <div>
+            <dt>Contract</dt>
+            <dd data-testid="contract-address">{session.contractAddress}</dd>
+          </div>
+          <div>
+            <dt>Temporary wallet</dt>
+            <dd data-testid="wallet-address">
+              {toHex0x(session.wallet.account.address)}
+            </dd>
+          </div>
+        </dl>
+      ) : null}
+      <p className="note">
+        Reloading creates a new wallet. Restarting <code>npm run dev</code>{" "}
+        deploys a new counter.
+      </p>
+    </main>
+  );
+}
+
+const root = document.getElementById("root");
+if (!root) throw new Error("Missing application root.");
+createRoot(root).render(<App />);

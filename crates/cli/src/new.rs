@@ -21,8 +21,8 @@ struct NewReport<'a> {
     config_path: PathBuf,
 }
 
-/// Create a new contract project in a subdirectory of
-/// the current working directory.
+/// Create a project at an explicit destination or in a named subdirectory.
+/// Missing names prompt only when terminal interaction is available.
 pub fn run(
     name: Option<String>,
     path: Option<PathBuf>,
@@ -218,10 +218,11 @@ fn render_project_ready(
         print.summary_card("Project Ready", &items);
     }
 
-    let next_steps = vec![
-        format!("cd {}", render_shell_arg(&dir.to_string_lossy())),
-        "cargo test".to_string(),
-        "groundhog build".to_string(),
-    ];
+    let mut next_steps = vec![format!("cd {}", render_shell_arg(&dir.to_string_lossy()))];
+    if let Some(recipe) = template.and_then(|id| crate::templates::lookup(id).ok()) {
+        next_steps.extend(recipe.next_steps.iter().map(|step| (*step).to_owned()));
+    } else {
+        next_steps.extend(["cargo test".into(), "groundhog build".into()]);
+    }
     print.next_steps(&next_steps);
 }

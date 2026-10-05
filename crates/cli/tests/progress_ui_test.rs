@@ -793,6 +793,37 @@ fn background_process_fixture() {
 }
 
 #[test]
+fn new_guides_name_destination_and_catalog_selection() {
+    for template in ["", "counter"] {
+        let tmp = TempDir::new().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        command
+            .arg("new")
+            .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .env("TERM", "xterm-256color");
+        let mut pty = Pty::spawn(command);
+        pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Project name:"));
+        pty.master.write_all(b"guided-project\n").unwrap();
+        pty.until(|pty| {
+            String::from_utf8_lossy(&pty.raw).contains("Destination [guided-project]:")
+        });
+        pty.master.write_all(b"chosen-directory\n").unwrap();
+        pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Enter for minimal"));
+        pty.master
+            .write_all(format!("{template}\n").as_bytes())
+            .unwrap();
+        assert!(pty.finish().success(), "{}", pty.history());
+        assert!(!tmp.path().join("guided-project").exists());
+        let project = tmp.path().join("chosen-directory");
+        let manifest = fs::read_to_string(project.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("name = \"guided-project\""));
+        let source = fs::read_to_string(project.join("src/implementation.rs")).unwrap();
+        assert_eq!(source.contains("pub fn increment"), template == "counter");
+    }
+}
+
+#[test]
 fn guided_setup_keeps_scaffold_warnings_on_the_final_screen() {
     let fixture = Fixture::new();
     fs::remove_file(fixture.root.join("groundhog.toml")).unwrap();

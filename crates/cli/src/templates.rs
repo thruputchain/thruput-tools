@@ -10,13 +10,18 @@ pub(crate) type File = (&'static str, &'static str);
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Template {
+    /// Stable identifier accepted by `new --template`.
     pub id: &'static str,
+    /// One-line description for discovery.
     pub description: &'static str,
+    /// Major components included in the generated project.
     pub contents: &'static [&'static str],
+    /// Requirements for building and running the project, not for creating files.
     pub prerequisites: &'static [&'static str],
+    /// Commands to run from the generated project directory.
     pub next_steps: &'static [&'static str],
     #[serde(skip)]
-    pub(crate) files: &'static [File],
+    pub(crate) files: &'static [&'static [File]],
 }
 
 pub(crate) const BASE: &[File] = &[
@@ -82,19 +87,92 @@ const COUNTER: &[File] = &[
     ),
 ];
 
+const APP: &[File] = &[
+    (
+        "package.json",
+        include_str!("../templates/counter-app/package.json.tmpl"),
+    ),
+    (
+        "tsconfig.json",
+        include_str!("../templates/counter-app/tsconfig.json.tmpl"),
+    ),
+    (
+        "web/index.html",
+        include_str!("../templates/counter-app/index.html.tmpl"),
+    ),
+    (
+        "web/main.tsx",
+        include_str!("../templates/counter-app/main.tsx.tmpl"),
+    ),
+    (
+        "web/wallet.ts",
+        include_str!("../templates/counter-app/wallet.ts.tmpl"),
+    ),
+    (
+        "web/style.css",
+        include_str!("../templates/counter-app/style.css.tmpl"),
+    ),
+    (
+        "scripts/groundhog.mjs",
+        include_str!("../templates/counter-app/groundhog.mjs.tmpl"),
+    ),
+    (
+        "scripts/build.mjs",
+        include_str!("../templates/counter-app/build.mjs.tmpl"),
+    ),
+    (
+        "scripts/dev.mjs",
+        include_str!("../templates/counter-app/dev.mjs.tmpl"),
+    ),
+    (
+        "README.md",
+        include_str!("../templates/counter-app/README.md.tmpl"),
+    ),
+    ("web/.gitignore", "/generated/\n"),
+    (
+        ".npmrc",
+        "@groundhogchain:registry=https://npm.pkg.github.com\n",
+    ),
+];
+
 /// Available templates. The minimal default is deliberately not a catalog entry.
-pub const CATALOG: &[Template] = &[Template {
-    id: "counter",
-    description: "A counter contract with native, RV32, and RPC integration tests",
-    contents: &[
-        "Rust counter contract",
-        "contract tests",
-        "Groundhog project configuration",
-    ],
-    prerequisites: &["Rust with rustup", "Groundhog Cargo registry credentials"],
-    next_steps: &["cargo test", "groundhog build", "groundhog test"],
-    files: COUNTER,
-}];
+pub const CATALOG: &[Template] = &[
+    Template {
+        id: "counter",
+        description: "A counter contract with native, RV32, and RPC integration tests",
+        contents: &[
+            "Rust counter contract",
+            "contract tests",
+            "Groundhog project configuration",
+        ],
+        prerequisites: &["Rust with rustup", "Groundhog Cargo registry credentials"],
+        next_steps: &["cargo test", "groundhog build", "groundhog test"],
+        files: &[COUNTER],
+    },
+    Template {
+        id: "counter-app",
+        description: "A counter contract and a local React application with a temporary browser wallet",
+        contents: &[
+            "counter contract and tests",
+            "generated TypeScript bindings",
+            "React + Vite frontend",
+            "local deployment scripts",
+        ],
+        prerequisites: &[
+            "Groundhog CLI configured via groundhog init",
+            "running groundhog node",
+            "Rust with rustup",
+            "Groundhog Cargo and npm registry access",
+            "Node.js 22.12+ and npm",
+        ],
+        next_steps: &[
+            "groundhog node  # in another terminal",
+            "npm install",
+            "npm run dev",
+        ],
+        files: &[COUNTER, APP],
+    },
+];
 
 /// Resolve an explicit template before creating any files.
 pub fn lookup(id: &str) -> Result<&'static Template, CliError> {
@@ -126,9 +204,19 @@ struct ShowReport {
 
 /// List embedded templates without network access or environment setup.
 pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    for template in CATALOG {
-        print.status(format_args!("{} — {}", template.id, template.description));
-    }
+    let rows = CATALOG
+        .iter()
+        .map(|template| vec![template.id.into(), template.description.into()])
+        .collect::<Vec<_>>();
+    print.data_table(
+        "Project templates",
+        &["ID".into(), "Description".into()],
+        &rows,
+        "No templates available",
+        CATALOG
+            .iter()
+            .map(|template| format!("{}\t{}", template.id, template.description)),
+    )?;
     print.json(&CommandResult::new(
         cmd,
         ListReport {
@@ -141,21 +229,19 @@ pub fn list(cmd: &'static str, print: &Print) -> Result<(), CliError> {
 /// Describe a template's contents, prerequisites, and next steps.
 pub fn show(id: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     let template = lookup(id)?;
-    print.summary_card(
+    let items = [
+        ("Description".into(), template.description.into()),
+        ("Contents".into(), template.contents.join(", ")),
+        ("Prerequisites".into(), template.prerequisites.join(", ")),
+        ("Next steps".into(), template.next_steps.join("; ")),
+    ];
+    print.data_summary(
         template.id,
-        &[
-            ("Description".into(), template.description.into()),
-            ("Contents".into(), template.contents.join(", ")),
-            ("Prerequisites".into(), template.prerequisites.join(", ")),
-        ],
-    );
-    print.next_steps(
-        &template
-            .next_steps
+        &items,
+        items
             .iter()
-            .map(|step| (*step).to_owned())
-            .collect::<Vec<_>>(),
-    );
+            .map(|(label, value)| format!("{label}: {value}")),
+    )?;
     print.json(&CommandResult::new(
         cmd,
         ShowReport {

@@ -1,0 +1,63 @@
+# {{PROJECT_NAME}}
+
+A Groundhog counter contract with a small React + Vite frontend. Contract calls
+use generated TypeScript bindings and a temporary native wallet in the browser.
+
+## Prerequisites
+
+- Node.js 22.12+ and npm.
+- Groundhog CLI installed and configured with `groundhog init`.
+- Rust with rustup and access to the Groundhog Cargo registry.
+- Access to the Groundhog npm packages. Configure registry authentication using
+  the [TypeScript client instructions](https://github.com/groundhogchain/client-ts#registry-auth-one-time-setup).
+- A compatible local runtime; install it with `groundhog toolchain install`.
+
+## Run
+
+Start the node in another terminal:
+
+```sh
+groundhog node
+```
+
+From this project:
+
+```sh
+npm install
+npm run dev
+```
+
+Startup builds the contract and bindings, funds the configured CLI wallet, deploys
+and initializes a fresh counter, then starts Vite. Open the printed URL.
+The browser generates a private key in memory, derives a native account, and
+requests an airdrop before enabling the buttons. Keys are never written to disk.
+
+Each page reload creates a new wallet. The contract and its state remain for the
+dev-server session. Restarting `npm run dev` creates a new counter starting at zero.
+If you restart the node, restart `npm run dev` too. Ctrl-C stops the app; your node
+keeps running. Decrementing zero demonstrates a rejected transaction.
+
+Startup uses the `local` profile. `GROUNDHOG_RPC_URL` overrides its endpoint;
+`PORT` overrides Vite's default 5173. `GROUNDHOG_CLI` selects a different CLI binary.
+
+## Project layout
+
+- `src/` and `tests/`: Rust contract and native/RV32/integration tests, shared with the counter template.
+- `web/main.tsx`: counter UI and transaction feedback.
+- `web/wallet.ts`: temporary browser wallet and funding.
+- `web/generated/counter.ts`: generated bindings, refreshed on build/startup.
+- `scripts/`: thin CLI build/deploy orchestration and Vite startup.
+- `.groundhog/app.json`: public configuration for the current local deployment.
+
+## Check your changes
+
+```sh
+cargo test
+groundhog test
+npm run build
+```
+
+`npm run build` rebuilds the bindings, checks TypeScript, and bundles the frontend.
+The example runs locally through `npm run dev`, which supplies `/deployment.json`
+and proxies `/rpc` to the node. Hosting the bundle elsewhere requires providing
+those endpoints and an appropriate wallet flow.

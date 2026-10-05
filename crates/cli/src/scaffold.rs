@@ -171,8 +171,11 @@ pub fn generate(dir: &Path, name: &str, template: Option<&str>) -> Result<(), Cl
     let files = template
         .map(crate::templates::lookup)
         .transpose()?
-        .map_or(crate::templates::MINIMAL, |recipe| recipe.files);
-    for (path, contents) in crate::templates::BASE.iter().chain(files) {
+        .map_or(&[crate::templates::MINIMAL][..], |recipe| recipe.files);
+    for (path, contents) in crate::templates::BASE
+        .iter()
+        .chain(files.iter().flat_map(|files| files.iter()))
+    {
         let path = dir.join(path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

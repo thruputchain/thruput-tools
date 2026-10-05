@@ -246,6 +246,7 @@ a short name, destination, and template flow. Creating files requires neither
 ```bash
 groundhog new my-contract                   # minimal contract (default)
 groundhog new my-counter --template counter # counter example
+groundhog new my-app --template counter-app # React + Vite counter application
 groundhog new my-contract --path .          # current directory must be empty
 groundhog templates list                    # offline template discovery
 groundhog templates show counter            # contents, prerequisites, next steps
@@ -255,6 +256,15 @@ Explicit names skip prompts. `--path` selects the destination; existing director
 must be empty and files are never overwritten. `--template stub` now explains how
 to use the minimal default. Creation JSON uses `data.schemaVersion = 2` and
 `template: null` for the minimal scaffold. Template discovery JSON uses schema v1.
+
+The counter app requires Node.js 22.12+, npm access to the Groundhog packages,
+and the normal Rust/CLI prerequisites. Run `groundhog init` once and keep
+`groundhog node` running in another terminal. In the app directory, run
+`npm install` and `npm run dev`. Startup builds the contract/bindings and deploys
+a fresh counter; the browser creates and funds an in-memory native wallet and
+signs directly through the TypeScript client. Reloading changes the wallet, while
+restarting the app changes the contract. See the generated README for configuration
+and build instructions.
 
 ### `groundhog build`
 

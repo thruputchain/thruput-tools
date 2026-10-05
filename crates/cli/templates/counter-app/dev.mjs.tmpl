@@ -1,0 +1,97 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { createServer } from "vite";
+import { createGroundhogClient, localnet } from "@groundhogchain/client";
+import { buildContract, groundhog, onShutdown } from "./groundhog.mjs";
+
+let server;
+let stage = "Checking CLI setup";
+onShutdown(async () => {
+  await server?.close();
+});
+
+try {
+  console.log(stage);
+  const status = await groundhog(["status", "--profile", "local"], {
+    allowWarnings: true,
+  });
+  if (!status.effectiveDefaultKey)
+    throw new Error("Run groundhog init to configure a signing key.");
+  const rpcUrl = process.env.GROUNDHOG_RPC_URL ?? status.project?.rpcUrl;
+  if (!rpcUrl)
+    throw new Error(
+      "Run groundhog node in another terminal, then retry npm run dev.",
+    );
+
+  stage = "Connecting to the local node";
+  console.log(stage);
+  const client = await createGroundhogClient({ cluster: localnet({ rpcUrl }) });
+  await client.getChainTip();
+
+  stage = "Building the contract and bindings";
+  console.log(stage);
+  const artifact = await buildContract();
+  const target = ["--profile", "local", "--rpc-url", rpcUrl];
+
+  stage = "Funding the deployment wallet";
+  console.log(stage);
+  await groundhog(["airdrop", ...target, "--amount", "100", "--force"]);
+
+  stage = "Deploying and initializing a fresh counter";
+  console.log(stage);
+  const deployment = await groundhog([
+    "deploy",
+    "--artifact",
+    artifact.rv32,
+    ...target,
+    "--fund",
+    "10",
+    "--init",
+    "initialize",
+    "--init-arg",
+    "0",
+    "--force",
+  ]);
+  if (typeof deployment.address !== "string")
+    throw new Error("Deployment returned no confirmed address.");
+  await mkdir(".groundhog", { recursive: true });
+  const config = { contractAddress: deployment.address, rpcUrl };
+  await writeFile(
+    ".groundhog/app.json",
+    `${JSON.stringify(config, null, 2)}\n`,
+  );
+
+  stage = "Starting the frontend";
+  server = await createServer({
+    root: "web",
+    server: {
+      host: "127.0.0.1",
+      port: Number(process.env.PORT ?? 5173),
+      strictPort: true,
+      proxy: {
+        "/rpc": { target: rpcUrl, rewrite: () => new URL(rpcUrl).pathname },
+      },
+    },
+    plugins: [
+      {
+        name: "local-counter-config",
+        configureServer(vite) {
+          vite.middlewares.use("/deployment.json", (_request, response) => {
+            response.setHeader("Content-Type", "application/json");
+            response.setHeader("Cache-Control", "no-store");
+            response.end(JSON.stringify(config));
+          });
+        },
+      },
+    ],
+  });
+  await server.listen();
+  server.printUrls();
+} catch (error) {
+  console.error(`${stage} failed: ${error.message}`);
+  if (stage === "Connecting to the local node")
+    console.error(
+      "Run groundhog node in another terminal, then retry npm run dev.",
+    );
+  await server?.close();
+  process.exitCode = 1;
+}
