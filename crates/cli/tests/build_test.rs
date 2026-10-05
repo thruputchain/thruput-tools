@@ -1374,6 +1374,7 @@ fn counter_fragments(interface_name: &str) -> Vec<groundhog_spec_tool::SpecFragm
                 interface_version: spec_string("0.1.0"),
                 declared_by: declarer(),
                 method: groundhog_spec_tool::ContractSpecMethod {
+                    effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
                     name: spec_string("get"),
                     args: vec![].try_into().unwrap(),
                     return_type: groundhog_spec_tool::ContractType::U64,

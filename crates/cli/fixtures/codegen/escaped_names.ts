@@ -112,6 +112,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: __gh_s("demo"), major: __gh_s("1"), module_path: __gh_s("demo::default"), declared: __gh_s("Kind") } },
+          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
         },
       ],
     },
@@ -126,6 +127,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U64 },
+          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
         },
       ],
     },
@@ -141,6 +143,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("of"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
+          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
         },
       ],
     },
@@ -194,6 +197,7 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const $default = {
   v0_1: {
+    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     get: __gh_client_contract.defineContractMethod<
       $default.v0_1.GetArgs,
       $default.v0_1.GetResult,
@@ -204,6 +208,7 @@ export const $default = {
       abiName: "get",
       publicName: "get",
       entrypoint: __gh_entrypoints.$default.v0_1.get,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
       ],
       returnType: spec.interfaces[0]!.methods[0]!.return_type,
@@ -221,6 +226,7 @@ export const $default = {
 
 export const Token = {
   v0_4: {
+    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     balance: __gh_client_contract.defineContractMethod<
       Token.v0_4.BalanceArgs,
       Token.v0_4.BalanceResult,
@@ -231,6 +237,7 @@ export const Token = {
       abiName: "balance",
       publicName: "balance",
       entrypoint: __gh_entrypoints.Token.v0_4.balance,
+      effect: spec.interfaces[1]!.methods[0]!.effect,
       args: [
       ],
       returnType: spec.interfaces[1]!.methods[0]!.return_type,
@@ -240,6 +247,7 @@ export const Token = {
     }),
   },
   v1: {
+    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     balance: __gh_client_contract.defineContractMethod<
       Token.v1.BalanceArgs,
       Token.v1.BalanceResult,
@@ -250,6 +258,7 @@ export const Token = {
       abiName: "balance",
       publicName: "balance",
       entrypoint: __gh_entrypoints.Token.v1.balance,
+      effect: spec.interfaces[2]!.methods[0]!.effect,
       args: [
         {
           abiName: "of",

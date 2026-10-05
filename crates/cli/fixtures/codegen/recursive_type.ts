@@ -52,6 +52,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("tree"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: __gh_s("demo"), major: __gh_s("1"), module_path: __gh_s("demo"), declared: __gh_s("Tree") } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U32 },
+          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
         },
       ],
     },
@@ -77,6 +78,7 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const RecursiveTypeContract = {
   v0_1: {
+    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     depth: __gh_client_contract.defineContractMethod<
       RecursiveTypeContract.v0_1.DepthArgs,
       RecursiveTypeContract.v0_1.DepthResult,
@@ -87,6 +89,7 @@ export const RecursiveTypeContract = {
       abiName: "depth",
       publicName: "depth",
       entrypoint: __gh_entrypoints.RecursiveTypeContract.v0_1.depth,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
         {
           abiName: "tree",

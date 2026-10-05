@@ -22,6 +22,13 @@ declare module "@groundhogchain/contract-spec" {
 declare module "@groundhogchain/client/contract" {
   import type { ContractAddress } from "@groundhogchain/protocol";
 
+  export enum ContractMethodEffect {
+    EffectUnknown = 0,
+    EffectPure = 1,
+    EffectReadOnly = 2,
+    EffectStateChanging = 3,
+  }
+
   /** Shaped enough that the generated spec literal is checked, not just
    *  accepted: the generator indexes into it by these exact field names. */
   export interface ContractSpecId {
@@ -43,6 +50,7 @@ declare module "@groundhogchain/client/contract" {
         name: unknown;
         args: readonly ContractSpecField[];
         return_type: unknown;
+        effect: ContractMethodEffect;
       }[];
     }[];
     type_defs: readonly unknown[];

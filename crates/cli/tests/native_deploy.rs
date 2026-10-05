@@ -403,6 +403,7 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
             vers: "0.1.0".try_into().unwrap(),
             throws: vec![].try_into().unwrap(),
             methods: vec![ContractSpecMethod {
+                effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
                 name: "initialize".try_into().unwrap(),
                 args: vec![ContractField {
                     name: "value".try_into().unwrap(),
@@ -511,6 +512,7 @@ async fn native_deploy_decodes_the_prepared_initializer_spec() {
             .try_into()
             .unwrap(),
             methods: vec![ContractSpecMethod {
+                effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
                 name: "initialize".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,

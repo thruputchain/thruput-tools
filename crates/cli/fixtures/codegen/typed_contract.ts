@@ -76,6 +76,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Tuple, tuple: [{ v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U64 }] },
+          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
         },
         {
           name: __gh_s("update"),
@@ -84,6 +85,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("request_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U8 }, len: 32n } } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
+          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
         },
       ],
     },
@@ -129,6 +131,7 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const ExampleContract = {
   v0_1: {
+    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     getValues: __gh_client_contract.defineContractMethod<
       ExampleContract.v0_1.GetValuesArgs,
       ExampleContract.v0_1.GetValuesResult,
@@ -139,6 +142,7 @@ export const ExampleContract = {
       abiName: "get_values",
       publicName: "getValues",
       entrypoint: __gh_entrypoints.ExampleContract.v0_1.getValues,
+      effect: spec.interfaces[0]!.methods[0]!.effect,
       args: [
       ],
       returnType: spec.interfaces[0]!.methods[0]!.return_type,
@@ -151,6 +155,7 @@ export const ExampleContract = {
       ],
       codecs: __gh_codecs,
     }),
+    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     update: __gh_client_contract.defineContractMethod<
       ExampleContract.v0_1.UpdateArgs,
       ExampleContract.v0_1.UpdateResult,
@@ -161,6 +166,7 @@ export const ExampleContract = {
       abiName: "update",
       publicName: "update",
       entrypoint: __gh_entrypoints.ExampleContract.v0_1.update,
+      effect: spec.interfaces[0]!.methods[1]!.effect,
       args: [
         {
           abiName: "value",
