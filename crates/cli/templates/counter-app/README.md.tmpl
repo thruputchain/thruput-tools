@@ -24,28 +24,47 @@ From this project:
 
 ```sh
 npm install
+npm run contract:deploy
 npm run dev
 ```
 
-Startup builds the contract and bindings, funds the configured CLI wallet, deploys
-and initializes a fresh counter, then starts Vite. Open the printed URL.
+`npm run contract:deploy` builds the contract and bindings, funds the configured
+CLI wallet, and deploys and initializes a fresh counter. It saves the address,
+RPC endpoint, and deployment transaction hash in `.groundhog/app.json`.
+`npm run dev` starts Vite using that deployment. Open the printed URL.
 The browser generates a private key in memory, derives a native account, and
 requests an airdrop before enabling the buttons. Keys are never written to disk.
 
-Each page reload creates a new wallet. The contract and its state remain for the
-dev-server session. Restarting `npm run dev` creates a new counter starting at zero.
-If you restart the node, restart `npm run dev` too. Ctrl-C stops the app; your node
-keeps running. Decrementing zero demonstrates a rejected transaction.
+Each page reload creates a new wallet. Restarting `npm run dev` preserves the
+contract and its state. After editing the contract, run `npm run contract:deploy`
+and reload the browser to use the new counter, starting at zero. Vite can keep
+running during deployment. React and CSS edits use Vite's live updates.
 
-Startup uses the `local` profile. `GROUNDHOG_RPC_URL` overrides its endpoint;
-`PORT` overrides Vite's default 5173. `GROUNDHOG_CLI` selects a different CLI binary.
+If you reset the node, deploy again. The app checks the saved deployment receipt
+and reports when it is unavailable. Ctrl-C stops the app; your node keeps running.
+Decrementing zero demonstrates a rejected transaction.
+
+Deployment uses the `local` profile. `GROUNDHOG_RPC_URL` overrides its endpoint
+when deploying; the dev server uses the saved endpoint. If deployment changes
+the endpoint, restart `npm run dev`. `PORT` overrides Vite's default 5173.
+`GROUNDHOG_CLI` selects a different CLI binary for builds and deployment.
+
+## Commands
+
+| Command | Action |
+| --- | --- |
+| `npm run contract:build` | Build the contract and generate TypeScript bindings. |
+| `npm run contract:deploy` | Build, fund, deploy, initialize, and save a fresh counter. |
+| `npm run dev` | Start the frontend using the saved deployment; no build or deployment. |
+| `npm run typecheck` | Check frontend TypeScript after generating bindings. |
+| `npm run build` | Rebuild contract/bindings, check TypeScript, and bundle the frontend; no deployment. |
 
 ## Project layout
 
 - `src/` and `tests/`: Rust contract and native/RV32/integration tests, shared with the counter template.
 - `web/main.tsx`: counter UI and transaction feedback.
 - `web/wallet.ts`: temporary browser wallet and funding.
-- `web/generated/counter.ts`: generated bindings, refreshed on build/startup.
+- `web/generated/counter.ts`: generated bindings, refreshed on build/deployment.
 - `scripts/`: thin CLI build/deploy orchestration and Vite startup.
 - `.groundhog/app.json`: public configuration for the current local deployment.
 
@@ -54,6 +73,7 @@ Startup uses the `local` profile. `GROUNDHOG_RPC_URL` overrides its endpoint;
 ```sh
 cargo test
 groundhog test
+groundhog test --integration
 npm run build
 ```
 

@@ -133,7 +133,8 @@ workspace test command does not run ignored live-node tests.
 bindings.
 
 The counter-app browser smoke generates a fresh project and verifies wallet
-funding, execution, failure feedback, reloads, fresh deployments, and cleanup:
+funding, execution, failure feedback, reloads, state across frontend restarts,
+explicit redeployment, node resets, and cleanup:
 
 ```sh
 npm ci --prefix scripts/scaffold-app

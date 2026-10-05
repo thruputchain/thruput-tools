@@ -131,6 +131,18 @@ const APP: &[File] = &[
         include_str!("../templates/counter-app/dev.mjs.tmpl"),
     ),
     (
+        "scripts/contract-build.mjs",
+        include_str!("../templates/counter-app/contract-build.mjs.tmpl"),
+    ),
+    (
+        "scripts/deploy.mjs",
+        include_str!("../templates/counter-app/deploy.mjs.tmpl"),
+    ),
+    (
+        "scripts/deployment.mjs",
+        include_str!("../templates/counter-app/deployment.mjs.tmpl"),
+    ),
+    (
         "README.md",
         include_str!("../templates/counter-app/README.md.tmpl"),
     ),
@@ -175,6 +187,7 @@ pub const CATALOG: &[Template] = &[
         next_steps: &[
             "groundhog node  # in another terminal",
             "npm install",
+            "npm run contract:deploy",
             "npm run dev",
         ],
         files: &[COUNTER, APP],

@@ -12,18 +12,26 @@ let session: ReturnType<typeof connect> | undefined;
 
 async function connect() {
   const response = await fetch("/deployment.json", { cache: "no-store" });
-  if (!response.ok)
-    throw new Error(
-      "Start this project with npm run dev to deploy its contract.",
-    );
   const config: unknown = await response.json();
+  if (!response.ok) {
+    const message =
+      config &&
+      typeof config === "object" &&
+      "error" in config &&
+      typeof config.error === "string"
+        ? config.error
+        : "Could not load the deployment. Run npm run contract:deploy, then npm run dev.";
+    throw new Error(message);
+  }
   if (
     !config ||
     typeof config !== "object" ||
     !("contractAddress" in config) ||
     typeof config.contractAddress !== "string"
   ) {
-    throw new Error("Missing contract address. Restart npm run dev.");
+    throw new Error(
+      "Missing contract address. Run npm run contract:deploy, then reload.",
+    );
   }
   const contract = addressFromHex(config.contractAddress);
   const client = await createGroundhogClient({

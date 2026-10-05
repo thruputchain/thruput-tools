@@ -260,11 +260,12 @@ to use the minimal default. Creation JSON uses `data.schemaVersion = 2` and
 The counter app requires Node.js 22.12+, npm access to the Groundhog packages,
 and the normal Rust/CLI prerequisites. Run `groundhog init` once and keep
 `groundhog node` running in another terminal. In the app directory, run
-`npm install` and `npm run dev`. Startup builds the contract/bindings and deploys
-a fresh counter; the browser creates and funds an in-memory native wallet and
-signs directly through the TypeScript client. Reloading changes the wallet, while
-restarting the app changes the contract. See the generated README for configuration
-and build instructions.
+`npm install`, `npm run contract:deploy`, then `npm run dev`. Deployment builds the
+contract/bindings and saves a fresh counter's address. The dev server reuses that
+deployment across restarts. The browser creates and funds an in-memory native
+wallet and signs directly through the TypeScript client. Reloading changes the
+wallet; explicit redeployment changes the contract. After redeploying, reload the
+browser. See the generated README for configuration and build instructions.
 
 ### `groundhog build`
 
