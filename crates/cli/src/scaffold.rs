@@ -168,14 +168,25 @@ pub fn validate_name(name: &str) -> Result<(), CliError> {
 /// Generate a contract project from a template.
 pub fn generate(dir: &Path, name: &str, template: Option<&str>) -> Result<(), CliError> {
     validate_name(name)?;
-    let files = template
-        .map(crate::templates::lookup)
-        .transpose()?
-        .map_or(&[crate::templates::MINIMAL][..], |recipe| recipe.files);
+    let recipe = template.map(crate::templates::lookup).transpose()?;
+    let files = recipe.map_or(&[crate::templates::MINIMAL][..], |recipe| recipe.files);
     for (path, contents) in crate::templates::BASE
         .iter()
         .chain(files.iter().flat_map(|files| files.iter()))
     {
+        let mut contents = apply(contents, name);
+        if *path == "AGENTS.md" {
+            contents = contents
+                .replace("{{CLI_VERSION}}", env!("CARGO_PKG_VERSION"))
+                .replace(
+                    "{{TEMPLATE_NAME}}",
+                    recipe.map_or("minimal", |recipe| recipe.id),
+                );
+            if let Some(notes) = recipe.and_then(|recipe| recipe.agent_notes) {
+                contents.push('\n');
+                contents.push_str(&apply(notes, name));
+            }
+        }
         let path = dir.join(path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -184,7 +195,7 @@ pub fn generate(dir: &Path, name: &str, template: Option<&str>) -> Result<(), Cl
             .write(true)
             .create_new(true)
             .open(path)?
-            .write_all(apply(contents, name).as_bytes())?;
+            .write_all(contents.as_bytes())?;
     }
     Ok(())
 }

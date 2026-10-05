@@ -22,6 +22,8 @@ pub struct Template {
     pub next_steps: &'static [&'static str],
     #[serde(skip)]
     pub(crate) files: &'static [&'static [File]],
+    #[serde(skip)]
+    pub(crate) agent_notes: Option<&'static str>,
 }
 
 pub(crate) const BASE: &[File] = &[
@@ -89,6 +91,10 @@ const COUNTER: &[File] = &[
 
 const APP: &[File] = &[
     (
+        "web/AGENTS.md",
+        include_str!("../templates/counter-app/agents.md.tmpl"),
+    ),
+    (
         "package.json",
         include_str!("../templates/counter-app/package.json.tmpl"),
     ),
@@ -148,6 +154,7 @@ pub const CATALOG: &[Template] = &[
         prerequisites: &["Rust with rustup", "Groundhog Cargo registry credentials"],
         next_steps: &["cargo test", "groundhog build", "groundhog test"],
         files: &[COUNTER],
+        agent_notes: None,
     },
     Template {
         id: "counter-app",
@@ -171,6 +178,7 @@ pub const CATALOG: &[Template] = &[
             "npm run dev",
         ],
         files: &[COUNTER, APP],
+        agent_notes: Some(include_str!("../templates/counter-app/agents-root.md.tmpl")),
     },
 ];
 
