@@ -64,7 +64,7 @@ jobs:
           repository: groundhogchain/actions
           persist-credentials: false
           path: actions
-          ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
+          ref: v1
 
       - name: Configure Namespace Cache
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
