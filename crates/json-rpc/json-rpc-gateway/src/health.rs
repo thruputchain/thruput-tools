@@ -1497,6 +1497,7 @@ mod tests {
     use groundhog_scheduler::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
         RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcomeBatch,
+        SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
     use groundhog_view::ViewGatewayIntroOutcome;
@@ -1837,6 +1838,33 @@ mod tests {
                 gate.wait().await;
             }
             Ok(VecM(vec![None; hashes.0.len()]))
+        }
+
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            hashes: TransactionHashBatch,
+        ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+            use groundhog_scheduler::{
+                SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+                SchedulerTransactionStatus,
+            };
+            let results = self.schedgateway_lookup_tx(hashes).await?;
+            Ok(VecM(
+                results
+                    .0
+                    .into_iter()
+                    .map(|tx| SchedulerTransactionOutcome {
+                        status: if tx.is_some() {
+                            SchedulerTransactionStatus::SchedulerTransactionPending
+                        } else {
+                            SchedulerTransactionStatus::SchedulerTransactionNotFound
+                        },
+                        error_source:
+                            SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                        error_code: 0,
+                    })
+                    .collect(),
+            ))
         }
 
         async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {

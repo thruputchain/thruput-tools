@@ -73,7 +73,7 @@ fn lookup_values(raw: Option<&str>) -> BTreeMap<String, f64> {
         .filter(|line| {
             line.starts_with("groundhog_gateway_scheduler_lookup_")
                 || (line.starts_with("groundhog_gateway_backend_")
-                    && line.contains("operation=\"schedgateway_lookup_tx\""))
+                    && line.contains("operation=\"schedgateway_lookup_transaction_outcomes\""))
         })
         .filter_map(|line| {
             let (name, value) = line.rsplit_once(' ')?;
@@ -448,6 +448,30 @@ mod tests {
         );
         assert_eq!(remaining_ticks(deadline, deadline, period), 0);
         assert_eq!(remaining_ticks(deadline + period, deadline, period), 0);
+    }
+
+    #[test]
+    fn metric_deltas_include_scheduler_outcome_backend_measurements() {
+        let request = "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_lookup_transaction_outcomes\",outcome=\"ok\"}";
+        let duration_count = "groundhog_gateway_backend_request_duration_seconds_count{backend=\"scheduler\",operation=\"schedgateway_lookup_transaction_outcomes\",result=\"ok\"}";
+        let duration_sum = "groundhog_gateway_backend_request_duration_seconds_sum{backend=\"scheduler\",operation=\"schedgateway_lookup_transaction_outcomes\",result=\"ok\"}";
+        let admission = "groundhog_gateway_scheduler_lookup_admission_total{outcome=\"accepted\"}";
+        let unrelated = "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_get_tip\",outcome=\"ok\"}";
+        let before = format!(
+            "{request} 5\n{duration_count} 5\n{duration_sum} 1.5\n{admission} 5\n{unrelated} 10"
+        );
+        let after = format!(
+            "{request} 8\n{duration_count} 8\n{duration_sum} 2.25\n{admission} 8\n{unrelated} 20"
+        );
+        assert_eq!(
+            counter_deltas(Some(&before), Some(&after)),
+            BTreeMap::from([
+                (request.to_owned(), Some(3.0)),
+                (duration_count.to_owned(), Some(3.0)),
+                (duration_sum.to_owned(), Some(0.75)),
+                (admission.to_owned(), Some(3.0)),
+            ])
+        );
     }
 
     #[test]

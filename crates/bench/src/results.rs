@@ -125,6 +125,8 @@ pub(super) struct BenchConfiguration {
     pub(super) outstanding: Option<usize>,
     pub(super) effective_max_inflight: usize,
     pub(super) accounts: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) account_fixture_sha256: Option<String>,
     pub(super) transaction_batch_size: usize,
     pub(super) max_skew_seconds: f64,
     pub(super) request_timeout_ms: u64,

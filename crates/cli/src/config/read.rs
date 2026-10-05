@@ -11,7 +11,7 @@ use super::global::{LocalRuntimeState, validate_local_runtime_state};
 use super::project::{Network, ProjectProfile};
 use crate::CliError;
 
-pub const CONFIG_GET_JSON_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_GET_JSON_SCHEMA_VERSION: u32 = 2;
 pub const CONFIG_PROFILES_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// A scalar profile field managed by `groundhog config`.
@@ -240,6 +240,8 @@ pub struct ConfigWalletBinding {
     pub kind: super::WalletKind,
     /// Native account derivation nonce.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "groundhog_json_rpc_types::decimal::option")]
+    #[schemars(with = "Option<groundhog_json_rpc_types::decimal::Decimal<u64>>")]
     pub account_nonce: Option<u64>,
 }
 

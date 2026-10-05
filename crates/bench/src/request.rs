@@ -69,7 +69,7 @@ impl ExpectedResult {
         match self {
             Self::Any => true,
             Self::Committed { height: expected } => {
-                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { height }) if *height == expected)
+                matches!(TransactionStatus::deserialize(value), Ok(TransactionStatus::Committed { height: Some(height) }) if *height == expected)
             }
             Self::Receipt { hash, height } => {
                 matches!(TransactionReceipt::deserialize(value), Ok(receipt) if receipt.tx_hash == hash && *receipt.height == height)
@@ -306,21 +306,21 @@ mod tests {
             json!(null),
             json!({"status":"pending"}),
             json!({"status":"unknown"}),
-            json!({"status":"committed","height":8}),
+            json!({"status":"committed","height":"8"}),
         ] {
             assert!(!status.validate(&value));
         }
-        assert!(status.validate(&json!({"status":"committed","height":7})));
+        assert!(status.validate(&json!({"status":"committed","height":"7"})));
         let expected = ExpectedResult::Receipt { hash, height: 7 };
         assert!(!expected.validate(&json!(null)));
-        let mut receipt = json!({"txHash":hash,"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":1500});
+        let mut receipt = json!({"txHash":hash,"height":"7","status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":"1500"});
         assert!(
             expected.validate(&receipt),
             "committed execution failures are valid read records"
         );
-        receipt["height"] = json!(8);
+        receipt["height"] = json!("8");
         assert!(!expected.validate(&receipt));
-        receipt["height"] = json!(7);
+        receipt["height"] = json!("7");
         receipt["txHash"] = json!(format!("0x{}", "bb".repeat(32)));
         assert!(!expected.validate(&receipt));
     }

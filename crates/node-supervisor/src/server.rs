@@ -10,7 +10,7 @@
 use std::{future::Future, io, net::SocketAddr, process::ExitStatus};
 
 use groundhog_bundle_identity::BundleIdentity;
-use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer};
+use groundhog_json_rpc_api::{AirdropApiServer, GroundhogApiServer, LocalFundingApiServer};
 use groundhog_json_rpc_server::batch::{ConcurrentBatchService, MAX_RPC_BATCH_REQUESTS};
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_json_rpc_types::protocol_token::protocol_text;
@@ -23,7 +23,7 @@ use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     airdrop::{LocalAirdropContext, LocalAirdropRpc},
     block_driver::{BlockDriverTask, ManualBlockProducer},
-    hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_dev_accounts, validate_runtime_identity},
+    hogd_dev::{DEFAULT_HOGD_DEV_BINARY, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
@@ -189,9 +189,7 @@ impl NodeSupervisorHandle {
             .as_deref()
             .unwrap_or(&default_protocol);
 
-        match validate_runtime_identity(hogd.readiness(), protocol_version)
-            .and_then(|()| validate_dev_accounts(hogd.readiness(), &config.hogd_dev))
-        {
+        match validate_runtime_identity(hogd.readiness(), protocol_version) {
             Ok(()) => {}
             Err(error) => {
                 if let Err(stop_err) = hogd.stop().await {
@@ -204,7 +202,19 @@ impl NodeSupervisorHandle {
             }
         }
 
-        match start_rpc_server(&config, hogd.readiness(), protocol_version).await {
+        let started = async {
+            start_rpc_server(
+                &config,
+                hogd.readiness(),
+                protocol_version,
+                hogd.faucet_signer()?,
+                hogd.funding_journal()?,
+                hogd.funding_lock_lease(),
+            )
+            .await
+        }
+        .await;
+        match started {
             Ok(started) => {
                 tracing::info!(rpc_addr = %started.addr, "node supervisor JSON-RPC ready");
                 Ok(Self {
@@ -358,6 +368,9 @@ async fn start_rpc_server(
     config: &NodeSupervisorConfig,
     readiness: &HogdDevReadiness,
     protocol_version: &str,
+    signer: std::sync::Arc<groundhog_signing::LocalSigner>,
+    journal: std::sync::Arc<std::sync::Mutex<crate::funding_journal::FundingJournal>>,
+    lock_lease: Option<std::sync::Arc<std::fs::File>>,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let listen_address = &config.rpc_listen_address;
     let manifest = readiness.runtime_manifest.as_ref().ok_or_else(|| {
@@ -382,7 +395,8 @@ async fn start_rpc_server(
     // Prefer the full indexer-backed read plane when available. If hogd-dev
     // only advertises DbGateway, still serve latest-state storage reads.
     if let Some(indexer_addr) = readiness.endpoints.indexer_block_explorer {
-        let local_airdrop = validated_local_airdrop_context(manifest, config)?;
+        let local_airdrop =
+            validated_local_airdrop_context(manifest, config, signer, journal, lock_lease)?;
         tracing::debug!(%indexer_addr, "connecting to hogd-dev IndexerBlockExplorer");
         let read = HogdDevReadBackend::connect(
             indexer_addr,
@@ -495,13 +509,15 @@ fn rpc_server_options(
 fn validated_local_airdrop_context(
     manifest: &groundhog_json_rpc_types::runtime_manifest::RuntimeManifest,
     config: &NodeSupervisorConfig,
+    signer: std::sync::Arc<groundhog_signing::LocalSigner>,
+    journal: std::sync::Arc<std::sync::Mutex<crate::funding_journal::FundingJournal>>,
+    lock_lease: Option<std::sync::Arc<std::fs::File>>,
 ) -> Result<LocalAirdropContext, NodeSupervisorError> {
-    LocalAirdropContext::from_validated_runtime(manifest, config).map_err(|reason| {
-        NodeSupervisorError::InvalidRuntimeManifest {
+    LocalAirdropContext::from_validated_runtime(manifest, config, signer, journal, lock_lease)
+        .map_err(|reason| NodeSupervisorError::InvalidRuntimeManifest {
             program: DEFAULT_HOGD_DEV_BINARY.to_owned(),
             reason,
-        }
-    })
+        })
 }
 
 struct RpcServerOptions {
@@ -597,6 +613,9 @@ where
         .merge(GroundhogApiServer::into_rpc(core_rpc))
         .expect("bug: json-rpc-server methods register without conflicts");
     if let Some(local_airdrop) = local_airdrop {
+        module
+            .merge(LocalFundingApiServer::into_rpc(local_airdrop.clone()))
+            .expect("bug: local funding methods register without conflicts");
         module
             .merge(AirdropApiServer::into_rpc(local_airdrop))
             .expect("bug: local airdrop methods register without conflicts");
@@ -994,7 +1013,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             client
                 .pending_transaction_count()
                 .await
-                .expect("bug: pendingTransactionCount should use SchedGateway"),
+                .expect("bug: pendingTransactionCount should use SchedGateway")
+                .0,
             0
         );
 
@@ -2321,7 +2341,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "expected committed status for known tx, got {status}"
         );
         assert_eq!(
-            status["height"], CANNED_HEIGHT_A,
+            status["height"],
+            CANNED_HEIGHT_A.to_string(),
             "committed status height should be CANNED_HEIGHT_A"
         );
 
@@ -2403,7 +2424,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "receipt should be non-null for committed tx"
         );
         assert_eq!(
-            receipt["height"], CANNED_HEIGHT_A,
+            receipt["height"],
+            CANNED_HEIGHT_A.to_string(),
             "receipt height should be CANNED_HEIGHT_A"
         );
         assert_eq!(
@@ -2412,7 +2434,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "receipt txHash should round-trip"
         );
         assert_eq!(
-            receipt["gasUsed"], CANNED_GAS_USED_A,
+            receipt["gasUsed"],
+            CANNED_GAS_USED_A.to_string(),
             "receipt should carry the gas the fake indexer's event log records"
         );
 
@@ -2515,7 +2538,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: getStorageAt should succeed");
 
         // Assert
-        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
         assert_eq!(read["item"]["kind"], "bytestring");
         assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
 
@@ -2554,7 +2577,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: getStorageAt should succeed with DbGateway only");
 
         // Assert
-        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
         assert_eq!(read["item"]["kind"], "bytestring");
         assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
 
@@ -2605,7 +2628,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: getStorageAt miss should succeed");
 
         // Assert
-        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
         assert!(
             read["item"].is_null(),
             "missing storage item should serialize as null"

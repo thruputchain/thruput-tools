@@ -11,9 +11,10 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
-    airdrop::{AirdropAttemptResponse, AirdropRequest},
+    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
+    decimal::Decimal,
     events::{EventPage, EventQuery},
     hex::HexBytes,
     network_config::NetworkConfigParams,
@@ -30,7 +31,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "8.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "10.0.1";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -42,6 +43,20 @@ pub trait AirdropApi {
     /// other deployments return standard JSON-RPC `Method not found`.
     #[method(name = "requestAirdrop")]
     async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
+}
+
+/// Funding API registered only by a supervised local node with submit/read planes.
+#[open_rpc(namespace = "groundhog", tag = "Local Funding API")]
+#[rpc(client, server, namespace = "groundhog")]
+pub trait LocalFundingApi {
+    /// Submit an explicit native HOG transfer using a retained caller nonce.
+    ///
+    /// Acceptance does not imply execution success. Observe the returned hash
+    /// through the ordinary status/receipt APIs. Retry an uncertain response
+    /// with exactly the same request; retain its chain identity and amount.
+    /// Hosted servers return standard JSON-RPC `Method not found`.
+    #[method(name = "fundAccount")]
+    async fn fund_account(&self, request: FundAccountRequest) -> RpcResult<FundAccountResponse>;
 }
 
 /// Phase 1: Core API — submit, query, poll.
@@ -65,11 +80,12 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check. The indexer is asked first, so `committed` wins; a
-    /// mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown`
-    /// is returned only after both backends answered without a match. If the mempool
-    /// could not be consulted and the indexer has no record, the call fails with
-    /// `BackendUnavailable` because the transaction may still be pending.
+    /// Lightweight status check. Any indexer record takes priority and skips the
+    /// scheduler lookup. Otherwise, return the scheduler's pending, committed,
+    /// retry, or dropped outcome. Scheduler commitments omit `height`; indexed
+    /// commitments include the actual block height, including block zero.
+    /// `unknown` requires successful misses from both backends; failed lookups
+    /// must not be interpreted as absence.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 
@@ -97,11 +113,14 @@ pub trait GroundhogApi {
 
     /// Block data at a given height.
     #[method(name = "getBlockByNumber")]
-    async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>>;
+    async fn get_block_by_number(
+        &self,
+        height: Decimal<BlockHeight>,
+    ) -> RpcResult<Option<BlockInfo>>;
 
     /// Number of transactions in the mempool.
     #[method(name = "pendingTransactionCount")]
-    async fn pending_transaction_count(&self) -> RpcResult<u64>;
+    async fn pending_transaction_count(&self) -> RpcResult<Decimal<u64>>;
 
     /// Paginated, filterable contract events. See `EventQuery` /
     /// `EventPage` for the Soroban-shaped filter / cursor / topic

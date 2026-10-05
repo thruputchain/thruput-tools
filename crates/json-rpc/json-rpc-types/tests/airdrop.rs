@@ -58,7 +58,7 @@ fn airdrop_response_accepts_future_additive_fields() {
         "attemptStatus": "pending",
         "recipient": format!("0x{}", "11".repeat(32)),
         "rawAmount": "100000000",
-        "retryAfterSeconds": 5,
+        "retryAfterSeconds": "5",
         "futureField": true
     });
 
@@ -68,4 +68,36 @@ fn airdrop_response_accepts_future_additive_fields() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn local_funding_rejects_noncanonical_amounts_and_unknown_fields() {
+    use groundhog_json_rpc_types::airdrop::FundAccountRequest;
+    let valid = json!({ "recipient": format!("0x{}", "11".repeat(32)),
+        "faucet": format!("0x{}", "22".repeat(32)), "clientNonce": "0x01", "rawAmount": "42" });
+    assert_eq!(
+        serde_json::from_value::<FundAccountRequest>(valid.clone())
+            .unwrap()
+            .amount()
+            .unwrap(),
+        42
+    );
+    for amount in [
+        "0",
+        "01",
+        "+1",
+        "-1",
+        "1.0",
+        "340282366920938463463374607431768211456",
+    ] {
+        let mut invalid = valid.clone();
+        invalid["rawAmount"] = json!(amount);
+        assert!(
+            serde_json::from_value::<FundAccountRequest>(invalid).is_err(),
+            "{amount}"
+        );
+    }
+    let mut unknown = valid;
+    unknown["seed"] = json!("obsolete");
+    assert!(serde_json::from_value::<FundAccountRequest>(unknown).is_err());
 }

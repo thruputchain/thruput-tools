@@ -290,8 +290,17 @@ fn run_integration_with_dev_node(
         build.artifact.kind
     ));
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let fixture = IntegrationFixture::new()?;
+    let default_key = "integration";
+    let bootstrap_accounts = vec![
+        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+            groundhog_json_rpc_types::hex::Hex0x(fixture.signer.verifying_key_bytes().into()),
+            groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS.to_string(),
+        ),
+    ];
     let node_options = crate::node::LocalNodeOptions {
         port: 0,
+        bootstrap_accounts,
         pid_file: crate::node::LocalNodePidFile::Disabled,
         hogd_protocol,
         hogd_dev_version: integration.hog_devnode_version.clone(),
@@ -335,19 +344,13 @@ fn run_integration_with_dev_node(
 
     let rpc_url = started.rpc_url();
     let runtime_manifest = started.readiness().manifest_path.clone();
-    let default_key = started
-        .readiness()
-        .runtime_manifest
-        .as_ref()
-        .and_then(crate::runtime_manifest::lowest_local_user_key)
-        .ok_or_else(|| {
-            CliError::Other("local runtime manifest has no local_user account".into())
-        })?;
+
     let result = run_integration_against_node(
         &build,
         &rpc_url,
         runtime_manifest,
-        &default_key,
+        default_key,
+        fixture,
         options,
         cargo_args,
         artifacts,
@@ -450,12 +453,38 @@ fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate
     }
 }
 
+struct IntegrationFixture {
+    config: tempfile::TempDir,
+    signer: groundhog_signing::LocalSigner,
+}
+
+impl IntegrationFixture {
+    fn new() -> Result<Self, CliError> {
+        let config = tempfile::tempdir()?;
+        let mut secret = zeroize::Zeroizing::new([0; 32]);
+        getrandom::fill(secret.as_mut())
+            .map_err(|error| CliError::Io(std::io::Error::other(error.to_string())))?;
+        let signer = groundhog_signing::LocalSigner::from_secret_key(*secret);
+        crate::keys::write_fixture_key(
+            &config.path().join("groundhog/keys"),
+            "integration",
+            &signer,
+        )?;
+        fs::write(
+            config.path().join("groundhog/config.toml"),
+            "default_profile = 'integration'\ndefault_key = 'integration'\n[profile.integration]\n",
+        )?;
+        Ok(Self { config, signer })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_integration_against_node(
     build: &IntegrationBuild,
     rpc_url: &str,
     runtime_manifest: Option<std::path::PathBuf>,
     default_key: &str,
+    fixture: IntegrationFixture,
     options: &TestOptions,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
@@ -469,6 +498,7 @@ fn run_integration_against_node(
         &build.artifact.path,
         rpc_url,
         default_key,
+        fixture.signer,
         runtime_manifest.clone(),
     )?;
     let submitted = crate::deploy::submit_prepared_deploy_and_resolve(&prepared)?;
@@ -482,12 +512,16 @@ fn run_integration_against_node(
         "Running RPC integration tests against {contract_address}..."
     ));
 
-    let env = integration_test_environment(
+    let mut env = integration_test_environment(
         rpc_url,
         &contract_address,
         runtime_manifest.as_deref(),
         default_key,
     );
+    env.push((
+        OsString::from("XDG_CONFIG_HOME"),
+        fixture.config.path().as_os_str().to_owned(),
+    ));
     let filter = SelectedFilter {
         name: options.match_test.as_deref(),
         exact: false,

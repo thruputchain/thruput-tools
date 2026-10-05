@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress, Ed25519PublicKey};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 1;
+pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Stable JSON fields shared by every native HOG transfer outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -35,6 +35,8 @@ pub struct TransferReportCommon {
 pub struct TransferDryRunReport {
     #[serde(flatten)]
     pub common: TransferReportCommon,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<i64>")]
     pub expiry_height: i64,
     pub signed_transaction: HexBytes,
 }
@@ -45,9 +47,13 @@ pub struct TransferDryRunReport {
 pub struct TransferCommittedReport {
     #[serde(flatten)]
     pub common: TransferReportCommon,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
     pub status: ExecStatus,
     pub events: Vec<EmittedEvent>,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub gas_used: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_data: Option<HexBytes>,
@@ -62,6 +68,8 @@ pub struct TransferCommittedReport {
 #[serde(rename_all = "camelCase")]
 pub enum TransferConfirmation {
     Invalid,
+    Retry,
+    Dropped,
     Unavailable,
 }
 
@@ -186,13 +194,13 @@ mod tests {
 
         let value = serde_json::to_value(report).expect("bug: report should serialize");
 
-        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["schemaVersion"], 2);
         assert_eq!(value["dryRun"], true);
         assert_eq!(value["submitted"], false);
         assert_eq!(value["senderWallet"], "alice");
         assert_eq!(value["recipientInput"], "alice");
         assert_eq!(value["rawAmount"], "15000000");
-        assert_eq!(value["expiryHeight"], 123);
+        assert_eq!(value["expiryHeight"], "123");
         assert_eq!(value["signedTransaction"], "0xaabb");
         for absent in [
             "height",

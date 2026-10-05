@@ -139,5 +139,5 @@ fn faucet_service_error_preserves_machine_readable_response_fields() {
     assert_eq!(error.code(), "faucet_service_error");
     assert_eq!(details["httpStatus"], 429);
     assert_eq!(details["code"], "airdrop_recipient_cooldown");
-    assert_eq!(details["retryAfterSeconds"], 42);
+    assert_eq!(details["retryAfterSeconds"], "42");
 }

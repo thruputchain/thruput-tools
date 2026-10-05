@@ -324,6 +324,14 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                     tx_hash: format_tx_hash(&tx_hash),
                     reason,
                 },
+                TransactionStatus::Retry { error } => CliError::TransactionRetry {
+                    tx_hash: format_tx_hash(&tx_hash),
+                    error,
+                },
+                TransactionStatus::Dropped { error } => CliError::TransactionDropped {
+                    tx_hash: format_tx_hash(&tx_hash),
+                    error,
+                },
                 TransactionStatus::RecentFailure {
                     attempt_height,
                     cause,
@@ -348,6 +356,8 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 Some(TransactionStatus::Committed { .. }) => "committed",
                 Some(TransactionStatus::Invalid { .. }) => "invalid",
                 Some(TransactionStatus::RecentFailure { .. }) => "recentFailure",
+                Some(TransactionStatus::Retry { .. }) => "retry",
+                Some(TransactionStatus::Dropped { .. }) => "dropped",
                 None => "unavailable",
                 Some(_) => "unrecognized",
             },

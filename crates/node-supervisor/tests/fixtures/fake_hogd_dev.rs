@@ -35,7 +35,7 @@ use groundhog_scheduler::{
     ParallelTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
     SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
-    SchedulerValidationResult,
+    SchedulerTransactionOutcomeBatch, SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
 };
@@ -51,8 +51,8 @@ use groundhog_xdr::transaction::{
     OptSignedTransactionBatch, TransactionHash, TransactionHashBatch,
 };
 use groundhog_xdr::types::{
-    BlockHeight, ConfigHash, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint,
-    NetworkHash, Protocol, SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
+    BlockHeight, ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
+    SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
 };
 use groundhog_xdr::validator::ValidatorID;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
@@ -68,93 +68,46 @@ const SUBMIT_LOG_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_SUBMIT_LOG";
 const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
 const COMMIT_ENTERED_FILE_ENV: &str = "GROUNDHOG_FAKE_COMMIT_ENTERED_FILE";
 const GRACEFUL_SHUTDOWN_FILE_ENV: &str = "GROUNDHOG_FAKE_GRACEFUL_SHUTDOWN_FILE";
-const DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 static TERMINATED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone)]
 struct FakeStartupConfig {
-    count: usize,
-    seed: String,
-    tokens: u64,
-}
-
-impl Default for FakeStartupConfig {
-    fn default() -> Self {
-        Self {
-            count: groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT,
-            seed: groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED.to_string(),
-            tokens: groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
-        }
-    }
+    accounts: Vec<Value>,
 }
 
 impl FakeStartupConfig {
     fn from_args() -> Self {
-        let mut config = Self::default();
-        let mut args = env::args().skip(1);
-        while let Some(arg) = args.next() {
-            let Some(value) = args.next() else {
-                continue;
+        let args: Vec<_> = env::args().collect();
+        let Some(pair) = args
+            .windows(2)
+            .find(|pair| pair[0] == "--bootstrap-manifest")
+        else {
+            // Process-lifecycle tests launch this fixture without chain configuration.
+            return Self {
+                accounts: Vec::new(),
             };
-            match arg.as_str() {
-                "--bootstrap-manifest" => config = Self::from_bootstrap_manifest(&value),
-                "--dev-accounts" => {
-                    config.count = value.parse().expect("bug: fake dev account count parses");
-                }
-                "--dev-account-seed" => config.seed = value,
-                "--dev-account-tokens" => {
-                    config.tokens = value.parse().expect("bug: fake dev account tokens parse");
-                }
-                _ => {}
-            }
-        }
-        config
-    }
-
-    fn from_bootstrap_manifest(path: &str) -> Self {
-        let manifest: Value = serde_json::from_slice(
-            &fs::read(path).expect("bug: fake bootstrap manifest should be readable"),
-        )
-        .expect("bug: fake bootstrap manifest should parse");
-        assert_eq!(manifest["schemaVersion"], 3);
-        assert_eq!(manifest["kind"], "groundhog-bootstrap");
-        assert_eq!(manifest["bootstrapFaucet"]["index"], 0);
-        assert_eq!(
-            manifest["bootstrapFaucet"]["initialStorageTokens"],
-            groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS.to_string()
-        );
-        let accounts = manifest
-            .get("bootstrapAccounts")
-            .and_then(Value::as_object)
-            .expect("bug: fake bootstrap manifest has bootstrapAccounts");
-        let count = accounts
-            .get("count")
-            .and_then(Value::as_u64)
-            .and_then(|count| usize::try_from(count).ok())
-            .expect("bug: fake bootstrap manifest count fits usize");
-        assert_eq!(accounts["firstIndex"], 1);
-        let seed = accounts
-            .get("seed")
-            .and_then(Value::as_str)
-            .expect("bug: fake bootstrap manifest seed is a string")
-            .to_string();
-        let raw_tokens = accounts
-            .get("initialStorageTokens")
-            .and_then(Value::as_str)
-            .expect("bug: fake bootstrap manifest token amount is a string");
-        let tokens: u64 = raw_tokens
-            .parse()
-            .expect("bug: fake bootstrap manifest tokens parse");
-        assert_eq!(
-            raw_tokens,
-            tokens.to_string(),
-            "bug: bootstrap allocation should remain a raw decimal string"
-        );
-        Self {
-            count,
-            seed,
-            tokens,
-        }
+        };
+        let path = &pair[1];
+        let manifest: groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifest =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(manifest.schema_version, 4);
+        let accounts = std::iter::once(&manifest.bootstrap_faucet)
+            .chain(manifest.bootstrap_accounts.iter())
+            .enumerate()
+            .map(|(position, allocation)| {
+                let public_key: [u8; 32] = allocation.public_key.as_ref().try_into().unwrap();
+                let address =
+                    groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0)
+                        .address();
+                json!({
+                    "role": if position == 0 { "faucet" } else { "local_user" },
+                    "publicKey": allocation.public_key,
+                    "walletAddress": Hex0x(address),
+                    "initialStorageTokens": allocation.initial_storage_tokens,
+                })
+            })
+            .collect();
+        Self { accounts }
     }
 }
 
@@ -692,46 +645,18 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
     }
 
     json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": "00".repeat(32),
         "protocol": protocol_text(&PROTOCOL_VERSION),
         "producer": Value::Object(producer),
         "endpoints": endpoints,
-        "bootstrapAccountDerivation": {
-            "scheme": DERIVATION_SCHEME,
-            "seed": config.seed,
-        },
-        "bootstrapAccounts": bootstrap_accounts(config),
+        "bootstrapAccounts": config.accounts,
         "bootstrap": {
             "storageCostModel": storage_cost_model(),
         },
     })
-}
-
-fn bootstrap_accounts(config: &FakeStartupConfig) -> Vec<Value> {
-    (0..=config.count)
-        .map(|index| {
-            let signer = groundhog_signing::derive_dev_account_signer(&config.seed, index);
-            let address = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                signer.verifying_key_bytes(),
-                0,
-            )
-            .address();
-            json!({
-                "index": u32::try_from(index).expect("bug: fake account index fits in u32"),
-                "role": if index == 0 { "faucet" } else { "local_user" },
-                "publicKey": Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes())),
-                "walletAddress": Hex0x(address),
-                "initialStorageTokens": if index == 0 {
-                    groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
-                } else {
-                    config.tokens
-                }.to_string(),
-            })
-        })
-        .collect()
 }
 
 fn storage_cost_model() -> Value {
@@ -1303,6 +1228,26 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         // but each hash still gets an explicit per-transaction answer.
         Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
     }
+    async fn schedcoord_lookup_transaction_outcomes(
+        &self,
+        hashes: TransactionHashBatch,
+    ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus,
+        };
+        Ok(VecM(
+            hashes
+                .0
+                .into_iter()
+                .map(|_| SchedulerTransactionOutcome {
+                    status: SchedulerTransactionStatus::SchedulerTransactionNotFound,
+                    error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                    error_code: 0,
+                })
+                .collect(),
+        ))
+    }
 }
 
 struct FakeSchedulerGateway(FakeScheduler);
@@ -1362,6 +1307,32 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
         hashes: TransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
+    }
+
+    async fn schedgateway_lookup_transaction_outcomes(
+        &self,
+        hashes: TransactionHashBatch,
+    ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus,
+        };
+        let results = self.schedgateway_lookup_tx(hashes).await?;
+        Ok(VecM(
+            results
+                .0
+                .into_iter()
+                .map(|tx| SchedulerTransactionOutcome {
+                    status: if tx.is_some() {
+                        SchedulerTransactionStatus::SchedulerTransactionPending
+                    } else {
+                        SchedulerTransactionStatus::SchedulerTransactionNotFound
+                    },
+                    error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                    error_code: 0,
+                })
+                .collect(),
+        ))
     }
 
     async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {

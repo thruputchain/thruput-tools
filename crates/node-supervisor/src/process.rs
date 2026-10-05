@@ -195,6 +195,14 @@ impl ChildSupervisor {
         &self,
         inherited_file: Option<File>,
     ) -> Result<SupervisedChild, NodeSupervisorError> {
+        self.spawn_with_files(inherited_file, None)
+    }
+
+    pub(crate) fn spawn_with_files(
+        &self,
+        inherited_file: Option<File>,
+        chain_lock: Option<File>,
+    ) -> Result<SupervisedChild, NodeSupervisorError> {
         let program = self.spec.program_label();
         let mut command = self.spec.command();
         if let Some(file) = inherited_file {
@@ -202,6 +210,14 @@ impl ChildSupervisor {
                 program: program.clone(),
                 source,
             })?;
+        }
+        if let Some(file) = chain_lock {
+            let fd =
+                inherit_file(&mut command, file).map_err(|source| NodeSupervisorError::Spawn {
+                    program: program.clone(),
+                    source,
+                })?;
+            command.env("HOG_DEVNODE_DATA_DIR_LOCK_FD", fd.to_string());
         }
         let child = command
             .spawn()
@@ -222,7 +238,7 @@ impl ChildSupervisor {
 }
 
 #[cfg(unix)]
-fn inherit_file(command: &mut Command, file: File) -> std::io::Result<()> {
+fn inherit_file(command: &mut Command, file: File) -> std::io::Result<i32> {
     use std::os::fd::{AsRawFd, FromRawFd};
 
     // A caller may have closed standard input/output before opening the file.
@@ -250,11 +266,11 @@ fn inherit_file(command: &mut Command, file: File) -> std::io::Result<()> {
             Ok(())
         });
     }
-    Ok(())
+    Ok(fd)
 }
 
 #[cfg(not(unix))]
-fn inherit_file(_command: &mut Command, _file: File) -> std::io::Result<()> {
+fn inherit_file(_command: &mut Command, _file: File) -> std::io::Result<i32> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "inherited installation leases require Unix file descriptors",

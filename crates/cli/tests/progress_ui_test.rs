@@ -527,7 +527,7 @@ fn json_build_report_and_error_contracts_are_preserved() {
         .unwrap();
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["data"]["schemaVersion"], 1);
+    assert_eq!(report["data"]["schemaVersion"], 2);
     assert!(
         report["data"]["cargoStdout"]
             .as_str()
@@ -1025,7 +1025,7 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
             assert!(!String::from_utf8_lossy(&pty.raw).contains("startup warning fixture"));
         }
         if mode != "failure" {
-            pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("dev-key manifest"));
+            pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("account manifest"));
             std::fs::write(root.path().join("log-now"), "").unwrap();
             pty.until(|pty| {
                 pty.parser

@@ -51,7 +51,9 @@ re-derive protocol primitives in the CLI.
   public method implementations in `json-rpc-server`; binaries supply backend
   adapters. Add hogd result decoding and composite status ordering to
   `hogd-backend`, not separate gateway/supervisor implementations.
-- RPC fields use `camelCase`, tagged enums, decimal JSON quantities, and
+- RPC fields use `camelCase`, tagged enums, canonical decimal strings for all
+  64-bit-or-wider integers (including small values), JSON numbers for smaller
+  bounded integers, and
   `0x`-prefixed lowercase hex bytes. Use `HexBytes` or `Topic` from
   `json-rpc-types/src/hex.rs`, not raw `Vec<u8>` in RPC payloads. Preserve
   opaque server-authored cursors verbatim.
@@ -62,6 +64,10 @@ re-derive protocol primitives in the CLI.
   production limits. Mark extensible public enums and manifest structs
   `#[non_exhaustive]`. In manifests, omit unavailable optional endpoints and
   encode large quantities as decimal strings.
+- Apply the same wide-integer policy to CLI JSON reports. Use the shared
+  `json-rpc-types::decimal` adapters with matching schema annotations; preserve
+  Rust integer types and binary XDR. Reject numeric JSON and noncanonical or
+  out-of-range decimal strings rather than supporting legacy representations.
 - `sendRawTransaction` succeeds only after authoritative mempool admission.
   Admission does not imply nomination or commitment. Keep advisory executor
   pre-checks in `tx-validation`, using the shared tip/config cache. Recheck

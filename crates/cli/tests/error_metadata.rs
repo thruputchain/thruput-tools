@@ -122,7 +122,7 @@ fn computed_details_payloads_carry_their_keys() {
             "url": "https://faucet.example/airdrop",
             "httpStatus": 429,
             "code": "rate_limited",
-            "retryAfterSeconds": 30,
+            "retryAfterSeconds": "30",
         }),
         "the faucet payload renames service_code and omits the message the display carries"
     );

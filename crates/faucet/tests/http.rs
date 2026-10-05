@@ -95,9 +95,9 @@ async fn network_returns_public_descriptor() {
     );
     assert_eq!(json["airdrop"]["rawAmount"], "100000000");
     assert!(json["airdrop"].get("amountHog").is_none());
-    assert_eq!(json["airdrop"]["recipientCooldownSeconds"], 43_200);
+    assert_eq!(json["airdrop"]["recipientCooldownSeconds"], "43200");
     assert_eq!(json["airdrop"]["clientQuotaMax"], 10);
-    assert_eq!(json["airdrop"]["clientQuotaWindowSeconds"], 3_600);
+    assert_eq!(json["airdrop"]["clientQuotaWindowSeconds"], "3600");
     assert_eq!(json["airdrop"]["maxPendingPerRecipient"], 1);
     assert!(json.get("bootstrapAccountDerivation").is_none());
     assert!(json.get("bootstrapAccounts").is_none());
@@ -161,7 +161,7 @@ async fn airdrop_validates_request_then_submits() {
             "recipient": format!("0x{}", "11".repeat(32)),
             "txHash": format!("0x{}", "22".repeat(32)),
             "rawAmount": "100000000",
-            "height": 42,
+            "height": "42",
             "status": { "result": "ok" }
         })
     );
@@ -389,7 +389,7 @@ async fn airdrop_duplicate_in_flight_returns_pending_attempt() {
         serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
     assert_eq!(json["attemptStatus"], "pending");
     assert_eq!(json["recipient"], format!("0x{}", "11".repeat(32)));
-    assert_eq!(json["retryAfterSeconds"], 5);
+    assert_eq!(json["retryAfterSeconds"], "5");
     assert!(json.get("txHash").is_none());
 }
 
@@ -412,7 +412,7 @@ async fn airdrop_pending_response_matches_shared_wire_type() {
             "recipient": format!("0x{}", "11".repeat(32)),
             "txHash": format!("0x{}", "22".repeat(32)),
             "rawAmount": "100000000",
-            "retryAfterSeconds": 5
+            "retryAfterSeconds": "5"
         })
     );
 }
@@ -1196,9 +1196,9 @@ fn test_network_descriptor() -> NetworkDescriptor {
         },
         "airdrop": {
             "rawAmount": "100000000",
-            "recipientCooldownSeconds": 43200,
+            "recipientCooldownSeconds": "43200",
             "clientQuotaMax": 10,
-            "clientQuotaWindowSeconds": 3600,
+            "clientQuotaWindowSeconds": "3600",
             "maxPendingPerRecipient": 1
         }
     }))

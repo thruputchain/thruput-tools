@@ -30,7 +30,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 7;
 
 /// HOG that `groundhog test --integration` transfers to the contract it deploys.
 ///
@@ -57,6 +57,8 @@ pub struct DeploymentOptions<'a> {
 struct InitializerReport {
     method: String,
     entrypoint_id: String,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
     calldata: HexBytes,
 }
@@ -69,7 +71,11 @@ struct NativeDeployment {
     network_hash: String,
     contract_hash: String,
     deployment_nonce: String,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<i64>")]
     expiry_height: i64,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
     funding_hog: String,
     funding_raw_amount: String,
@@ -346,16 +352,16 @@ pub fn run(
         "txHash": tx_hash_formatted,
         "artifactKind": prepared.artifact.kind.as_str(),
         "artifactPath": &prepared.artifact.path,
-        "artifactBytes": prepared.artifact_bytes_len,
+        "artifactBytes": prepared.artifact_bytes_len.to_string(),
         "address": contract_addr_hex,
         "addressSource": match address_source {
             Some(DeployAddressSource::Receipt) => Some("receipt"),
             Some(DeployAddressSource::Derived) => Some("derived"),
             None => None,
         },
-        "height": receipt.height,
+        "height": receipt.height.to_string(),
         "status": receipt.status,
-        "gasUsed": receipt.gas_used,
+        "gasUsed": receipt.gas_used.to_string(),
         "transactionDetail": transaction_detail,
         "walletEntrypointId": prepared.wallet_entrypoint_id,
         "walletEntrypointSource": prepared.wallet_entrypoint_source,
@@ -513,7 +519,7 @@ fn print_dry_run(
             "rpcUrl": prepared.rpc_url,
             "artifactKind": prepared.artifact.kind.as_str(),
             "artifactPath": &prepared.artifact.path,
-            "artifactBytes": prepared.artifact_bytes_len,
+            "artifactBytes": prepared.artifact_bytes_len.to_string(),
             "predictedAddress": prepared.predicted_address,
             "walletEntrypointId": prepared.wallet_entrypoint_id,
             "walletEntrypointSource": prepared.wallet_entrypoint_source,
@@ -610,6 +616,7 @@ fn prepare_deploy_plan(
         resolved,
         wallet,
         options,
+        None,
     )
 }
 
@@ -621,6 +628,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     artifact_path: &Path,
     rpc_url: &str,
     key_name: &str,
+    signer: groundhog_signing::LocalSigner,
     runtime_manifest: Option<PathBuf>,
 ) -> Result<PreparedDeploy, CliError> {
     let artifact_bytes = std::fs::read(artifact_path)?;
@@ -640,6 +648,16 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         wallets: std::collections::BTreeMap::default(),
         source: None,
     };
+    let account =
+        groundhog_signing::PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
+    let sender = crate::account_resolution::ResolvedTransactionSender {
+        native_account: Some(account.clone()),
+        key_name: key_name.into(),
+        wallet_name: None,
+        wallet_address: account.address(),
+        signer,
+        network_hash: crate::account_resolution::resolve_network_hash(&profile, key_name)?,
+    };
     sign_deploy_plan(prepare_deploy_transaction_plan(
         ResolvedArtifact {
             kind: ArtifactKind::Rv32,
@@ -653,6 +671,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
             fund: Some(INTEGRATION_DEPLOY_FUND_HOG),
             ..DeploymentOptions::default()
         },
+        Some(sender),
     )?)
 }
 
@@ -664,6 +683,7 @@ fn prepare_deploy_transaction_plan(
     profile: &ResolvedProfile,
     selected_wallet: Option<&str>,
     options: &DeploymentOptions<'_>,
+    sender: Option<crate::account_resolution::ResolvedTransactionSender>,
 ) -> Result<DeployPlan, CliError> {
     let rpc_url = profile.rpc_endpoint()?;
     if options.init_method.is_none()
@@ -681,7 +701,10 @@ fn prepare_deploy_transaction_plan(
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let sender = resolve_transaction_sender(profile, selected_wallet)?;
+    let sender = match sender {
+        Some(sender) => sender,
+        None => resolve_transaction_sender(profile, selected_wallet)?,
+    };
     let funding = resolve_native_funding(sender.native_account.is_some(), options.fund)?;
 
     if sender.native_account.is_none() && options.init_method.is_some() {

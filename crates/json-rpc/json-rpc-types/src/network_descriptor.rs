@@ -11,7 +11,7 @@ use crate::hex::HexBytes;
 use crate::{ContractAddress, NetworkHash, SHA256Hash};
 
 /// Current public network descriptor schema version.
-pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 4;
+pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 5;
 /// Descriptor family for public hosted-network metadata.
 pub const NETWORK_DESCRIPTOR_KIND: &str = "groundhog-network";
 
@@ -84,10 +84,14 @@ pub struct AirdropDescriptor {
     /// Fixed raw HOG amount transferred per successful request.
     pub raw_amount: String,
     /// Cooldown applied to each recipient.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub recipient_cooldown_seconds: u64,
     /// Number of requests allowed for each client identity in the quota window.
     pub client_quota_max: u32,
     /// Client quota window duration.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub client_quota_window_seconds: u64,
     /// Maximum in-flight requests for one recipient.
     pub max_pending_per_recipient: u32,

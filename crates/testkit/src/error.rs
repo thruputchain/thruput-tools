@@ -81,6 +81,14 @@ pub enum TestkitError {
     /// The runtime manifest has no faucet account to fund test accounts.
     #[error("runtime manifest has no bootstrap faucet")]
     MissingFaucet,
+    /// A pending request must be reconciled before changing its amount.
+    #[error(
+        "a retained funding request for {recipient:?} has a different amount; retry the original amount on this Network handle"
+    )]
+    FundingRequestMismatch {
+        /// Recipient with retained funding intent.
+        recipient: groundhog_xdr::types::ContractAddress,
+    },
     /// A receipt belongs to another transaction.
     #[error("receipt hash does not match {expected:?}")]
     ReceiptHashMismatch {

@@ -92,7 +92,7 @@ fn chain_tip_wire_format() {
         block_hash: zero_hash(),
     };
     let v: Value = serde_json::to_value(&tip).unwrap();
-    assert_eq!(v["height"], 42);
+    assert_eq!(v["height"], "42");
     assert!(v["blockHash"].as_str().unwrap().starts_with("0x"));
     assert_eq!(v["blockHash"].as_str().unwrap().len(), 66); // 0x + 64
     // Verify camelCase
@@ -159,14 +159,45 @@ fn transaction_status_pending() {
 #[test]
 fn transaction_status_committed() {
     let s = TransactionStatus::Committed {
-        height: BlockHeight::from(100i64),
+        height: Some(BlockHeight::from(100i64)),
     };
     let v: Value = serde_json::to_value(&s).unwrap();
     assert_eq!(v["status"], "committed");
-    assert_eq!(v["height"], 100);
+    assert_eq!(v["height"], "100");
     // No block_hash field
     assert!(v.get("blockHash").is_none());
     assert!(v.get("block_hash").is_none());
+}
+
+#[test]
+fn committed_height_is_optional_and_zero_is_a_real_height() {
+    for (json, expected) in [
+        (serde_json::json!({"status": "committed"}), None),
+        (
+            serde_json::json!({"status": "committed", "height": "0"}),
+            Some(BlockHeight::from(0)),
+        ),
+        (
+            serde_json::json!({"status": "committed", "height": "42"}),
+            Some(BlockHeight::from(42)),
+        ),
+    ] {
+        let status: TransactionStatus = serde_json::from_value(json.clone()).unwrap();
+        assert!(matches!(&status, TransactionStatus::Committed { height } if *height == expected));
+        assert_eq!(serde_json::to_value(status).unwrap(), json);
+    }
+    for height in [
+        serde_json::json!(0),
+        serde_json::json!("00"),
+        serde_json::json!("9223372036854775808"),
+    ] {
+        assert!(
+            serde_json::from_value::<TransactionStatus>(serde_json::json!({
+                "status": "committed", "height": height,
+            }))
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -189,8 +220,8 @@ fn transaction_receipt_wire_format() {
     };
     let v: Value = serde_json::to_value(&receipt).unwrap();
     assert!(v["txHash"].as_str().unwrap().starts_with("0x"));
-    assert_eq!(v["gasUsed"], 123_456);
-    assert_eq!(v["height"], 50);
+    assert_eq!(v["gasUsed"], "123456");
+    assert_eq!(v["height"], "50");
     assert_eq!(v["status"]["result"], "ok");
     assert!(v["events"].as_array().unwrap().is_empty());
     // camelCase
@@ -221,7 +252,7 @@ fn view_request_wire_format() {
         ..request
     };
     let v: Value = serde_json::to_value(&with_gas).unwrap();
-    assert_eq!(v["gasLimit"], 250_000);
+    assert_eq!(v["gasLimit"], "250000");
     let decoded: ViewRequest = serde_json::from_value(v).unwrap();
     assert_eq!(decoded.gas_limit, Some(250_000));
 }
@@ -233,11 +264,11 @@ fn server_limits_wire_format() {
     assert_eq!(
         v,
         serde_json::json!({
-            "maxViewGas": 10_000_000,
-            "maxViewCalldataBytes": 65_536,
+            "maxViewGas": "10000000",
+            "maxViewCalldataBytes": "65536",
             "maxEventsPerPage": 200,
             "maxTransactionsPerPage": 200,
-            "maxCursorBytes": 256,
+            "maxCursorBytes": "256",
         })
     );
     let decoded: ServerLimits = serde_json::from_value(v).unwrap();
@@ -257,8 +288,8 @@ fn view_response_wire_format() {
     let v: Value = serde_json::to_value(&response).unwrap();
     assert_eq!(v["output"]["result"], "return");
     assert_eq!(v["output"]["returnData"], "0x2a");
-    assert_eq!(v["height"], 7);
-    assert_eq!(v["gasUsed"], 1234);
+    assert_eq!(v["height"], "7");
+    assert_eq!(v["gasUsed"], "1234");
     assert!(v.get("gas_used").is_none());
     assert!(v["events"].as_array().unwrap().is_empty());
 }
@@ -341,7 +372,7 @@ fn identified_event_wire_format() {
     };
     let v: Value = serde_json::to_value(&event).unwrap();
     assert!(v["txHash"].as_str().unwrap().starts_with("0x"));
-    assert_eq!(v["blockHeight"], 10);
+    assert_eq!(v["blockHeight"], "10");
     assert_eq!(v["sequenceNumber"], 0);
     assert!(v.get("tx_hash").is_none());
     assert!(v.get("block_hash").is_none());
@@ -501,10 +532,10 @@ fn transaction_ref_page_wire_format() {
     let v: Value = serde_json::to_value(&page).unwrap();
     assert!(v["refs"][0]["txHash"].as_str().unwrap().starts_with("0x"));
     assert!(v["refs"][0].get("tx_hash").is_none());
-    assert_eq!(v["refs"][0]["height"], 7);
+    assert_eq!(v["refs"][0]["height"], "7");
     assert_eq!(v["cursor"], "0x0102");
-    assert_eq!(v["latestBlock"], 9);
-    assert_eq!(v["oldestBlock"], 0);
+    assert_eq!(v["latestBlock"], "9");
+    assert_eq!(v["oldestBlock"], "0");
     assert!(v.get("latest_block").is_none());
 }
 
@@ -523,8 +554,8 @@ fn block_info_wire_format() {
     assert_eq!(v["networkHash"], format!("0x{}", "01".repeat(32)));
     assert_eq!(v["configHash"], format!("0x{}", "08".repeat(32)));
     assert_eq!(v["proposer"], format!("0x{}", "02".repeat(32)));
-    assert_eq!(v["blockTimepoint"], 123);
-    assert_eq!(v["blockHeight"], 99);
+    assert_eq!(v["blockTimepoint"], "123");
+    assert_eq!(v["blockHeight"], "99");
     assert_eq!(v["txsHash"], format!("0x{}", "03".repeat(32)));
     assert_eq!(v["storageHash"], format!("0x{}", "04".repeat(32)));
     assert_eq!(v["eventsHash"], format!("0x{}", "05".repeat(32)));

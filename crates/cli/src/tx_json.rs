@@ -4,8 +4,8 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress, events::PaginationC
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const TX_SHOW_JSON_SCHEMA_VERSION: u32 = 1;
-pub const TX_LIST_JSON_SCHEMA_VERSION: u32 = 1;
+pub const TX_SHOW_JSON_SCHEMA_VERSION: u32 = 3;
+pub const TX_LIST_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Stable JSON data for a one-shot public transaction lookup.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -32,6 +32,10 @@ pub struct TxListReport {
     pub address: ContractAddress,
     pub refs: Vec<TransactionRef>,
     pub cursor: PaginationCursor,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }

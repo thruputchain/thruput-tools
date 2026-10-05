@@ -329,7 +329,7 @@ fn services_report_ready_without_exiting_and_stop_cleanly() {
                 .args(["node", "--port", "0", "--hog-devnode-binary"])
                 .arg(fake_hogd_dev_binary())
                 .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer");
-            "dev-key manifest"
+            "account manifest"
         } else {
             command.args(["docs", "--port", "0"]);
             "Ctrl-C to stop"
@@ -398,6 +398,7 @@ fn transfer_cards_distinguish_commitment_rejection_and_uncertainty() {
                 "--force",
             ])
             .current_dir(temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("fixture-config"))
             .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
             .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0");
         let (status, text) = rendered(command, 80);

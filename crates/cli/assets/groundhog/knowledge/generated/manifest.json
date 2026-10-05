@@ -2,24 +2,24 @@
   "artifacts": {
     "agentGuide": {
       "path": "generated/agent-guide.md",
-      "sha256": "sha256:c3554f906e65c62de6e1b6cc244fd9ca778997498d48b256b813bdcece7dbb23"
+      "sha256": "sha256:f7bf7ffe8e123ee0a7f26f077748dc0fbb6a13464e3f57c76ce1af929929ab54"
     },
     "records": {
       "path": "generated/records.jsonl",
-      "sha256": "sha256:44c6f7117710d0d80c48150081cc8c362d07eaa22f93d2c10421d4a178b2ab00"
+      "sha256": "sha256:91fdb476bc51b0f38590959d29f7701437ebd41917cb9ba5026bb12f940b1ef3"
     },
     "skillTemplate": {
       "path": "generated/SKILL.md",
-      "sha256": "sha256:2a65c9045f77e49d61477dea0c22302291d35fac4b315604091250738305aeef"
+      "sha256": "sha256:463ab56941ff242f9fc76622f3244d697674b232e50bcbd4001768f5c0784d1e"
     }
   },
   "compatibility": {
-    "groundhog-cli": "0.22.1"
+    "groundhog-cli": "0.24.0"
   },
   "id": "groundhog",
   "repository": "https://github.com/groundhogchain/agent-skills",
   "schemaVersion": 1,
   "sourceDirty": false,
-  "sourceRevision": "aad9be0621e142af688f0ddc2d432ec08b61b70a",
-  "sourceSha256": "sha256:53e766647547ee095b194671d71625a47e5cbb2873f3dce9420473d0c393d1c9"
+  "sourceRevision": "03e7080a80be91dfb83a17e3f626636516819cd8",
+  "sourceSha256": "sha256:c001854d81d003d6bc9c9bec1e884d37d5a8da00ef3bae3ba6215b5e7eeb614a"
 }
