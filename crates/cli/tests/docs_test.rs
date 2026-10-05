@@ -302,7 +302,61 @@ fn markdown_snapshot() -> tempfile::TempDir {
     )
     .unwrap();
     std::fs::write(dir.path().join("markdown/all.md"), "# Full docs\n").unwrap();
+    let identity: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("snapshot.json")).unwrap()).unwrap();
+    std::fs::write(
+        dir.path().join("markdown/manifest.json"),
+        serde_json::to_vec(
+            &serde_json::json!({ "schemaVersion": 1, "snapshot": identity, "pages": [] }),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     dir
+}
+
+#[test]
+fn external_markdown_export_rejects_missing_malformed_or_mismatched_identity() {
+    for case in [
+        "missing",
+        "malformed",
+        "schema",
+        "revision",
+        "dirty",
+        "guide",
+    ] {
+        let source = markdown_snapshot();
+        let manifest_path = source.path().join("markdown/manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        match case {
+            "missing" => std::fs::remove_file(&manifest_path).unwrap(),
+            "malformed" => std::fs::write(&manifest_path, "{").unwrap(),
+            other => {
+                match other {
+                    "schema" => manifest["schemaVersion"] = 2.into(),
+                    "revision" => manifest["snapshot"]["sourceRevision"] = "b".repeat(40).into(),
+                    "dirty" => manifest["snapshot"]["sourceDirty"] = true.into(),
+                    "guide" => manifest["snapshot"]["agentGuideCliVersion"] = "999.0.0".into(),
+                    _ => unreachable!(),
+                }
+                std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            }
+        }
+        let output = source.path().join("export");
+        let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            .args(["docs", "export", "--dir"])
+            .arg(source.path())
+            .arg("--output")
+            .arg(&output)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "accepted {case} manifest");
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["ok"], false);
+        assert!(!output.exists(), "created output for {case} manifest");
+    }
 }
 
 #[test]
@@ -413,21 +467,25 @@ fn legacy_snapshot_export_reports_missing_markdown_without_creating_output() {
 }
 
 #[cfg(unix)]
+struct ServiceCleanup(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for ServiceCleanup {
+    fn drop(&mut self) {
+        let _ = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            .env("XDG_CACHE_HOME", &self.0)
+            .args(["docs", "stop", "--json"])
+            .output();
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
     use std::os::unix::fs::PermissionsExt;
-    struct Cleanup(std::path::PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = Command::new(env!("CARGO_BIN_EXE_groundhog"))
-                .env("XDG_CACHE_HOME", &self.0)
-                .args(["docs", "stop", "--json"])
-                .output();
-        }
-    }
     let dir = markdown_snapshot();
     let cache = tempfile::tempdir().unwrap();
-    let _cleanup = Cleanup(cache.path().to_owned());
+    let _cleanup = ServiceCleanup(cache.path().to_owned());
     let invoke = |args: &[&str]| {
         let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
             .env("XDG_CACHE_HOME", cache.path())
@@ -475,6 +533,23 @@ fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
     let (ok, status) = invoke(&["docs", "status"]);
     assert!(ok);
     assert_eq!(status["data"]["running"], true);
+    let backup = state.with_file_name("state.backup.json");
+    assert_eq!(
+        std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    std::fs::write(&state, "{").unwrap();
+    let (ok, recovered) = invoke(&["docs", "status"]);
+    assert!(ok, "{recovered}");
+    assert_eq!(recovered["data"]["server"]["url"], url);
+    assert_eq!(
+        std::fs::read(&state).unwrap(),
+        std::fs::read(&backup).unwrap()
+    );
+    std::fs::remove_file(&state).unwrap();
+    let (ok, recovered_start) = invoke(&args);
+    assert!(ok, "{recovered_start}");
+    assert_eq!(recovered_start["data"]["reused"], true);
     let (ok, conflict) = invoke(&[
         "docs",
         "--background",
@@ -484,12 +559,14 @@ fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
         dir.path().to_str().unwrap(),
     ]);
     assert!(!ok, "{conflict}");
+    std::fs::write(&state, "{").unwrap();
     let (ok, stopped) = invoke(&["docs", "stop"]);
     assert!(ok, "{stopped}");
     assert_eq!(stopped["data"]["running"], false);
     assert!(TcpStream::connect(address).is_err());
     assert!(dir.path().join("markdown/index.md").is_file());
     assert!(!state.exists());
+    assert!(!backup.exists());
     assert!(invoke(&["docs", "stop"]).0);
     assert_eq!(invoke(&["docs", "status"]).1["data"]["running"], false);
     // A different server may reuse a stale instance's port and return 204.
@@ -499,6 +576,30 @@ fn background_docs_reports_readiness_reuses_and_stops_only_its_instance() {
     assert!(invoke(&["docs", "stop"]).0);
     assert!(peer.join().unwrap());
     assert!(!state.exists());
+}
+
+#[test]
+fn background_docs_preserves_unrecoverable_state_without_claiming_it_stopped() {
+    let cache = tempfile::tempdir().unwrap();
+    let service = cache.path().join("groundhog/docs-service");
+    std::fs::create_dir_all(&service).unwrap();
+    let state = service.join("state.json");
+    let backup = service.join("state.backup.json");
+    std::fs::write(&state, "{").unwrap();
+    std::fs::write(&backup, "{}").unwrap();
+    for action in ["status", "stop", "--background"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            .env("XDG_CACHE_HOME", cache.path())
+            .args(["docs", action, "--json"])
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let failure: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(failure["data"].get("running").is_none());
+        assert_eq!(std::fs::read(&state).unwrap(), b"{");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"{}");
+        assert!(!service.join("server.log").exists());
+    }
 }
 
 #[cfg(unix)]

@@ -111,7 +111,32 @@ pub(crate) fn read_snapshot(root: &Path) -> Result<Snapshot, DocsError> {
             "unsupported schema, missing identity, or missing site entry points".into(),
         ));
     }
+    if root.join("markdown/index.md").is_file() {
+        let path = root.join("markdown/manifest.json");
+        let bytes = std::fs::read(&path).map_err(|source| DocsError::Read { path, source })?;
+        validate_markdown_manifest(&bytes, &snapshot)?;
+    }
     Ok(snapshot)
+}
+
+pub(crate) fn validate_markdown_manifest(
+    bytes: &[u8],
+    snapshot: &Snapshot,
+) -> Result<(), DocsError> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MarkdownManifest {
+        schema_version: u32,
+        snapshot: Snapshot,
+    }
+    let markdown: MarkdownManifest = serde_json::from_slice(bytes)
+        .map_err(|_| DocsError::Invalid("invalid Markdown manifest".into()))?;
+    if markdown.schema_version != 1 || markdown.snapshot != *snapshot {
+        return Err(DocsError::Invalid(
+            "Markdown export identity differs from the snapshot".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Serve a trusted, immutable local snapshot on loopback until interrupted.

@@ -41,3 +41,21 @@ The site build generates and checks these files together with the HTML. Its
 Markdown manifest records the same source identity as `snapshot.json`; both
 the importer and the CLI verify that they match. Keep the Markdown tree and
 the browser site in the same selected archive.
+
+External `--dir` snapshots with Markdown must also include a valid
+`markdown/manifest.json` with schema version 1 and the exact root snapshot
+identity. Serving or exporting rejects missing, malformed, or mismatched
+manifests before reporting or copying the documentation.
+
+## Background service state
+
+The background server records its authenticated control identity in private,
+atomically written `state.json` and `state.backup.json` files under the
+`groundhog/docs-service` cache directory. Status, start, and stop can restore a
+missing or invalid primary file from the validated backup. The normal instance
+identity check still runs before reuse or stop; a reused port is not ownership.
+
+If neither copy is valid, the command reports an error and preserves both files.
+Restore a trusted copy to recover control. Do not assume the server stopped or
+kill a process based only on a port number. A successful stop removes both copies
+and keeps the extracted documentation.

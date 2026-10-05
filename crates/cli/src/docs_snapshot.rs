@@ -2,7 +2,7 @@
 
 use crate::{
     CliError,
-    docs::{DocsError, Snapshot, read_snapshot, regular_files},
+    docs::{DocsError, Snapshot, read_snapshot, regular_files, validate_markdown_manifest},
 };
 use flate2::read::GzDecoder;
 use fs2::FileExt;
@@ -29,13 +29,6 @@ struct Pin {
     archive: String,
     archive_bytes: usize,
     sha256: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MarkdownManifest {
-    schema_version: u32,
-    snapshot: Snapshot,
 }
 
 type Files = Vec<(PathBuf, Vec<u8>)>;
@@ -122,11 +115,8 @@ fn decode(archive: &[u8], pin: &Pin) -> Result<Files, CliError> {
         .iter()
         .find(|(path, _)| path == Path::new("markdown/manifest.json"))
         .ok_or_else(|| invalid("archive has no Markdown manifest"))?;
-    let markdown: MarkdownManifest =
-        serde_json::from_slice(&markdown.1).map_err(|_| invalid("invalid Markdown manifest"))?;
-    if markdown.schema_version != 1 || markdown.snapshot != snapshot {
-        return Err(invalid("Markdown export identity differs from the snapshot").into());
-    }
+    validate_markdown_manifest(&markdown.1, &snapshot)
+        .map_err(|error| invalid(&error.to_string()))?;
     Ok(files)
 }
 

@@ -181,14 +181,14 @@ fn service_error(message: impl Into<String>) -> CliError {
     DocsError::Service(message.into()).into()
 }
 
-fn read_state(path: &Path) -> Result<Option<State>, CliError> {
+fn read_state_file(path: &Path) -> Result<Option<State>, CliError> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     let state: State = serde_json::from_slice(&bytes).map_err(|_| {
-        service_error("invalid state file; inspect the docs-service cache directory")
+        service_error("invalid state file; restore state.json or state.backup.json from a trusted copy; the server may still be running")
     })?;
     let url =
         reqwest::Url::parse(&state.report.url).map_err(|_| service_error("invalid service URL"))?;
@@ -207,6 +207,45 @@ fn read_state(path: &Path) -> Result<Option<State>, CliError> {
         return Err(service_error("invalid service identity"));
     }
     Ok(Some(state))
+}
+
+fn write_state(path: &Path, state: &State) -> Result<(), CliError> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| service_error("missing state directory"))?;
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    file.write_all(&serde_json::to_vec(state).map_err(DocsError::Json)?)?;
+    file.as_file().sync_all()?;
+    file.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn read_state(path: &Path) -> Result<Option<State>, CliError> {
+    let primary = read_state_file(path);
+    if matches!(primary, Ok(Some(_))) {
+        return primary;
+    }
+    // Preserve the authenticated control identity if one cache copy is damaged.
+    // Never discard both copies or report a server stopped merely because parsing failed.
+    match read_state_file(&path.with_file_name("state.backup.json")) {
+        Ok(Some(state)) => {
+            write_state(path, &state)?;
+            Ok(Some(state))
+        }
+        Ok(None) => primary,
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_state(path: &Path) -> Result<(), CliError> {
+    for path in [path.to_owned(), path.with_file_name("state.backup.json")] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn client() -> Result<reqwest::blocking::Client, CliError> {
@@ -258,7 +297,7 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
     let state = match read_state(&state_path)? {
         Some(state) if running(&state)? => Some(state),
         Some(_) => {
-            fs::remove_file(&state_path)?;
+            remove_state(&state_path)?;
             None
         }
         None => None,
@@ -291,7 +330,7 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
-                fs::remove_file(state_path)?;
+                remove_state(&state_path)?;
             }
             Ok(empty())
         }
@@ -313,10 +352,8 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
             }
             let (state, mut child) = spawn(&cache, root, port, &executable)?;
             let saved = (|| -> Result<(), CliError> {
-                let mut file = tempfile::NamedTempFile::new_in(&cache)?;
-                file.write_all(&serde_json::to_vec(&state).map_err(DocsError::Json)?)?;
-                file.as_file().sync_all()?;
-                file.persist(&state_path).map_err(|error| error.error)?;
+                write_state(&state_path, &state)?;
+                write_state(&state_path.with_file_name("state.backup.json"), &state)?;
                 // The child remains tied to this pipe until its controller state
                 // is durable. Parent interruption before this point closes stdin
                 // and stops the otherwise untracked background process.
@@ -330,7 +367,7 @@ fn manage(action: Action, dir: Option<&Path>, port: u16) -> Result<ServiceReport
             if let Err(error) = saved {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = fs::remove_file(&state_path);
+                let _ = remove_state(&state_path);
                 return Err(error);
             }
             Ok(report(state, false))
