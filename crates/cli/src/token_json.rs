@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events_json::RawEventReport;
 
-pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 2;
+pub const TOKEN_TRANSFERS_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Effective participant constraint for a token-transfer query.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -84,6 +84,10 @@ pub struct TokenTransfersReport {
     pub participant_filter: Option<TokenParticipantFilter>,
     pub records: Vec<TokenTransferRecordReport>,
     pub cursor: PaginationCursor,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }

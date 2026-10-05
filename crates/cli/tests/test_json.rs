@@ -6,7 +6,7 @@ use groundhog_cli::test_json::*;
 #[test]
 fn missing_mode_deserializes_as_rv32_default() {
     let json = serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 7,
         "projectRoot": "/project",
         "profile": {
             "name": "default",
@@ -23,12 +23,12 @@ fn missing_mode_deserializes_as_rv32_default() {
         "success": true,
         "summary": {
             "source": "empty",
-            "total": 0,
-            "passed": 0,
-            "failed": 0,
-            "ignored": 0,
-            "measured": 0,
-            "filteredOut": 0
+            "total": "0",
+            "passed": "0",
+            "failed": "0",
+            "ignored": "0",
+            "measured": "0",
+            "filteredOut": "0"
         },
         "runs": [],
         "rerun": {
@@ -44,11 +44,11 @@ fn missing_mode_deserializes_as_rv32_default() {
         }
     });
 
-    let report: TestReport = serde_json::from_value(json).expect("v3 report should parse");
+    let report: TestReport = serde_json::from_value(json).expect("current report should parse");
 
     assert_eq!(report.mode, TestMode::Rv32);
     assert!(report.package.is_empty());
-    assert_eq!(report.schema_version, 3);
+    assert_eq!(report.schema_version, 7);
     assert_eq!(report.artifact.kind, ArtifactKind::Rv32);
     assert_eq!(
         report.artifact.path,
@@ -83,12 +83,12 @@ fn old_reports_without_artifact_fail_deserialization() {
         "success": true,
         "summary": {
             "source": "empty",
-            "total": 0,
-            "passed": 0,
-            "failed": 0,
-            "ignored": 0,
-            "measured": 0,
-            "filteredOut": 0
+            "total": "0",
+            "passed": "0",
+            "failed": "0",
+            "ignored": "0",
+            "measured": "0",
+            "filteredOut": "0"
         },
         "runs": [],
         "rerun": {

@@ -2,6 +2,7 @@ pub mod airdrop;
 pub mod balance;
 pub mod block;
 pub mod bootstrap_manifest;
+pub mod decimal;
 pub mod dev;
 pub mod error;
 pub mod events;

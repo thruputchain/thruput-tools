@@ -312,8 +312,8 @@ mod tests {
         let balance_calls = calls.clone();
         let faucet_calls = calls.clone();
         let mut module = jsonrpsee::RpcModule::new(());
-        module.register_method("groundhog_getBalance", move |_, (), _| json!({"address":Hex0x(address),"rawBalance":if balance_calls.load(Ordering::SeqCst)>0 {"100".into()} else {initial.to_string()},"height":1})).expect("balance method");
-        module.register_method("groundhog_requestAirdrop", move |_, (), _| {faucet_calls.fetch_add(1,Ordering::SeqCst); json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":1,"status":{"result":"ok"}})}).expect("faucet method");
+        module.register_method("groundhog_getBalance", move |_, (), _| json!({"address":Hex0x(address),"rawBalance":if balance_calls.load(Ordering::SeqCst)>0 {"100".into()} else {initial.to_string()},"height":"1"})).expect("balance method");
+        module.register_method("groundhog_requestAirdrop", move |_, (), _| {faucet_calls.fetch_add(1,Ordering::SeqCst); json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":"1","status":{"result":"ok"}})}).expect("faucet method");
         (url, server.start(module), calls)
     }
 
@@ -367,7 +367,7 @@ mod tests {
                         assert!(evidence["accounts"][0]["funding"]["txHash"].is_string());
                         "invalid"
                     };
-                    json!({"address":Hex0x(address),"rawBalance":raw,"height":1})
+                    json!({"address":Hex0x(address),"rawBalance":raw,"height":"1"})
                 })
                 .expect("balance");
             let request_artifact = artifact.clone();
@@ -377,7 +377,7 @@ mod tests {
                 assert_eq!(evidence["accounts"][0]["fundingRequest"],request[0]);
                 if transport_failure { return Err(jsonrpsee::types::ErrorObjectOwned::owned(-32000,"uncertain funding",None::<()>)); }
                 funded.store(1,Ordering::SeqCst);
-                Ok(json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":1,"status":{"result":"ok"}}))
+                Ok(json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":"1","status":{"result":"ok"}}))
             }).expect("faucet");
             let handle = server.start(module);
             let spec =
@@ -437,7 +437,7 @@ mod tests {
                     } else {
                         "100"
                     };
-                    json!({"address":Hex0x(address),"rawBalance":raw,"height":1})
+                    json!({"address":Hex0x(address),"rawBalance":raw,"height":"1"})
                 })
                 .expect("balance");
             module.register_async_method("groundhog_requestAirdrop", move |_, _, _| {
@@ -450,7 +450,7 @@ mod tests {
                         funded.store(1, Ordering::SeqCst);
                     });
                     worker.await.expect("funding worker");
-                    json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":1,"status":{"result":"ok"}})
+                    json!({"attemptStatus":"succeeded","recipient":Hex0x(address),"txHash":format!("0x{}","01".repeat(32)),"rawAmount":"100","height":"1","status":{"result":"ok"}})
                 }
             }).expect("faucet");
             let handle = server.start(module);

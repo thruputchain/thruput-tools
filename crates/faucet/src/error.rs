@@ -17,6 +17,7 @@ struct FaucetErrorDetail {
     code: &'static str,
     message: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "groundhog_json_rpc_types::decimal::option")]
     retry_after_seconds: Option<u64>,
 }
 

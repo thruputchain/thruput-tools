@@ -39,7 +39,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Schema version of the `airdrop --json` data payload.
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 3;
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 4;
 const DEFAULT_AIRDROP_HOG: &str = "10";
 
 #[derive(Debug)]
@@ -295,7 +295,7 @@ fn run_local_airdrop(
                 "role": prepared.faucet_role,
             },
             "txHash": tx_hash,
-            "height": receipt.height,
+            "height": receipt.height.to_string(),
             "status": receipt.status,
             "observations": observations,
         }),
@@ -476,7 +476,7 @@ fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print
                 "status": "observed",
                 "rawBalance": balance.raw_balance,
                 "balanceHog": hog::format_amount(raw),
-                "height": balance.height,
+                "height": balance.height.to_string(),
             }))
         });
 
@@ -580,13 +580,13 @@ fn run_remote_airdrop(
             "policy": {
                 "rawAmount": prepared.airdrop_policy.raw_amount,
                 "amountHog": prepared.amount_hog,
-                "recipientCooldownSeconds": prepared.airdrop_policy.recipient_cooldown_seconds,
+                "recipientCooldownSeconds": prepared.airdrop_policy.recipient_cooldown_seconds.to_string(),
                 "clientQuotaMax": prepared.airdrop_policy.client_quota_max,
-                "clientQuotaWindowSeconds": prepared.airdrop_policy.client_quota_window_seconds,
+                "clientQuotaWindowSeconds": prepared.airdrop_policy.client_quota_window_seconds.to_string(),
                 "maxPendingPerRecipient": prepared.airdrop_policy.max_pending_per_recipient,
             },
             "txHash": tx_hash,
-            "height": height,
+            "height": height.to_string(),
             "status": status,
         }),
     ))
@@ -1569,9 +1569,9 @@ mod tests {
             "faucet": { "walletAddress": format!("0x{}", "04".repeat(32)) },
             "airdrop": {
                 "rawAmount": "100000000",
-                "recipientCooldownSeconds": 43200,
+                "recipientCooldownSeconds": "43200",
                 "clientQuotaMax": 10,
-                "clientQuotaWindowSeconds": 3600,
+                "clientQuotaWindowSeconds": "3600",
                 "maxPendingPerRecipient": 1
             },
             "walletCreate": {

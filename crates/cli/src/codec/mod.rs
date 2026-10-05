@@ -132,7 +132,7 @@ mod tests {
         });
         let bytes = xdrs::cxs::encode(&(selector, 7u64)).unwrap();
         let decoded = decode_abort(&bytes, Some(&metadata)).unwrap();
-        assert_eq!(decoded.value, serde_json::json!(7));
+        assert_eq!(decoded.value, serde_json::json!("7"));
         assert_eq!(decoded.exception_crate, None);
         // An invalid declared payload must not fall back to the ambient registry.
         let malformed = xdrs::cxs::encode(&selector).unwrap();

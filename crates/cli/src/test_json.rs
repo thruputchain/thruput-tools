@@ -10,13 +10,13 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 6;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 7;
 
 /// Schema version for the `groundhog test --workspace --json` payload.
 ///
 /// Bump this when the shape or semantics of `WorkspaceTestReport` change
 /// in a way that could break existing machine consumers.
-pub const WORKSPACE_TEST_JSON_SCHEMA_VERSION: u32 = 1;
+pub const WORKSPACE_TEST_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Structured machine-readable report for `groundhog test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -109,16 +109,28 @@ pub struct IntegrationTestInfo {
 #[serde(rename_all = "camelCase")]
 pub struct TestSummary {
     pub source: TestSummarySource,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub total: u64,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub passed: u64,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub failed: u64,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub ignored: u64,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub measured: u64,
     /// Number of tests libtest reported as filtered out.
     ///
     /// For aggregated multi-run reports this is set to `0`, because
     /// libtest reports the count per invocation and those values do not
     /// compose meaningfully across rerun filters.
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub filtered_out: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<f64>,

@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const EVENTS_LIST_JSON_SCHEMA_VERSION: u32 = 1;
+pub const EVENTS_LIST_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Effective positional topic filters for one event query.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -58,6 +58,8 @@ pub struct DecodedEventReport {
 #[serde(rename_all = "camelCase")]
 pub struct RawEventReport {
     pub tx_hash: TxHash,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub block_height: BlockHeight,
     pub sequence_number: u32,
     pub contract_address: ContractAddress,
@@ -125,6 +127,10 @@ pub struct EventListReport {
     pub spec: Option<EventSpecReport>,
     pub events: Vec<EventListItemReport>,
     pub cursor: PaginationCursor,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }

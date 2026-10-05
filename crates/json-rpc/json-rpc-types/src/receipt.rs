@@ -26,6 +26,8 @@ pub struct TransactionReceipt {
     pub tx_hash: TxHash,
 
     /// Block height at which this transaction was committed.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
 
     /// Execution result.
@@ -58,6 +60,8 @@ pub struct TransactionReceipt {
     ///
     /// Committed by consensus as part of the event log, so every node
     /// reports the same figure.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_used: u64,
 }
 

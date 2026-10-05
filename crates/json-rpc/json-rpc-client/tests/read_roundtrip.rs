@@ -431,7 +431,7 @@ async fn get_block_by_number_roundtrips_a_populated_block() {
     let (client, handle) = start_server(PopulatedReadBackend::default()).await;
 
     let block = client
-        .get_block_by_number(BlockHeight::from(33))
+        .get_block_by_number(BlockHeight::from(33).into())
         .await
         .expect("bug: getBlockByNumber should succeed")
         .expect("bug: scripted block should be present");
@@ -453,7 +453,7 @@ async fn get_block_by_number_roundtrips_a_populated_block() {
     assert_eq!(block.upgrades[1].0, vec![0x02, 0x03]);
 
     let missing = client
-        .get_block_by_number(BlockHeight::from(34))
+        .get_block_by_number(BlockHeight::from(34).into())
         .await
         .expect("bug: getBlockByNumber should succeed");
     assert!(missing.is_none());

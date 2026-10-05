@@ -37,7 +37,7 @@ use crate::{CliError, Print};
 pub const DEFAULT_CALL_GAS_LIMIT: u64 = 25_000_000;
 
 /// Current schema version for `call --json` data payloads.
-pub const CALL_JSON_SCHEMA_VERSION: u32 = 1;
+pub const CALL_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,9 +237,9 @@ pub fn run(
         "txHash": tx_hash_formatted,
         "contract": prepared.contract_address_hex,
         "method": prepared.method,
-        "height": receipt.height,
+        "height": receipt.height.to_string(),
         "status": receipt.status,
-        "gasUsed": receipt.gas_used,
+        "gasUsed": receipt.gas_used.to_string(),
         "statusSummary": status_summary,
         "returnData": receipt.return_data,
         "abortData": receipt.abort_data,
@@ -1364,7 +1364,7 @@ mod tests {
         let bytes = xdrs::cxs::encode(&7_u64).expect("bug: u64 should encode");
         let decoded = decode_return_value(&bytes, Some(&CallMetadata::Local(metadata)))
             .expect("bug: simple return value should decode");
-        assert_eq!(decoded, serde_json::json!(7));
+        assert_eq!(decoded, serde_json::json!("7"));
     }
 
     #[test]

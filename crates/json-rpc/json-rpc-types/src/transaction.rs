@@ -29,7 +29,11 @@ pub enum TransactionStatus {
     /// Included in a committed block. SCP finality = done.
     /// No `block_hash`: SCP instant finality means no forks/reorgs,
     /// so height alone is sufficient for confirmation.
-    Committed { height: BlockHeight },
+    Committed {
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
+        height: BlockHeight,
+    },
 
     /// Scheduler rejected the transaction.
     Invalid { reason: String },
@@ -45,6 +49,8 @@ pub enum TransactionStatus {
     #[serde(rename_all = "camelCase")]
     RecentFailure {
         /// Executing block height of the failed attempt.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
         attempt_height: BlockHeight,
         /// First storage conflict or refused contract attachment.
         cause: TransactionFailureCause,
@@ -304,6 +310,8 @@ pub struct AddressTransactionQuery {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRef {
     pub tx_hash: TxHash,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub height: BlockHeight,
 }
 
@@ -326,10 +334,14 @@ pub struct TransactionRefPage {
     pub cursor: PaginationCursor,
 
     /// Highest block height indexed at response time, not an application checkpoint.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at
     /// response time.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
     pub oldest_block: BlockHeight,
 }
 

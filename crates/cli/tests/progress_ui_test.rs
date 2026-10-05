@@ -527,7 +527,7 @@ fn json_build_report_and_error_contracts_are_preserved() {
         .unwrap();
     assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["data"]["schemaVersion"], 1);
+    assert_eq!(report["data"]["schemaVersion"], 2);
     assert!(
         report["data"]["cargoStdout"]
             .as_str()

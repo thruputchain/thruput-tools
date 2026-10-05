@@ -118,6 +118,8 @@ pub enum AirdropAttemptResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         tx_hash: Option<TxHash>,
         /// Suggested delay before retrying the same logical attempt.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<u64>")]
         retry_after_seconds: u64,
     },
     /// The transaction committed successfully.
@@ -129,6 +131,8 @@ pub enum AirdropAttemptResponse {
         /// Native amount in indivisible units.
         raw_amount: String,
         /// Committed block height.
+        #[serde(with = "crate::decimal")]
+        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
         height: BlockHeight,
         /// Committed execution result.
         status: ExecStatus,

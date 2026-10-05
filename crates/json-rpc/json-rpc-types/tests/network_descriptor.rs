@@ -15,7 +15,7 @@ fn native_descriptor_requires_no_legacy_wallet_metadata() {
     });
     let descriptor: NetworkDescriptor = serde_json::from_value(value).unwrap();
     let value = serde_json::to_value(descriptor).unwrap();
-    assert_eq!(value["schemaVersion"], 4);
+    assert_eq!(value["schemaVersion"], 5);
     assert!(value.get("walletCreate").is_none());
     assert!(value.get("devWallet").is_none());
 }

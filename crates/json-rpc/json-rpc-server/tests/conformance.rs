@@ -704,7 +704,7 @@ async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
 async fn get_block_by_number_is_not_implemented_for_all_shapes() {
     for backend in all_shapes() {
         let err = server(backend)
-            .get_block_by_number(BlockHeight::from(0))
+            .get_block_by_number(BlockHeight::from(0).into())
             .await
             .expect_err("bug: getBlockByNumber is not yet implemented");
 
