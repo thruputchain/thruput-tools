@@ -87,6 +87,44 @@ fn explicit_destination_accepts_empty_directory_and_protects_existing_files() {
 }
 
 #[test]
+fn project_reports_resolve_parent_components_in_destination_paths() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join("workspace");
+    fs::create_dir(&cwd).unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let output = cli(&cwd, &["new", "example", "--path", "../example"]);
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["path"],
+        root.join("example").to_str().unwrap()
+    );
+    assert_eq!(
+        report["data"]["configPath"],
+        root.join("example/groundhog.toml").to_str().unwrap()
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .args(["new", "human", "--path", "../human", "--non-interactive"])
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let destination = root.join("human");
+    assert!(stderr.contains(destination.to_str().unwrap()), "{stderr}");
+    assert!(
+        stderr.contains(destination.join("groundhog.toml").to_str().unwrap()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("cd {}", destination.display())),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("/../"), "{stderr}");
+}
+
+#[test]
 fn missing_name_is_actionable_without_a_terminal() {
     let tmp = TempDir::new().unwrap();
     let output = cli(tmp.path(), &["new"]);

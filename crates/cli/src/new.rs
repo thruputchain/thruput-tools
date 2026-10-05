@@ -1,4 +1,5 @@
 use crate::checks::{Finding, FindingLevel};
+use crate::print::{StepState, Wizard};
 use crate::terminal::render_shell_arg;
 use crate::{CliError, Print};
 use schemars::JsonSchema;
@@ -31,6 +32,15 @@ pub fn run(
     print: &Print,
 ) -> Result<(), CliError> {
     let interactive = name.is_none() && print.can_prompt();
+    let mut wizard = Wizard::new(
+        print,
+        "New Groundhog Project",
+        "Choose a name, destination, and starting template.",
+        ["Project name", "Destination", "Template"],
+    );
+    if interactive {
+        wizard.begin_step(0)?;
+    }
     let name = match name {
         Some(name) => name,
         None if interactive => print.read_line("Project name: ")?.trim().to_owned(),
@@ -43,7 +53,9 @@ pub fn run(
         }
     };
     crate::scaffold::validate_name(&name)?;
+    wizard.finish_step(0, StepState::Done);
     let path = if interactive && path.is_none() {
+        wizard.begin_step(1)?;
         let answer = print.read_line(format_args!("Destination [{name}]: "))?;
         Some(PathBuf::from(if answer.trim().is_empty() {
             &name
@@ -53,7 +65,16 @@ pub fn run(
     } else {
         path
     };
+    wizard.finish_step(1, StepState::Done);
     let template = if interactive && template.is_none() {
+        wizard.begin_step(2)?;
+        print.detail(
+            "minimal",
+            "Empty contract with native and RV32 tests (default)",
+        );
+        for entry in crate::templates::CATALOG {
+            print.detail(entry.id, entry.description);
+        }
         let choices = crate::templates::CATALOG
             .iter()
             .map(|entry| entry.id)
@@ -66,6 +87,12 @@ pub fn run(
     };
     let allow_empty = path.is_some();
     let dir = env::current_dir()?.join(path.unwrap_or_else(|| PathBuf::from(&name)));
+    template
+        .as_deref()
+        .map(crate::templates::lookup)
+        .transpose()?;
+    wizard.finish_step(2, StepState::Done);
+    wizard.finish_view()?;
     create(&dir, &name, template.as_deref(), allow_empty, cmd, print).map(|_| ())
 }
 
@@ -121,6 +148,10 @@ fn create(
         }
         Err(e) => return Err(e.into()),
     }
+    // Resolve against the filesystem after creation so symlinks and `..` retain
+    // their actual meaning while every reported path is absolute and clean.
+    let dir = fs::canonicalize(dir)?;
+    let dir = dir.as_path();
     let task = crate::print::progress::Task::start(print, "Creating project", true);
     task.print()
         .phase(format_args!("Creating project `{name}`"));

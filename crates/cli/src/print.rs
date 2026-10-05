@@ -14,7 +14,7 @@ pub(crate) mod service;
 mod theme;
 mod wizard;
 pub use theme::Outcome;
-pub(crate) use wizard::StepState;
+pub(crate) use wizard::{StepState, Wizard};
 
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
