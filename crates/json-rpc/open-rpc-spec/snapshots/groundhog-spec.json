@@ -219,6 +219,58 @@
       }
     },
     "schemas": {
+      "AddressAuthDataInfo": {
+        "description": "The signer set and weight threshold registered at an address.",
+        "properties": {
+          "requiredWeight": {
+            "description": "Minimum total signer weight required to authorize a transaction\nfrom this address.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signers": {
+            "description": "Occupied key slots in ascending `keyId` order. Unoccupied slots are\nomitted, so `keyId` values need not be contiguous.",
+            "items": {
+              "$ref": "#/components/schemas/AuthSigner"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "signers",
+          "requiredWeight"
+        ],
+        "type": "object"
+      },
+      "AddressAuthDataResponse": {
+        "description": "Authorization configuration registered at one address, read from the\nlatest committed snapshot.",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Address whose authorization configuration was read."
+          },
+          "authData": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AddressAuthDataInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The registered configuration, or `null` when the address has none.\n\nThe two cases take different auth claims. An address without auth\ndata accepts only `kPubkeySignature` claims whose preimage derives\nthe address. An address with auth data accepts only\n`kSourceAddressAuthData` claims, signed by keys listed here."
+          },
+          "height": {
+            "$ref": "#/components/schemas/BlockHeight",
+            "description": "Committed block height used for the read, reported whether or not\nthe address has a registered configuration."
+          }
+        },
+        "required": [
+          "address",
+          "height"
+        ],
+        "type": "object"
+      },
       "AddressTransactionQuery": {
         "additionalProperties": false,
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
@@ -352,6 +404,75 @@
         "required": [
           "recipient",
           "clientNonce"
+        ],
+        "type": "object"
+      },
+      "AuthPublicKey": {
+        "description": "A registered public key, tagged by its cryptographic scheme.",
+        "oneOf": [
+          {
+            "description": "An Ed25519 public key.",
+            "properties": {
+              "key": {
+                "$ref": "#/components/schemas/Hex0x_Ed25519PublicKey",
+                "description": "The 32-byte public key."
+              },
+              "scheme": {
+                "const": "ed25519",
+                "type": "string"
+              }
+            },
+            "required": [
+              "scheme",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A scheme unknown to this server build. The key is registered, but\nthis server cannot describe it.",
+            "properties": {
+              "scheme": {
+                "const": "unknown",
+                "type": "string"
+              },
+              "schemeId": {
+                "description": "Raw protocol scheme id of the unrecognized key.",
+                "format": "int32",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scheme",
+              "schemeId"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AuthSigner": {
+        "description": "One registered key slot.",
+        "properties": {
+          "keyId": {
+            "description": "Slot index. A signature by this key names it as `publicKeyId`, and a\nsource-address claim admits it by setting this bit in `allowedKeys`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxWeight": {
+            "description": "Weight this key contributes toward `requiredWeight`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "publicKey": {
+            "$ref": "#/components/schemas/AuthPublicKey",
+            "description": "The registered public key."
+          }
+        },
+        "required": [
+          "keyId",
+          "publicKey",
+          "maxWeight"
         ],
         "type": "object"
       },
@@ -869,6 +990,10 @@
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
       },
+      "Hex0x_Ed25519PublicKey": {
+        "pattern": "^0x[0-9a-f]{64}$",
+        "type": "string"
+      },
       "Hex0x_SHA256Hash": {
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
@@ -1164,7 +1289,7 @@
             "type": "object"
           },
           {
-            "description": "Authorization data is registered at this address.  Presence\nindicator only — querying signer details requires a contract\ninvocation.",
+            "description": "Authorization data is registered at this address.  Presence\nindicator only; `getAddressAuthData` returns the signer set.",
             "properties": {
               "kind": {
                 "const": "authData",
@@ -1694,7 +1819,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "8.1.0"
+    "version": "8.2.0"
   },
   "methods": [
     {
@@ -2181,6 +2306,47 @@
         }
       },
       "summary": "Native HOG balance for any address at the latest committed snapshot.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_getAddressAuthData",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          }
+        }
+      ],
+      "result": {
+        "name": "AddressAuthDataResponse",
+        "schema": {
+          "$ref": "#/components/schemas/AddressAuthDataResponse"
+        }
+      },
+      "summary": "Authorization configuration (signer keys, their weights, and the required weight) registered at any address, at the latest committed snapshot. `authData` is `null` when the address has none; such an address accepts only pubkey-signature claims, and one with auth data only source-address claims.",
       "tags": [
         {
           "name": "Core API"

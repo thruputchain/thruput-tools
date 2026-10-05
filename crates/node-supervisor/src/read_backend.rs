@@ -13,7 +13,7 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::DbGateway_DbGateway1_Client;
+use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayPayload};
 use groundhog_hogd_backend::{
     db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
     scheduler as shared_scheduler, status as shared_status,
@@ -23,6 +23,7 @@ use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     ContractAddress,
+    address_auth::AddressAuthDataResponse,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -252,6 +253,18 @@ impl ReadPlane for HogdDevStorageReadBackend {
         )
         .await
     }
+
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        within_request_deadline(
+            context,
+            get_address_auth_data_from_db_gateway(&self.db_gateway, address),
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -385,6 +398,22 @@ impl ReadPlane for HogdDevReadBackend {
         )
         .await
     }
+
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        let db_gateway = self
+            .db_gateway
+            .as_ref()
+            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
+        within_request_deadline(
+            context,
+            get_address_auth_data_from_db_gateway(db_gateway, address),
+        )
+        .await
+    }
 }
 
 async fn connect_db_gateway(
@@ -443,18 +472,35 @@ async fn get_native_hog_balance_from_db_gateway(
     get_item_from_db_gateway(db_gateway, address, StorageKey::FreeNativeTokenBalance).await
 }
 
+async fn get_address_auth_data_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+) -> Result<AddressAuthDataResponse, RpcServerError> {
+    let payload = get_payload_from_db_gateway(db_gateway, address, StorageKey::AuthData).await?;
+    let (block_height, item) = shared_db_gateway::single_item(DB_GATEWAY, payload)?;
+    shared_db_gateway::address_auth_data_read(DB_GATEWAY, address, block_height, item)
+}
+
 async fn get_item_from_db_gateway(
     db_gateway: &DbGateway_DbGateway1_Client,
     address: ContractAddress,
     key: StorageKey,
 ) -> Result<StorageItemRead, RpcServerError> {
+    let payload = get_payload_from_db_gateway(db_gateway, address, key).await?;
+    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
+}
+
+async fn get_payload_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+    key: StorageKey,
+) -> Result<DbGatewayPayload, RpcServerError> {
     let batch = shared_db_gateway::single_key_batch(address, key);
     let outer = db_gateway
         .dbgateway_get_items(&batch)
         .await
         .map_err(|source| RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {source}")))?;
-    let payload = shared_db_gateway::payload(DB_GATEWAY, outer)?;
-    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
+    shared_db_gateway::payload(DB_GATEWAY, outer)
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +549,7 @@ mod tests {
     use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
     use groundhog_json_rpc_types::protocol_token::protocol_text;
     use groundhog_json_rpc_types::{
+        address_auth::{AuthPublicKey, AuthSigner},
         events::{EventFilterList, EventQuery},
         hex::Hex0x,
         transaction::{TransactionStatus, TxHash},
@@ -516,12 +563,14 @@ mod tests {
         },
     };
     use groundhog_scp::network::ProtocolCommit as Protocol;
+    use groundhog_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
     use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
     use groundhog_xdr::transaction::{
         Invocation, OptSignedTransactionBatch, SignedTransaction, Transaction,
         TransactionHashBatch, Uniquifier,
     };
     use groundhog_xdr::types::BlockHeight as IdxBlockHeight;
+    use groundhog_xdr::types::{Ed25519PublicKey, PublicKey, StorageKey};
     use groundhog_xdr::{
         PROTOCOL_VERSION,
         event::TxEmittedEvent,
@@ -985,6 +1034,9 @@ mod tests {
         OuterDefault,
         EmptyPayload,
         ItemDefaultError,
+        /// Answers a lone `AuthData` key with registered auth data; any other
+        /// key is a per-item failure, so a misrouted read cannot pass.
+        AuthData,
     }
 
     struct FakeDbGateway {
@@ -1002,9 +1054,29 @@ mod tests {
 
         async fn dbgateway_get_items(
             &self,
-            _arg0: AddressAndKeyBatch,
+            arg0: AddressAndKeyBatch,
         ) -> Result<DbGatewayResult, ProgramError> {
             match self.mode {
+                FakeDbGatewayMode::AuthData => {
+                    let item = match arg0.0.as_slice() {
+                        [request] if request.key == StorageKey::AuthData => {
+                            DbGatewayItemResult::kRPCNone {
+                                item: WireStorageItem::kItemTypeAuthData {
+                                    auth_data: canned_auth_data(),
+                                },
+                            }
+                        }
+                        _ => DbGatewayItemResult::Default {
+                            error: RPCError::kRPCUnrecoverable.0,
+                        },
+                    };
+                    Ok(DbGatewayResult::kRPCNone {
+                        payload: DbGatewayPayload {
+                            block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
+                            items: VecM(vec![item]),
+                        },
+                    })
+                }
                 FakeDbGatewayMode::Found => Ok(DbGatewayResult::kRPCNone {
                     payload: DbGatewayPayload {
                         block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
@@ -1442,6 +1514,91 @@ mod tests {
         assert!(
             matches!(result, Err(RpcServerError::BackendUnavailable(_))),
             "per-item non-not-found Default should be BackendUnavailable, got {result:?}"
+        );
+    }
+
+    fn canned_auth_data() -> AddressAuthData {
+        let mut public_keys: [PublicKeyConfigOpt; 21] =
+            std::array::from_fn(|_| PublicKeyConfigOpt::new(None));
+        public_keys[1] = PublicKeyConfigOpt::new(Some(PublicKeyConfig {
+            key: PublicKey::Ed25519 {
+                ed25519: Ed25519PublicKey::from([0x5a; 32]),
+            },
+            max_weight: 2,
+        }));
+        AddressAuthData {
+            public_keys,
+            required_weight: 2,
+            last_written_height: IdxBlockHeight::from(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_address_auth_data_projects_registered_signers_at_snapshot_height() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::AuthData).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let read = backend
+            .read_address_auth_data(RpcRequestContext::unbounded(), canned_storage_address())
+            .await
+            .expect("bug: auth data read should succeed");
+
+        // Assert
+        assert_eq!(read.address, canned_storage_address());
+        assert_eq!(*read.height, CANNED_STORAGE_HEIGHT);
+        let auth_data = read.auth_data.expect("bug: canned address has auth data");
+        assert_eq!(auth_data.required_weight, 2);
+        assert_eq!(
+            auth_data.signers,
+            vec![AuthSigner {
+                key_id: 1,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(Ed25519PublicKey::from([0x5a; 32])),
+                },
+                max_weight: 2,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_address_auth_data_not_found_is_unconfigured_at_snapshot_height() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::NotFound).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let read = backend
+            .read_address_auth_data(RpcRequestContext::unbounded(), canned_storage_address())
+            .await
+            .expect("bug: an address without auth data is a successful read");
+
+        // Assert
+        assert_eq!(*read.height, CANNED_STORAGE_HEIGHT);
+        assert!(read.auth_data.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_address_auth_data_without_gateway_surfaces_backend_unavailable() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        // Act
+        let result = backend
+            .read_address_auth_data(RpcRequestContext::unbounded(), canned_storage_address())
+            .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "missing DbGateway should be BackendUnavailable, got {result:?}"
         );
     }
 

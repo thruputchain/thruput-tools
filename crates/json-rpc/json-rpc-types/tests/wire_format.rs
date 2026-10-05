@@ -1,5 +1,8 @@
 use serde_json::Value;
 
+use groundhog_json_rpc_types::address_auth::{
+    AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey,
+};
 use groundhog_json_rpc_types::airdrop::{AirdropRequest, ClientNonce};
 use groundhog_json_rpc_types::block::{
     BlockInfo, BlockProjectionError, ChainTip, consensus_value_hash,
@@ -22,10 +25,11 @@ use groundhog_json_rpc_types::transaction::{
 use groundhog_json_rpc_types::view::{RootInvocationOutput, ViewRequest, ViewResponse};
 use groundhog_scheduler::{ConsensusValue, ProposalTxsHash};
 use groundhog_xdr::{
+    address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt},
     header::ProposalHeader,
     types::{
-        ConfigHash, ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
-        SHA256Hash as XdrHash, StorageShortHash, TimePoint, TxsHash,
+        ConfigHash, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint, NetworkHash,
+        Protocol, PublicKey, SHA256Hash as XdrHash, StorageShortHash, TimePoint, TxsHash,
     },
     validator::ValidatorID,
 };
@@ -581,4 +585,72 @@ fn storage_item_wire_format_uses_camel_case_variant_fields() {
     assert_eq!(unknown_json["kind"], "unknown");
     assert_eq!(unknown_json["typeId"], 9);
     assert!(unknown_json.get("type_id").is_none());
+}
+
+#[test]
+fn address_auth_data_wire_format_lists_occupied_slots_by_key_id() {
+    let mut public_keys: [PublicKeyConfigOpt; 21] =
+        std::array::from_fn(|_| PublicKeyConfigOpt::new(None));
+    for (slot, byte, weight) in [(0usize, 0xaa, 1), (3, 0xbb, 2)] {
+        public_keys[slot] = PublicKeyConfigOpt::new(Some(PublicKeyConfig {
+            key: PublicKey::Ed25519 {
+                ed25519: Ed25519PublicKey::from([byte; 32]),
+            },
+            max_weight: weight,
+        }));
+    }
+    let auth_data = AddressAuthData {
+        public_keys,
+        required_weight: 2,
+        last_written_height: BlockHeight::from(5i64),
+    };
+    let response = AddressAuthDataResponse {
+        address: zero_address(),
+        height: BlockHeight::from(9i64),
+        auth_data: Some(AddressAuthDataInfo::from(&auth_data)),
+    };
+
+    let v: Value = serde_json::to_value(&response).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({
+            "address": format!("0x{}", "00".repeat(32)),
+            "height": 9,
+            "authData": {
+                "signers": [
+                    {
+                        "keyId": 0,
+                        "publicKey": { "scheme": "ed25519", "key": format!("0x{}", "aa".repeat(32)) },
+                        "maxWeight": 1,
+                    },
+                    {
+                        "keyId": 3,
+                        "publicKey": { "scheme": "ed25519", "key": format!("0x{}", "bb".repeat(32)) },
+                        "maxWeight": 2,
+                    },
+                ],
+                "requiredWeight": 2,
+            },
+        })
+    );
+    let decoded: AddressAuthDataResponse = serde_json::from_value(v).unwrap();
+    assert_eq!(decoded, response);
+}
+
+#[test]
+fn address_auth_data_wire_format_reports_absent_configuration_as_null() {
+    let response = AddressAuthDataResponse {
+        address: zero_address(),
+        height: BlockHeight::from(9i64),
+        auth_data: None,
+    };
+    let v: Value = serde_json::to_value(&response).unwrap();
+    assert!(v["authData"].is_null());
+    assert_eq!(v["height"], 9);
+
+    let unknown = AuthPublicKey::Unknown { scheme_id: 7 };
+    assert_eq!(
+        serde_json::to_value(&unknown).unwrap(),
+        serde_json::json!({ "scheme": "unknown", "schemeId": 7 })
+    );
 }

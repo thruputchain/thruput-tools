@@ -183,8 +183,9 @@ pub struct GatewayContext {
     /// per-call overhead at high load.
     pub batch_submitter: BatchSubmitter,
 
-    /// Adaptive batching reader for `getStorageAt`. Accumulates
-    /// concurrent (`address`, `key`) reads and packs them into one
+    /// Adaptive batching reader for `DbGateway1` reads (`getStorageAt`,
+    /// `getBalance`, and `getAddressAuthData`). Accumulates concurrent
+    /// (`address`, `key`) reads and packs them into one
     /// `dbgateway_get_items` RPC per fired batch.
     pub storage_batcher: StorageReadBatcher,
 

@@ -11,6 +11,7 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     airdrop::{AirdropAttemptResponse, AirdropRequest},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
@@ -30,7 +31,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "8.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "8.2.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -135,6 +136,16 @@ pub trait GroundhogApi {
     /// Native HOG balance for any address at the latest committed snapshot.
     #[method(name = "getBalance")]
     async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse>;
+
+    /// Authorization configuration (signer keys, their weights, and the required
+    /// weight) registered at any address, at the latest committed snapshot.
+    /// `authData` is `null` when the address has none; such an address accepts only
+    /// pubkey-signature claims, and one with auth data only source-address claims.
+    #[method(name = "getAddressAuthData")]
+    async fn get_address_auth_data(
+        &self,
+        address: ContractAddress,
+    ) -> RpcResult<AddressAuthDataResponse>;
 
     /// Execute a sandboxed contract simulation against the latest committed state.
     /// There is no way to select a past height; `height` in the response names the

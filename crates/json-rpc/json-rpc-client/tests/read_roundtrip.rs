@@ -12,6 +12,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
+    address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
     block::{BlockInfo, ChainTip},
     events::{
         BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventPage,
@@ -227,6 +228,40 @@ impl ReadPlane for PopulatedReadBackend {
             }),
         })
     }
+
+    async fn read_address_auth_data(
+        &self,
+        _context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        Ok(AddressAuthDataResponse {
+            address,
+            height: BlockHeight::from(23),
+            auth_data: Some(canned_auth_data()),
+        })
+    }
+}
+
+fn canned_auth_data() -> AddressAuthDataInfo {
+    AddressAuthDataInfo {
+        signers: vec![
+            AuthSigner {
+                key_id: 0,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x31; 32])),
+                },
+                max_weight: 1,
+            },
+            AuthSigner {
+                key_id: 4,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x32; 32])),
+                },
+                max_weight: 2,
+            },
+        ],
+        required_weight: 3,
+    }
 }
 
 #[async_trait::async_trait]
@@ -383,6 +418,23 @@ async fn get_balance_roundtrips_a_decimal_string_balance() {
     // i128-scale value: must survive as a decimal string, not a JSON number.
     assert_eq!(balance.raw_balance, "123456789012345678901234567890");
     assert_eq!(*balance.height, 22);
+
+    stop(handle).await;
+}
+
+#[tokio::test]
+async fn get_address_auth_data_roundtrips_signers_and_threshold() {
+    let (client, handle) = start_server(PopulatedReadBackend::default()).await;
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0x65; 32]));
+
+    let read = client
+        .get_address_auth_data(address)
+        .await
+        .expect("bug: getAddressAuthData should succeed");
+
+    assert_eq!(read.address, address);
+    assert_eq!(*read.height, 23);
+    assert_eq!(read.auth_data, Some(canned_auth_data()));
 
     stop(handle).await;
 }

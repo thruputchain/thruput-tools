@@ -328,8 +328,9 @@ pub struct GatewayConfig {
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
-    /// Serves `groundhog_getStorageAt`. Optional: when absent the
-    /// gateway starts in degraded mode and `getStorageAt` returns
+    /// Serves `groundhog_getStorageAt`, `groundhog_getBalance`, and
+    /// `groundhog_getAddressAuthData`. Optional: when absent the gateway
+    /// starts in degraded mode and those methods return
     /// `BackendUnavailable`.
     pub db_gateway_address: Option<String>,
 
@@ -373,7 +374,8 @@ pub struct GatewayConfig {
     /// Adaptive batching for `sendRawTransaction`.
     pub batch: AdaptiveBatchConfig,
 
-    /// Adaptive batching for `getStorageAt`.
+    /// Adaptive batching for `DbGateway1` reads (`getStorageAt`,
+    /// `getBalance`, and `getAddressAuthData`).
     pub storage: AdaptiveBatchConfig,
 
     /// Request coalescing for `chainTip`.

@@ -28,6 +28,7 @@
 //! - `ReadPlane::contract_events`             → indexer
 //! - `ReadPlane::get_storage_at`              → `DbGateway1` contract-data reads
 //! - `ReadPlane::read_native_hog_balance`     → `DbGateway1` free native-token balance reads
+//! - `ReadPlane::read_address_auth_data`      → `DbGateway1` address auth-data reads
 //! - `ViewPlane::view`                        → view executor service (TBD)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
@@ -66,6 +67,7 @@
 use async_trait::async_trait;
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
@@ -277,6 +279,16 @@ pub trait ReadPlane: Send + Sync + 'static {
         context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError>;
+
+    /// Return the latest committed authorization configuration for one
+    /// address. This reads hogd's `AuthData` key, not contract storage. An
+    /// address with no registered configuration is a successful read with
+    /// `auth_data: None`, still labeled with the snapshot height.
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError>;
 }
 
 /// Backend plane for sandboxed contract simulation.

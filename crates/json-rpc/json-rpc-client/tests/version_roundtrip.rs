@@ -6,6 +6,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     block::BlockInfo,
     events::{EventPage, EventQuery},
     network_info::NetworkInfo,
@@ -108,6 +109,14 @@ impl ReadPlane for VersionOnlyBackend {
         _address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBalance".into()))
+    }
+
+    async fn read_address_auth_data(
+        &self,
+        _context: RpcRequestContext,
+        _address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getAddressAuthData".into()))
     }
 }
 

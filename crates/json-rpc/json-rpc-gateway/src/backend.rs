@@ -7,6 +7,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     block::BlockInfo,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
@@ -186,6 +187,22 @@ impl ReadPlane for GatewayBackend {
             self.ctx
                 .storage_batcher
                 .read_native_hog_balance(context, address),
+        )
+        .await
+    }
+
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            self.ctx
+                .storage_batcher
+                .read_address_auth_data(context, address),
         )
         .await
     }
