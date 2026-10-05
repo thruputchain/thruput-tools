@@ -289,8 +289,9 @@ pub trait ViewPlane: Send + Sync + 'static {
     /// here are reserved for transport, backend availability, and
     /// request-level failures.
     ///
-    /// `gas_limit` is the server-configured execution cap to put on the
-    /// root view invocation. It is not user supplied and no gas is charged.
+    /// `gas_limit` is the validated budget to put on the root view
+    /// invocation: the request's `gasLimit`, or the server's `view_gas_limit`
+    /// when the request names none. No gas is charged.
     ///
     /// Backends should override this once they have a stable hogd view
     /// execution service. The default keeps the public method available
@@ -302,26 +303,5 @@ pub trait ViewPlane: Send + Sync + 'static {
         _gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("view".into()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::RpcRequestContext;
-
-    #[test]
-    fn cap_from_start_does_not_reset_after_elapsed_work() {
-        let context = RpcRequestContext::new(Some(Duration::from_secs(10)));
-        let expected = context
-            .started_at()
-            .checked_add(Duration::from_secs(5))
-            .expect("test deadline should fit");
-
-        let capped = context.capped_from_start(Duration::from_secs(5));
-
-        assert_eq!(capped.started_at(), context.started_at());
-        assert_eq!(capped.deadline(), Some(expected));
     }
 }

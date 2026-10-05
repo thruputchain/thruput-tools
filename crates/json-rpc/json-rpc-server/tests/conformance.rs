@@ -5,7 +5,7 @@
 //! gateway and the local hogd-dev supervisor.
 //!
 //! Real backend adapters live in `crates/json-rpc/json-rpc-gateway` and
-//! `crates/dev/node-supervisor`, both of which depend on this crate.
+//! `crates/node-supervisor`, both of which depend on this crate.
 //! To stay within the public surface
 //! and avoid circular deps, these tests use a programmable mock that can
 //! be configured to mimic each backend shape.
@@ -235,6 +235,7 @@ impl ViewPlane for ScriptedViewBackend {
             output: self.output.clone(),
             events: vec![],
             height: BlockHeight::from(42),
+            gas_used: 0,
         })
     }
 }
@@ -417,6 +418,35 @@ async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes
 }
 
 #[tokio::test]
+async fn event_filters_require_a_named_contract_for_all_shapes() {
+    for backend in all_shapes() {
+        let calls = backend.contract_events_calls.clone();
+        let svc = server(backend);
+        let mut empty = simple_query();
+        empty.filters.0.0.clear();
+        let mut no_contracts = simple_query();
+        no_contracts.filters.0.0[0].contract_addresses.0.0.clear();
+        let mut mixed = simple_query();
+        mixed.filters.0.0.push(no_contracts.filters.0.0[0].clone());
+        for query in [empty, no_contracts, mixed] {
+            let error = svc
+                .get_events(query)
+                .await
+                .expect_err("bug: empty event filters must be rejected");
+            assert_eq!(error.code(), codes::INVALID_PARAMS);
+        }
+        assert_eq!(*calls.lock().await, 0);
+        // No topic constraints is a valid wildcard within a named contract.
+        let page = svc
+            .get_events(simple_query())
+            .await
+            .expect("bug: a named contract with wildcard topics must be accepted");
+        assert!(page.events.is_empty());
+        assert_eq!(*calls.lock().await, 1);
+    }
+}
+
+#[tokio::test]
 async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
     for backend in all_shapes() {
         let calls = backend.contract_events_calls.clone();
@@ -552,6 +582,7 @@ async fn view_entrypoint_length_validated_for_all_shapes() {
                 entrypoint: HexBytes(vec![0u8; entrypoint_len]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             };
 
             let err = svc
@@ -573,6 +604,7 @@ async fn view_calldata_length_validated_for_all_shapes() {
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
             caller: None,
+            gas_limit: None,
         };
 
         let err = svc
@@ -593,6 +625,7 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
+            gas_limit: None,
         };
 
         let err = svc
@@ -624,6 +657,7 @@ async fn view_success_outputs_round_trip_for_all_shapes() {
                 entrypoint: HexBytes(vec![0u8; 8]),
                 calldata: HexBytes(vec![]),
                 caller: None,
+                gas_limit: None,
             };
 
             let response = svc
@@ -650,6 +684,19 @@ async fn chain_tip_dispatches_through_chain_plane_for_all_shapes() {
         // value confirms dispatch landed in the configured plane rather
         // than short-circuiting in the shared server.
         assert_eq!(*tip.height, 0);
+    }
+}
+
+#[tokio::test]
+async fn chain_config_dispatches_through_chain_plane_for_all_shapes() {
+    for backend in all_shapes() {
+        let config = server(backend)
+            .chain_config()
+            .await
+            .expect("bug: chain_config must dispatch through chain plane");
+
+        // The mock's config states nothing, so no parameters come back.
+        assert_eq!(config.max_contract_size_bytes, None);
     }
 }
 

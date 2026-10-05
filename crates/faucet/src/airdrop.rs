@@ -1,3 +1,4 @@
+use groundhog_json_rpc_types::hex::{decode_fixed_hex, prefixed_hex};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -17,9 +18,12 @@ use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
+use groundhog_signing::default_wallet::{
+    BuildDefaultWalletCallTransaction, build_default_wallet_call_transaction,
+};
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
+    DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
+    sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -90,9 +94,9 @@ impl AirdropService {
         }
         let key = AirdropAttemptKey {
             network_id: request.network_id.clone(),
-            genesis_hash: hex_string(request.genesis_hash.0),
-            recipient: hex_string(request.recipient.0),
-            client_nonce: hex_encode(request.client_nonce.as_bytes()),
+            genesis_hash: prefixed_hex(request.genesis_hash.0),
+            recipient: prefixed_hex(request.recipient.0),
+            client_nonce: hex::encode(request.client_nonce.as_bytes()),
         };
         let now = SystemTime::now();
         if let Err(error) = self.policy_store.expire(now) {
@@ -126,7 +130,7 @@ impl AirdropService {
         };
         let quota_checks = [
             QuotaCheck {
-                key: QuotaKey::AirdropRecipient(hex_string(request.recipient.0)),
+                key: QuotaKey::AirdropRecipient(prefixed_hex(request.recipient.0)),
                 max: 1,
                 window: Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
             },
@@ -384,7 +388,7 @@ impl AirdropService {
             Ok(accepted) => {
                 let amount_matches =
                     accepted.raw_amount.parse::<u128>().ok() == Some(self.submitter.raw_amount());
-                attempt.tx_hash = Some(hex_string(accepted.tx_hash.0.0));
+                attempt.tx_hash = Some(prefixed_hex(accepted.tx_hash.0.0));
                 // An accepted transaction must not age out while its receipt is unresolved;
                 // otherwise the same idempotency key could submit a second transaction.
                 attempt.expires_at = None;
@@ -772,8 +776,7 @@ fn policy_store_error_response(error: &PolicyStoreError) -> Response {
             "airdrop_already_pending",
             "airdrop attempt is already in progress",
         ),
-        PolicyStoreError::AttemptNotFound
-        | PolicyStoreError::InvalidWalletCreateTransition { .. } => error_response(
+        PolicyStoreError::AttemptNotFound => error_response(
             StatusCode::CONFLICT,
             "airdrop_attempt_conflict",
             "airdrop attempt state changed while processing",
@@ -801,23 +804,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
     }
 }
 
-fn hex_string(bytes: impl AsRef<[u8]>) -> String {
-    format!("0x{}", hex_encode(bytes.as_ref()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
-fn parse_tx_hash(value: &str) -> Option<TxHash> {
-    let value = value.strip_prefix("0x").unwrap_or(value);
-    let bytes: [u8; 32] = hex::decode(value).ok()?.try_into().ok()?;
+pub(crate) fn parse_tx_hash(value: &str) -> Option<TxHash> {
+    let bytes = decode_fixed_hex(value).ok()?;
     Some(TxHash(SHA256Hash::from(
         groundhog_xdr::types::SHA256Hash::from(bytes),
     )))
@@ -926,8 +914,6 @@ impl AirdropSubmitError {
 pub struct AirdropRuntimeConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: u128,
-    /// Faucet wallet `doAction` entrypoint.
-    pub wallet_do_action_entrypoint: ContractEntrypointID,
     /// 32-byte faucet signing secret key.
     pub faucet_secret_key: Zeroizing<[u8; 32]>,
 }
@@ -936,10 +922,6 @@ impl std::fmt::Debug for AirdropRuntimeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AirdropRuntimeConfig")
             .field("raw_amount", &self.raw_amount)
-            .field(
-                "wallet_do_action_entrypoint",
-                &self.wallet_do_action_entrypoint,
-            )
             .field("faucet_secret_key", &format_args!("<redacted>"))
             .finish()
     }
@@ -951,16 +933,18 @@ pub enum AirdropRuntimeConfigError {
     /// The configured raw airdrop amount was missing, invalid, or zero.
     #[error("airdrop raw amount must be greater than zero")]
     EmptyAmount,
-    /// The configured wallet `doAction` entrypoint was not 8 bytes.
-    #[error("airdrop wallet doAction entrypoint must be 8 bytes, got {0}")]
-    InvalidDoActionEntrypoint(usize),
+    /// The native HOG transfer selector must be eight bytes.
+    #[error("native HOG transfer entrypoint must be 8 bytes, got {0}")]
+    InvalidTransferEntrypoint(usize),
+    /// The signing key must control the advertised native faucet account.
+    #[error("faucet wallet address does not match the signing key nonce-zero pubkey account")]
+    FaucetAddressMismatch,
 }
 
 impl AirdropRuntimeConfig {
     /// Validate wire-format config values into runtime airdrop config.
     pub fn from_wire(
         raw_amount: &str,
-        wallet_do_action_entrypoint: HexBytes,
         faucet_secret_key: Zeroizing<[u8; 32]>,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         let raw_amount = raw_amount
@@ -968,14 +952,8 @@ impl AirdropRuntimeConfig {
             .ok()
             .filter(|amount| *amount > 0)
             .ok_or(AirdropRuntimeConfigError::EmptyAmount)?;
-        let entrypoint_len = wallet_do_action_entrypoint.0.len();
-        let wallet_do_action_entrypoint: [u8; 8] = wallet_do_action_entrypoint
-            .0
-            .try_into()
-            .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(entrypoint_len))?;
         Ok(Self {
             raw_amount,
-            wallet_do_action_entrypoint: ContractEntrypointID::from(wallet_do_action_entrypoint),
             faucet_secret_key,
         })
     }
@@ -985,9 +963,8 @@ pub struct RpcAirdropSubmitter {
     rpc_url: String,
     raw_amount: u128,
     network_hash: groundhog_xdr::types::NetworkHash,
-    faucet_wallet_address: groundhog_xdr::types::ContractAddress,
+    faucet_account: PubkeyAccount,
     faucet_signer: LocalSigner,
-    wallet_do_action_entrypoint: ContractEntrypointID,
     hog_token_address: groundhog_xdr::types::ContractAddress,
     hog_transfer_entrypoint: ContractEntrypointID,
 }
@@ -999,13 +976,18 @@ impl RpcAirdropSubmitter {
         config: &AirdropRuntimeConfig,
         network_hash: groundhog_xdr::types::NetworkHash,
     ) -> Result<Self, AirdropRuntimeConfigError> {
+        let faucet_signer = LocalSigner::from_secret_key(*config.faucet_secret_key);
+        let faucet_account =
+            PubkeyAccount::from_public_key_bytes(faucet_signer.verifying_key_bytes(), 0);
+        if faucet_account.address() != descriptor.faucet.wallet_address.0 {
+            return Err(AirdropRuntimeConfigError::FaucetAddressMismatch);
+        }
         Ok(Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
             raw_amount: config.raw_amount,
             network_hash,
-            faucet_wallet_address: descriptor.faucet.wallet_address.0,
-            faucet_signer: LocalSigner::from_secret_key(*config.faucet_secret_key),
-            wallet_do_action_entrypoint: config.wallet_do_action_entrypoint,
+            faucet_account,
+            faucet_signer,
             hog_token_address: descriptor.native_hog.token_address.0,
             hog_transfer_entrypoint: ContractEntrypointID::from(entrypoint_bytes(
                 &descriptor.native_hog.transfer_entrypoint,
@@ -1039,9 +1021,8 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
         let nonce = next_nonce()
             .map_err(|error| AirdropSubmitError::BuildTransaction(error.to_string()))?;
-        let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
-            wallet_address: self.faucet_wallet_address,
-            wallet_entrypoint: self.wallet_do_action_entrypoint,
+        let tx = build_default_wallet_call_transaction(BuildDefaultWalletCallTransaction {
+            account: &self.faucet_account,
             target_address: self.hog_token_address,
             target_entrypoint: self.hog_transfer_entrypoint,
             target_calldata: transfer_calldata.as_slice(),
@@ -1081,16 +1062,16 @@ fn entrypoint_bytes(entrypoint: &HexBytes) -> Result<[u8; 8], AirdropRuntimeConf
     let len = entrypoint.0.len();
     entrypoint
         .0
-        .clone()
+        .as_slice()
         .try_into()
-        .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(len))
+        .map_err(|_| AirdropRuntimeConfigError::InvalidTransferEntrypoint(len))
 }
 
 fn encode_transfer_calldata(
     recipient: &groundhog_xdr::types::ContractAddress,
     raw_amount: u128,
 ) -> Result<Vec<u8>, AirdropSubmitError> {
-    xdrs::cxs::encode(&(recipient, raw_amount))
+    groundhog_signing::native_hog_transfer_calldata(recipient, raw_amount)
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
 }
 
@@ -1098,7 +1079,6 @@ fn encode_transfer_calldata(
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use groundhog_json_rpc_types::hex::HexBytes;
     use serde_json::json;
     use zeroize::Zeroizing;
 
@@ -1120,12 +1100,8 @@ mod tests {
 
     #[test]
     fn airdrop_runtime_config_debug_redacts_faucet_secret_key() {
-        let config = AirdropRuntimeConfig::from_wire(
-            "100000000",
-            HexBytes(vec![0x64; 8]),
-            Zeroizing::new([0xAB; 32]),
-        )
-        .expect("bug: runtime config should validate");
+        let config = AirdropRuntimeConfig::from_wire("100000000", Zeroizing::new([0xAB; 32]))
+            .expect("bug: runtime config should validate");
 
         let debug = format!("{config:?}");
 

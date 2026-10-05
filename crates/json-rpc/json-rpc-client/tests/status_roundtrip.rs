@@ -61,12 +61,14 @@ impl RecentFailureBackend {
 fn canned_recent_failure() -> TransactionStatus {
     TransactionStatus::RecentFailure {
         attempt_height: BlockHeight::from(ATTEMPT_HEIGHT),
-        conflict: ConflictDiagnostic {
-            address: Hex0x(groundhog_xdr::types::ContractAddress::from(
-                CONFLICT_ADDRESS,
-            )),
-            key: HexBytes(CONFLICT_KEY.to_vec()),
-            code: ConflictCode::ExclusiveLock,
+        cause: groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+            conflict: ConflictDiagnostic {
+                address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+                    CONFLICT_ADDRESS,
+                )),
+                key: HexBytes(CONFLICT_KEY.to_vec()),
+                code: ConflictCode::ExclusiveLock,
+            },
         },
     }
 }
@@ -122,6 +124,7 @@ impl ReadPlane for RecentFailureBackend {
                 events: Vec::new(),
                 return_data: None,
                 abort_data: None,
+                gas_used: 1_500,
             }));
         }
         Ok(None)
@@ -204,7 +207,10 @@ async fn receipt_polling_surfaces_recent_failure_status() {
             status:
                 TransactionStatus::RecentFailure {
                     attempt_height,
-                    conflict,
+                    cause:
+                        groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict {
+                            conflict,
+                        },
                 },
         } => {
             assert_eq!(actual_hash, tx_hash);
@@ -284,7 +290,8 @@ async fn recent_failure_status_roundtrips_through_client() {
     match status {
         TransactionStatus::RecentFailure {
             attempt_height,
-            conflict,
+            cause:
+                groundhog_json_rpc_types::transaction::TransactionFailureCause::DbConflict { conflict },
         } => {
             assert_eq!(*attempt_height, ATTEMPT_HEIGHT);
             assert_eq!(

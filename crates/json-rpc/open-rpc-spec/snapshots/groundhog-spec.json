@@ -220,6 +220,7 @@
     },
     "schemas": {
       "AddressTransactionQuery": {
+        "additionalProperties": false,
         "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
         "properties": {
           "address": {
@@ -230,7 +231,7 @@
           },
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
-            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
+            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off. `order` and `anchor` remain required request fields,\nbut the cursor supplies continuation state. Keep the same address.\nA cursor continues one historical walk, not blocks added after it began."
           },
           "limit": {
             "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
@@ -336,6 +337,7 @@
         ]
       },
       "AirdropRequest": {
+        "additionalProperties": false,
         "description": "Public parameters for `groundhog_requestAirdrop`.",
         "properties": {
           "clientNonce": {
@@ -380,6 +382,7 @@
         "description": "Where to begin iteration on the initial call.",
         "oneOf": [
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atBeginning",
@@ -392,6 +395,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "kind": {
                 "const": "atEnd",
@@ -404,6 +408,7 @@
             "type": "object"
           },
           {
+            "additionalProperties": false,
             "properties": {
               "height": {
                 "$ref": "#/components/schemas/BlockHeight"
@@ -556,6 +561,11 @@
             "type": "string"
           },
           {
+            "const": "insufficientFunds",
+            "description": "The native HOG balance at the diagnostic's address cannot cover the\ndebits in this block, or a newly created balance item cannot cover\nits own storage cost. Storage written under a contract's address is\ncharged to that contract's balance, so a deployment reports this at\nthe new contract's address when it holds no HOG.",
+            "type": "string"
+          },
+          {
             "const": "other",
             "description": "Unrecognized conflict code. Check for gateway updates.",
             "type": "string"
@@ -591,7 +601,36 @@
           "$ref": "#/components/schemas/Hex0x_ContractAddress"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
+      },
+      "ContractRejectCode": {
+        "description": "Reason the executor refused a contract attachment.",
+        "oneOf": [
+          {
+            "enum": [
+              "tooMany",
+              "blobTooLarge",
+              "notDeployable",
+              "duplicate",
+              "malformedArtifact",
+              "unsupportedFormat",
+              "unsupportedAbi",
+              "gasScheduleMismatch",
+              "memoryTooLarge",
+              "codeSizeInvalid",
+              "initialMemoryInvalid",
+              "digestMismatch",
+              "invalidProgram"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Unrecognized rejection code from a newer node.",
+            "type": "string"
+          }
+        ]
       },
       "EmittedEvent": {
         "description": "A single emitted event, as stored by the hogd indexer.\n\nThe gateway parses hogd's `TxEmittedEvent.serialized_event` into\nseparate topics and data. The serialized format is:\n`topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.\n`num_topics` (0–3) determines the split point. Max total 1024 bytes.\n\nSee `docs/gateway/system-design.md` \"Event Parsing\" for details.",
@@ -620,6 +659,7 @@
         "type": "object"
       },
       "EventFilter": {
+        "additionalProperties": false,
         "description": "A single event-filter predicate: events must be emitted by one of\n`contractAddresses` AND match the topic constraints. Required\nnon-empty `contractAddresses` — the indexer has no topic-indexed\ncolumn family and can't efficiently serve \"any contract\" scans.\n(When such an index is added, the gateway relaxes the non-empty\ncheck; the wire contract stays the same.)",
         "properties": {
           "contractAddresses": {
@@ -641,10 +681,11 @@
           "$ref": "#/components/schemas/EventFilter"
         },
         "maxItems": 5,
+        "minItems": 1,
         "type": "array"
       },
       "EventPage": {
-        "description": "One page of events returned by `getEvents`.\n\nTo fetch the next page, send the same query back with `cursor`\nset to the value returned here.  An empty `cursor` means the\nstream is exhausted in the requested direction.",
+        "description": "One page of events returned by `getEvents`.\n\nOpaque cursors continue one historical walk; an empty cursor ends it.\nFor restart rules, see the\n[pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).",
         "properties": {
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
@@ -659,7 +700,7 @@
           },
           "latestBlock": {
             "$ref": "#/components/schemas/BlockHeight",
-            "description": "Highest block height the indexer has processed at response time.\nCompare to last-seen heights to decide caught-up state."
+            "description": "Highest block height indexed at response time, not an application checkpoint."
           },
           "oldestBlock": {
             "$ref": "#/components/schemas/BlockHeight",
@@ -675,6 +716,7 @@
         "type": "object"
       },
       "EventQuery": {
+        "additionalProperties": false,
         "description": "`getEvents` request. A candidate event matches the query iff it\nmatches at least one `EventFilter` in `filters` (OR across filters,\nAND within each filter).",
         "properties": {
           "anchor": {
@@ -682,10 +724,11 @@
           },
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
-            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
+            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off. `order` and `anchor` remain required request fields,\nbut the cursor supplies continuation state. Keep the same filters.\nA cursor continues one historical walk, not blocks added after it began."
           },
           "filters": {
-            "$ref": "#/components/schemas/EventFilterList"
+            "$ref": "#/components/schemas/EventFilterList",
+            "description": "At least one filter is required. Empty lists are not all-contract scans."
           },
           "limit": {
             "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
@@ -707,6 +750,7 @@
         "type": "object"
       },
       "EventTopicFilter": {
+        "additionalProperties": false,
         "description": "Positional topic filter. For each topic position (0, 1, 2):\n  - An empty list means \"match anything at this position.\"\n  - A non-empty list means \"match if the event's topic at this\n    position is in this list.\" OR within a position, AND across\n    positions.\n\nPartial match: a filter that specifies only topic0 matches events\nwith more topics. Extra topics on the event past the filter's\nspecified positions are ignored. (This is the ethereum getLogs /\nstellar-rpc post-#358 semantics.)",
         "properties": {
           "topic0": {
@@ -875,6 +919,93 @@
         ],
         "type": "string"
       },
+      "NetworkConfigParams": {
+        "description": "The execution parameters a chain's network config states, flattened\nfrom the list that carries them. Returned by `chainConfig`.\n\nA field is `None`, and absent from the JSON, when the config does not\nstate that parameter; the node alone decides what is then in force.\n`Default` is the reading with nothing stated.",
+        "properties": {
+          "maxAuthTokenDepth": {
+            "description": "Levels of node nesting an auth token may carry.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxBytestringLen": {
+            "description": "Bytes one bytestring storage item may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxContractSizeBytes": {
+            "description": "Bytes one attached contract's code blob may hold. The protocol fixes\n`kDefaultMaxContractSizeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxCrossInvokeDepth": {
+            "description": "Invocation frames one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxNewContractsPerTx": {
+            "description": "Contracts one transaction may attach in `contractsToDeploy`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32CodeBytes": {
+            "description": "Code bytes an RV32 artifact may carry to be attached. The protocol\nfixes `kDefaultMaxRv32CodeBytes` as the value in force when unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxRv32MemoryBytes": {
+            "description": "Guest data memory bytes an RV32 artifact may declare to be attached.\nThe protocol fixes `kDefaultMaxRv32MemoryBytes` as the value in force\nwhen unstated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSavepointDepth": {
+            "description": "Storage savepoints one transaction may have open at once.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxSha256Buffers": {
+            "description": "Concurrently open incremental SHA-256 buffers permitted per\ninvocation frame.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "NetworkInfo": {
         "description": "Immutable protocol identity reported by a JSON-RPC server.",
         "properties": {
@@ -949,6 +1080,49 @@
             "type": "object"
           }
         ]
+      },
+      "ServerLimits": {
+        "description": "Request bounds this JSON-RPC endpoint enforces. Returned by\n`serverLimits`.\n\nThese are operator settings local to the serving endpoint, not consensus\nparameters: two endpoints for the same chain may report different values,\nand a value may change when the endpoint is reconfigured. Consensus-checked\nexecution parameters are reported by `chainConfig`.",
+        "properties": {
+          "maxCursorBytes": {
+            "description": "Longest opaque pagination cursor accepted, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxEventsPerPage": {
+            "description": "Largest `limit` a `getEvents` page may ask for.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxTransactionsPerPage": {
+            "description": "Largest `limit` a `getTransactionsByAddress` page may ask for.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxViewCalldataBytes": {
+            "description": "Largest `view` calldata, in bytes.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxViewGas": {
+            "description": "Largest `gasLimit` a `view` request may ask for, and the budget a view\nruns under when it names none.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "maxViewGas",
+          "maxViewCalldataBytes",
+          "maxEventsPerPage",
+          "maxTransactionsPerPage",
+          "maxCursorBytes"
+        ],
+        "type": "object"
       },
       "StorageItemInfo": {
         "description": "Latest-committed value at a single storage location, presented as\na tagged union so machine consumers can switch on `kind` without\nrunning an XDR codec for the common cases.",
@@ -1122,8 +1296,67 @@
         "maxItems": 16,
         "type": "array"
       },
+      "TransactionFailureCause": {
+        "description": "Why a recent proposal attempt failed. This diagnostic is advisory, not final.",
+        "oneOf": [
+          {
+            "description": "Two-phase commit could not apply a storage delta.",
+            "properties": {
+              "conflict": {
+                "$ref": "#/components/schemas/ConflictDiagnostic"
+              },
+              "kind": {
+                "const": "dbConflict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "conflict"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The executor refused a contract attachment before execution.",
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/ContractRejectCode"
+              },
+              "contractIndex": {
+                "description": "Position in the transaction's contracts-to-deploy list.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "contractRejected",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "contractIndex",
+              "code"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A cause added by a newer server.",
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "TransactionReceipt": {
-        "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasUsed`/`gasPrice`, `transactionIndex`, `logsBloom`.\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
+        "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasPrice`, `transactionIndex`, `logsBloom`.\n- `gasUsed` is committed by consensus as part of the transaction's event\n  log (`TxEventLog.gas_consumed`).\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
         "properties": {
           "abortData": {
             "anyOf": [
@@ -1142,6 +1375,12 @@
               "$ref": "#/components/schemas/EmittedEvent"
             },
             "type": "array"
+          },
+          "gasUsed": {
+            "description": "Gas the transaction consumed: the root frame, every frame it invoked,\nand the pre-execution validation of attached contracts. On an\nout-of-gas fault it equals the transaction's gas limit.\n\nCommitted by consensus as part of the event log, so every node\nreports the same figure.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "height": {
             "$ref": "#/components/schemas/BlockHeight",
@@ -1171,7 +1410,8 @@
           "txHash",
           "height",
           "status",
-          "events"
+          "events",
+          "gasUsed"
         ],
         "type": "object"
       },
@@ -1192,7 +1432,7 @@
         "type": "object"
       },
       "TransactionRefPage": {
-        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.",
+        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.\n\nOpaque cursors continue one historical walk; an empty cursor ends it.\nFor restart rules, see the\n[pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).",
         "properties": {
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
@@ -1200,7 +1440,7 @@
           },
           "latestBlock": {
             "$ref": "#/components/schemas/BlockHeight",
-            "description": "Highest block height the indexer has processed at response time."
+            "description": "Highest block height indexed at response time, not an application checkpoint."
           },
           "oldestBlock": {
             "$ref": "#/components/schemas/BlockHeight",
@@ -1223,7 +1463,7 @@
         "type": "object"
       },
       "TransactionStatus": {
-        "description": "Lightweight status — the result of checking mempool then indexer.\n\nLookup order: scheduler (Pending) → indexer (Committed) → Unknown.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
+        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
         "oneOf": [
           {
             "description": "In the mempool, not yet in a committed block.",
@@ -1273,15 +1513,15 @@
             "type": "object"
           },
           {
-            "description": "No committed record, but the transaction failed\nnondeterministically during two-phase commit within the last few\nblocks and the indexer still holds the diagnostic.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
+            "description": "No committed record, but a recent proposal attempt failed and the\nindexer still holds its diagnostic. This includes storage conflicts\nduring two-phase commit and contract attachments refused before execution.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
             "properties": {
               "attemptHeight": {
                 "$ref": "#/components/schemas/BlockHeight",
                 "description": "Executing block height of the failed attempt."
               },
-              "conflict": {
-                "$ref": "#/components/schemas/ConflictDiagnostic",
-                "description": "First conflicting storage op reported for the failed attempt."
+              "cause": {
+                "$ref": "#/components/schemas/TransactionFailureCause",
+                "description": "First storage conflict or refused contract attachment."
               },
               "status": {
                 "const": "recentFailure",
@@ -1291,7 +1531,7 @@
             "required": [
               "status",
               "attemptHeight",
-              "conflict"
+              "cause"
             ],
             "type": "object"
           },
@@ -1374,6 +1614,7 @@
         "type": "object"
       },
       "ViewRequest": {
+        "additionalProperties": false,
         "description": "Request for sandboxed contract simulation against the latest committed state.",
         "properties": {
           "calldata": {
@@ -1398,6 +1639,15 @@
           "entrypoint": {
             "$ref": "#/components/schemas/HexBytes",
             "description": "Contract entrypoint id. Must be exactly 8 bytes."
+          },
+          "gasLimit": {
+            "description": "Optional gas budget for the root invocation. Absent selects the\nserver's `maxViewGas` (see `serverLimits`); a value above it, or zero,\nis rejected as an invalid parameter. No gas is charged for a view.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1417,6 +1667,12 @@
             },
             "type": "array"
           },
+          "gasUsed": {
+            "description": "Gas the invocation consumed: the root frame and every frame it\ninvoked. On an out-of-gas fault it equals the gas limit the view ran\nwith. Matches the `gasUsed` a transaction with no attached contracts\nmaking the same invocation would report; out-of-gas is checked\nstrictly, so size a transaction's limit above this figure.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "height": {
             "$ref": "#/components/schemas/BlockHeight",
             "description": "Block height of the committed snapshot used for the view."
@@ -1429,7 +1685,8 @@
         "required": [
           "output",
           "events",
-          "height"
+          "height",
+          "gasUsed"
         ],
         "type": "object"
       }
@@ -1437,7 +1694,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "5.2.0"
+    "version": "8.1.0"
   },
   "methods": [
     {
@@ -1575,7 +1832,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check (mempool -> indexer -> unknown). `unknown` is only returned after both the mempool and the indexer answered without a match; if the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. The indexer is asked first, so `committed` wins; a mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown` is returned only after both backends answered without a match. If the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
       "tags": [
         {
           "name": "Core API"
@@ -1606,6 +1863,53 @@
         }
       },
       "summary": "Current chain tip: height, block hash, and the protocol it executed under.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_chainConfig",
+      "params": [],
+      "result": {
+        "name": "NetworkConfigParams",
+        "schema": {
+          "$ref": "#/components/schemas/NetworkConfigParams"
+        }
+      },
+      "summary": "The execution parameters the chain's network config states. Only stated parameters are reported; an unstated one is absent. Served from a tip reading refreshed at most once per cache window. Fails with `BackendUnavailable` when no reading is available or the config version is unreadable.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [],
+      "name": "groundhog_serverLimits",
+      "params": [],
+      "result": {
+        "name": "ServerLimits",
+        "schema": {
+          "$ref": "#/components/schemas/ServerLimits"
+        }
+      },
+      "summary": "Request bounds this endpoint enforces, such as the `view` gas ceiling. These are local operator settings, not consensus parameters: they can differ between endpoints serving the same chain. Answered without contacting a backend.",
       "tags": [
         {
           "name": "Core API"
@@ -1917,7 +2221,7 @@
           "$ref": "#/components/schemas/ViewResponse"
         }
       },
-      "summary": "Execute a sandboxed contract simulation against committed state.",
+      "summary": "Execute a sandboxed contract simulation against the latest committed state. There is no way to select a past height; `height` in the response names the snapshot the view ran against. `gasLimit` is optional: absent runs under the endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is rejected as an invalid parameter.",
       "tags": [
         {
           "name": "Core API"

@@ -7,7 +7,7 @@ use crate::{BlockHeight, ContractAddress};
 
 /// Request for sandboxed contract simulation against the latest committed state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ViewRequest {
     /// Contract address to execute.
     pub contract: ContractAddress,
@@ -21,6 +21,13 @@ pub struct ViewRequest {
     /// Optional simulated caller address observed by `get_msg_sender`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<ContractAddress>,
+
+    /// Optional gas budget for the root invocation. Absent selects the
+    /// server's `maxViewGas` (see `serverLimits`); a value above it, or zero,
+    /// is rejected as an invalid parameter. No gas is charged for a view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1))]
+    pub gas_limit: Option<u64>,
 }
 
 /// Result of sandboxed contract simulation.
@@ -38,6 +45,13 @@ pub struct ViewResponse {
 
     /// Block height of the committed snapshot used for the view.
     pub height: BlockHeight,
+
+    /// Gas the invocation consumed: the root frame and every frame it
+    /// invoked. On an out-of-gas fault it equals the gas limit the view ran
+    /// with. Matches the `gasUsed` a transaction with no attached contracts
+    /// making the same invocation would report; out-of-gas is checked
+    /// strictly, so size a transaction's limit above this figure.
+    pub gas_used: u64,
 }
 
 /// Root invocation output with raw buffers preserved as hex.

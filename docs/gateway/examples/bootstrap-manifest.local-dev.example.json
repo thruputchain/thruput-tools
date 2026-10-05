@@ -1,11 +1,8 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "groundhog-bootstrap",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",
-  "devWallet": {
-    "profile": "hog-devnode-default"
-  },
   "bootstrapFaucet": {
     "index": 0,
     "initialStorageTokens": "10000000000000"

@@ -22,9 +22,8 @@ workspace = true
 [dependencies]
 groundhog-json-rpc-api = { workspace = true }
 groundhog-json-rpc-types = { workspace = true }
-jsonrpsee = { workspace = true, features = ["client", "macros", "http-client"] }
+jsonrpsee = { workspace = true, features = ["macros", "http-client"] }
 tokio = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

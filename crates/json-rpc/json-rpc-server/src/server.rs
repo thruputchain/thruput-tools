@@ -15,6 +15,7 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     network_info::NetworkInfo,
     receipt::TransactionReceipt,
+    server_limits::ServerLimits,
     state::{StorageItemInfo, StorageItemRead},
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
@@ -59,18 +60,19 @@ pub struct GroundhogRpcServer<S, C, R, V> {
 #[derive(Debug, Clone, Copy)]
 struct TipState {
     height: i64,
-    /// Every field unset when the tip's network config is a version this
-    /// build cannot interpret; chain-configured checks are then skipped.
-    params: NetworkConfigParams,
+    /// `None` when the tip's network config is a version this build cannot
+    /// interpret: chain-configured pre-checks are then skipped and
+    /// `chainConfig` reports the config as unreadable rather than empty.
+    params: Option<NetworkConfigParams>,
 }
 
 impl TipState {
     fn from_reading(reading: &TipReading) -> Self {
         let params = match NetworkConfigParams::from_network_config(&reading.network_config) {
-            Ok(params) => params,
+            Ok(params) => Some(params),
             Err(error) => {
                 tracing::warn!(%error, "tip network config unreadable, chain-configured pre-checks skipped");
-                NetworkConfigParams::default()
+                None
             }
         };
         Self {
@@ -91,15 +93,38 @@ impl TipState {
 /// stale height can only under-detect expiry, and the config changes only
 /// at explicit upgrade blocks. Fetches that overlap may complete out of
 /// order; the reading with the higher tip is the later one and is kept.
-#[derive(Debug, Clone, Default)]
+///
+/// The one time a caller does queue behind a probe is a cold cache: with
+/// no reading at all, a caller inside the window waits for the in-flight
+/// probe instead of answering empty, so concurrent first callers after
+/// startup share one fetch rather than one of them failing.
+#[derive(Debug, Clone)]
 struct TipCache {
     state: Arc<tokio::sync::Mutex<TipCacheState>>,
+    /// Signalled when a probe finishes, whatever its outcome, so cold-cache
+    /// waiters can re-read the state.
+    probe_done: Arc<tokio::sync::watch::Sender<()>>,
+}
+
+impl Default for TipCache {
+    fn default() -> Self {
+        let (probe_done, _) = tokio::sync::watch::channel(());
+        Self {
+            state: Arc::default(),
+            probe_done: Arc::new(probe_done),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct TipCacheState {
     last_attempt: Option<Instant>,
     reading: Option<TipState>,
+    /// A probe claimed the current window and has not reported back. Stays
+    /// set if that probe's request is cancelled mid-flight; cold-cache
+    /// waiters therefore give up after the probe timeout rather than trust
+    /// it, and the next claimed window resets it.
+    in_flight: bool,
 }
 
 impl TipCacheState {
@@ -150,44 +175,80 @@ impl TipCache {
         Fut: Future<Output = Result<TipReading, RpcServerError>>,
     {
         let now = Instant::now();
-        {
+        // `Some` when this caller waits on a probe another caller claimed;
+        // `None` when it claimed the window itself. Decided under the lock
+        // and released before any await, since the probe locks again.
+        let waiter = {
             let mut state = self.state.lock().await;
             match state.last_attempt {
                 Some(at) if now.duration_since(at) < ttl => {
-                    return TipRead {
-                        state: state.reading,
-                        probed: false,
-                    };
+                    if state.reading.is_some() || !state.in_flight {
+                        return TipRead {
+                            state: state.reading,
+                            probed: false,
+                        };
+                    }
+                    // Subscribed under the lock, so the probe cannot finish
+                    // before the wait begins.
+                    Some(self.probe_done.subscribe())
                 }
-                _ => state.last_attempt = Some(now),
+                _ => {
+                    state.last_attempt = Some(now);
+                    state.in_flight = true;
+                    None
+                }
             }
-        }
+        };
+        let Some(mut probe_done) = waiter else {
+            return self.probe(probe_timeout, context, fetch).await;
+        };
 
+        // A reading obtained this way is as fresh as one this caller probed
+        // for itself, so it counts as probed.
+        let _ = tokio::time::timeout(probe_timeout, probe_done.changed()).await;
+        TipRead {
+            state: self.state.lock().await.reading,
+            probed: true,
+        }
+    }
+
+    /// Run the probe this caller claimed the window for, then release any
+    /// cold-cache waiters.
+    async fn probe<Fut>(
+        &self,
+        probe_timeout: Duration,
+        context: RpcRequestContext,
+        fetch: impl FnOnce(RpcRequestContext) -> Fut,
+    ) -> TipRead
+    where
+        Fut: Future<Output = Result<TipReading, RpcServerError>>,
+    {
         let probe_context = context.capped(probe_timeout);
-        let Some(remaining) = probe_context.remaining() else {
-            return TipRead {
-                state: self.state.lock().await.reading,
-                probed: false,
-            };
+        let outcome = match probe_context.remaining() {
+            Some(remaining) => Some(tokio::time::timeout(remaining, fetch(probe_context)).await),
+            None => None,
         };
-        let state = match tokio::time::timeout(remaining, fetch(probe_context)).await {
-            Ok(Ok(reading)) => {
-                let mut state = self.state.lock().await;
-                state.record(TipState::from_reading(&reading));
-                state.reading
+        let state = {
+            let mut state = self.state.lock().await;
+            match &outcome {
+                Some(Ok(Ok(reading))) => {
+                    state.record(TipState::from_reading(reading));
+                }
+                Some(Ok(Err(error))) => {
+                    tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
+                }
+                Some(Err(_)) => {
+                    tracing::warn!("chain tip probe timed out, pre-checks use last reading");
+                }
+                None => {}
             }
-            Ok(Err(error)) => {
-                tracing::warn!(%error, "chain tip unavailable, pre-checks use last reading");
-                self.state.lock().await.reading
-            }
-            Err(_) => {
-                tracing::warn!("chain tip probe timed out, pre-checks use last reading");
-                self.state.lock().await.reading
-            }
+            state.in_flight = false;
+            state.reading
         };
+        self.probe_done.send_replace(());
         TipRead {
             state,
-            probed: true,
+            probed: outcome.is_some(),
         }
     }
 }
@@ -358,11 +419,12 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V>
 where
     C: ChainPlane,
 {
-    /// Db-tip reading for the submit pre-checks, served from the shared
-    /// rate-limited cache. Its state is `None` when no reading is available
-    /// (probe failed or timed out with no prior success); the caller then
-    /// runs only the checks that need no chain reading.
-    async fn submit_tip_state(&self, context: RpcRequestContext) -> TipRead {
+    /// Db-tip reading served from the shared rate-limited cache, for the
+    /// submit pre-checks and `chainConfig`. Its state is `None` when no
+    /// reading is available (probe failed or timed out with no prior
+    /// success); a submit then runs only the checks that need no chain
+    /// reading, and `chainConfig` has nothing to report.
+    async fn cached_tip_state(&self, context: RpcRequestContext) -> TipRead {
         self.tip_state_within(Duration::from_millis(self.config.tip_cache_ttl_ms), context)
             .await
     }
@@ -424,8 +486,8 @@ where
             // The pre-checks are advisory mirrors of what the scheduler and
             // executor enforce authoritatively: an unavailable tip reading
             // skips the chain-dependent checks rather than blocking submission.
-            let mut tip = self.submit_tip_state(context).await;
-            let params = tip.state.map(|tip| tip.params).unwrap_or_default();
+            let mut tip = self.cached_tip_state(context).await;
+            let params = tip.state.and_then(|tip| tip.params).unwrap_or_default();
             let tx = match validate_raw_transaction(&tx_hex, &params) {
                 Ok(tx) => tx,
                 // A cached config can lag, by up to the TTL, an upgrade block
@@ -435,7 +497,7 @@ where
                 // itself is already current, and the rejection stands.
                 Err(RpcServerError::TxInvalidDetailed(_)) if !tip.probed => {
                     tip = self.fresh_tip_state(context).await;
-                    let params = tip.state.map_or(params, |tip| tip.params);
+                    let params = tip.state.and_then(|tip| tip.params).unwrap_or(params);
                     validate_raw_transaction(&tx_hex, &params)?
                 }
                 Err(error) => return Err(error.into()),
@@ -481,6 +543,17 @@ where
     }
 
     #[tracing::instrument(skip_all)]
+    async fn server_limits(&self) -> RpcResult<ServerLimits> {
+        Ok(ServerLimits::new(
+            self.config.view_gas_limit,
+            self.config.max_view_calldata_bytes as u64,
+            self.config.max_events_per_page,
+            self.config.max_transactions_per_page,
+            self.config.max_cursor_bytes as u64,
+        ))
+    }
+
+    #[tracing::instrument(skip_all)]
     async fn network_info(&self) -> RpcResult<NetworkInfo> {
         Ok(self.network_info.clone())
     }
@@ -493,6 +566,29 @@ where
             // Every fetched tip refreshes the pre-check cache, config included.
             self.tip_cache.store(TipState::from_reading(&reading)).await;
             Ok(reading.tip)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn chain_config(&self) -> RpcResult<NetworkConfigParams> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            // Same rate-limited reading as the submit pre-checks: one tip
+            // fetch per TTL window.
+            let Some(state) = self.cached_tip_state(context).await.state else {
+                return Err(RpcServerError::BackendUnavailable(
+                    "no chain tip reading is available".into(),
+                )
+                .into());
+            };
+            let Some(params) = state.params else {
+                return Err(RpcServerError::BackendUnavailable(
+                    "tip network config is a version this server cannot read".into(),
+                )
+                .into());
+            };
+            Ok(params)
         })
         .await
     }
@@ -588,6 +684,7 @@ where
             ?request.contract,
             entrypoint_len = request.entrypoint.0.len(),
             calldata_len = request.calldata.0.len(),
+            gas_limit = ?request.gas_limit,
         )
     )]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse> {
@@ -611,10 +708,8 @@ where
                     None::<()>,
                 ));
             }
-            Ok(self
-                .view
-                .view(context, request, self.config.view_gas_limit)
-                .await?)
+            let gas_limit = view_gas_limit(request.gas_limit, self.config.view_gas_limit)?;
+            Ok(self.view.view(context, request, gas_limit).await?)
         })
         .await
     }
@@ -638,16 +733,48 @@ where
     }
 }
 
+/// Resolve the gas budget for a `groundhog_view` request: the requested
+/// `gasLimit` when it is within `1..=ceiling`, else `ceiling` (the configured
+/// `view_gas_limit`) when the request names none.
+fn view_gas_limit(requested: Option<u64>, ceiling: u64) -> Result<u64, RpcServerError> {
+    match requested {
+        None => Ok(ceiling),
+        Some(0) => Err(RpcServerError::InvalidParam(
+            "view gasLimit must be greater than zero".into(),
+        )),
+        Some(gas_limit) if gas_limit > ceiling => Err(RpcServerError::InvalidParam(format!(
+            "view gasLimit {gas_limit} exceeds maximum {ceiling}"
+        ))),
+        Some(gas_limit) => Ok(gas_limit),
+    }
+}
+
 /// Bounds-check a `getEvents` query before the JSON-RPC dispatcher
 /// hands it to the read backend.  Rejects requests whose `limit` or
 /// opaque `cursor` exceed the per-server caps in `RpcServerConfig`.
 ///
-/// `limit == 0` and empty `filters` pass through unchanged; the
-/// indexer owns those defaults.
+/// `limit == 0` selects the indexer's default. Empty filters or contract
+/// lists are invalid: the indexer cannot serve all-contract scans.
 fn validate_event_query(
     query: &EventQuery,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
+    if query.filters.0.is_empty() {
+        return Err(RpcServerError::InvalidParam(
+            "filters must contain at least one event filter".into(),
+        ));
+    }
+    if let Some(index) = query
+        .filters
+        .0
+        .iter()
+        .position(|filter| filter.contract_addresses.0.is_empty())
+    {
+        return Err(RpcServerError::InvalidParam(format!(
+            "filters[{index}].contractAddresses must name at least one contract; \
+             the indexer cannot scan all contracts",
+        )));
+    }
     if query.limit > config.max_events_per_page {
         return Err(RpcServerError::InvalidParam(format!(
             "limit {} exceeds maximum {}",
@@ -1077,6 +1204,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 },
                 events: vec![],
                 height: BlockHeight::from(0),
+                gas_used: 0,
             })
         }
     }
@@ -1648,6 +1776,181 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
+    async fn chain_config_rpc_reports_exactly_what_the_tip_config_states() {
+        let chain = ConfigChain::new(3);
+        let server = expiry_check_server(
+            chain,
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let config = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+
+        assert_eq!(config.max_new_contracts_per_tx, Some(3));
+        assert_eq!(
+            config,
+            NetworkConfigParams {
+                max_new_contracts_per_tx: Some(3),
+                ..NetworkConfigParams::default()
+            },
+            "unstated parameters are absent, not defaulted"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_refreshes_the_precheck_cache() {
+        let chain = ConfigChain::new(1);
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = expiry_check_server(chain.clone(), RpcServerConfig::default(), submitted);
+
+        server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+        server
+            .send_raw_transaction(signed_tx_hex_with_contracts(vec![rv32_contract(8, 1)]))
+            .await
+            .expect("bug: one contract is within the cap the chainConfig call fetched");
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "the submit should reuse the reading the chainConfig call stored"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_serves_the_cached_reading_within_the_ttl() {
+        let chain = ConfigChain::new(3);
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        for _ in 0..3 {
+            server
+                .chain_config()
+                .await
+                .expect("bug: config should be readable");
+        }
+
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "calls inside the TTL window must not each fetch the db tip"
+        );
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_refetches_once_the_ttl_has_lapsed() {
+        let chain = ConfigChain::new(1);
+        let server = expiry_check_server(
+            chain.clone(),
+            RpcServerConfig::default().with_tip_cache_ttl_ms(0),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let first = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+        chain.set_params(max_contracts_params(2)).await;
+
+        let second = server
+            .chain_config()
+            .await
+            .expect("bug: config should be readable");
+
+        assert_eq!(first.max_new_contracts_per_tx, Some(1));
+        assert_eq!(
+            second.max_new_contracts_per_tx,
+            Some(2),
+            "an expired window fetches the tip again and reports the upgraded config"
+        );
+        assert_eq!(*chain.tip_calls.lock().await, 2);
+    }
+
+    #[tokio::test]
+    async fn chain_config_rpc_fails_when_no_tip_reading_is_available() {
+        let server = expiry_check_server(
+            UnavailableChain,
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let error = server
+            .chain_config()
+            .await
+            .expect_err("bug: nothing to report without a reading");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    /// Chain plane that yields before answering, so a second caller can
+    /// arrive while the first fetch is still in flight.
+    #[derive(Clone)]
+    struct YieldingChain(ConfigChain);
+
+    #[async_trait::async_trait]
+    impl ChainPlane for YieldingChain {
+        async fn chain_tip(
+            &self,
+            context: RpcRequestContext,
+        ) -> Result<TipReading, RpcServerError> {
+            tokio::task::yield_now().await;
+            self.0.chain_tip(context).await
+        }
+
+        async fn get_block_by_number(
+            &self,
+            context: RpcRequestContext,
+            height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            self.0.get_block_by_number(context, height).await
+        }
+
+        async fn pending_transaction_count(
+            &self,
+            context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
+            self.0.pending_transaction_count(context).await
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_chain_config_calls_on_a_cold_cache_share_the_first_fetch() {
+        let chain = ConfigChain::new(3);
+        let server = expiry_check_server(
+            YieldingChain(chain.clone()),
+            RpcServerConfig::default(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+
+        let (first, second) = tokio::join!(server.chain_config(), server.chain_config());
+
+        assert_eq!(
+            first
+                .expect("bug: the caller that fetched sees its reading")
+                .max_new_contracts_per_tx,
+            Some(3)
+        );
+        assert_eq!(
+            second
+                .expect("bug: a caller arriving mid-fetch waits for that reading")
+                .max_new_contracts_per_tx,
+            Some(3)
+        );
+        assert_eq!(
+            *chain.tip_calls.lock().await,
+            1,
+            "the second caller shares the fetch rather than adding one"
+        );
+    }
+
+    #[tokio::test]
     async fn bound_violation_is_rechecked_against_a_fresh_tip_before_rejecting() {
         // The cached config caps attachments at one; an upgrade then raises
         // it to two. A submit inside the TTL must not reject on the stale
@@ -1901,12 +2204,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(*event_calls.lock().await, 1);
     }
 
-    #[tokio::test]
-    async fn view_passes_configured_gas_limit_to_view_plane() {
+    /// Run one view with `requested` gas against a server whose ceiling is
+    /// `ceiling`; return the outcome and the gas limits the view plane saw.
+    async fn view_with_gas(
+        requested: Option<u64>,
+        ceiling: u64,
+    ) -> (RpcResult<ViewResponse>, Vec<u64>) {
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let event_calls = Arc::new(Mutex::new(0));
         let view_gas_limits = Arc::new(Mutex::new(Vec::new()));
-        let gas_limit = 123_456;
         let server = GroundhogRpcServer::new(
             SubmitOnly {
                 submitted: submitted.clone(),
@@ -1919,7 +2225,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 view_gas_limits: view_gas_limits.clone(),
             },
             test_network_info(),
-            RpcServerConfig::default().with_view_gas_limit(gas_limit),
+            RpcServerConfig::default().with_view_gas_limit(ceiling),
             BuildInfo::for_tests(),
         );
 
@@ -1928,16 +2234,68 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
             caller: None,
+            gas_limit: requested,
         };
 
-        server
-            .view(request)
-            .await
-            .expect("bug: valid view request should dispatch to view plane");
-
-        assert_eq!(*view_gas_limits.lock().await, vec![gas_limit]);
+        let result = server.view(request).await;
         assert!(submitted.lock().await.is_empty());
         assert_eq!(*event_calls.lock().await, 0);
+        let seen = view_gas_limits.lock().await.clone();
+        (result, seen)
+    }
+
+    #[tokio::test]
+    async fn view_without_gas_limit_runs_under_the_configured_ceiling() {
+        let (result, seen) = view_with_gas(None, 123_456).await;
+        result.expect("bug: valid view request should dispatch to view plane");
+        assert_eq!(seen, vec![123_456]);
+    }
+
+    #[tokio::test]
+    async fn view_passes_requested_gas_limit_within_the_ceiling() {
+        for requested in [1, 1_000, 123_456] {
+            let (result, seen) = view_with_gas(Some(requested), 123_456).await;
+            result.expect("bug: in-range gas limit should dispatch to view plane");
+            assert_eq!(seen, vec![requested]);
+        }
+    }
+
+    #[tokio::test]
+    async fn view_rejects_gas_limit_above_ceiling_or_zero_before_dispatch() {
+        for requested in [0, 123_457, u64::MAX] {
+            let (result, seen) = view_with_gas(Some(requested), 123_456).await;
+            let err = result.expect_err("out-of-range gas limit must be rejected");
+            assert_eq!(err.code(), codes::INVALID_PARAMS, "gasLimit {requested}");
+            assert!(
+                seen.is_empty(),
+                "gasLimit {requested} reached the view plane"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn server_limits_report_the_configured_bounds_without_backend_dispatch() {
+        let mock = Arc::new(MockBackend::default());
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            test_network_info(),
+            RpcServerConfig::default()
+                .with_view_gas_limit(42_000)
+                .with_max_view_calldata_bytes(512)
+                .with_max_events_per_page(17)
+                .with_max_transactions_per_page(19)
+                .with_max_cursor_bytes(64),
+            BuildInfo::for_tests(),
+        );
+
+        let limits = server
+            .server_limits()
+            .await
+            .expect("bug: server limits should be infallible");
+
+        assert_eq!(limits, ServerLimits::new(42_000, 512, 17, 19, 64));
+        assert!(mock.submitted.lock().await.is_empty());
+        assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     #[tokio::test]

@@ -14,30 +14,28 @@ env:
   # Fallback if the CI runner overwrites .cargo/config.toml
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://crates.thruput.network/api/v1/crates/
 
+permissions:
+  contents: read
+
 jobs:
+  # Check rust dependencies against policy
   dependency-policy:
-    name: Dependency policy (${{ matrix.check }})
-    runs-on: namespace-profile-hogd-linux-2604
-    strategy:
-      matrix:
-        check:
-          - advisories
-          - sources
     permissions:
       contents: read
-    steps:
-      - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+    uses: groundhogchain/actions/.github/workflows/rust-dependency-policy.yml@af074672d3a6f3ddedcacd758224ea5a5cf2a8f3 # v0
+    with:
+      registry-name: groundhog
+    secrets:
+      registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
 
-      - name: Check dependency policy
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        env:
-          RUSTUP_TOOLCHAIN: "1.85.0"
-        with:
-          arguments: --all-features --locked
-          command: check ${{ matrix.check }}
+  # Lint our workflows
+  workflow-lint:
+    permissions:
+      contents: read
+    uses: groundhogchain/actions/.github/workflows/workflow-lint.yml@af074672d3a6f3ddedcacd758224ea5a5cf2a8f3 # v0
 
   clippy:
+    needs: dependency-policy # Check deps before building anything
     name: Clippy
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
@@ -47,7 +45,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -55,6 +53,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
+    needs: dependency-policy # Check deps before building anything
     name: Test
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
@@ -64,7 +63,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -123,7 +122,8 @@ jobs:
           done
 
   cli-smoke:
-    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test)
+    needs: dependency-policy # Check deps before building anything
+    name: CLI smoke, ${{ matrix.template }} template (new + cargo build + cargo test + clippy + groundhog test + groundhog test --integration)
     runs-on: namespace-profile-hogd-linux-2604
     permissions:
       contents: read
@@ -138,7 +138,7 @@ jobs:
         uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -182,6 +182,13 @@ jobs:
       - name: Contract tests (groundhog test)
         working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
         run: groundhog test
+
+      # Starts an ephemeral hog-devnode from the embedded catalog, deploys the
+      # contract with a native local-user account, and runs tests/integration.rs.
+      # Nothing else exercises the integration deploy end to end.
+      - name: Integration tests (groundhog test --integration)
+        working-directory: ${{ runner.temp }}/my-${{ matrix.template }}
+        run: groundhog test --integration
 
       # A user-level rustflags override makes cargo drop the project's
       # .cargo/config.toml target rustflags (linker script, codegen flags such
@@ -229,8 +236,92 @@ jobs:
             cat guard.log
             exit 1
           fi
+          # shellcheck disable=SC2016
           if ! grep -q 'no `-T` linker script' guard.log; then
             echo "groundhog build failed for a reason other than the rv32 linker-script guard"
             cat guard.log
             exit 1
           fi
+
+  # Codegen tests assert on generated text. This job runs the real CLI over the
+  # checked-in spec artifacts, then type-checks and runs what it generates.
+  codegen-typecheck:
+    needs: dependency-policy # Check deps before building anything
+    name: Codegen typecheck (spec artifact -> groundhog codegen ts -> tsc)
+    runs-on: namespace-profile-hogd-linux-2604
+    permissions:
+      contents: read
+    env:
+      FIXTURES: crates/cli/fixtures/codegen
+      # Matches the version client-ts builds with, so the bindings are checked
+      # by the compiler that actually consumes them.
+      TYPESCRIPT_VERSION: 6.0.3
+    steps:
+      - name: Checkout
+        uses: namespacelabs/nscloud-checkout-action@def520b6c21233362f09c9ceda4352c51cceca26 # v8
+
+      - name: Configure Namespace Cache
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+        with:
+          cache: rust
+
+      - name: Build groundhog CLI
+        run: cargo build --locked -p groundhog-cli
+
+      # Regenerating in place means the diff below also proves the checked-in
+      # bindings are what the CLI emits today, not a stale snapshot.
+      - name: Generate bindings from the checked-in spec artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          artifacts=("$FIXTURES"/*.spec.xdr)
+          if [ ${#artifacts[@]} -eq 0 ]; then
+            echo "no spec artifacts found in $FIXTURES"
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            output="${artifact%.spec.xdr}.ts"
+            echo "codegen $artifact -> $output"
+            ./target/debug/groundhog codegen ts "$artifact" --output "$output"
+          done
+
+      - name: Bindings match the checked-in snapshots
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- "$FIXTURES"; then
+            echo
+            echo "Generated bindings differ from the checked-in snapshots."
+            echo "Run: UPDATE_SNAPSHOTS=1 cargo test -p groundhog-cli --lib codegen"
+            exit 1
+          fi
+          # git diff only covers tracked files, so check for untracked bindings too.
+          untracked="$(git ls-files --others --exclude-standard -- "$FIXTURES")"
+          if [ -n "$untracked" ]; then
+            echo "Generated bindings that are not checked in:"
+            echo "$untracked"
+            echo "Commit them, or drop the spec artifact that produced them."
+            exit 1
+          fi
+
+      # A clean tsc says nothing, so print the version first: a green log then
+      # shows the compiler ran rather than leaving that to be assumed.
+      - name: Type-check the generated bindings
+        working-directory: crates/cli/fixtures/codegen/typecheck
+        run: |
+          set -euo pipefail
+          npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc --version
+          npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json
+          echo "tsc clean: generated bindings type-check"
+
+      # A binding can type-check and still fail when it runs, so compile the
+      # bindings and call every event decoder they generate.
+      - name: Run the generated event decoders
+        working-directory: crates/cli/fixtures/codegen/typecheck
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP:?}/codegen-js"
+          npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p tsconfig.json \
+            --noEmit false --rootDir .. --outDir "$out"
+          echo '{ "type": "module" }' > "$out/package.json"
+          node --version
+          node decode-events.mjs "$out"

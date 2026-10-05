@@ -11,6 +11,9 @@ use jsonrpsee::{
     types::{Id, Request, error::reject_too_big_batch_response},
 };
 
+/// Maximum JSON-RPC array entries accepted by the gateway and embedded node.
+pub const MAX_RPC_BATCH_REQUESTS: u32 = 1_000;
+
 /// Per-array limit on active and buffered entries (1..=1024, default 128).
 /// Independent of backend submit batching and array-length limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

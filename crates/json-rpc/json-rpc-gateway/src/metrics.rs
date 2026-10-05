@@ -1,3 +1,6 @@
+mod lookup;
+pub(crate) use lookup::{LookupAdmission, LookupWaitOutcome, LookupWaitStage};
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -124,6 +127,7 @@ pub struct GatewayMetrics {
 }
 
 struct MetricsInner {
+    lookup: lookup::LookupMetrics,
     registry: Registry,
     gather_lock: Mutex<()>,
     health_status: GaugeVec,
@@ -152,6 +156,10 @@ struct MetricsInner {
 }
 
 impl GatewayMetrics {
+    pub(crate) fn scheduler_lookup(&self) -> &lookup::LookupMetrics {
+        &self.inner.lookup
+    }
+
     /// Create a gateway-owned Prometheus registry with all v1 collectors.
     ///
     /// The registry is intentionally private to the gateway process so metric
@@ -162,6 +170,7 @@ impl GatewayMetrics {
         commit_hash: Option<&'static str>,
     ) -> prometheus::Result<Self> {
         let registry = Registry::new();
+        let lookup = lookup::LookupMetrics::new(&registry)?;
         let health_status = GaugeVec::new(
             Opts::new(
                 "groundhog_gateway_health_status",
@@ -366,6 +375,7 @@ impl GatewayMetrics {
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
+                lookup,
                 registry,
                 gather_lock: Mutex::new(()),
                 health_status,
@@ -561,11 +571,24 @@ impl GatewayMetrics {
         self.inner.view_timeouts_total.inc();
     }
 
-    pub(crate) fn observe_malformed_event_dropped(&self, reason: &'static str) {
+    /// Count `dropped` malformed events, which may be zero.
+    pub(crate) fn observe_malformed_events_dropped(&self, reason: &'static str, dropped: usize) {
+        if dropped == 0 {
+            return;
+        }
         self.inner
             .malformed_events_dropped_total
             .with_label_values(&[reason])
-            .inc();
+            .inc_by(dropped as u64);
+    }
+
+    /// How many malformed events have been dropped for `reason`.
+    #[cfg(test)]
+    pub(crate) fn malformed_events_dropped(&self, reason: &'static str) -> u64 {
+        self.inner
+            .malformed_events_dropped_total
+            .with_label_values(&[reason])
+            .get()
     }
 
     /// Render Prometheus text exposition after refreshing snapshot-backed gauges.
@@ -912,7 +935,8 @@ mod tests {
             Duration::from_millis(25),
         );
         metrics.observe_view_timeout();
-        metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
+        metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, 3);
+        metrics.observe_malformed_events_dropped(REASON_PARSE_FAILED, 0);
         let guard = metrics.internal_batch_in_flight_guard("storage_batcher");
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
@@ -941,7 +965,7 @@ mod tests {
         ));
         assert!(body.contains("groundhog_gateway_view_timeouts_total 1"));
         assert!(body.contains(
-            "groundhog_gateway_malformed_events_dropped_total{reason=\"parse_failed\"} 1"
+            "groundhog_gateway_malformed_events_dropped_total{reason=\"parse_failed\"} 3"
         ));
 
         for bucket in [1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0] {

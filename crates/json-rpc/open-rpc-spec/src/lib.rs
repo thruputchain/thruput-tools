@@ -136,13 +136,13 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_chainTip" | "groundhog_pendingTransactionCount" => &[
+        "groundhog_chainTip" | "groundhog_chainConfig" | "groundhog_pendingTransactionCount" => &[
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_networkInfo" | "groundhog_version" => &[],
+        "groundhog_networkInfo" | "groundhog_serverLimits" | "groundhog_version" => &[],
         "groundhog_requestAirdrop" => &[
             codes::INVALID_PARAMS,
             codes::TX_REJECTED,

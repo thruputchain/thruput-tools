@@ -3,19 +3,17 @@ use crate::key_source::{
     DefaultFaucetSecretKeyLoader, FaucetSecretKeyLoadError, FaucetSecretKeyLoader,
     FaucetSecretKeySource,
 };
-use crate::wallet_create::{WalletCreateRuntimeConfig, WalletCreateRuntimeConfigError};
 use axum::http::HeaderValue;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::{
-    AirdropDescriptor, DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor,
-    NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
+    AirdropDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
+    NetworkDescriptorEndpoints,
 };
 use groundhog_json_rpc_types::{ContractAddress, NetworkHash, NetworkHashHex, SHA256Hash};
-use groundhog_signing::LocalSigner;
+use groundhog_signing::{LocalSigner, PubkeyAccount};
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 pub(crate) const MIN_AIRDROP_TERMINAL_RETENTION_SECS: u64 = 12 * 60 * 60;
@@ -34,8 +32,6 @@ pub struct FaucetConfigFile {
     pub network: NetworkConfig,
     /// Private faucet airdrop execution config.
     pub airdrop: AirdropConfig,
-    /// Private wallet-create execution config.
-    pub wallet_create: WalletCreateExecutionConfig,
     /// Private-preview policy controls.
     #[serde(default)]
     pub policy: PolicyConfig,
@@ -52,10 +48,6 @@ pub struct FaucetConfigParts {
     pub airdrop: AirdropRuntimeConfig,
     /// Network hash every faucet-signed transaction is bound to.
     pub network_hash: groundhog_xdr::types::NetworkHash,
-    /// Raw HOG units transferred before wallet creation.
-    pub wallet_create_prefund_raw_amount: u128,
-    /// Private wallet-create execution config.
-    pub wallet_create: WalletCreateRuntimeConfig,
     /// Browser origins allowed to call the API.
     pub cors_allowed_origins: Vec<HeaderValue>,
     /// Private-preview policy controls.
@@ -90,38 +82,26 @@ impl FaucetConfigFile {
             "policy.airdrop.ip_quota_window_secs",
             self.policy.airdrop.ip_quota_window_secs,
         )?;
-        validate_quota_window(
-            "policy.wallet_create.owner_quota_window_secs",
-            self.policy.wallet_create.owner_quota_window_secs,
-        )?;
-        validate_quota_window(
-            "policy.wallet_create.ip_quota_window_secs",
-            self.policy.wallet_create.ip_quota_window_secs,
-        )?;
-        let wallet_create_prefund_raw_amount = self
-            .network
-            .wallet_create
-            .prefund_raw_amount
-            .parse::<u128>()
-            .ok()
-            .filter(|amount| *amount > 0)
-            .ok_or_else(|| FaucetConfigError::InvalidWalletCreatePrefundRawAmount {
-                value: self.network.wallet_create.prefund_raw_amount.clone(),
-            })?;
-        validate_dev_wallet_entrypoint_shape(
-            "network.dev_wallet.deploy_entrypoint",
-            &self.network.dev_wallet.deploy_entrypoint,
-        )?;
-        validate_dev_wallet_entrypoint_shape(
-            "network.dev_wallet.do_action_entrypoint",
-            &self.network.dev_wallet.do_action_entrypoint,
-        )?;
         validate_faucet_public_key_shape(&self.network.faucet.public_key)?;
+        let public_key: [u8; 32] = self
+            .network
+            .faucet
+            .public_key
+            .0
+            .as_slice()
+            .try_into()
+            .map_err(|_| {
+                FaucetConfigError::InvalidFaucetPublicKey(self.network.faucet.public_key.0.len())
+            })?;
+        if PubkeyAccount::from_public_key_bytes(public_key, 0).address()
+            != self.network.faucet.wallet_address.0
+        {
+            return Err(FaucetConfigError::FaucetAddressMismatch);
+        }
         let faucet_secret_key = key_loader.load(&self.airdrop.secret_key_source).await?;
         validate_faucet_public_key_match(&self.network.faucet.public_key, &faucet_secret_key)?;
         let airdrop_raw_amount = self.airdrop.raw_amount.clone();
         let airdrop = self.airdrop.into_runtime_config(faucet_secret_key)?;
-        let wallet_create = self.wallet_create.into_runtime_config()?;
         let cors_allowed_origins = self
             .cors_allowed_origins
             .iter()
@@ -144,8 +124,6 @@ impl FaucetConfigFile {
             network_descriptor,
             airdrop,
             network_hash,
-            wallet_create_prefund_raw_amount,
-            wallet_create,
             policy,
             cors_allowed_origins,
         })
@@ -160,8 +138,6 @@ pub struct PolicyConfig {
     pub trust_proxy_client_ip_headers: bool,
     /// Airdrop policy controls.
     pub airdrop: AirdropPolicyConfig,
-    /// Wallet-create policy controls.
-    pub wallet_create: WalletCreatePolicyConfig,
 }
 
 impl PolicyConfig {
@@ -175,17 +151,6 @@ impl PolicyConfig {
                 client_overrides: self.airdrop.client_overrides,
                 max_pending_per_recipient: self.airdrop.max_pending_per_recipient,
                 max_retained_attempts: self.airdrop.max_retained_attempts,
-            },
-            wallet_create: WalletCreatePolicyRuntimeConfig {
-                owner_quota_window_secs: self.wallet_create.owner_quota_window_secs,
-                owner_quota_max: self.wallet_create.owner_quota_max,
-                ip_quota_window_secs: self.wallet_create.ip_quota_window_secs,
-                ip_quota_max: self.wallet_create.ip_quota_max,
-                max_pending_per_owner: self.wallet_create.max_pending_per_owner,
-                unprefunded_attempt_ttl_secs: self.wallet_create.unprefunded_attempt_ttl_secs,
-                prefunded_attempt_retention_secs: self
-                    .wallet_create
-                    .prefunded_attempt_retention_secs,
             },
         }
     }
@@ -235,39 +200,11 @@ impl Default for AirdropPolicyConfig {
     }
 }
 
-/// Wallet-create policy config.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct WalletCreatePolicyConfig {
-    pub owner_quota_window_secs: u64,
-    pub owner_quota_max: u32,
-    pub ip_quota_window_secs: u64,
-    pub ip_quota_max: u32,
-    pub max_pending_per_owner: u32,
-    pub unprefunded_attempt_ttl_secs: u64,
-    pub prefunded_attempt_retention_secs: u64,
-}
-
-impl Default for WalletCreatePolicyConfig {
-    fn default() -> Self {
-        Self {
-            owner_quota_window_secs: 24 * 60 * 60,
-            owner_quota_max: 3,
-            ip_quota_window_secs: 24 * 60 * 60,
-            ip_quota_max: 20,
-            max_pending_per_owner: 1,
-            unprefunded_attempt_ttl_secs: 15 * 60,
-            prefunded_attempt_retention_secs: 24 * 60 * 60,
-        }
-    }
-}
-
 /// Runtime policy controls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyRuntimeConfig {
     pub trust_proxy_client_ip_headers: bool,
     pub airdrop: AirdropPolicyRuntimeConfig,
-    pub wallet_create: WalletCreatePolicyRuntimeConfig,
 }
 
 /// Runtime airdrop policy controls.
@@ -280,18 +217,6 @@ pub struct AirdropPolicyRuntimeConfig {
     pub max_pending_per_recipient: u32,
     /// Global bound on retained airdrop idempotency records, including unresolved attempts.
     pub max_retained_attempts: usize,
-}
-
-/// Runtime wallet-create policy controls.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WalletCreatePolicyRuntimeConfig {
-    pub owner_quota_window_secs: u64,
-    pub owner_quota_max: u32,
-    pub ip_quota_window_secs: u64,
-    pub ip_quota_max: u32,
-    pub max_pending_per_owner: u32,
-    pub unprefunded_attempt_ttl_secs: u64,
-    pub prefunded_attempt_retention_secs: u64,
 }
 
 /// Errors returned while validating faucet service config.
@@ -321,21 +246,17 @@ pub enum FaucetConfigError {
     /// The private airdrop config was invalid.
     #[error(transparent)]
     Airdrop(#[from] AirdropRuntimeConfigError),
-    /// The private wallet-create config was invalid.
-    #[error(transparent)]
-    WalletCreate(#[from] WalletCreateRuntimeConfigError),
     /// A configured CORS origin was invalid.
     #[error("invalid CORS origin `{origin}`: {message}")]
     InvalidCorsOrigin { origin: String, message: String },
-    /// The wallet-create prefund amount was missing, invalid, or zero.
-    #[error("wallet-create prefund raw amount must be greater than zero, got `{value}`")]
-    InvalidWalletCreatePrefundRawAmount { value: String },
     /// The expected faucet public key was not 32 bytes.
     #[error("network faucet public key must be 32 bytes, got {0}")]
     InvalidFaucetPublicKey(usize),
-    /// A public dev-wallet entrypoint was not 8 bytes.
-    #[error("{field} must be 8 bytes, got {len}")]
-    InvalidDevWalletEntrypoint { field: &'static str, len: usize },
+    /// The configured address must be the public key's nonce-zero native account.
+    #[error(
+        "network.faucet.wallet_address does not match the public key nonce-zero pubkey account"
+    )]
+    FaucetAddressMismatch,
     /// The loaded secret key did not control the configured faucet account.
     #[error("loaded faucet signing key does not match network.faucet.public_key")]
     FaucetPublicKeyMismatch,
@@ -425,10 +346,6 @@ pub struct NetworkConfig {
     pub native_hog: NativeHogConfig,
     /// Public faucet account configuration.
     pub faucet: FaucetAccountConfig,
-    /// Wallet-create metadata configuration.
-    pub wallet_create: WalletCreateConfig,
-    /// Public dev-wallet entrypoint configuration.
-    pub dev_wallet: DevWalletConfig,
 }
 
 impl NetworkConfig {
@@ -450,14 +367,6 @@ impl NetworkConfig {
                 self.native_hog.transfer_entrypoint,
             ),
             FaucetDescriptor::new(self.faucet.wallet_address),
-            WalletCreateDescriptor::new(
-                self.wallet_create.prefund_raw_amount,
-                self.wallet_create.wallet_contract_hash,
-            ),
-            DevWalletDescriptor::new(
-                self.dev_wallet.deploy_entrypoint,
-                self.dev_wallet.do_action_entrypoint,
-            ),
         )
         .with_airdrop(AirdropDescriptor::new(
             airdrop_raw_amount,
@@ -521,47 +430,12 @@ fn validate_faucet_public_key_match(
     Ok(())
 }
 
-/// Wallet-create metadata configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WalletCreateConfig {
-    /// Raw HOG units prefunded to the deterministic future wallet address.
-    pub prefund_raw_amount: String,
-    /// Contract hash used for deterministic wallet address derivation.
-    pub wallet_contract_hash: SHA256Hash,
-}
-
-/// Public dev-wallet entrypoint configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DevWalletConfig {
-    /// Entrypoint used to deploy a contract through the wallet.
-    pub deploy_entrypoint: HexBytes,
-    /// Entrypoint used to invoke contract actions through the wallet.
-    pub do_action_entrypoint: HexBytes,
-}
-
-fn validate_dev_wallet_entrypoint_shape(
-    field: &'static str,
-    entrypoint: &HexBytes,
-) -> Result<(), FaucetConfigError> {
-    if entrypoint.0.len() == 8 {
-        return Ok(());
-    }
-    Err(FaucetConfigError::InvalidDevWalletEntrypoint {
-        field,
-        len: entrypoint.0.len(),
-    })
-}
-
 /// Private airdrop execution configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AirdropConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: String,
-    /// Faucet wallet `doAction` entrypoint.
-    pub wallet_do_action_entrypoint: HexBytes,
     /// Source used to load the faucet signing key at startup.
     pub secret_key_source: FaucetSecretKeySource,
 }
@@ -572,33 +446,7 @@ impl AirdropConfig {
         self,
         faucet_secret_key: zeroize::Zeroizing<[u8; 32]>,
     ) -> Result<AirdropRuntimeConfig, AirdropRuntimeConfigError> {
-        AirdropRuntimeConfig::from_wire(
-            &self.raw_amount,
-            self.wallet_do_action_entrypoint,
-            faucet_secret_key,
-        )
-    }
-}
-
-/// Private wallet-create execution configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WalletCreateExecutionConfig {
-    /// Faucet wallet `create_wallet` entrypoint.
-    pub create_wallet_entrypoint: HexBytes,
-    /// Dev-wallet artifact path included in wallet-create transactions.
-    pub wallet_artifact_path: PathBuf,
-}
-
-impl WalletCreateExecutionConfig {
-    /// Convert wire config into validated runtime wallet-create config.
-    pub fn into_runtime_config(
-        self,
-    ) -> Result<WalletCreateRuntimeConfig, WalletCreateRuntimeConfigError> {
-        WalletCreateRuntimeConfig::from_wire(
-            self.create_wallet_entrypoint,
-            self.wallet_artifact_path,
-        )
+        AirdropRuntimeConfig::from_wire(&self.raw_amount, faucet_secret_key)
     }
 }
 
@@ -606,7 +454,7 @@ impl WalletCreateExecutionConfig {
 mod tests {
     use async_trait::async_trait;
     use groundhog_json_rpc_types::hex::HexBytes;
-    use groundhog_signing::LocalSigner;
+    use groundhog_signing::{LocalSigner, PubkeyAccount};
     use zeroize::Zeroizing;
 
     use crate::key_source::{
@@ -655,9 +503,6 @@ mod tests {
         let config: FaucetConfigFile = toml::from_str(include_str!("../faucet.example.toml"))
             .expect("bug: example faucet config should parse");
 
-        assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
-        assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
-        assert_eq!(config.network.wallet_create.prefund_raw_amount, "10000000");
         assert_eq!(config.network.native_hog.decimals, 7);
         assert_eq!(config.airdrop.raw_amount, "1000000000");
     }
@@ -756,7 +601,6 @@ mod tests {
     fn airdrop_config_contains_only_key_source() {
         let config = AirdropConfig {
             raw_amount: "100000000".into(),
-            wallet_do_action_entrypoint: HexBytes(vec![0x64; 8]),
             secret_key_source: FaucetSecretKeySource::Environment {
                 variable: "GROUNDHOG_FAUCET_SECRET_KEY".into(),
             },
@@ -785,7 +629,6 @@ mod tests {
         assert_eq!(descriptor.network_id, "devnet-preview");
         assert_eq!(descriptor.endpoints.rpc_url, "https://rpc.devnet.example");
         assert_eq!(descriptor.native_hog.decimals, 7);
-        assert_eq!(descriptor.wallet_create.prefund_raw_amount, "100000000");
         let airdrop = descriptor
             .airdrop
             .expect("bug: faucet descriptor should advertise airdrop policy");
@@ -794,8 +637,6 @@ mod tests {
         assert_eq!(airdrop.client_quota_max, 10);
         assert_eq!(airdrop.client_quota_window_seconds, 3_600);
         assert_eq!(airdrop.max_pending_per_recipient, 1);
-        assert_eq!(descriptor.dev_wallet.deploy_entrypoint.0.len(), 8);
-        assert_eq!(descriptor.dev_wallet.do_action_entrypoint.0.len(), 8);
     }
 
     #[tokio::test]
@@ -812,22 +653,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_builds_wallet_create_runtime_config() {
-        let config: FaucetConfigFile =
-            toml::from_str(&test_config()).expect("bug: fixture config should parse");
-
-        let parts = config
-            .into_parts_with_key_loader(&TestKeyLoader)
-            .await
-            .expect("bug: wallet-create runtime config should validate");
-
-        assert_eq!(
-            parts.wallet_create.wallet_artifact_path,
-            std::path::PathBuf::from("contracts/dev_wallet.rv32a")
-        );
-    }
-
-    #[tokio::test]
     async fn config_builds_default_policy_config() {
         let config: FaucetConfigFile =
             toml::from_str(&test_config()).expect("bug: fixture config should parse");
@@ -840,8 +665,6 @@ mod tests {
         assert!(!parts.policy.trust_proxy_client_ip_headers);
         assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 60);
         assert_eq!(parts.policy.airdrop.ip_quota_max, 10);
-        assert_eq!(parts.policy.wallet_create.owner_quota_max, 3);
-        assert_eq!(parts.policy.wallet_create.ip_quota_max, 20);
     }
 
     #[tokio::test]
@@ -864,15 +687,6 @@ mod tests {
             ip = "10.0.0.12"
             quota_max = 10000
             quota_window_secs = 3600
-
-            [policy.wallet_create]
-            owner_quota_window_secs = 120
-            owner_quota_max = 4
-            ip_quota_window_secs = 180
-            ip_quota_max = 5
-            max_pending_per_owner = 1
-            unprefunded_attempt_ttl_secs = 20
-            prefunded_attempt_retention_secs = 240
             "#
         ))
         .expect("bug: fixture config should parse");
@@ -886,10 +700,6 @@ mod tests {
         assert_eq!(parts.policy.airdrop.max_retained_attempts, 200_000);
         assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 60);
         assert_eq!(parts.policy.airdrop.client_overrides[0].quota_max, 10_000);
-        assert_eq!(
-            parts.policy.wallet_create.prefunded_attempt_retention_secs,
-            240
-        );
     }
 
     #[tokio::test]
@@ -920,39 +730,13 @@ mod tests {
 
     #[test]
     fn config_rejects_unknown_fields() {
-        let err = toml::from_str::<FaucetConfigFile>(
-            r#"
-            unexpected = true
+        // Start from a complete, valid document so the unknown key is the only
+        // problem the parser can report.
+        let err =
+            toml::from_str::<FaucetConfigFile>(&format!("unexpected = true\n{}", test_config()))
+                .expect_err("bug: unknown fields should fail");
 
-            [network]
-            network_id = "devnet-preview"
-            protocol = "x23"
-            genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
-            network_hash = "0000000000000000000000000000000000000000000000000000000000000000"
-
-            [network.endpoints]
-            rpc_url = "https://rpc.devnet.example"
-
-            [network.native_hog]
-            token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
-            decimals = 7
-            transfer_entrypoint = "0x63285b3523f9dc3f"
-
-            [network.faucet]
-            wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
-
-            [network.wallet_create]
-            prefund_raw_amount = "100000000"
-            wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
-
-            [network.dev_wallet]
-            deploy_entrypoint = "0xf969542572bd6860"
-            do_action_entrypoint = "0xa0fff94c64fbaf3c"
-            "#,
-        )
-        .expect_err("bug: unknown fields should fail");
-
-        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 
     #[tokio::test]
@@ -970,94 +754,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_allows_distinct_wallet_create_prefund_and_airdrop_amounts() {
-        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
-            "prefund_raw_amount = \"100000000\"",
-            "prefund_raw_amount = \"200000000\"",
-        ))
-        .expect("bug: fixture config should parse");
-
-        let parts = config
-            .into_parts_with_key_loader(&TestKeyLoader)
-            .await
-            .expect("bug: wallet prefund and airdrop amounts should be independent");
-
-        assert_eq!(parts.wallet_create_prefund_raw_amount, 200_000_000);
-        assert_eq!(parts.airdrop.raw_amount, 100_000_000);
-    }
-
-    #[tokio::test]
-    async fn config_rejects_zero_wallet_create_prefund_before_loading_secret() {
-        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
-            "prefund_raw_amount = \"100000000\"",
-            "prefund_raw_amount = \"0\"",
-        ))
-        .expect("bug: fixture config should parse");
-
-        let err = config
-            .into_parts_with_key_loader(&FailIfCalledKeyLoader)
-            .await
-            .expect_err("bug: zero wallet prefund should fail");
-
-        assert!(err.to_string().contains("must be greater than zero"));
-    }
-
-    #[tokio::test]
     async fn config_rejects_secret_that_does_not_match_faucet_public_key() {
-        let expected_public_key =
-            hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
-        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
-            &format!("public_key = \"0x{expected_public_key}\""),
-            &format!("public_key = \"0x{}\"", "aa".repeat(32)),
-        ))
-        .expect("bug: fixture config should parse");
-
+        let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
+        config.network.faucet.public_key = HexBytes(vec![0xaa; 32]);
+        config.network.faucet.wallet_address = groundhog_json_rpc_types::hex::Hex0x(
+            PubkeyAccount::from_public_key_bytes([0xaa; 32], 0).address(),
+        );
         let error = config
             .into_parts_with_key_loader(&TestKeyLoader)
             .await
-            .expect_err("bug: mismatched faucet key should fail");
-
-        assert!(error.to_string().contains("does not match"), "{error}");
-        assert!(!error.to_string().contains(&expected_public_key));
+            .unwrap_err();
+        assert!(matches!(error, FaucetConfigError::FaucetPublicKeyMismatch));
+        assert!(!error.to_string().contains(&"aa".repeat(32)));
     }
 
     #[tokio::test]
     async fn config_rejects_malformed_public_key_before_loading_secret() {
-        let expected_public_key =
-            hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
-        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
-            &format!("public_key = \"0x{expected_public_key}\""),
-            "public_key = \"0xaa\"",
-        ))
-        .expect("bug: fixture config should parse");
-
+        let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
+        config.network.faucet.public_key = HexBytes(vec![0xaa]);
         let error = config
             .into_parts_with_key_loader(&FailIfCalledKeyLoader)
             .await
-            .expect_err("bug: malformed public key should fail");
-
-        assert!(error.to_string().contains("32 bytes"), "{error}");
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            FaucetConfigError::InvalidFaucetPublicKey(1)
+        ));
     }
 
     #[tokio::test]
-    async fn config_rejects_malformed_public_entrypoint_before_loading_secret() {
-        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
-            "deploy_entrypoint = \"0xf969542572bd6860\"",
-            "deploy_entrypoint = \"0xf96954\"",
-        ))
-        .expect("bug: fixture config should parse");
-
+    async fn config_rejects_wrong_native_address_before_loading_secret() {
+        let mut config: FaucetConfigFile = toml::from_str(&test_config()).unwrap();
+        config.network.faucet.wallet_address = groundhog_json_rpc_types::hex::Hex0x(
+            PubkeyAccount::from_public_key_bytes(
+                LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes(),
+                1,
+            )
+            .address(),
+        );
         let error = config
             .into_parts_with_key_loader(&FailIfCalledKeyLoader)
             .await
-            .expect_err("bug: malformed public entrypoint should fail");
+            .unwrap_err();
+        assert!(matches!(error, FaucetConfigError::FaucetAddressMismatch));
+    }
 
-        assert!(
-            error
-                .to_string()
-                .contains("network.dev_wallet.deploy_entrypoint must be 8 bytes"),
-            "{error}"
-        );
+    #[test]
+    fn retired_wallet_configuration_is_rejected() {
+        for section in [
+            "[network.wallet_create]\nprefund_raw_amount = \"1\"",
+            "[network.dev_wallet]\ndeploy_entrypoint = \"0x00\"",
+            "[wallet_create]\nwallet_artifact_path = \"dev_wallet.rv32a\"",
+            "[policy.wallet_create]\nowner_quota_max = 3",
+        ] {
+            assert!(
+                toml::from_str::<FaucetConfigFile>(&format!("{}\n{section}", test_config()))
+                    .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1093,7 +847,17 @@ mod tests {
     fn test_config() -> String {
         let public_key =
             hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
-        TEST_CONFIG.replace("__FAUCET_PUBLIC_KEY__", &public_key)
+        let address = hex::encode(
+            PubkeyAccount::from_public_key_bytes(
+                LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes(),
+                0,
+            )
+            .address()
+            .as_ref(),
+        );
+        TEST_CONFIG
+            .replace("__FAUCET_PUBLIC_KEY__", &public_key)
+            .replace("__FAUCET_ADDRESS__", &address)
     }
 
     const TEST_CONFIG: &str = r#"
@@ -1115,27 +879,14 @@ mod tests {
         transfer_entrypoint = "0x63285b3523f9dc3f"
 
         [network.faucet]
-        wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
+        wallet_address = "0x__FAUCET_ADDRESS__"
         public_key = "0x__FAUCET_PUBLIC_KEY__"
-
-        [network.wallet_create]
-        prefund_raw_amount = "100000000"
-        wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
-
-        [network.dev_wallet]
-        deploy_entrypoint = "0xf969542572bd6860"
-        do_action_entrypoint = "0xa0fff94c64fbaf3c"
 
         [airdrop]
         raw_amount = "100000000"
-        wallet_do_action_entrypoint = "0x646f416374696f6e"
 
         [airdrop.secret_key_source]
         type = "environment"
         variable = "GROUNDHOG_FAUCET_SECRET_KEY"
-
-        [wallet_create]
-        create_wallet_entrypoint = "0x6372656174655761"
-        wallet_artifact_path = "contracts/dev_wallet.rv32a"
         "#;
 }

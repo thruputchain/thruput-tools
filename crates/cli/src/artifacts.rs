@@ -1,0 +1,325 @@
+use crate::CliError;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Artifact-related CLI options shared across build, test, deploy, and call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtifactOptions {
+    target_dir: Option<PathBuf>,
+}
+
+/// Contract artifact runtime kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactKind {
+    /// Lowered RV32 artifact emitted as `.rv32a`.
+    Rv32,
+}
+
+impl ArtifactKind {
+    /// Return the stable wire spelling used in CLI JSON and messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rv32 => "rv32",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "rv32" => Some(Self::Rv32),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for ArtifactKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ArtifactKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown artifact kind `{value}`, expected `{}`",
+                Self::Rv32.as_str()
+            ))
+        })
+    }
+}
+
+impl JsonSchema for ArtifactKind {
+    fn schema_name() -> Cow<'static, str> {
+        "ArtifactKind".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::ArtifactKind").into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "enum": [ArtifactKind::Rv32.as_str()],
+            "description": "Contract artifact runtime kind."
+        })
+    }
+}
+
+/// Artifact path paired with the runtime kind inferred or selected by the CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedArtifact {
+    /// Runtime kind used to wrap artifact bytes for deploy.
+    pub kind: ArtifactKind,
+    /// Resolved artifact path on disk.
+    pub path: PathBuf,
+}
+
+/// Auto-detected artifact and the Cargo package it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPackageArtifact {
+    /// Resolved contract artifact.
+    pub artifact: ResolvedArtifact,
+    /// Selected Cargo package name.
+    pub package_name: String,
+    /// Directory containing the selected package's manifest.
+    pub package_root: PathBuf,
+}
+
+impl ArtifactOptions {
+    /// Create artifact options from an optional target directory.
+    pub fn new(target_dir: Option<PathBuf>) -> Self {
+        Self { target_dir }
+    }
+
+    /// Create artifact options from the original invocation cwd.
+    pub fn from_invocation_cwd(target_dir: Option<PathBuf>, invocation_cwd: &Path) -> Self {
+        Self {
+            target_dir: target_dir.map(|path| normalize_target_dir(path, invocation_cwd)),
+        }
+    }
+
+    /// Apply artifact settings to a cargo command.
+    pub fn apply_to_command(&self, command: &mut Command) {
+        if let Some(target_dir) = &self.target_dir {
+            command.env("CARGO_TARGET_DIR", target_dir);
+        }
+    }
+
+    /// Return the configured target directory, if any.
+    pub fn target_dir(&self) -> Option<&Path> {
+        self.target_dir.as_deref()
+    }
+}
+
+/// Cargo flags that constrain how the manifest may be resolved.
+///
+/// A cargo invocation that resolves the dependency graph must carry the
+/// user's `--locked` / `--offline` / `--frozen` intent: a `--locked` build
+/// whose preflight drops the flag can have the lockfile it was promised
+/// would not change rewritten by that preflight, and an `--offline` build
+/// can reach the network. Threading this through a resolving helper's
+/// signature is the point — the next such helper cannot be written without
+/// confronting the flags.
+///
+/// Only for call sites that do **not** forward the user's whole `cargo_args`
+/// slice. A passthrough site already carries these flags inside that slice;
+/// applying this on top would hand each flag to cargo twice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ManifestFlags {
+    locked: bool,
+    offline: bool,
+    frozen: bool,
+}
+
+impl ManifestFlags {
+    /// Read the manifest-resolve flags out of a user `cargo_args` slice.
+    pub fn from_cargo_args(cargo_args: &[String]) -> Self {
+        let present = |flag: &str| cargo_args.iter().any(|arg| arg == flag);
+        Self {
+            locked: present("--locked"),
+            offline: present("--offline"),
+            frozen: present("--frozen"),
+        }
+    }
+
+    /// Append the enabled flags to a cargo command.
+    pub fn apply_to_command(&self, command: &mut Command) {
+        if self.locked {
+            command.arg("--locked");
+        }
+        if self.offline {
+            command.arg("--offline");
+        }
+        if self.frozen {
+            command.arg("--frozen");
+        }
+    }
+}
+
+/// Return the raw Cargo-produced RV32 ELF output path for a package in the given target directory.
+pub fn cargo_rv32_elf_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join(crate::scaffold::to_snake(package_name))
+}
+
+/// Return the Groundhog-owned RV32 artifact output path for a package in the given target directory.
+pub fn groundhog_rv32_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir
+        .join("groundhog")
+        .join(format!("{}.rv32a", crate::scaffold::to_snake(package_name)))
+}
+
+/// Return the Groundhog-owned RV32 build metadata sidecar path.
+pub fn groundhog_rv32_metadata_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir.join("groundhog").join(format!(
+        "{}.rv32.json",
+        crate::scaffold::to_snake(package_name)
+    ))
+}
+
+/// Infer artifact kind from a path extension.
+pub fn infer_artifact_kind(path: &Path) -> Result<ArtifactKind, CliError> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("rv32a") => Ok(ArtifactKind::Rv32),
+        _ => Err(CliError::UnsupportedArtifactExtension(
+            path.display().to_string(),
+        )),
+    }
+}
+
+/// Resolve a Groundhog-owned build artifact for an explicit or inferred package.
+pub fn resolve_groundhog_artifact(
+    cwd: &Path,
+    artifacts: &ArtifactOptions,
+    package: Option<&str>,
+) -> Result<ResolvedPackageArtifact, CliError> {
+    let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
+    let pkg_name = crate::build::resolve_package(&metadata, package, cwd)?;
+    let path = groundhog_rv32_output_path(&metadata.target_directory, pkg_name);
+
+    if !path.try_exists()? {
+        return Err(CliError::ArtifactNotFound {
+            kind: ArtifactKind::Rv32.as_str(),
+            path: path.display().to_string(),
+        });
+    }
+
+    let package_root = metadata
+        .packages
+        .iter()
+        .find(|candidate| candidate.name == pkg_name)
+        .and_then(|candidate| candidate.manifest_path.parent())
+        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
+
+    Ok(ResolvedPackageArtifact {
+        artifact: ResolvedArtifact {
+            kind: ArtifactKind::Rv32,
+            path,
+        },
+        package_name: pkg_name.to_owned(),
+        package_root,
+    })
+}
+
+/// Ensure passthrough cargo arguments do not override the CLI target directory.
+pub fn ensure_no_target_dir_passthrough_conflicts(
+    options: &ArtifactOptions,
+    config_base_dir: &Path,
+    passthrough_args: &[String],
+) -> Result<(), CliError> {
+    if options.target_dir.is_none() {
+        return Ok(());
+    }
+
+    let mut index = 0;
+    while index < passthrough_args.len() {
+        let arg = &passthrough_args[index];
+
+        if arg == "--target-dir" || arg.starts_with("--target-dir=") {
+            return Err(CliError::TargetDirConflict);
+        }
+
+        if arg == "--config" {
+            if let Some(path) = passthrough_args.get(index + 1)
+                && config_arg_sets_target_dir(path, config_base_dir)
+            {
+                return Err(CliError::TargetDirConflict);
+            }
+            index += 2;
+            continue;
+        }
+
+        if let Some(path) = arg.strip_prefix("--config=")
+            && config_arg_sets_target_dir(path, config_base_dir)
+        {
+            return Err(CliError::TargetDirConflict);
+        }
+
+        index += 1;
+    }
+
+    Ok(())
+}
+
+fn config_arg_sets_target_dir(arg: &str, config_base_dir: &Path) -> bool {
+    if arg.contains('=') {
+        let (key, _) = arg.split_once('=').expect("bug: arg contains '='");
+        return key.trim() == "build.target-dir";
+    }
+
+    let config_path = config_base_dir.join(arg);
+    config_file_sets_target_dir(config_path.as_path())
+}
+
+fn config_file_sets_target_dir(path: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&contents) else {
+        return false;
+    };
+
+    value
+        .get("build")
+        .and_then(|build| build.get("target-dir"))
+        .is_some()
+}
+
+fn normalize_target_dir(target_dir: PathBuf, invocation_cwd: &Path) -> PathBuf {
+    let absolute = if target_dir.is_absolute() {
+        target_dir
+    } else {
+        invocation_cwd.join(target_dir)
+    };
+
+    normalize_path_components(&absolute)
+}
+
+fn normalize_path_components(path: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}

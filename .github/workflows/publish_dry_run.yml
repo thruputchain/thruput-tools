@@ -21,16 +21,25 @@ env:
     groundhog-rv32-artifact
     groundhog-tx-validation
     groundhog-json-rpc-server
+    groundhog-hogd-backend
     groundhog-json-rpc-client
     groundhog-signing
+    groundhog-client
     groundhog-node-supervisor
     groundhog-rv32-lower
+    groundhog-toolchain
+    groundhog-cli-macros
     groundhog-cli
     groundhog-testkit
+
+permissions:
+  contents: read
 
 jobs:
   publish:
     runs-on: namespace-profile-hogd-linux-2604
+    permissions:
+      contents: read
 
     steps:
       - name: Setup SSH Agent
@@ -47,16 +56,22 @@ jobs:
           git config --global url."git@github.com:".insteadOf "https://github.com/"
 
       - name: Checkout actions repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: groundhogchain/actions
+          persist-credentials: false
           path: actions
           ref: b2409b8655be03b1a8667b7cf7e8b31bfe311e07
 
       - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
+        with:
+          tool: cargo-hack@0.6.45
 
       - name: publish dry run
         uses: ./actions/cargo-publish-dry-run

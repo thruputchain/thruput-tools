@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "hogd-dev-runtime",
   "chainState": "fresh",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -37,14 +37,6 @@
     }
   ],
   "bootstrap": {
-    "devWallet": {
-      "contentHash": "0x5151515151515151515151515151515151515151515151515151515151515151",
-      "deployedCodeHash": "0x5252525252525252525252525252525252525252525252525252525252525252",
-      "artifactHint": "contracts/dev_wallet.rv32a",
-      "deployEntrypoint": "0xadac498222148e4f",
-      "createWalletEntrypoint": "0x6372656174655761",
-      "doActionEntrypoint": "0x646f416374696f6e"
-    },
     "storageCostModel": {
       "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
       "baseDataItemCost": "12000",

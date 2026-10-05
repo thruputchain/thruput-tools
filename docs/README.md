@@ -1,47 +1,49 @@
-# Groundhog Docs
+# Groundhog documentation
 
-This directory has two kinds of documents:
+Start with the [workspace architecture](architecture.md) for the system's shape
+and a map into the source. The [repository README](../README.md) covers setup
+and the first local contract loop.
 
-- **Living docs** describe the current user, operator, and implementation
-  contract.
-- **Archive docs** preserve older strategy notes, shipped implementation plans,
-  and competitive analysis. They are useful context, but the current code and
-  living docs win when they disagree.
+## Design and rationale
 
-## Start Here
+Read the guide for the area you are changing:
 
-- [CLI roadmap](cli/roadmap.md) - active CLI execution tracker.
-- [Runtime manifest quickstart](gateway/runtime-manifest.md) - current
-  local-node, gateway, and benchmark handoff contract.
-- [Gateway benchmark bootstrap plan](gateway/benchmark-bootstrap-plan.md) -
-  active benchmark/bootstrap roadmap, including bootstrap-manifest input.
-- [Groundhog simulation](sim/) - current `hogsim` docs for stateful
-  end-to-end chain traffic, soak tests, target orchestration, and result
-  artifacts.
-- [Benchmark scenario library](gateway/bench-scenarios.md) - repeatable local
-  benchmark scenarios.
-- [Gateway roadmap](gateway/roadmap.md) - high-level gateway product roadmap.
+- [Gateway](gateway/system-design.md): public RPC, backend boundaries, admission,
+  and why the local node shares the server implementation.
+- [CLI](cli/design.md): configuration, wallet identity, build artifacts, and
+  managed runtime acquisition.
+- [RV32](rv32/design.md): the ELF-to-artifact boundary and memory layout choices.
+- [Simulation](sim/sim-design.md): scheduled traffic, actor state, target ownership,
+  and what reproducibility means for a real node.
+- [Testkit](testkit/DESIGN.md): concurrent application tests and their relationship
+  to simulation and the single-project integration loop.
 
-## Reference
+## Operating the tools
 
-- [Dev-node transaction submission batching](specs/2026-09-04-dev-node-submit-batching.md) -
-  active design and acceptance criteria for batching embedded local-node
-  submissions.
-- [Gateway system design](gateway/system-design.md) - gateway architecture
-  background and current backend topology notes.
-- [Gateway open questions](gateway/open-questions.md) - remaining cross-team
-  questions and resolved decisions.
-- [Hog-devnode process contract](cli/specs/2026-04-29-hogd-dev-process-contract.md)
-  - current `groundhog node` child-process contract.
-- [CLI specs](cli/specs/) - current contracts, deferred decisions, and active
-  options papers. Shipped implementation plans move to the archive unless they
-  remain the current operator/user contract.
+- [CLI reference](../crates/cli/README.md)
+- [Local node, gateway, and runtime manifests](gateway/runtime-manifest.md)
+- [Benchmark scenarios and comparisons](gateway/bench-scenarios.md)
+- [Transaction-status miss benchmark](gateway/lookup-bench.md)
+- [Gateway health and observability checks](gateway/observability-smoke-test.md)
+- [Simulator quickstart and results](sim/README.md)
+- [Releases](releases.md)
+- [Bundled documentation maintenance](bundled-documentation.md)
 
-## Archive
+## Proposals
 
-- [CLI archive](archive/cli/) - shipped implementation plans, historical design
-  context, and competitive DX analysis.
-- [Gateway archive](archive/gateway/) - historical gateway sketches superseded
-  by the `json-rpc-api` trait and the generated OpenRPC snapshot.
-- [Superpowers archive](archive/superpowers/) - shipped artifact-layout and
-  instrumentation plans.
+These describe proposed work, not the current implementation:
+
+- [CLI TUI](specs/2026-09-21-cli-tui-mvp.md)
+- [Project scaffolding](specs/2026-09-21-project-scaffolding.md)
+
+## What belongs here
+
+Code, tests, generated schemas, and executable examples are the source of truth
+for implementation. Keep prose that explains why the system has its shape, how
+components relate, or how to operate it. Link to the owning source instead of
+copying types, defaults, algorithms, or command inventories.
+
+Keep proposals labelled and separate from current behavior. When work ships,
+retain only the rationale that will help a later contributor; remove the plan,
+completion checklist, and session or release evidence. Git history preserves
+those records. An archive directory is not a second documentation lifecycle.

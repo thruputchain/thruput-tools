@@ -57,6 +57,7 @@ impl JsonSchema for ContractAddressList {
         json_schema!({
             "type": "array",
             "items": items,
+            "minItems": 1,
             "maxItems": MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER,
             "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound."
         })
@@ -97,6 +98,7 @@ impl JsonSchema for EventFilterList {
         json_schema!({
             "type": "array",
             "items": items,
+            "minItems": 1,
             "maxItems": MAX_EVENT_FILTERS_PER_QUERY,
             "description": "Event filters accepted by a single event query. Mirrors the hogd-indexer per-query filter bound."
         })
@@ -113,11 +115,40 @@ pub enum IterationOrder {
 
 /// Where to begin iteration on the initial call.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", from = "BlockAnchorFields")]
 pub enum BlockAnchor {
     AtBeginning,
     AtEnd,
     AtHeight { height: BlockHeight },
+}
+
+/// `BlockAnchor` as it is read off the wire. serde's `deny_unknown_fields`
+/// does not reach the unit variants of an internally tagged enum, so
+/// `{"kind": "atEnd", "height": 5}` would read as `AtEnd`; every variant here
+/// has fields, so a field the variant lacks is an error.
+// Variant names are `BlockAnchor`'s, from which the wire `kind` tags derive.
+#[allow(clippy::enum_variant_names)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename = "BlockAnchor",
+    deny_unknown_fields
+)]
+enum BlockAnchorFields {
+    AtBeginning {},
+    AtEnd {},
+    AtHeight { height: BlockHeight },
+}
+
+impl From<BlockAnchorFields> for BlockAnchor {
+    fn from(anchor: BlockAnchorFields) -> Self {
+        match anchor {
+            BlockAnchorFields::AtBeginning {} => Self::AtBeginning,
+            BlockAnchorFields::AtEnd {} => Self::AtEnd,
+            BlockAnchorFields::AtHeight { height } => Self::AtHeight { height },
+        }
+    }
 }
 
 /// Opaque pagination cursor authored by the server.
@@ -130,7 +161,7 @@ pub struct PaginationCursor(pub Vec<u8>);
 
 impl Serialize for PaginationCursor {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        HexBytes(self.0.clone()).serialize(serializer)
+        serializer.collect_str(&crate::hex::HexDisplay(&self.0))
     }
 }
 
@@ -168,7 +199,7 @@ impl JsonSchema for PaginationCursor {
 /// specified positions are ignored. (This is the ethereum getLogs /
 /// stellar-rpc post-#358 semantics.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventTopicFilter {
     pub topic0: TopicList,
     pub topic1: TopicList,
@@ -182,7 +213,7 @@ pub struct EventTopicFilter {
 /// (When such an index is added, the gateway relaxes the non-empty
 /// check; the wire contract stays the same.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventFilter {
     pub contract_addresses: ContractAddressList,
     pub topics: EventTopicFilter,
@@ -192,14 +223,16 @@ pub struct EventFilter {
 /// matches at least one `EventFilter` in `filters` (OR across filters,
 /// AND within each filter).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EventQuery {
+    /// At least one filter is required. Empty lists are not all-contract scans.
     pub filters: EventFilterList,
     pub order: IterationOrder,
     pub anchor: BlockAnchor,
     /// `0x` on the initial call. Non-empty to continue where a previous
-    /// response left off; `order` and `anchor` in the request are
-    /// ignored when a cursor is supplied — the cursor carries them.
+    /// response left off. `order` and `anchor` remain required request fields,
+    /// but the cursor supplies continuation state. Keep the same filters.
+    /// A cursor continues one historical walk, not blocks added after it began.
     pub cursor: PaginationCursor,
     /// Values above the server's per-page cap (default 200) are
     /// rejected as invalid params; `0` means server default (50).
@@ -248,9 +281,9 @@ pub struct IdentifiedEvent {
 
 /// One page of events returned by `getEvents`.
 ///
-/// To fetch the next page, send the same query back with `cursor`
-/// set to the value returned here.  An empty `cursor` means the
-/// stream is exhausted in the requested direction.
+/// Opaque cursors continue one historical walk; an empty cursor ends it.
+/// For restart rules, see the
+/// [pagination contract](https://docs.groundhog.dev/reference/json-rpc-api/#pagination-contract).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {
@@ -265,8 +298,7 @@ pub struct EventPage {
     /// argument.
     pub cursor: PaginationCursor,
 
-    /// Highest block height the indexer has processed at response time.
-    /// Compare to last-seen heights to decide caught-up state.
+    /// Highest block height indexed at response time, not an application checkpoint.
     pub latest_block: BlockHeight,
 
     /// Oldest block height the indexer still retains data for at
@@ -479,89 +511,4 @@ fn map_topic_list(topics: TopicList) -> VecM<groundhog_xdr::event::Topic> {
             .map(|topic| groundhog_xdr::event::Topic::from(topic.0))
             .collect(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn address_json() -> serde_json::Value {
-        serde_json::Value::String(format!("0x{}", "11".repeat(32)))
-    }
-
-    fn topic_json() -> serde_json::Value {
-        serde_json::Value::String(format!("0x{}", "22".repeat(32)))
-    }
-
-    fn filter_json(addresses: usize, topic0_values: usize) -> serde_json::Value {
-        serde_json::json!({
-            "contractAddresses": vec![address_json(); addresses],
-            "topics": {
-                "topic0": vec![topic_json(); topic0_values],
-                "topic1": [],
-                "topic2": [],
-            },
-        })
-    }
-
-    fn query_json(filters: usize, addresses: usize, topic0_values: usize) -> serde_json::Value {
-        serde_json::json!({
-            "filters": vec![filter_json(addresses, topic0_values); filters],
-            "order": "ascending",
-            "anchor": { "kind": "atBeginning" },
-            "cursor": "0x",
-            "limit": 0,
-        })
-    }
-
-    // The RPC boundary is JSON: every `getEvents` request is deserialized
-    // through these types before any handler runs, so the `VecM` bounds
-    // below are the request-size limits the server enforces.
-
-    #[test]
-    fn event_query_at_the_filter_list_bounds_deserializes() {
-        let query = query_json(
-            MAX_EVENT_FILTERS_PER_QUERY as usize,
-            MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER as usize,
-            MAX_TOPIC_VALUES_PER_POSITION as usize,
-        );
-
-        let parsed: EventQuery =
-            serde_json::from_value(query).expect("bug: bounded query should deserialize");
-
-        assert_eq!(
-            parsed.filters.0.0.len(),
-            MAX_EVENT_FILTERS_PER_QUERY as usize
-        );
-    }
-
-    #[test]
-    fn event_query_with_too_many_filters_is_rejected_at_deserialization() {
-        let query = query_json(MAX_EVENT_FILTERS_PER_QUERY as usize + 1, 1, 1);
-
-        let error = serde_json::from_value::<EventQuery>(query)
-            .expect_err("bug: oversized filter list should fail to deserialize");
-
-        assert!(error.to_string().contains("length"), "{error}");
-    }
-
-    #[test]
-    fn event_filter_with_too_many_addresses_is_rejected_at_deserialization() {
-        let query = query_json(1, MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER as usize + 1, 1);
-
-        let error = serde_json::from_value::<EventQuery>(query)
-            .expect_err("bug: oversized address list should fail to deserialize");
-
-        assert!(error.to_string().contains("length"), "{error}");
-    }
-
-    #[test]
-    fn topic_position_with_too_many_values_is_rejected_at_deserialization() {
-        let query = query_json(1, 1, MAX_TOPIC_VALUES_PER_POSITION as usize + 1);
-
-        let error = serde_json::from_value::<EventQuery>(query)
-            .expect_err("bug: oversized topic list should fail to deserialize");
-
-        assert!(error.to_string().contains("length"), "{error}");
-    }
 }

@@ -1,14 +1,21 @@
-# Crate Groups
+# Crate layout
 
-The workspace groups crates by protocol boundary and usage:
+Crates are grouped by subsystem. Other crates live directly under `crates/`,
+using their existing names.
 
-- `json-rpc/` contains the public JSON-RPC stack: API types, jsonrpsee traits,
-  shared server implementation, gateway, typed client, and OpenRPC generation.
-- `x23/` contains internal x23 transport helpers used to communicate with hogd
-  services. This is not the public API surface.
-- `tools/` contains developer-facing tools and supporting libraries.
-- `dev/` contains local development, simulation, benchmark, and process-level
-  test harnesses.
+- `json-rpc/` contains the public JSON-RPC stack: API types, traits, shared
+  server, gateway, typed client, and OpenRPC generation.
+- `rv32/` contains the contract artifact format and ELF lowering.
+- `x23/` contains the internal hogd integration layer: transport helpers and
+  shared backend adapters that map hogd responses to public RPC payloads.
 
-JSON-RPC crate package names and directories use explicit `json-rpc-*` names.
-OpenRPC, x23, tools, and dev crate names remain domain-specific.
+Top-level crates include the CLI, embeddable client, signing, toolchain
+management, local node supervisor, services, and test tools. Libraries can
+serve several of these consumers; their location does not restrict their use.
+
+Keep existing crate names within groups. In particular, `json-rpc-client`
+identifies the wire client, while `client` provides contract invocation.
+Directory moves do not change Cargo package names.
+
+See the [architecture guide](../docs/architecture.md) for component relationships
+and [Cargo.toml](../Cargo.toml) for the complete crate list.

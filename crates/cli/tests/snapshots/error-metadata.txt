@@ -1,0 +1,571 @@
+InvalidWalletBinding
+  code: invalid_wallet_binding
+  details: walletName, message
+
+WalletBindingConflict
+  code: wallet_binding_conflict
+  hint text: choose a different --name; existing wallet identities are preserved
+  details: walletName
+
+WalletCreatePrefundUnsupported
+  code: wallet_create_prefund_unsupported
+  hint text: create the empty wallet first, then run groundhog airdrop <wallet-name>
+
+NativeDeploymentFundingRequired
+  code: native_deployment_funding_required
+  hint text: choose the HOG amount to transfer to the new contract; this is not an automatic storage-cost estimate
+
+NativeDeploymentOptionsForLegacy
+  code: native_deployment_options_for_legacy
+  hint text: existing legacy wallets retain their own deployment funding behavior
+
+InvalidDeploymentInitializer
+  code: invalid_deployment_initializer
+  details: message
+
+NativeDeploymentUnverified
+  code: native_deployment_unverified
+  details: message
+
+Docs
+  code: docs_error
+
+CargoNotFound
+  code: cargo_not_found
+  hint text: install Rust and ensure `cargo` is on your PATH
+
+ContractTomlNotFound
+  code: contract_toml_not_found
+  hint text: every contract build runs as `cargo --config .cargo/contract.toml`; create that file containing `[unstable]` and `build-std = ["core", "alloc"]`, or run `groundhog new` to scaffold a project. Do not put `[target.*]` rustflags in it — cargo joins those with `.cargo/config.toml`, so a flag in both files is passed twice
+
+PackageNotFound
+  code: package_not_found
+  hint format: available packages can be listed with `cargo metadata --no-deps`; check that `{0}` is spelled correctly
+
+PackageRequired
+  code: package_required
+  hint text: run from inside a package directory, pass `-p <package>` to select one, or pass `--workspace` to `groundhog test` to test every member with a `test_rv32` target
+
+CargoMetadataFailed
+  code: cargo_metadata_failed
+  hint text: ensure `cargo` is on PATH and you are inside a Cargo project or workspace
+
+Rv32ElfNotFound
+  code: rv32_elf_not_found
+  hint text: check that the package builds a binary for riscv32im-unknown-none-elf and that its binary name matches the package name
+
+ArtifactNotFound
+  code: artifact_not_found
+  hint format: run `groundhog build` first to produce the {kind} artifact, or pass `--artifact <path>`
+
+UnsupportedArtifactExtension
+  code: unsupported_artifact_extension
+  hint text: pass a `.rv32a` artifact path
+
+TargetDirConflict
+  code: target_dir_conflict
+  hint text: remove `--target-dir` from passthrough args or config when using the CLI target directory option
+
+CargoFailed
+  code: cargo_failed
+  hint text: see the cargo output above for the underlying build or test failure
+
+CargoFailedWithOutput
+  code: cargo_failed
+  hint: computed
+  details: stdout, stderr
+
+DirExists
+  code: dir_exists
+  hint format: remove `{0}`, or choose a different project name
+
+DirNotEmpty
+  code: dir_not_empty
+  hint text: use an empty directory, or pick a different target path
+
+UnknownTemplate
+  code: unknown_template
+  hint text: available templates: `counter`, `stub`
+
+Io
+  code: io_error
+
+ProfileNotFound
+  code: profile_not_found
+  hint format: create it with `groundhog config new {0} --network <NETWORK>`, or switch to an existing one with `--profile` or `GROUNDHOG_PROFILE`
+
+ProfileNotFoundInScope
+  code: profile_not_found_in_scope
+  hint format: create the profile with `groundhog config new {} --network <NETWORK> --{scope}`
+  details: profile, scope
+
+ProfileAlreadyExists
+  code: profile_already_exists
+  hint format: update it with `groundhog config set <FIELD> <VALUE> --profile={} --{scope}`
+  details: profile, scope
+
+NoActiveProfile
+  code: no_active_profile
+  hint text: select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in project or global config
+
+ProfileNameInvalid
+  code: profile_name_invalid
+  hint text: use a non-empty profile name without control characters
+
+ConfigFieldUnsupported
+  code: config_field_unsupported
+  hint text: supported fields: network, rpc-url, network-hash, faucet-url, default-key
+
+ConfigValueInvalid
+  code: config_value_invalid
+  hint text: use local, devnet, or mainnet for network; absolute HTTP(S) URLs; 64 lowercase hexadecimal digits for network-hash; and a non-empty default key
+  details: field, message
+
+ConfigParse
+  code: config_parse_failed
+  hint text: fix the reported config file and rerun the command
+  details: path, message, line, column
+
+ConfigFileInvalid
+  code: config_file_invalid
+  hint text: fix the reported config file and rerun the command
+  details: path, message
+
+ProjectConfigUnavailable
+  code: project_config_unavailable
+  hint text: run from inside a Groundhog project or remove `--project`
+
+ConfigScopeConflict
+  code: config_scope_conflict
+  hint text: choose exactly one of `--global` or `--project`
+
+ConfigScopeAmbiguous
+  code: config_scope_ambiguous
+  hint text: rerun with `--global` or `--project` to choose the destination file
+
+ConfigLockTimeout
+  code: config_lock_timeout
+  hint text: wait for the other config command to finish, then retry
+  details: path
+
+ConfigChangedDuringConfirmation
+  code: config_changed_during_confirmation
+  hint text: review the current profile and rerun the removal command
+  details: path
+
+CredentialsEmpty
+  code: credentials_empty
+  hint text: rerun `groundhog init` and provide a password; the username is optional
+
+UnsupportedOs
+  code: unsupported_os
+  hint text: `groundhog test` currently supports macOS and Linux host targets
+
+Rv32LowerFailed
+  code: rv32_lower_failed
+  hint: computed
+  details: computed
+
+SpecFailed
+  code: spec_failed
+  hint text: check that your contract uses `#[contract]` and `#[contract_type]` attributes correctly
+
+TsBindingsFailed
+  code: ts_bindings_failed
+
+RawSpecFormat
+  code: raw_spec_format
+
+KeyExists
+  code: key_exists
+  hint format: use a different name, or remove the existing key with `groundhog keys rm -- {}`
+
+KeyNotFound
+  code: key_not_found
+  hint text: list available keys with `groundhog keys ls`
+
+KeyNameEmpty
+  code: key_name_empty
+  hint text: key names may only contain letters, digits, hyphens, and underscores
+
+EmptyWalletName
+  code: empty_wallet_name
+  hint text: pass a non-empty wallet name
+
+KeyNameInvalid
+  code: key_name_invalid
+  hint text: key names may only contain letters, digits, hyphens, and underscores
+
+InvalidSecretSeed
+  code: invalid_secret_seed
+  hint text: provide one private seed through stdin or the hidden prompt; never pass it as a command argument
+
+ReservedDevKeyName
+  code: reserved_dev_key_name
+  hint text: choose a name other than dev-N for a stored key
+
+JsonUnsupported
+  code: json_unsupported
+  hint format: run `groundhog {0}` without `--json`
+
+NotImplemented
+  code: not_implemented
+  hint text: this command is planned for a future release
+
+IntegrationTestNotFound
+  code: integration_test_not_found
+  hint text: create `tests/integration.rs` before running `groundhog test --integration`
+
+InvalidTestOptions
+  code: invalid_test_options
+  hint text: remove the conflicting `groundhog test` option and rerun the command
+
+NoWorkspaceTestPackages
+  code: no_workspace_test_packages
+  hint text: `--workspace` tests the members that declare a `tests/test_rv32.rs` target, as `groundhog new` scaffolds; run `groundhog test -p <package>` to test one member
+
+WorkspaceTestsFailed
+  code: workspace_tests_failed
+  hint text: see each package's test output above; rerun one package with `groundhog test -p <package>`, or `groundhog test --workspace --rerun` to run only the recorded failures
+  details: failed, total
+
+EnvRustflagsSet
+  code: env_rustflags_set
+  hint format: unset it for this build (e.g. `env -u {0} groundhog build`); to add extra rustflags, append them to the `[target.*]` rustflags lists in the project's `.cargo/config.toml` instead
+
+Rv32LinkerScriptNotConfigured
+  code: rv32_linker_script_not_configured
+  hint: computed
+
+StatusHasWarnings
+  code: status_has_warnings
+
+CommandReportedFailure
+  code: command_reported_failure
+
+NodeSupervisor
+  code: node_supervisor_error
+  hint text: check `--hog-devnode-binary`; if contract artifacts are installed elsewhere, pass `--contract-artifacts-dir <DIR>`, then inspect the hog-devnode process output and local node logs
+
+NodeSupervisorProtocolIntroRejected
+  code: protocol_intro_rejected
+  hint: computed
+
+LocalNodeAlreadyRunning
+  code: local_node_already_running
+  hint text: stop the running `groundhog node` process before starting another local node
+
+RpcConnect
+  code: rpc_connect
+  hint format: run `groundhog node` in another terminal, or check that the RPC endpoint at {0} is running
+
+ProxyConfiguration
+  code: proxy_configuration_invalid
+  hint format: set `{variable}` to an HTTP(S) proxy URL or host:port, or unset it
+
+HttpClientInit
+  code: http_client_init_failed
+  hint text: check the standard proxy environment variables, then retry
+
+MissingRpcUrl
+  code: missing_rpc_url
+  hint text: for a local profile, start `groundhog node` in another terminal; otherwise run `groundhog config set rpc-url <URL> --profile <name>` or pass `--rpc-url <URL>`
+
+LocalNodeUnavailable
+  code: missing_rpc_url
+  hint text: start `groundhog node` in another terminal, then retry; if you intended another network, pass `--profile <name>` (for example `--profile devnet`) or `--rpc-url <URL>`
+  details: computed
+
+ProfileConfigInvalid
+  code: profile_config_invalid
+  hint text: update the selected profile in project or global config, or choose a profile that matches the requested command
+
+InteractiveInputRequired
+  code: interactive_input_required
+  hint text: provide the required input explicitly; for key import, pipe the seed on stdin
+
+ConfirmationRequired
+  code: confirmation_required
+  hint text: rerun from an interactive terminal, or pass `--force` to proceed without a prompt
+  details: computed
+
+FaucetService
+  code: faucet_service_error
+  hint: computed
+  details: computed
+
+MissingSigningKey
+  code: missing_signing_key
+  hint text: set `default_key` in project or global config, or run `groundhog keys generate`
+
+MissingNetworkHash
+  code: missing_network_hash
+  hint text: signing binds each transaction to a network: run `groundhog config set network-hash <hash> --profile <name>`, or point the profile at a runtime manifest from `groundhog node` via GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest
+
+InvalidNetworkHash
+  code: invalid_network_hash
+  hint text: network_hash is the 32-byte network hash: 64 lowercase hexadecimal digits, optionally 0x-prefixed, as `groundhog_networkInfo` reports it
+
+InvalidHogAmount
+  code: invalid_hog_amount
+  hint text: enter a positive decimal HOG amount with at most seven decimal places
+  details: input, message
+
+InvalidAddressTarget
+  code: invalid_address_target
+  hint text: use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address
+  details: target, message
+
+UnknownAddressTarget
+  code: unknown_address_target
+  hint text: use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address
+  details: target
+
+UnknownContractAlias
+  code: unknown_contract_alias
+  hint format: use a configured contract alias or a 32-byte 0x-prefixed address; inspect aliases with `groundhog config get {} --sources`
+  details: alias, profile, configSource, availableAliases
+
+InvalidTransactionHash
+  code: invalid_transaction_hash
+  hint text: pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix
+  details: input, message
+
+InvalidTransactionHistoryLimit
+  code: invalid_transaction_history_limit
+  hint text: pass a positive whole-number page size; the selected endpoint enforces its maximum
+  details: input, message
+
+InvalidTransactionCursor
+  code: invalid_transaction_cursor
+  hint text: pass the opaque hex cursor returned by the previous `groundhog tx list` page
+  details: input, message
+
+InvalidEventTopic
+  code: invalid_event_topic
+  hint text: pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix
+  details: input, message
+
+InvalidEventFilter
+  code: invalid_event_filter
+  hint format: pass at most {max} values at each event topic position
+  details: position, count, max
+
+InvalidEventLimit
+  code: invalid_event_limit
+  hint text: pass a positive whole-number page size; the selected endpoint enforces its maximum
+  details: input, message
+
+InvalidEventCursor
+  code: invalid_event_cursor
+  hint text: pass the opaque hex cursor returned by the previous `groundhog events list` page with unchanged filters
+  details: input, message
+
+InvalidEventOptions
+  code: invalid_event_options
+  hint text: pass `--spec <PATH>` with `--event`, and do not combine a selected event with a conflicting `--topic0`
+  details: message
+
+InvalidTokenTransferLimit
+  code: invalid_event_limit
+  hint text: pass a positive whole-number page size; the selected endpoint enforces its maximum
+  details: input, message
+
+InvalidTokenTransferCursor
+  code: invalid_event_cursor
+  hint text: pass the opaque hex cursor returned by the previous `groundhog token transfers` page with the same token and participant filters
+  details: input, message
+
+InvalidTokenTransferOptions
+  code: invalid_event_options
+  hint text: use `--account` by itself, or use `--from` and `--to` separately or together
+  details: message
+
+InvalidEventSpec
+  code: invalid_event_spec
+  hint text: pass a trusted local `.xdr` sidecar containing a valid contract event spec
+  details: path, message
+
+RuntimeInit
+  code: runtime_init_failed
+
+CallGasBalanceInsufficient
+  code: call_gas_balance_insufficient
+  hint text: add HOG to the wallet or lower `--gas-limit` if the contract needs less gas
+  details: wallet, availableRaw, requiredRaw
+
+RpcMethodFailed
+  code: rpc_method_failed
+  hint text: check the RPC endpoint and node logs for details
+
+RpcCapabilityUnsupported
+  code: rpc_capability_unsupported
+  hint text: use a full local devnode or a compatible remote RPC that supports the required RPC method
+  details: method, message
+
+LocalDevAccountUnavailable
+  code: local_dev_account_unavailable
+  hint text: run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints
+
+ManifestEntrypoint
+  code: manifest_entrypoint_invalid
+  hint text: restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from project or global config
+  details: keyName, field, message
+
+NetworkDescriptorInvalid
+  code: network_descriptor_invalid
+  hint text: check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry
+  details: field, message
+
+NetworkDescriptorMismatch
+  code: network_descriptor_mismatch
+  hint text: check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry
+  details: field, expected, actual
+
+WalletAddressDerivationFailed
+  code: wallet_address_derivation_failed
+  hint text: check the stored public key material, or regenerate the key
+
+SavedWalletAmbiguous
+  code: saved_wallet_ambiguous
+  hint text: set `default_wallet` in the selected profile or pass the command's explicit wallet option
+  details: keyName, profile, walletNames
+
+SavedWalletNotFound
+  code: saved_wallet_not_found
+  hint text: run `groundhog wallet ls` and select a saved wallet name
+  details: walletName, profile
+
+SavedWalletOwnerMismatch
+  code: saved_wallet_owner_mismatch
+  hint format: select a wallet owned by key `{key_name}`, or change the effective default key
+  details: walletName, keyName, configured, local
+
+DevWalletSelectionUnsupported
+  code: dev_wallet_selection_unsupported
+  hint text: remove the explicit/default wallet selection when using a manifest-backed dev key
+  details: keyName, walletName
+
+InheritedDefaultWalletRemoval
+  code: inherited_default_wallet_removal
+  hint format: run `groundhog wallet use <NAME> --profile={}` to select a project default before removing this wallet
+  details: walletName, profile
+
+WalletRemovalExposesMissingDefault
+  code: wallet_removal_exposes_missing_default
+  hint format: save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile={}`
+  details: walletName, inheritedWallet, profile
+
+SavedWalletOwnerPublicKeyInvalid
+  code: saved_wallet_owner_public_key_invalid
+  hint text: recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile
+  details: keyName, message
+
+TransferToSelf
+  code: transfer_to_self
+  hint text: select a different recipient or use `--from` to select another source wallet
+  details: address
+
+ReceiptTimeout
+  code: receipt_timeout
+  hint format: inspect with `groundhog tx show {}` using the same profile and RPC endpoint as the original submission before submitting the operation again. Unknown is inconclusive; check the sending wallet's HOG balance on the same network before resubmitting. Local logs: node terminal or redirected output; use `--verbose` on future starts (restarting loses ephemeral state).
+
+TransactionInvalid
+  code: transaction_invalid
+  hint text: check the transaction arguments and signing wallet, then submit a new transaction
+  details: txHash, reason
+
+TransactionRecentFailure
+  code: transaction_recent_failure
+  hint: computed
+  details: txHash, attemptHeight, cause
+
+ReceiptPollingExhausted
+  code: receipt_polling_exhausted
+
+CallEncode
+  code: call_encode
+  hint text: check the reported argument path and use structured JSON for composite contract values
+  details: path, message
+
+CallDecode
+  code: call_decode
+  hint text: check the reported return-value path and verify the resolved contract types match the on-chain value
+  details: path, message
+
+InvalidStorageKey
+  code: invalid_storage_key
+  hint text: pass a 32-byte storage key as 0x-prefixed hex
+
+InvalidViewCalldata
+  code: invalid_view_calldata
+  hint text: pass raw calldata as 0x-prefixed hex, or omit it for empty calldata
+
+InvalidViewArguments
+  code: invalid_view_arguments
+  hint text: use either positional method arguments or `--calldata`, not both
+
+CodegenFailed
+  code: codegen_failed
+  hint text: check that the file contains a valid contract spec
+
+ChainDataDirLocked
+  code: chain_data_dir_locked
+  hint text: stop the node using this data directory and retry
+
+ChainArchiveInvalid
+  code: chain_archive_invalid
+  hint text: use an unmodified archive produced by `groundhog chain dump`
+
+ChainDumpExists
+  code: chain_dump_exists
+  hint text: review the existing archive and rerun with `--force`, or choose another output path
+
+ChainArchiveInsideDataDir
+  code: chain_archive_inside_data_dir
+  hint text: place the archive outside the node data directory
+
+ChainArchiveIo
+  code: chain_archive_io
+  hint text: check path permissions and available disk space, then retry
+
+InvalidArgument
+  code: invalid_argument
+  hint format: correct the {argument} and rerun; `--help` shows the expected format
+  details: argument, message
+
+PackageMetadataInvalid
+  code: package_metadata_invalid
+  hint format: set `{key}` under `[package.metadata.groundhog]` in the package's Cargo.toml to a positive byte count: an integer, or a string such as "128K" or "0x20000"
+  details: package, key, message
+
+TransactionRejectedBeforeSubmission
+  code: transaction_rejected_before_submission
+  hint: computed
+  details: computed
+
+ToolchainCatalog
+  code: toolchain_catalog_error
+  hint: computed
+
+ToolchainInstall
+  code: toolchain_install_error
+  hint: computed
+
+ToolchainSource
+  code: toolchain_source_error
+  hint text: check the artifact source and cache permissions, then retry `groundhog toolchain install`
+
+ToolchainOfflineMissing
+  code: toolchain_offline_missing
+  hint text: rerun `groundhog toolchain install` without offline mode, or set GROUNDHOG_DEVNODE_BINARY to a local build
+  details: version, target
+
+ToolchainNotInstalled
+  code: toolchain_not_installed
+  hint format: run `groundhog toolchain install {}` first
+  details: version, target
+
+Other
+  code: other
+

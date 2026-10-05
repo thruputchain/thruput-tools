@@ -28,7 +28,9 @@ pub struct RpcServerConfig {
     /// requests are rejected as `InvalidParam` before backend dispatch.
     pub max_view_calldata_bytes: usize,
 
-    /// Gas budget assigned to backend `groundhog_view` execution.
+    /// Gas budget assigned to backend `groundhog_view` execution when the
+    /// request names no `gasLimit`, and the ceiling a requested `gasLimit`
+    /// may not exceed.
     ///
     /// The shared server validates JSON request shape; concrete backends
     /// pass this cap into the hogd view invocation once view execution is
