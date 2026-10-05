@@ -153,7 +153,7 @@ fn encode_abort_bytes(
 #[test]
 fn decode_abort_decodes_declared_spec_exception() {
     let metadata = CallMetadata::Spec(throwing_spec_metadata());
-    let expected = serde_json::json!({"case": "Bounds", "value": [7]});
+    let expected = serde_json::json!({"case": "Bounds", "value": ["7"]});
     let bytes = encode_abort_bytes(
         COUNTER_ERROR_SELECTOR,
         ContractType::Named {

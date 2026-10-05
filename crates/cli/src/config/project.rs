@@ -111,8 +111,70 @@ pub struct ResolvedProfile {
     pub runtime_artifacts_dir: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
+    #[serde(with = "wallet_json")]
+    #[schemars(with = "BTreeMap<String, wallet_json::Wallet>")]
     pub wallets: BTreeMap<String, SavedWalletBinding>,
     pub source: Option<PathBuf>,
+}
+
+// Resolved profiles appear in command reports. Persisted TOML bindings retain
+// their numeric nonce; only the report projection uses decimal JSON strings.
+mod wallet_json {
+    use super::{SavedWalletBinding, WalletKind};
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(remote = "SavedWalletBinding")]
+    #[schemars(rename = "JsonWalletBinding")]
+    pub(super) struct Wallet {
+        address: String,
+        #[serde(default)]
+        owner_public_key: String,
+        #[serde(default, skip_serializing_if = "WalletKind::is_legacy")]
+        kind: WalletKind,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "groundhog_json_rpc_types::decimal::option"
+        )]
+        #[schemars(with = "Option<groundhog_json_rpc_types::decimal::Decimal<u64>>")]
+        account_nonce: Option<u64>,
+    }
+
+    struct WalletRef<'a>(&'a SavedWalletBinding);
+
+    impl Serialize for WalletRef<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            Wallet::serialize(self.0, serializer)
+        }
+    }
+
+    pub(super) fn serialize<S: serde::Serializer>(
+        wallets: &BTreeMap<String, SavedWalletBinding>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(
+            wallets
+                .iter()
+                .map(|(name, wallet)| (name, WalletRef(wallet))),
+        )
+    }
+
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<String, SavedWalletBinding>, D::Error> {
+        #[derive(Deserialize)]
+        struct Owned(#[serde(with = "Wallet")] SavedWalletBinding);
+
+        BTreeMap::<String, Owned>::deserialize(deserializer).map(|wallets| {
+            wallets
+                .into_iter()
+                .map(|(name, wallet)| (name, wallet.0))
+                .collect()
+        })
+    }
 }
 
 /// Explicit CLI profile overrides.
@@ -897,6 +959,30 @@ fn is_valid_address(addr: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolved_wallet_json_preserves_wide_nonces_without_changing_toml() {
+        let wire = serde_json::json!({
+            "name": "test", "contracts": {}, "wallets": {
+                "native": {"address": "address", "owner_public_key": "owner",
+                    "kind": "native", "account_nonce": "9007199254740993"}
+            }
+        });
+        let profile: super::ResolvedProfile = serde_json::from_value(wire.clone()).unwrap();
+        let wallet = &profile.wallets["native"];
+        assert_eq!(wallet.account_nonce, Some(9_007_199_254_740_993));
+        assert!(
+            toml::to_string(wallet)
+                .unwrap()
+                .contains("account_nonce = 9007199254740993")
+        );
+        let output = serde_json::to_value(profile).unwrap();
+        assert_eq!(output["wallets"], wire["wallets"]);
+
+        let mut invalid = wire;
+        invalid["wallets"]["native"]["account_nonce"] = serde_json::json!(42);
+        assert!(serde_json::from_value::<super::ResolvedProfile>(invalid).is_err());
+    }
+
     use super::{
         PreparedWalletRemoval, ProjectProfile, WalletRemovalPeer, remove_prepared_profile_wallet,
     };

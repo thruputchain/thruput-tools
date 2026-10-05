@@ -191,7 +191,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
     module
         .register_method(
             "groundhog_chainTip",
-            |_, _, _| json!({"height":42,"blockHash":format!("0x{}","00".repeat(32))}),
+            |_, _, _| json!({"height":"42","blockHash":format!("0x{}","00".repeat(32))}),
         )
         .unwrap();
     module
@@ -225,7 +225,7 @@ async fn server(outcome: Outcome) -> (String, ServerHandle, Arc<State>) {
         if matches!(state.outcome, Outcome::LookupError) { return Err(ErrorObjectOwned::owned(-32000, "receipt unavailable", None::<()>)); }
         let signed = signed(state.submissions.lock().unwrap().first().unwrap());
         let (hash, address) = identity(&signed);
-        let mut receipt = json!({"txHash":hash,"height":43,"status":{"result":"ok"},"events":[],"gasUsed":99,"returnData":address});
+        let mut receipt = json!({"txHash":hash,"height":"43","status":{"result":"ok"},"events":[],"gasUsed":"99","returnData":address});
         match state.outcome {
             Outcome::ReceiptHashMismatch => receipt["txHash"] = json!(format!("0x{}", "bb".repeat(32))),
             Outcome::MissingReturn => { receipt.as_object_mut().unwrap().remove("returnData"); },
@@ -450,7 +450,7 @@ async fn named_initializer_uses_the_deployed_artifact_spec_and_typed_arguments()
     );
     assert_eq!(
         init["gasLimit"],
-        groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT
+        groundhog_cli::call::DEFAULT_CALL_GAS_LIMIT.to_string()
     );
     for value in ["not-a-number", "18446744073709551616"] {
         let bad = fixture.deploy(&["--fund", "5", "--init", "initialize", "--init-arg", value]);
@@ -532,7 +532,7 @@ async fn native_deploy_decodes_the_prepared_initializer_spec() {
     assert!(!output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["error"]["code"], "transaction_reverted");
-    assert_eq!(report["data"]["abortValue"], 7);
+    assert_eq!(report["data"]["abortValue"], "7");
     assert!(report["data"].get("abortDecodeError").is_none());
     assert_eq!(fixture.config(), before);
     handle.stop().unwrap();
@@ -577,7 +577,7 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
                 vec![0xab, 0xcd]
             ))
         );
-        assert_eq!(data["schemaVersion"], 6);
+        assert_eq!(data["schemaVersion"], 7);
         assert_eq!(data["nativeDeployment"]["fundingRawAmount"], "0");
         assert_eq!(
             data["nativeDeployment"]["initializer"]["entrypointId"],
@@ -587,7 +587,7 @@ async fn zero_funding_and_initializer_are_preserved_in_dry_run_and_recovery() {
             data["nativeDeployment"]["initializer"]["calldata"],
             "0xabcd"
         );
-        assert_eq!(data["nativeDeployment"]["initializer"]["gasLimit"], 12345);
+        assert_eq!(data["nativeDeployment"]["initializer"]["gasLimit"], "12345");
         assert_eq!(
             state.submissions.lock().unwrap().len(),
             usize::from(!dry_run)

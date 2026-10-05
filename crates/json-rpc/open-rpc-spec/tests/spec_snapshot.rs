@@ -25,6 +25,35 @@ const INFALLIBLE_METHODS: &[&str] = &[
 ];
 
 #[test]
+fn public_schemas_never_expose_wide_json_numbers() {
+    fn check(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                if fields.get("type").and_then(serde_json::Value::as_str) == Some("integer") {
+                    assert!(
+                        !matches!(
+                            fields.get("format").and_then(serde_json::Value::as_str),
+                            Some("int64" | "uint64" | "int128" | "uint128")
+                        ),
+                        "wide integer must be a decimal string: {value}"
+                    );
+                }
+                for value in fields.values() {
+                    check(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    check(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    check(&build_spec());
+}
+
+#[test]
 fn openrpc_spec_matches_snapshot() {
     let spec = build_spec();
     let actual = serde_json::to_string_pretty(&spec).expect("spec JSON serialization should work");

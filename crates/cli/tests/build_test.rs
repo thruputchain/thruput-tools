@@ -619,7 +619,7 @@ fn build_json_lists_a_typescript_codegen_refusal_under_warnings() {
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "build");
-    assert_eq!(payload["data"]["schemaVersion"], 1);
+    assert_eq!(payload["data"]["schemaVersion"], 2);
     let warnings = payload["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert_eq!(warnings[0]["level"], "warn");

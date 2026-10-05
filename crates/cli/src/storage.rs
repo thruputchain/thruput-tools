@@ -13,7 +13,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Schema version of the `storage --json` data payload.
-pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 1;
+pub const STORAGE_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Read the latest committed storage item at a contract address/key pair.
 pub fn run(
@@ -71,7 +71,7 @@ pub fn run(
             "rpcUrl": rpc_url,
             "address": address_hex,
             "key": key_hex,
-            "blockHeight": read.block_height,
+            "blockHeight": read.block_height.to_string(),
             "item": read.item,
         }),
     ))?;

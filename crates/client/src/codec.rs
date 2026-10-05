@@ -1310,6 +1310,21 @@ where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
+    if matches!(ty, "u64" | "i64" | "u128" | "i128" | "U256" | "I256") {
+        let text = parse_json_string(value, path)?;
+        let digits = text.strip_prefix('-').unwrap_or(text);
+        if text == "-0"
+            || digits.is_empty()
+            || (digits.len() > 1 && digits.starts_with('0'))
+            || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(encode_value_error(
+                path,
+                format!("expected a canonical decimal {ty} string"),
+            ));
+        }
+        return parse_numeric(text, ty);
+    }
     match value {
         Value::Number(number) => parse_numeric(&number.to_string(), ty),
         Value::String(string) => parse_numeric(string, ty),
@@ -1477,8 +1492,12 @@ fn decode_spec_scalar_value_from_reader(
         })),
         ContractType::U32 => Some(read_xdr_value::<u32>(reader, path).map(Value::from)),
         ContractType::I32 => Some(read_xdr_value::<i32>(reader, path).map(Value::from)),
-        ContractType::U64 => Some(read_xdr_value::<u64>(reader, path).map(Value::from)),
-        ContractType::I64 => Some(read_xdr_value::<i64>(reader, path).map(Value::from)),
+        ContractType::U64 => {
+            Some(read_xdr_value::<u64>(reader, path).map(|value| Value::from(value.to_string())))
+        }
+        ContractType::I64 => {
+            Some(read_xdr_value::<i64>(reader, path).map(|value| Value::from(value.to_string())))
+        }
         ContractType::U128 => {
             Some(read_xdr_value::<u128>(reader, path).map(|value| Value::from(value.to_string())))
         }
@@ -1758,13 +1777,13 @@ fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<Value> {
     match ty.as_str() {
         "u16" => decode_xdr_value::<u16>(bytes).map(Value::from),
         "u32" => decode_xdr_value::<u32>(bytes).map(Value::from),
-        "u64" => decode_xdr_value::<u64>(bytes).map(Value::from),
+        "u64" => decode_xdr_value::<u64>(bytes).map(|value| Value::from(value.to_string())),
         "u128" => decode_xdr_value::<u128>(bytes).map(|value| Value::from(value.to_string())),
         "U256" => decode_xdr_value::<groundhog_u256::U256>(bytes)
             .map(|value| Value::from(value.to_string())),
         "i16" => decode_xdr_value::<i16>(bytes).map(Value::from),
         "i32" => decode_xdr_value::<i32>(bytes).map(Value::from),
-        "i64" => decode_xdr_value::<i64>(bytes).map(Value::from),
+        "i64" => decode_xdr_value::<i64>(bytes).map(|value| Value::from(value.to_string())),
         "i128" => decode_xdr_value::<i128>(bytes).map(|value| Value::from(value.to_string())),
         "I256" => decode_xdr_value::<groundhog_u256::I256>(bytes)
             .map(|value| Value::from(value.to_string())),

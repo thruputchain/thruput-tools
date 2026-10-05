@@ -594,19 +594,24 @@ where
     }
 
     #[tracing::instrument(skip_all, fields(?height))]
-    async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>> {
+    async fn get_block_by_number(
+        &self,
+        height: groundhog_json_rpc_types::decimal::Decimal<BlockHeight>,
+    ) -> RpcResult<Option<BlockInfo>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.get_block_by_number(context, height).await?)
+            Ok(self.chain.get_block_by_number(context, height.0).await?)
         })
         .await
     }
 
     #[tracing::instrument(skip_all)]
-    async fn pending_transaction_count(&self) -> RpcResult<u64> {
+    async fn pending_transaction_count(
+        &self,
+    ) -> RpcResult<groundhog_json_rpc_types::decimal::Decimal<u64>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.pending_transaction_count(context).await?)
+            Ok(self.chain.pending_transaction_count(context).await?.into())
         })
         .await
     }
@@ -2192,7 +2197,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             server
                 .pending_transaction_count()
                 .await
-                .expect("bug: chain plane should answer pending count"),
+                .expect("bug: chain plane should answer pending count")
+                .0,
             7
         );
 

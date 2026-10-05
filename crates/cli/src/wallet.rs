@@ -16,7 +16,7 @@ use serde_json::json;
 use std::path::Path;
 
 /// JSON contract for offline native account creation.
-pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 5;
+pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 6;
 
 /// Result of deriving and optionally saving a native account. No chain state is inferred.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -37,6 +37,8 @@ pub struct WalletCreateReport {
     /// Transaction format for this account.
     pub kind: WalletKind,
     /// Nonce used to derive the account address.
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     pub account_nonce: u64,
     /// Whether saving was skipped.
     pub dry_run: bool,
@@ -56,6 +58,7 @@ struct SavedWallet {
     #[serde(skip_serializing_if = "WalletKind::is_legacy")]
     kind: WalletKind,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "groundhog_json_rpc_types::decimal::option")]
     account_nonce: Option<u64>,
     is_default: bool,
 }

@@ -19,9 +19,13 @@ pub struct TransactionDetail {
     /// Full receipt retained within the heavy-data retention window.
     pub receipt: TransactionReceipt,
     /// Gas units consumed by the transaction.
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_consumed: u64,
     /// Configured gas limit from the transaction, if one was set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub gas_limit: Option<u64>,
     /// Top-level storage writes applied by the committed transaction.
     pub storage_deltas: Vec<StorageDeltaInfo>,
@@ -69,6 +73,8 @@ pub struct InvocationInfo {
     pub address: ContractAddress,
     pub entrypoint: HexBytes,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::decimal::option")]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub gas_limit: Option<u64>,
     pub calldata: HexBytes,
 }
@@ -78,8 +84,14 @@ pub struct InvocationInfo {
 #[serde(rename_all = "camelCase")]
 pub struct SyscallInfo {
     pub name: String,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub number: u64,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_remaining_at_start: u64,
+    #[serde(with = "crate::decimal")]
+    #[schemars(with = "crate::decimal::Decimal<u64>")]
     pub gas_remaining_at_end: u64,
     pub status: SyscallStatusInfo,
     /// XDR-encoded syscall trace body, including typed inputs/outputs.

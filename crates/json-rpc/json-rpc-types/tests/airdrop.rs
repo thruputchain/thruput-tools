@@ -58,7 +58,7 @@ fn airdrop_response_accepts_future_additive_fields() {
         "attemptStatus": "pending",
         "recipient": format!("0x{}", "11".repeat(32)),
         "rawAmount": "100000000",
-        "retryAfterSeconds": 5,
+        "retryAfterSeconds": "5",
         "futureField": true
     });
 

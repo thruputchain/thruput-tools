@@ -1737,7 +1737,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     let json = serde_json::to_string(&report).unwrap();
     let roundtrip: groundhog_cli::config::ConfigGetReport = serde_json::from_str(&json).unwrap();
 
-    assert!(json.contains("\"schemaVersion\":1"));
+    assert!(json.contains("\"schemaVersion\":2"));
     assert!(json.contains("\"ownerPublicKey\""));
     assert!(!json.contains("owner_public_key"));
     assert_eq!(roundtrip, report);

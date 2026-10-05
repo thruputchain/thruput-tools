@@ -62,8 +62,8 @@ fn transaction_detail_serializes_hex_and_camel_case() {
     };
 
     let value: Value = serde_json::to_value(&detail).expect("bug: detail should serialize");
-    assert_eq!(value["gasConsumed"], 12);
-    assert_eq!(value["gasLimit"], 99);
+    assert_eq!(value["gasConsumed"], "12");
+    assert_eq!(value["gasLimit"], "99");
     assert_eq!(value["storageDeltas"][0]["kind"], "bytestringSet");
     assert_eq!(value["storageDeltas"][0]["key"], "0x66");
     assert_eq!(
