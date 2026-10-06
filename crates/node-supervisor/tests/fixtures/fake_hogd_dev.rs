@@ -35,7 +35,7 @@ use groundhog_scheduler::{
     ParallelTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
     SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
-    SchedulerValidationResult,
+    SchedulerTransactionOutcomeBatch, SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
 };
@@ -1021,15 +1021,6 @@ fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> SHA256Hash {
 
 #[async_trait]
 impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
-    async fn schedcoord_lookup_transaction_outcomes(
-        &self,
-        _hashes: TransactionHashBatch,
-    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
-        Err(ProgramError::msg(
-            "fake scheduler does not implement outcome lookup",
-        ))
-    }
-
     async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
         Ok(())
     }
@@ -1237,21 +1228,19 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         // but each hash still gets an explicit per-transaction answer.
         Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
     }
+
+    async fn schedcoord_lookup_transaction_outcomes(
+        &self,
+        _hashes: TransactionHashBatch,
+    ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+        Err(ProgramError::msg("not implemented in fake hogd-dev"))
+    }
 }
 
 struct FakeSchedulerGateway(FakeScheduler);
 
 #[async_trait]
 impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
-    async fn schedgateway_lookup_transaction_outcomes(
-        &self,
-        _hashes: TransactionHashBatch,
-    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
-        Err(ProgramError::msg(
-            "fake scheduler does not implement outcome lookup",
-        ))
-    }
-
     async fn schedgateway_intro(
         &self,
         _protocol: ProtocolCommit,
@@ -1310,6 +1299,13 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
     async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
         i64::try_from(self.0.pending_submits.load(Ordering::SeqCst))
             .map_err(|_| ProgramError::msg("fake pending count overflow"))
+    }
+
+    async fn schedgateway_lookup_transaction_outcomes(
+        &self,
+        _hashes: TransactionHashBatch,
+    ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+        Err(ProgramError::msg("not implemented in fake hogd-dev"))
     }
 }
 

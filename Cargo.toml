@@ -90,8 +90,10 @@ groundhog_view = { version = "=0.46.0", registry = "groundhog" }
 groundhog_scp = { version = "=0.46.0", registry = "groundhog" }
 groundhog_coordinator = { version = "=0.46.0", registry = "groundhog" }
 groundhog-trace = { version = "=0.46.0", registry = "groundhog" }
-xdrs = { version = "=0.10.3", registry = "groundhog", features = ["alloc"] }
-xdr-common = { version = "=0.10.3", registry = "groundhog" }
+# The XDR codec is the exception: caret, so an xdrs patch release reaches this
+# workspace without a release here.  Cargo still resolves one 0.10.x per graph.
+xdrs = { version = "0.10.3", registry = "groundhog", features = ["alloc"] }
+xdr-common = { version = "0.10.3", registry = "groundhog" }
 rpc_driver = { version = "=0.13.1", registry = "groundhog" }
 # from the sdk crate:
 groundhog-spec-tool = { version = "=0.44.2", registry = "groundhog" }

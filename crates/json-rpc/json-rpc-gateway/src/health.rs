@@ -1497,6 +1497,7 @@ mod tests {
     use groundhog_scheduler::{
         ConsensusValue, DbTip, ParallelSignedTransactionBatch, PendingTxCount, ProposalTxsHash,
         RPCError, SchedGatewayIntroOutcome, SchedGatewaySubmitOutcomeBatch,
+        SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
     use groundhog_view::ViewGatewayIntroOutcome;
@@ -1805,13 +1806,6 @@ mod tests {
 
     #[async_trait]
     impl SchedGateway_SchedGateway1 for TestScheduler {
-        async fn schedgateway_lookup_transaction_outcomes(
-            &self,
-            _hashes: TransactionHashBatch,
-        ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
-            panic!("bug: this test should not look up scheduler outcomes")
-        }
-
         async fn schedgateway_intro(
             &self,
             _protocol: Protocol,
@@ -1852,6 +1846,13 @@ mod tests {
                 gate.notified().await;
             }
             Ok(0)
+        }
+
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            _hashes: TransactionHashBatch,
+        ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+            panic!("health probe test should not look up transaction outcomes")
         }
     }
 
