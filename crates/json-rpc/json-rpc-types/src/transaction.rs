@@ -56,12 +56,52 @@ pub enum TransactionStatus {
         cause: TransactionFailureCause,
     },
 
-    /// Not found in mempool or indexer.
+    /// Scheduler processing failed; resubmitting the transaction may succeed.
+    Retry { error: SchedulerTransactionError },
+
+    /// Scheduler processing failed permanently; modify the transaction before resubmitting.
+    Dropped { error: SchedulerTransactionError },
+
+    /// Not found in the scheduler's retained outcomes or indexer.
     Unknown,
 
     /// Unrecognized status from a newer server. Returned when the
     /// client encounters a `status` tag it doesn't know about. Check
     /// for client updates.
+    #[serde(other)]
+    Other,
+}
+
+/// A scheduler processing failure. The source identifies the protocol enum of `code`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulerTransactionError {
+    /// Subsystem that reported the failure.
+    pub source: SchedulerTransactionErrorSource,
+    /// `AuthErrorCode`, `SchedulerErrorCode`, or `ExecResult` for the indicated source.
+    pub code: i32,
+}
+
+impl SchedulerTransactionError {
+    /// Preserve the subsystem and its protocol error code.
+    pub fn new(source: SchedulerTransactionErrorSource, code: i32) -> Self {
+        Self { source, code }
+    }
+}
+
+/// Subsystem whose protocol error enum supplies a scheduler failure code.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub enum SchedulerTransactionErrorSource {
+    /// Authentication subsystem (`AuthErrorCode`).
+    Auth,
+    /// Mempool scheduler (`SchedulerErrorCode`).
+    Scheduler,
+    /// Executor (`ExecResult`).
+    Executor,
+    /// A source added by a newer server.
     #[serde(other)]
     Other,
 }

@@ -1101,6 +1101,51 @@
           }
         ]
       },
+      "SchedulerTransactionError": {
+        "additionalProperties": false,
+        "description": "A scheduler processing failure. The source identifies the protocol enum of `code`.",
+        "properties": {
+          "code": {
+            "description": "`AuthErrorCode`, `SchedulerErrorCode`, or `ExecResult` for the indicated source.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SchedulerTransactionErrorSource",
+            "description": "Subsystem that reported the failure."
+          }
+        },
+        "required": [
+          "source",
+          "code"
+        ],
+        "type": "object"
+      },
+      "SchedulerTransactionErrorSource": {
+        "description": "Subsystem whose protocol error enum supplies a scheduler failure code.",
+        "oneOf": [
+          {
+            "const": "auth",
+            "description": "Authentication subsystem (`AuthErrorCode`).",
+            "type": "string"
+          },
+          {
+            "const": "scheduler",
+            "description": "Mempool scheduler (`SchedulerErrorCode`).",
+            "type": "string"
+          },
+          {
+            "const": "executor",
+            "description": "Executor (`ExecResult`).",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "A source added by a newer server.",
+            "type": "string"
+          }
+        ]
+      },
       "ServerLimits": {
         "description": "Request bounds this JSON-RPC endpoint enforces. Returned by\n`serverLimits`.\n\nThese are operator settings local to the serving endpoint, not consensus\nparameters: two endpoints for the same chain may report different values,\nand a value may change when the endpoint is reconfigured. Consensus-checked\nexecution parameters are reported by `chainConfig`.",
         "properties": {
@@ -1542,7 +1587,41 @@
             "type": "object"
           },
           {
-            "description": "Not found in mempool or indexer.",
+            "description": "Scheduler processing failed; resubmitting the transaction may succeed.",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/SchedulerTransactionError"
+              },
+              "status": {
+                "const": "retry",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Scheduler processing failed permanently; modify the transaction before resubmitting.",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/SchedulerTransactionError"
+              },
+              "status": {
+                "const": "dropped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Not found in the scheduler's retained outcomes or indexer.",
             "properties": {
               "status": {
                 "const": "unknown",
@@ -1700,7 +1779,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "9.0.0"
+    "version": "9.1.0"
   },
   "methods": [
     {
@@ -1838,7 +1917,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check. The indexer is asked first, so `committed` wins; a mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown` is returned only after both backends answered without a match. If the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. Any indexer record takes priority and skips the scheduler lookup. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome. Scheduler commitments currently use height \"0\". `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
       "tags": [
         {
           "name": "Core API"

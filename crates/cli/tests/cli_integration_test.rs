@@ -11428,12 +11428,14 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
                 "code": "boundsExceeded",
             } },
         }),
+        serde_json::json!({ "status": "retry", "error": { "source": "scheduler", "code": 1 } }),
+        serde_json::json!({ "status": "dropped", "error": { "source": "auth", "code": 2 } }),
         serde_json::json!({ "status": "unknown" }),
         serde_json::json!({ "status": "futureStatus", "futureField": 1 }),
     ];
 
     for (index, status) in statuses.into_iter().enumerate() {
-        let expected_status = if index == 4 {
+        let expected_status = if status["status"] == "futureStatus" {
             serde_json::json!({ "status": "other" })
         } else {
             status.clone()
@@ -11550,7 +11552,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
         (
             serde_json::json!({ "status": "unknown" }),
             None,
-            "status: unknown (not found in the mempool or indexer)",
+            "status: unknown (not found in scheduler outcomes or indexer)",
             "status: invalid",
         ),
     ] {
@@ -15938,4 +15940,56 @@ fn issuer_token_movements_count_clawback_once() {
     let alice = format!("0x{}", "13".repeat(32));
     assert_eq!(clawback_burn["transfer"]["from"], alice);
     assert!(clawback_burn["transfer"]["to"].is_null());
+}
+
+#[test]
+fn transfer_live_scheduler_failures_preserve_json_outcome() {
+    for tag in ["retry", "dropped"] {
+        let status =
+            serde_json::json!({ "status": tag, "error": { "source": "scheduler", "code": 1 } });
+        let run = run_transfer_live_mock_with_hash(
+            TransferRpcMock {
+                submit: TransferSubmitMock::MatchingHash,
+                poll: Some(TransferPollMock::Status(status.clone())),
+            },
+            true,
+        );
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(stdout["ok"], false);
+        assert_eq!(stdout["error"]["code"], format!("transaction_{tag}"));
+        assert_eq!(stdout["data"]["confirmation"], tag);
+        assert_eq!(stdout["data"]["transactionStatus"], status);
+    }
+}
+
+#[test]
+fn tx_show_scheduler_failures_render_next_steps() {
+    let hash = format!("0x{}", "bc".repeat(32));
+    for (tag, next_step) in [
+        ("retry", "resubmit the transaction"),
+        ("dropped", "modify the transaction"),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Result(serde_json::json!({
+                "status":tag, "error":{"source":"scheduler", "code":3}
+            })),
+            None,
+        );
+        let output = groundhog()
+            .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&format!("status: {tag}")), "{stderr}");
+        assert!(stderr.contains("error source: scheduler"), "{stderr}");
+        assert!(stderr.contains("error code: 3"), "{stderr}");
+        assert!(stderr.contains(next_step), "{stderr}");
+    }
 }

@@ -153,3 +153,39 @@ fn unknown_failure_cause_and_contract_code_decode_as_other() {
         ContractRejectCode::Other
     );
 }
+
+#[test]
+fn scheduler_failure_statuses_preserve_source_and_code() {
+    use groundhog_json_rpc_types::transaction::{
+        SchedulerTransactionError, SchedulerTransactionErrorSource,
+    };
+    for (status, tag) in [
+        (
+            TransactionStatus::Retry {
+                error: SchedulerTransactionError::new(
+                    SchedulerTransactionErrorSource::Scheduler,
+                    1,
+                ),
+            },
+            "retry",
+        ),
+        (
+            TransactionStatus::Dropped {
+                error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Auth, -2),
+            },
+            "dropped",
+        ),
+    ] {
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["status"], tag);
+        let decoded: TransactionStatus = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+        assert!(value["error"]["code"].is_i64());
+        assert!(
+            serde_json::from_value::<SchedulerTransactionError>(
+                serde_json::json!({"source":"auth", "code":1, "extra":true})
+            )
+            .is_err()
+        );
+    }
+}

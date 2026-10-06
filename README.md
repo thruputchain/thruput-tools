@@ -15,7 +15,10 @@ Building from source requires Rust 1.96 or newer. This workspace and generated
 contract projects currently depend on packages in the private Groundhog Cargo
 registry. Repository access alone is not enough to build them; the commands
 below require registry credentials and authentication instructions from the
-Groundhog team.
+Groundhog team. This checkout also pins protocol bindings to a commit in the
+private `groundhogchain/protocol-rs` repository. Source builds require
+authenticated Git access to that repository and its `groundhogchain/protocol`
+submodule.
 
 Generated contracts pin their own nightly toolchain, which rustup installs on
 first use.

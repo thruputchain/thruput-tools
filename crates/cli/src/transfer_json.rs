@@ -68,6 +68,8 @@ pub struct TransferCommittedReport {
 #[serde(rename_all = "camelCase")]
 pub enum TransferConfirmation {
     Invalid,
+    Retry,
+    Dropped,
     Unavailable,
 }
 

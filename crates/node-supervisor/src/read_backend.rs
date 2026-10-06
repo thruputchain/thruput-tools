@@ -2,7 +2,7 @@
 //!
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` runs the indexer-and-mempool probe the gateway
+//! calls; `transaction_status` runs the indexer-and-scheduler probe the gateway
 //! runs, from `groundhog_hogd_backend::status`, so both answer alike.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
@@ -47,7 +47,7 @@ const HOGD_DEV_POOL_SIZE: usize = 2;
 /// Indexer-backed read plane for hogd-dev.
 ///
 /// Implements the `ReadPlane` trait: receipts and events come from the indexer;
-/// pending-tx detection for `transaction_status` borrows the shared scheduler
+/// scheduler outcome lookup for `transaction_status` borrows the shared scheduler
 /// client from the chain/submit backend.
 #[derive(Clone)]
 pub(crate) struct HogdDevReadBackend {
@@ -139,16 +139,19 @@ impl HogdDevReadBackend {
 /// The supervisor's two status lookups. Neither is metered or bounded here:
 /// the caller's request deadline bounds the whole probe.
 impl shared_status::StatusProbe for HogdDevReadBackend {
-    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+    async fn scheduler_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
         let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
         let results = self
             .scheduler_gateway
-            .schedgateway_lookup_tx(&batch)
+            .schedgateway_lookup_transaction_outcomes(&batch)
             .await
             .map_err(|error| {
                 RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
             })?;
-        shared_scheduler::mempool_holds_tx(SCHEDULER_GATEWAY, &results)
+        shared_scheduler::transaction_outcome(SCHEDULER_GATEWAY, &results)
     }
 
     async fn indexed_status(
@@ -558,10 +561,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Controls what `schedgateway_lookup_tx` returns.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone)]
     enum FakeSchedulerMode {
         /// Returns one `None` per queried hash — nothing pending.
         NoPending,
+        Outcome(groundhog_scheduler::SchedulerTransactionOutcome),
         /// Returns one `Some(dummy_tx)` per queried hash — all pending.
         AllPending,
         /// Returns an empty batch — no per-hash answer at all.
@@ -653,7 +657,10 @@ mod tests {
             hashes: TransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             self.lookups.fetch_add(1, Ordering::SeqCst);
-            match self.mode {
+            match &self.mode {
+                FakeSchedulerMode::Outcome(_) => {
+                    panic!("old lookup must not be used for retained outcomes")
+                }
                 FakeSchedulerMode::NoPending => {
                     Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
                 }
@@ -672,6 +679,37 @@ mod tests {
                     Err(ProgramError::msg("fake scheduler lookup rpc-fail"))
                 }
             }
+        }
+
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            hashes: TransactionHashBatch,
+        ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+            use groundhog_scheduler::{
+                SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+                SchedulerTransactionStatus,
+            };
+            if let FakeSchedulerMode::Outcome(outcome) = &self.mode {
+                self.lookups.fetch_add(1, Ordering::SeqCst);
+                return Ok(VecM(vec![outcome.clone(); hashes.0.len()]));
+            }
+            let results = self.schedgateway_lookup_tx(hashes).await?;
+            Ok(VecM(
+                results
+                    .0
+                    .into_iter()
+                    .map(|tx| SchedulerTransactionOutcome {
+                        status: if tx.is_some() {
+                            SchedulerTransactionStatus::SchedulerTransactionPending
+                        } else {
+                            SchedulerTransactionStatus::SchedulerTransactionNotFound
+                        },
+                        error_source:
+                            SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                        error_code: 0,
+                    })
+                    .collect(),
+            ))
         }
 
         async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
@@ -1493,6 +1531,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transaction_status_scheduler_retained_outcomes() {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus as Status,
+        };
+        for (status, tag) in [
+            (Status::SchedulerTransactionSucceeded, "committed"),
+            (Status::SchedulerTransactionRetry, "retry"),
+            (Status::SchedulerTransactionDropped, "dropped"),
+        ] {
+            let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+            let outcome = SchedulerTransactionOutcome {
+                status,
+                error_source: Source::SchedulerTransactionErrorExecutor,
+                error_code: -4,
+            };
+            let (sched_addr, _sched) =
+                start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
+            let backend = make_read_backend(idx_addr, sched_addr).await;
+            let status = backend
+                .transaction_status(RpcRequestContext::unbounded(), canned_tx_hash([0x99; 32]))
+                .await
+                .unwrap();
+            let value = serde_json::to_value(status).unwrap();
+            assert_eq!(value["status"], tag);
+            if tag == "committed" {
+                assert_eq!(value["height"], "0");
+            } else {
+                assert_eq!(
+                    value["error"],
+                    serde_json::json!({"source":"executor", "code":-4})
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn transaction_status_in_neither_returns_unknown() {
         // Arrange: scheduler says not pending; indexer doesn't have it.
         let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
@@ -1518,7 +1593,8 @@ mod tests {
         // Arrange: scheduler says not pending; indexer holds a recent
         // nondeterministic-failure diagnostic for the hash.
         let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (sched_addr, _sched, lookups) =
+            start_counting_fake_scheduler(FakeSchedulerMode::AllPending).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;
         let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
 
@@ -1527,6 +1603,8 @@ mod tests {
             .transaction_status(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: status check should succeed");
+
+        assert_eq!(lookups.load(Ordering::SeqCst), 0);
 
         // Assert
         match status {

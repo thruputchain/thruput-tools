@@ -12,7 +12,7 @@ use groundhog_json_rpc_types::{
 use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
 
 type IndexerAnswer = Result<Option<TransactionStatus>, RpcServerError>;
-type MempoolAnswer = Result<bool, RpcServerError>;
+type MempoolAnswer = Result<Option<TransactionStatus>, RpcServerError>;
 
 /// A probe that answers from a script and records which backend it was
 /// asked, in order. Asking past the script is a sequencing bug and panics.
@@ -37,7 +37,7 @@ impl Scripted {
 }
 
 impl StatusProbe for Scripted {
-    async fn mempool_holds(&self, _tx_hash: TxHash) -> MempoolAnswer {
+    async fn scheduler_status(&self, _tx_hash: TxHash) -> MempoolAnswer {
         self.asked.lock().unwrap().push("mempool");
         self.mempool
             .lock()
@@ -98,9 +98,9 @@ async fn a_committed_record_answers_without_asking_the_mempool() {
 }
 
 #[tokio::test]
-async fn pending_wins_over_a_miss_a_diagnostic_and_an_indexer_failure() {
-    for first in [Ok(None), Ok(Some(recent_failure())), Err(indexer_down())] {
-        let probe = Scripted::new(vec![first], vec![Ok(true)]);
+async fn scheduler_answers_after_a_miss_or_an_indexer_failure() {
+    for first in [Ok(None), Err(indexer_down())] {
+        let probe = Scripted::new(vec![first], vec![Ok(Some(TransactionStatus::Pending))]);
 
         let status = transaction_status(&probe, hash()).await.unwrap();
 
@@ -110,13 +110,8 @@ async fn pending_wins_over_a_miss_a_diagnostic_and_an_indexer_failure() {
 }
 
 #[tokio::test]
-async fn a_mempool_miss_returns_the_indexer_diagnostic_or_failure() {
-    let probe = Scripted::new(vec![Ok(Some(recent_failure()))], vec![Ok(false)]);
-    let status = transaction_status(&probe, hash()).await.unwrap();
-    assert!(matches!(status, TransactionStatus::RecentFailure { .. }));
-    assert_eq!(probe.asked(), ["indexer", "mempool"]);
-
-    let probe = Scripted::new(vec![Err(indexer_down())], vec![Ok(false)]);
+async fn a_scheduler_miss_retains_the_indexer_failure() {
+    let probe = Scripted::new(vec![Err(indexer_down())], vec![Ok(None)]);
     let error = transaction_status(&probe, hash()).await.unwrap_err();
     assert_eq!(error, indexer_down());
     assert_eq!(probe.asked(), ["indexer", "mempool"]);
@@ -124,7 +119,7 @@ async fn a_mempool_miss_returns_the_indexer_diagnostic_or_failure() {
 
 #[tokio::test]
 async fn unknown_requires_both_backends_to_have_missed() {
-    let probe = Scripted::new(vec![Ok(None)], vec![Ok(false)]);
+    let probe = Scripted::new(vec![Ok(None)], vec![Ok(None)]);
     let status = transaction_status(&probe, hash()).await.unwrap();
     assert!(matches!(status, TransactionStatus::Unknown));
     assert_eq!(probe.asked(), ["indexer", "mempool"]);
@@ -135,10 +130,44 @@ async fn unknown_requires_both_backends_to_have_missed() {
         panic!("expected BackendUnavailable, got {error:?}");
     };
     assert!(message.starts_with("scheduler: down"), "{message}");
-    assert!(message.contains("may still be pending"), "{message}");
+
     assert_eq!(probe.asked(), ["indexer", "mempool"]);
 
     let probe = Scripted::new(vec![Ok(None)], vec![Err(RpcServerError::BackendTimeout)]);
     let error = transaction_status(&probe, hash()).await.unwrap_err();
     assert_eq!(error, RpcServerError::BackendTimeout);
+}
+
+#[tokio::test]
+async fn a_diagnostic_answers_without_asking_the_scheduler() {
+    let probe = Scripted::new(vec![Ok(Some(recent_failure()))], vec![]);
+    assert!(matches!(
+        transaction_status(&probe, hash()).await.unwrap(),
+        TransactionStatus::RecentFailure { .. }
+    ));
+    assert_eq!(probe.asked(), ["indexer"]);
+}
+
+#[tokio::test]
+async fn scheduler_retained_outcomes_answer_after_an_indexer_miss() {
+    use groundhog_json_rpc_types::transaction::{
+        SchedulerTransactionError, SchedulerTransactionErrorSource,
+    };
+    for status in [
+        TransactionStatus::Committed { height: 0.into() },
+        TransactionStatus::Retry {
+            error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Scheduler, 1),
+        },
+        TransactionStatus::Dropped {
+            error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Auth, 2),
+        },
+    ] {
+        let expected = serde_json::to_value(&status).unwrap();
+        let probe = Scripted::new(vec![Ok(None)], vec![Ok(Some(status))]);
+        assert_eq!(
+            serde_json::to_value(transaction_status(&probe, hash()).await.unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(probe.asked(), ["indexer", "mempool"]);
+    }
 }

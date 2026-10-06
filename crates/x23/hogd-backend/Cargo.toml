@@ -28,4 +28,5 @@ tracing = { workspace = true }
 xdr-common = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tokio = { workspace = true }

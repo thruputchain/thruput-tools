@@ -270,8 +270,27 @@ fn print_show(
                 print.detail("cause", terminal_safe(&cause));
             }
         }
+        TransactionStatus::Retry { error } | TransactionStatus::Dropped { error } => {
+            let retry = matches!(status, TransactionStatus::Retry { .. });
+            print.detail("status", if retry { "retry" } else { "dropped" });
+            if let Ok(source) = serde_json::to_string(&error.source) {
+                print.detail("error source", source.trim_matches('"'));
+            }
+            print.detail("error code", error.code);
+            print.detail(
+                "next step",
+                if retry {
+                    "resubmit the transaction; the mempool will not retry it automatically"
+                } else {
+                    "modify the transaction before resubmitting"
+                },
+            );
+        }
         TransactionStatus::Unknown => {
-            print.detail("status", "unknown (not found in the mempool or indexer)");
+            print.detail(
+                "status",
+                "unknown (not found in scheduler outcomes or indexer)",
+            );
         }
         TransactionStatus::Other => print.detail("status", "other (update the CLI)"),
         _ => print.detail("status", "unsupported (update the CLI)"),

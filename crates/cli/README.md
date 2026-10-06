@@ -436,7 +436,11 @@ groundhog tx list alice --cursor 0x0123...
 ```
 
 `tx show` performs one status lookup and fetches a receipt only for a committed
-transaction; it does not wait. `tx list` preserves the endpoint's opaque cursor
+transaction; it does not wait. Scheduler `retry` outcomes mean the transaction
+may be resubmitted; the mempool will not retry it automatically. `dropped`
+outcomes require modifying the transaction before resubmission. Both retain
+the error source and protocol error code in terminal and JSON output.
+`tx list` preserves the endpoint's opaque cursor
 and does not fetch receipts. Address history includes root invocations only, so
 incoming wallet-wrapped transfers may not appear in a recipient's history.
 

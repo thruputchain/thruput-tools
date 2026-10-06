@@ -1303,6 +1303,26 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         // but each hash still gets an explicit per-transaction answer.
         Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
     }
+    async fn schedcoord_lookup_transaction_outcomes(
+        &self,
+        hashes: TransactionHashBatch,
+    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus,
+        };
+        Ok(VecM(
+            hashes
+                .0
+                .into_iter()
+                .map(|_| SchedulerTransactionOutcome {
+                    status: SchedulerTransactionStatus::SchedulerTransactionNotFound,
+                    error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                    error_code: 0,
+                })
+                .collect(),
+        ))
+    }
 }
 
 struct FakeSchedulerGateway(FakeScheduler);
@@ -1362,6 +1382,32 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
         hashes: TransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
+    }
+
+    async fn schedgateway_lookup_transaction_outcomes(
+        &self,
+        hashes: TransactionHashBatch,
+    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus,
+        };
+        let results = self.schedgateway_lookup_tx(hashes).await?;
+        Ok(VecM(
+            results
+                .0
+                .into_iter()
+                .map(|tx| SchedulerTransactionOutcome {
+                    status: if tx.is_some() {
+                        SchedulerTransactionStatus::SchedulerTransactionPending
+                    } else {
+                        SchedulerTransactionStatus::SchedulerTransactionNotFound
+                    },
+                    error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                    error_code: 0,
+                })
+                .collect(),
+        ))
     }
 
     async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
