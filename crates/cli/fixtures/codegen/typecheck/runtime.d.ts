@@ -94,8 +94,8 @@ declare module "@groundhogchain/client/contract" {
   export function createContractCodecContext(typeDefs: unknown): unknown;
 
   export function defineContractMethod<TArgs, TResult, TDeclaredException>(
-    definition: unknown,
-  ): unknown;
+    definition: { effect: ContractMethodEffect | null; [key: string]: unknown },
+  ): { readonly effect: ContractMethodEffect | null };
 
   export function defineContractEvent<
     const TName extends string,

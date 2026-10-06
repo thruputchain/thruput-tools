@@ -6,7 +6,6 @@ export const ContractTypeKind = kinds;
 export const ContractTypeDefKind = kinds;
 export const ContractUnionCaseKind = kinds;
 export const ContractMethodEffect = {
-  EffectUnknown: 0,
   EffectPure: 1,
   EffectReadOnly: 2,
   EffectStateChanging: 3,

@@ -2,7 +2,8 @@
 // compile while one of its types resolves to the wrong declaration; these fail
 // to type-check when it does.
 
-import type { SignedToken } from "@groundhogchain/client/contract";
+import type { ContractMethodEffect, SignedToken } from "@groundhogchain/client/contract";
+import { ExampleContract } from "../typed_contract.js";
 import type { ContractAddress } from "@groundhogchain/protocol";
 import type { ERC20 } from "../erc20.js";
 import {
@@ -62,3 +63,10 @@ export const minted: typeof $spec.v1.Minted.signature = new Uint8Array();
 export const oldBalance: Token.v0_4.BalanceResult = 1n;
 export const newBalance: Token.v1.BalanceArgs = { of: {} as ContractAddress };
 export const methods = [Token.v0_4.balance, Token.v1.balance, $default.v0_1.get] as const;
+
+export const effects: readonly (ContractMethodEffect | null)[] = [
+  ExampleContract.v0_1.calculate.effect,
+  ExampleContract.v0_1.getValues.effect,
+  ExampleContract.v0_1.update.effect,
+  ExampleContract.v0_1.undeclared.effect,
+];

@@ -4835,6 +4835,8 @@ export type Result =
         reason = "the snapshot fixture keeps its complete ABI shape visible in one place"
     )]
     fn typed_contract_spec() -> ContractSpec {
+        use groundhog_contract_spec::ContractMethodEffect as Effect;
+
         let request_id = ContractType::Array {
             array: ContractArrayType {
                 element: Box::new(ContractType::U8),
@@ -4861,7 +4863,7 @@ export type Result =
                 .unwrap(),
                 methods: vec![
                     ContractSpecMethod {
-                        effect: None,
+                        effect: Some(Effect::EffectReadOnly),
                         name: spec_string("get_values"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::Tuple {
@@ -4872,7 +4874,7 @@ export type Result =
                         effect: None,
                     },
                     ContractSpecMethod {
-                        effect: None,
+                        effect: Some(Effect::EffectStateChanging),
                         name: spec_string("update"),
                         args: vec![
                             ContractField {
@@ -4890,6 +4892,18 @@ export type Result =
                         .unwrap(),
                         return_type: ContractType::Void,
                         effect: None,
+                    },
+                    ContractSpecMethod {
+                        effect: Some(Effect::EffectPure),
+                        name: spec_string("calculate"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    },
+                    ContractSpecMethod {
+                        effect: None,
+                        name: spec_string("undeclared"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::Void,
                     },
                 ]
                 .try_into()
