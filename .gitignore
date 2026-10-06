@@ -5,7 +5,7 @@ docs/superpowers/
 actions/
 crates/faucet/faucet.toml
 crates/faucet/web/dist/
-crates/faucet/web/node_modules/
+node_modules/
 
 # Python bytecode cache. Not produced by CI (which runs scripts
 # directly), but appears as soon as anything imports a helper from
