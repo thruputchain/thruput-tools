@@ -5,7 +5,7 @@
     "groundhog-rpc"
   ],
   "compatibility": {
-    "groundhog-cli": "0.22.1"
+    "groundhog-cli": "0.23.0"
   },
   "records": [
     "groundhog.local-development",
@@ -19,7 +19,7 @@
   "artifacts": {
     "agentGuide": {
       "path": "generated/agent-guide.md",
-      "sha256": "sha256:c97754d1373c1aa0070ebfc0816023c670e3f87c2d4768509e42c0642faeab99"
+      "sha256": "sha256:58d110438670d354f59ff9369fd971c19575579b2d010d5961e2cc843927d30d"
     },
     "records": {
       "path": "generated/records.jsonl",
