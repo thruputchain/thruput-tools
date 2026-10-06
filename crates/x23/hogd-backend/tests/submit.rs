@@ -27,7 +27,8 @@ fn an_empty_batch_packs_to_no_segments() {
 
 // The scheduler client takes its argument as `EncodesAs` the wire batch,
 // so the batch must encode exactly as the owned `ParallelSignedTransactionBatch`
-// would. Lengths that are not multiples of 4 check that the payload is
+// would. The payload totals leave every remainder modulo 4, and some
+// transactions are not multiples of 4, so this checks that the payload is
 // padded once, after the last transaction.
 #[test]
 fn a_submit_batch_encodes_as_the_wire_batch() {
@@ -35,24 +36,31 @@ fn a_submit_batch_encodes_as_the_wire_batch() {
         txs::encode(batch).expect("encodes")
     }
 
-    let transactions = vec![vec![1u8; 3], vec![], vec![2; 5], vec![3; 8]];
-    let batch = pack(transactions.clone()).expect("packs");
-    let wire = ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(vec![1; 4]),
-        segment_bytes: VecM(vec![3, 0, 5, 8]),
-        xdr: BytesM(transactions.concat()),
-    });
+    let cases: [&[u32]; 5] = [&[3, 0, 5, 8], &[1], &[3, 3], &[2, 5], &[]];
+    for lengths in cases {
+        let transactions: Vec<Vec<u8>> = (1u8..)
+            .zip(lengths)
+            .map(|(fill, &len)| vec![fill; len as usize])
+            .collect();
+        let batch = pack(transactions.clone()).expect("packs");
+        let wire = ParallelSignedTransactionBatch::new(ParallelBatch {
+            segment_tokens: VecM(vec![1; lengths.len()]),
+            segment_bytes: VecM(lengths.to_vec()),
+            xdr: BytesM(transactions.concat()),
+        });
 
-    let encoded = encode_arg(&batch);
-    assert_eq!(encoded, txs::encode(&wire).expect("encodes"));
-    assert_eq!(
-        cxs::encode(&batch).expect("encodes"),
-        cxs::encode(&wire).expect("encodes")
-    );
-    assert_eq!(
-        txs::decode::<ParallelSignedTransactionBatch>(&encoded).expect("decodes"),
-        wire
-    );
+        let encoded = encode_arg(&batch);
+        assert_eq!(encoded, txs::encode(&wire).expect("encodes"), "{lengths:?}");
+        assert_eq!(
+            cxs::encode(&batch).expect("encodes"),
+            cxs::encode(&wire).expect("encodes"),
+            "{lengths:?}"
+        );
+        assert_eq!(
+            txs::decode::<ParallelSignedTransactionBatch>(&encoded).expect("decodes"),
+            wire
+        );
+    }
 }
 
 #[test]
