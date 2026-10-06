@@ -277,7 +277,7 @@ broadcast. Explicit prepare/sign/persist/submit remains available.
   failure. Classification does not authorize transaction resubmission.
 - `getVersion` returns nullable `releaseVersion` and `bundleManifestDigest`.
   Use `wireFormat` for compatibility; release identity is diagnostic.
-- RPC wire 9 and CLI JSON use canonical decimal strings for all 64-bit-or-wider
+- RPC wire 10 and CLI JSON use canonical decimal strings for all 64-bit-or-wider
   integers; TypeScript uses `bigint`, never `Number`. Smaller integers stay numbers.
 
 ### HTTP batching
@@ -386,7 +386,7 @@ and deployment on failure. Dry-run submits nothing. Inspect unverified signed
 identity before retrying: nonce/address change. Aliases require verified success
 at the predicted address.
 
-`tx show`: indexer wins; resubmit `retry` transactions, modify `dropped` ones.
+`tx show`: indexer wins; resubmit `retry`, modify `dropped`. Committed height is optional.
 
 ## Sources and Escalation
 

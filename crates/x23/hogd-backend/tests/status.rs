@@ -61,7 +61,9 @@ fn hash() -> TxHash {
 }
 
 fn committed() -> TransactionStatus {
-    TransactionStatus::Committed { height: 42.into() }
+    TransactionStatus::Committed {
+        height: Some(42.into()),
+    }
 }
 
 fn recent_failure() -> TransactionStatus {
@@ -93,7 +95,7 @@ async fn a_committed_record_answers_without_asking_the_mempool() {
 
     let status = transaction_status(&probe, hash()).await.unwrap();
 
-    assert!(matches!(status, TransactionStatus::Committed { height } if height == 42.into()));
+    assert!(matches!(status, TransactionStatus::Committed { height } if height == Some(42.into())));
     assert_eq!(probe.asked(), ["indexer"]);
 }
 
@@ -154,7 +156,7 @@ async fn scheduler_retained_outcomes_answer_after_an_indexer_miss() {
         SchedulerTransactionError, SchedulerTransactionErrorSource,
     };
     for status in [
-        TransactionStatus::Committed { height: 0.into() },
+        TransactionStatus::Committed { height: None },
         TransactionStatus::Retry {
             error: SchedulerTransactionError::new(SchedulerTransactionErrorSource::Scheduler, 1),
         },

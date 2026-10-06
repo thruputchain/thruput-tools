@@ -196,12 +196,12 @@ async fn fetch_transaction(
         .await
         .map_err(|error| map_rpc_error("getTransactionStatus", &error))?;
     let committed_height = match &status {
-        TransactionStatus::Committed { height } => Some(height.clone()),
+        TransactionStatus::Committed { height } => height.clone(),
         _ => None,
     };
-    let Some(committed_height) = committed_height else {
+    if !matches!(status, TransactionStatus::Committed { .. }) {
         return Ok((status, None));
-    };
+    }
 
     let receipt = client
         .get_transaction_receipt(tx_hash)
@@ -218,7 +218,9 @@ async fn fetch_transaction(
                 ),
             });
         }
-        if receipt.height != committed_height {
+        if let Some(committed_height) = committed_height
+            && receipt.height != committed_height
+        {
             return Err(CliError::RpcMethodFailed {
                 method: "getTransactionReceipt",
                 message: format!(
@@ -254,7 +256,9 @@ fn print_show(
         TransactionStatus::Pending => print.detail("status", "pending"),
         TransactionStatus::Committed { height } => {
             print.detail("status", "committed");
-            print.detail("height", **height);
+            if let Some(height) = height {
+                print.detail("height", **height);
+            }
         }
         TransactionStatus::Invalid { reason } => {
             print.detail("status", "invalid");

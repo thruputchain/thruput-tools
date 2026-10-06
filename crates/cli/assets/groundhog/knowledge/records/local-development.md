@@ -83,4 +83,4 @@ and deployment on failure. Dry-run submits nothing. Inspect unverified signed
 identity before retrying: nonce/address change. Aliases require verified success
 at the predicted address.
 
-`tx show`: indexer wins; resubmit `retry` transactions, modify `dropped` ones.
+`tx show`: indexer wins; resubmit `retry`, modify `dropped`. Committed height is optional.

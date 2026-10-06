@@ -244,7 +244,8 @@ async fn prepare_inner(
                 .map_err(|error| BenchError::Setup(format!("invalid receipt: {error}")))?;
                 let receipt = receipt
                     .ok_or_else(|| BenchError::Setup("committed hash has no receipt".into()))?;
-                if receipt.tx_hash != *hash || receipt.height != height {
+                if receipt.tx_hash != *hash || height.is_some_and(|height| receipt.height != height)
+                {
                     return Err(BenchError::Setup(
                         "receipt hash/height differs from committed status".into(),
                     ));
@@ -257,7 +258,7 @@ async fn prepare_inner(
                 })).expect("bug: receipt shape serializes"));
                 records.push(ConfirmedRecord {
                     hash: *hash,
-                    height: height.into_inner(),
+                    height: receipt.height.into_inner(),
                 });
                 break;
             }

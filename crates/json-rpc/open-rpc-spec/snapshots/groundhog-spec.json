@@ -1514,7 +1514,7 @@
         "type": "object"
       },
       "TransactionStatus": {
-        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
+        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports scheduler success or an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
         "oneOf": [
           {
             "description": "In the mempool, not yet in a committed block.",
@@ -1533,7 +1533,15 @@
             "description": "Included in a committed block. SCP finality = done.\nNo `block_hash`: SCP instant finality means no forks/reorgs,\nso height alone is sufficient for confirmation.",
             "properties": {
               "height": {
-                "$ref": "#/components/schemas/DecimalBlockHeight"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DecimalBlockHeight"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Committed block height, omitted until an indexed record supplies it."
               },
               "status": {
                 "const": "committed",
@@ -1541,8 +1549,7 @@
               }
             },
             "required": [
-              "status",
-              "height"
+              "status"
             ],
             "type": "object"
           },
@@ -1779,7 +1786,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "9.1.0"
+    "version": "10.0.0"
   },
   "methods": [
     {

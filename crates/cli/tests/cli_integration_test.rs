@@ -11308,7 +11308,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.show");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["txHash"], hash);
@@ -11316,6 +11316,64 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["data"]["status"]["height"], "42");
     assert_eq!(stdout["data"]["receipt"], receipt);
     assert_eq!(stdout["data"]["receipt"]["events"][0], event);
+}
+
+#[test]
+fn tx_show_committed_without_height_handles_indexer_catching_up() {
+    let hash = format!("0x{}", "ab".repeat(32));
+    for json_output in [false, true] {
+        for receipt_available in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let receipt = if receipt_available {
+                serde_json::json!({
+                    "txHash": hash,
+                    "height": "42",
+                    "gasUsed": "1500",
+                    "status": { "result": "ok" },
+                    "events": [],
+                })
+            } else {
+                serde_json::Value::Null
+            };
+            let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+                &hash,
+                TxShowRpcResponse::Result(serde_json::json!({"status": "committed"})),
+                Some(TxShowRpcResponse::Result(receipt.clone())),
+            );
+            let mut command = groundhog();
+            if json_output {
+                command.arg("--json");
+            }
+            let output = command
+                .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+                .current_dir(tmp.path())
+                .output()
+                .unwrap();
+            rpc_server.join().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if json_output {
+                let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(
+                    stdout["data"]["status"],
+                    serde_json::json!({"status": "committed"})
+                );
+                assert_eq!(stdout["data"]["receipt"], receipt);
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(stderr.contains("status: committed"));
+                assert!(!stderr.contains("height: 0"));
+                if receipt_available {
+                    assert!(stderr.contains("receipt height: 42"));
+                } else {
+                    assert!(stderr.contains("receipt: unavailable"));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -11487,7 +11545,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "profile": "default",
             "rpcUrl": rpc_url,
             "txHash": hash,

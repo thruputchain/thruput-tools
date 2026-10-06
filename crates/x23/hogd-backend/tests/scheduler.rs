@@ -51,9 +51,10 @@ fn scheduler_outcomes_preserve_processing_results() {
         decode(Status::SchedulerTransactionPending),
         Some(TransactionStatus::Pending)
     ));
-    assert!(
-        matches!(decode(Status::SchedulerTransactionSucceeded), Some(TransactionStatus::Committed { height }) if height == 0.into())
-    );
+    assert!(matches!(
+        decode(Status::SchedulerTransactionSucceeded),
+        Some(TransactionStatus::Committed { height: None })
+    ));
     for (source, expected) in [
         (
             Source::SchedulerTransactionErrorAuth,

@@ -14,7 +14,7 @@ pub struct TxHash(pub SHA256Hash);
 
 /// Lightweight transaction status from the mempool and indexer.
 ///
-/// Pending reports mempool presence; Committed reports an indexed record.
+/// Pending reports mempool presence; Committed reports scheduler success or an indexed record.
 /// See `docs/gateway/system-design.md` "Transaction Status Lookup Order" for
 /// degraded-mode behavior when a backend is unavailable.
 ///
@@ -30,9 +30,14 @@ pub enum TransactionStatus {
     /// No `block_hash`: SCP instant finality means no forks/reorgs,
     /// so height alone is sufficient for confirmation.
     Committed {
-        #[serde(with = "crate::decimal")]
-        #[schemars(with = "crate::decimal::Decimal<BlockHeight>")]
-        height: BlockHeight,
+        /// Committed block height, omitted until an indexed record supplies it.
+        #[serde(
+            default,
+            with = "crate::decimal::option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
+        height: Option<BlockHeight>,
     },
 
     /// Scheduler rejected the transaction.

@@ -1561,7 +1561,7 @@ mod tests {
 
         // Assert
         assert!(
-            matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_A),
+            matches!(status, TransactionStatus::Committed { height: Some(ref height) } if **height == CANNED_HEIGHT_A),
             "expected Committed({CANNED_HEIGHT_A}), got {status:?}",
         );
     }
@@ -1593,7 +1593,7 @@ mod tests {
             let value = serde_json::to_value(status).unwrap();
             assert_eq!(value["status"], tag);
             if tag == "committed" {
-                assert_eq!(value["height"], "0");
+                assert_eq!(value, serde_json::json!({"status": "committed"}));
             } else {
                 assert_eq!(
                     value["error"],
@@ -1700,7 +1700,7 @@ mod tests {
 
         // Assert: scheduler failure is non-fatal; we still get the indexer answer.
         assert!(
-            matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_B),
+            matches!(status, TransactionStatus::Committed { height: Some(ref height) } if **height == CANNED_HEIGHT_B),
             "expected Committed({CANNED_HEIGHT_B}) despite scheduler failure, got {status:?}",
         );
     }

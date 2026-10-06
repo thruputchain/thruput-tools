@@ -1306,7 +1306,9 @@ mod tests {
         ))
         .await
         .unwrap();
-        assert!(matches!(status, TransactionStatus::Committed { height } if height == 42.into()));
+        assert!(
+            matches!(status, TransactionStatus::Committed { height } if height == Some(42.into()))
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
@@ -1341,7 +1343,7 @@ mod tests {
             let value = serde_json::to_value(status).unwrap();
             assert_eq!(value["status"], tag);
             if tag == "committed" {
-                assert_eq!(value["height"], "0");
+                assert_eq!(value, serde_json::json!({"status": "committed"}));
             } else {
                 assert_eq!(
                     value["error"],
@@ -1486,7 +1488,9 @@ mod tests {
         for (result, expected) in [
             (
                 committed,
-                TransactionStatus::Committed { height: 42.into() },
+                TransactionStatus::Committed {
+                    height: Some(42.into()),
+                },
             ),
             (
                 TxInfoResult::TxInfoRecentFailure {
