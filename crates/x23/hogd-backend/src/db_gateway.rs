@@ -5,31 +5,17 @@
 //! per-key result. Only one per-item code — `kRPCNotFound` — is an absent
 //! key; every other one is a backend failure that must not read as a miss.
 
-use groundhog_db_gateway::{
-    AddressAndKeyBatch, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
-};
+use groundhog_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
 use groundhog_json_rpc_server::RpcServerError;
-use groundhog_json_rpc_types::{
-    ContractAddress,
-    state::{StorageItemInfo, StorageItemRead},
-};
+use groundhog_json_rpc_types::state::{StorageItemInfo, StorageItemRead};
 use groundhog_scheduler::RPCError;
-use groundhog_xdr::types::{AddressAndKey, StorageKey, StorageKeyContractData};
-use xdr_common::VecM;
+use groundhog_xdr::types::{StorageKey, StorageKeyContractData};
 
 /// The storage key for one 32-byte contract-data slot.
 pub fn contract_data_key(key: [u8; 32]) -> StorageKey {
     StorageKey::ContractData {
         contract_data_key: StorageKeyContractData::from(key),
     }
-}
-
-/// Build a one-key request batch.
-pub fn single_key_batch(address: ContractAddress, key: StorageKey) -> AddressAndKeyBatch {
-    VecM(vec![AddressAndKey {
-        address: address.0,
-        key,
-    }])
 }
 
 /// Unwrap the outer batch result.

@@ -16,10 +16,8 @@ use groundhog_json_rpc_types::{
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_xdr::transaction::TransactionHash;
 use std::time::Instant;
 use tokio::task::JoinHandle;
-use xdr_common::VecM;
 
 use crate::config::HealthBackend;
 use crate::context::{GatewayContext, clear_scheduler_if_current};
@@ -194,7 +192,6 @@ async fn transaction_is_pending(
     let generation = client.generation();
     let lookup_client = client.lookup_client().clone();
     let hash = shared_receipt::tx_hash_to_wire(tx_hash);
-    let batch: VecM<TransactionHash> = VecM(vec![hash]);
     let started_at = Instant::now();
     let worker = tokio::spawn(async move {
         let _admission = admission;
@@ -203,7 +200,11 @@ async fn transaction_is_pending(
         if Instant::now() >= deadline {
             return None;
         }
-        Some(lookup_client.schedgateway_lookup_tx(&batch).await)
+        Some(
+            lookup_client
+                .schedgateway_lookup_tx(std::slice::from_ref(&hash))
+                .await,
+        )
     });
     drop(scheduler);
     let mut guard = SchedulerLookupGuard::new(worker);
@@ -348,12 +349,13 @@ mod tests {
     use groundhog_x23_transport::try_connect;
     use groundhog_xdr::exec_result::ExecResult;
     use groundhog_xdr::{
-        transaction::{OptSignedTransactionBatch, TransactionHashBatch},
+        transaction::{OptSignedTransactionBatch, TransactionHash, TransactionHashBatch},
         types::SHA256Hash,
     };
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
     use tokio::sync::{Notify, RwLock};
+    use xdr_common::VecM;
 
     use super::*;
 
