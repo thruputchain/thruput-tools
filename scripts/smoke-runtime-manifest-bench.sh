@@ -35,6 +35,7 @@ BENCH_DURATION="${BENCH_DURATION:-2}"
 BENCH_WARMUP="${BENCH_WARMUP:-0}"
 BENCH_WORKERS="${BENCH_WORKERS:-1}"
 BENCH_ACCOUNTS="${BENCH_ACCOUNTS:-3}"
+BENCH_ACCOUNT_SEED="runtime-manifest-smoke-v1"
 BENCH_REQUEST_TIMEOUT_MS="${BENCH_REQUEST_TIMEOUT_MS:-10000}"
 BENCH_MAX_RESPONSE_BYTES="${BENCH_MAX_RESPONSE_BYTES:-1048576}"
 BENCH_BUILD_PROFILE="${BENCH_BUILD_PROFILE:-}"
@@ -280,7 +281,7 @@ bench_send_raw() {
     log "Bench $label sendRawTransaction: ${rate} rps, ${duration}s, ${warmup}s warmup, ${workers} workers, ${accounts} accounts"
     run_bench_command "$(benchmark_slug "$label")-send-raw-transaction-${rate}rps.json" \
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
-        --url "$url" --runtime-manifest "$manifest" --method sendRawTransaction \
+        --url "$url" --runtime-manifest "$manifest" --account-seed "$BENCH_ACCOUNT_SEED" --method sendRawTransaction \
         --accounts "$accounts" --rate "$rate" --duration "$duration" --warmup "$warmup" --workers "$workers" \
         --force
 }
@@ -308,7 +309,7 @@ bench_confirmed_reads() {
         --scenario "$BENCH_SCENARIO" --target-label "$label" \
         --url "$url" --runtime-manifest "$manifest" \
         --method getTransactionReceipt --outstanding 8 \
-        --seed-count "$BENCH_ACCOUNTS" --seed-output "$hashes" \
+        --account-seed "$BENCH_ACCOUNT_SEED" --seed-count "$BENCH_ACCOUNTS" --seed-output "$hashes" \
         --accounts "$BENCH_ACCOUNTS" --force \
         --duration "$BENCH_DURATION" --warmup "$BENCH_WARMUP" --workers "$BENCH_WORKERS"
     log "Bench $label confirmed status: import verified corpus, 8 outstanding"
@@ -460,11 +461,33 @@ cleanup() {
 trap cleanup EXIT
 
 log "Workdir: $WORK"
-mkdir -p "$WORK/cache"
+mkdir -p "$WORK/cache" "$WORK/config"
+export XDG_CONFIG_HOME="$WORK/config"
+fixture_count="$(python3 - "$BENCH_ACCOUNTS" "$GATEWAY_BASELINE_ACCOUNTS" "$SUBMIT_RAMP_ACCOUNTS" <<'COUNT'
+import sys
+n=max(map(int,sys.argv[1:]))
+assert 0 < n <= 1000
+print(n)
+COUNT
+)"
+log "Creating explicitly seeded benchmark fixture keys"
+for ((index=0; index<fixture_count; index++)); do
+    python3 - "$BENCH_ACCOUNT_SEED" "$index" <<'SEED' | "$CLI" --json keys import "bench-$index" > "$WORK/bench-$index.json"
+import hashlib, sys
+print(hashlib.sha256(f"groundhog-bench:{sys.argv[1]}:account-{sys.argv[2]}".encode()).hexdigest())
+SEED
+done
+python3 - "$WORK" "$fixture_count" <<'ALLOCATIONS'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1])
+allocations=[{"publicKey":json.loads((root/f"bench-{i}.json").read_text())["data"]["key"]["publicKey"],"initialStorageTokens":"1000000000"} for i in range(int(sys.argv[2]))]
+(root/"bootstrap-accounts.json").write_text(json.dumps(allocations))
+ALLOCATIONS
 log "Starting CLI node"
 NODE_ARGS=(
     --json
     node
+    --bootstrap-accounts "$WORK/bootstrap-accounts.json"
     --port
     0
     --block-driver

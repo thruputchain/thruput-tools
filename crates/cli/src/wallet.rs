@@ -8,7 +8,7 @@ use crate::config::{
 };
 use crate::keys::load_local_public_key;
 use crate::result::CommandResult;
-use crate::{CliError, Print, dev_keys};
+use crate::{CliError, Print};
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -360,12 +360,6 @@ pub fn use_wallet(
     let resolved_profile = resolve_profile(&project_root, profile)?;
     let key_name =
         resolve_default_key_for_profile(&resolved_profile)?.ok_or(CliError::MissingSigningKey)?;
-    if dev_keys::is_dev_key(&key_name) {
-        return Err(CliError::DevWalletSelectionUnsupported {
-            key_name,
-            wallet_name: name.to_owned(),
-        });
-    }
     let public_key =
         load_local_public_key(&key_name)?.ok_or_else(|| CliError::KeyNotFound(key_name.clone()))?;
     resolve_selected_wallet(&resolved_profile, &key_name, public_key, name)?;
@@ -402,13 +396,6 @@ fn resolve_wallet_create_inputs(
         Some(key_name) => key_name.to_owned(),
         None => resolve_default_key_for_profile(&profile)?.ok_or(CliError::MissingSigningKey)?,
     };
-    if dev_keys::is_dev_key(&key_name) {
-        return Err(CliError::Other(
-            "wallet creation requires a non-dev key; run `groundhog keys generate <name>` \
-             and retry with `--key <name>`"
-                .into(),
-        ));
-    }
     let wallet_name = match wallet_name {
         Some(wallet_name) => {
             let wallet_name = wallet_name.trim();

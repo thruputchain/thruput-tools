@@ -11,7 +11,7 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
-    airdrop::{AirdropAttemptResponse, AirdropRequest},
+    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     decimal::Decimal,
@@ -31,7 +31,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "9.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "9.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -43,6 +43,20 @@ pub trait AirdropApi {
     /// other deployments return standard JSON-RPC `Method not found`.
     #[method(name = "requestAirdrop")]
     async fn request_airdrop(&self, request: AirdropRequest) -> RpcResult<AirdropAttemptResponse>;
+}
+
+/// Funding API registered only by a supervised local node with submit/read planes.
+#[open_rpc(namespace = "groundhog", tag = "Local Funding API")]
+#[rpc(client, server, namespace = "groundhog")]
+pub trait LocalFundingApi {
+    /// Submit an explicit native HOG transfer using a retained caller nonce.
+    ///
+    /// Acceptance does not imply execution success. Observe the returned hash
+    /// through the ordinary status/receipt APIs. Retry an uncertain response
+    /// with exactly the same request; retain its chain identity and amount.
+    /// Hosted servers return standard JSON-RPC `Method not found`.
+    #[method(name = "fundAccount")]
+    async fn fund_account(&self, request: FundAccountRequest) -> RpcResult<FundAccountResponse>;
 }
 
 /// Phase 1: Core API — submit, query, poll.

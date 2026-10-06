@@ -1,7 +1,7 @@
 //! RPC integration tests run by `groundhog test --integration`.
 //!
 //! The command builds the contract, starts an ephemeral local node, deploys
-//! the contract with the runtime's lowest-index local user, and then runs this
+//! the contract with its own temporary stored key, and then runs this
 //! test target. It passes the node and deployment details through the
 //! environment variables below.
 //! `GROUNDHOG_PROFILE` and `GROUNDHOG_DEFAULT_KEY` describe that deployment;
@@ -41,7 +41,7 @@ mod live {
         );
         assert_contract_address(&contract_address);
         assert_eq!(profile, "integration");
-        assert_eq!(default_key, "dev-1");
+        assert_eq!(default_key, "integration");
 
         let client = HttpClientBuilder::default()
             .build(&rpc_url)

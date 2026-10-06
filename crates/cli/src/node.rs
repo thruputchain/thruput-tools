@@ -13,7 +13,7 @@ use std::time::Duration;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
-const NODE_STARTUP_SCHEMA_VERSION: u32 = 3;
+const NODE_STARTUP_SCHEMA_VERSION: u32 = 4;
 pub(crate) const GENESIS_ROOT_ARTIFACT_FILENAME: &str = "genesis_root.rv32a";
 
 #[cfg(test)]
@@ -56,6 +56,86 @@ pub fn run_with_options(
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     rt.block_on(async { run_hogd_dev(options, cmd, print, logs.as_ref()).await })
+}
+
+/// Select a stored key's public nonce-zero account for a fresh local chain.
+/// No key is generated. With no selected default, the node starts with only its faucet.
+pub fn stored_key_allocation(
+    key: Option<&str>,
+    raw_amount: u64,
+) -> Result<
+    (
+        Option<String>,
+        Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
+    ),
+    CliError,
+> {
+    let key = match key {
+        Some(key) => Some(key.to_owned()),
+        None => match crate::config::resolve_default_key(&std::env::current_dir()?, None) {
+            Ok(key) => key,
+            Err(CliError::NoActiveProfile) => crate::config::load_default_key()?,
+            Err(error) => return Err(error),
+        },
+    };
+    let Some(key) = key else {
+        return Ok((None, Vec::new()));
+    };
+    let public_key = crate::keys::load_local_public_key(&key)?
+        .ok_or_else(|| CliError::KeyNotFound(key.clone()))?;
+    Ok((
+        Some(key),
+        vec![
+            groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                groundhog_json_rpc_types::hex::Hex0x(public_key.into()),
+                raw_amount.to_string(),
+            ),
+        ],
+    ))
+}
+
+/// Read bounded public allocations for fixture-owned native accounts.
+/// Each entry contains only `publicKey` and positive decimal `initialStorageTokens`.
+pub fn load_bootstrap_allocations(
+    path: &Path,
+) -> Result<Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>, CliError>
+{
+    use std::io::Read as _;
+    let invalid = |message: String| CliError::ConfigValueInvalid {
+        field: "bootstrap-accounts".into(),
+        message,
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(invalid("allocations must be a regular file".into()));
+    }
+    let mut bytes = Vec::new();
+    file.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 256 * 1024 {
+        return Err(invalid("allocation file exceeds 256 KiB".into()));
+    }
+    let allocations: Vec<
+        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation,
+    > = serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+    if allocations.len() > 1000 {
+        return Err(invalid(
+            "at most 1000 user allocations are supported".into(),
+        ));
+    }
+    let mut public_keys = std::collections::HashSet::new();
+    for allocation in &allocations {
+        if !public_keys.insert(allocation.public_key.0) {
+            return Err(invalid("duplicate public key allocation".into()));
+        }
+    }
+    Ok(allocations)
 }
 
 /// Parse one `NAME=VALUE` genesis parameter override.
@@ -122,10 +202,11 @@ pub struct LocalNodeOptions {
     pub startup_timeout: Option<Duration>,
     /// PID-file behavior for orphan detection.
     pub pid_file: LocalNodePidFile,
-    /// Override the local-user account count, excluding the dev-0 faucet.
-    pub dev_account_count: Option<usize>,
-    /// Override initial raw HOG units allocated to each local-user account.
-    pub dev_account_tokens: Option<u64>,
+    /// CLI key selected for startup reporting; the runtime receives only its public allocation.
+    pub selected_key: Option<String>,
+    /// Public allocations for caller-owned nonce-zero native accounts.
+    pub bootstrap_accounts:
+        Vec<groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation>,
     /// Override the local block production mode.
     pub block_driver: Option<LocalNodeBlockDriverMode>,
     /// Override the interval used by timer-driven block production.
@@ -166,6 +247,7 @@ pub struct StartedLocalNode {
     readiness: groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
     data_dir: Option<PathBuf>,
+    selected_key: Option<String>,
 }
 
 impl StartedLocalNode {
@@ -251,6 +333,7 @@ async fn start_resolved_local_node(
 ) -> Result<StartedLocalNode, CliError> {
     use groundhog_node_supervisor::NodeSupervisorHandle;
 
+    let selected_key = options.selected_key.clone();
     let config = local_node_config(options)?;
     let data_dir = config.hogd_dev.data_dir.clone();
     let handle = NodeSupervisorHandle::start_with_inherited_file(
@@ -269,6 +352,7 @@ async fn start_resolved_local_node(
         readiness,
         backend_planes,
         data_dir,
+        selected_key,
     })
 }
 
@@ -344,16 +428,18 @@ async fn run_hogd_dev(
         local_runtime_state_cleanup(&started, runtime_artifacts_dir.as_deref());
 
     if print.is_json() {
-        if let Err(error) = print.json(&CommandResult::new(
-            cmd,
-            hogd_dev_startup_payload(
+        if let Err(error) = print.json(&CommandResult::new(cmd, {
+            let mut payload = hogd_dev_startup_payload(
                 started.rpc_addr(),
                 started.readiness(),
                 started.backend_planes(),
                 &local_runtime_state_result,
                 started.data_dir(),
-            ),
-        )) {
+            );
+            payload["selectedKey"] = json!(started.selected_key);
+            add_startup_account_report(&mut payload, &started);
+            payload
+        })) {
             let stop_result = started.stop().await;
             cleanup_written_local_runtime_state(cleanup_local_runtime_state, print);
             if let Err(stop_error) = stop_result {
@@ -466,6 +552,95 @@ pub(crate) fn prepare_stop_signal()
     Ok(tokio::signal::ctrl_c())
 }
 
+fn add_startup_account_report(payload: &mut serde_json::Value, started: &StartedLocalNode) {
+    match startup_wallet(started) {
+        Ok(wallet) => payload["selectedWallet"] = json!(wallet),
+        Err(error) => payload["walletHint"] = json!(error.to_string()),
+    }
+    payload["setupHint"] = json!(startup_setup_hint(started));
+}
+
+fn local_funding_hint(recipient: &str, rpc_url: &str, manifest: Option<&Path>) -> String {
+    let target = manifest.map_or_else(String::new, |path| {
+        format!(
+            " --runtime-manifest {}",
+            crate::terminal::render_shell_arg(&path.to_string_lossy())
+        )
+    });
+    format!(
+        "Select a profile with network = local, then run `groundhog airdrop {} --rpc-url {}{} --amount 100`.",
+        crate::terminal::render_shell_arg(recipient),
+        crate::terminal::render_shell_arg(rpc_url),
+        target
+    )
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupWallet {
+    name: String,
+    address: String,
+    has_initial_allocation: bool,
+    funding_hint: Option<String>,
+}
+
+fn startup_wallet(started: &StartedLocalNode) -> Result<Option<StartupWallet>, CliError> {
+    let Some(key) = started.selected_key.as_deref() else {
+        return Ok(None);
+    };
+    let (name, address) = match crate::config::resolve_profile(&std::env::current_dir()?, None) {
+        Ok(mut profile) => {
+            profile.default_key = Some(key.to_owned());
+            crate::account_resolution::resolve_address_target_or_default_wallet(&profile, None)?
+        }
+        Err(CliError::NoActiveProfile) => {
+            let public_key = crate::keys::load_local_public_key(key)?
+                .ok_or_else(|| CliError::KeyNotFound(key.to_owned()))?;
+            (
+                key.to_owned(),
+                groundhog_signing::PubkeyAccount::from_public_key_bytes(public_key, 0).address(),
+            )
+        }
+        Err(error) => return Err(error),
+    };
+    let has_initial_allocation = started
+        .readiness()
+        .runtime_manifest
+        .as_ref()
+        .is_some_and(|m| {
+            m.bootstrap_accounts
+                .iter()
+                .any(|a| a.wallet_address.0 == address)
+        });
+    let address = crate::codec::format_contract_address(&address);
+    let funding_hint = (!has_initial_allocation).then(|| {
+        format!(
+            "This wallet has no initial allocation. {}",
+            local_funding_hint(
+                &address,
+                &started.rpc_url(),
+                started.readiness().manifest_path.as_deref()
+            )
+        )
+    });
+    Ok(Some(StartupWallet {
+        name,
+        address,
+        has_initial_allocation,
+        funding_hint,
+    }))
+}
+
+fn startup_setup_hint(started: &StartedLocalNode) -> Option<String> {
+    (started.selected_key.is_none()
+        && started.readiness().runtime_manifest.as_ref().is_some_and(|m| {
+            !m.bootstrap_accounts.iter().any(|a| a.role ==
+                groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
+        }))
+    .then(|| format!("No key selected. Run `groundhog init` or `groundhog keys generate NAME` and `groundhog keys use NAME`. {}",
+        local_funding_hint("NAME", &started.rpc_url(), started.readiness().manifest_path.as_deref())))
+}
+
 fn print_started_local_node(
     started: &StartedLocalNode,
     local_runtime_state_result: &Result<PathBuf, CliError>,
@@ -483,6 +658,43 @@ fn print_started_local_node(
             print.warn(
             "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
         );
+        }
+        if let Some(key) = &started.selected_key {
+            print.detail("selected key", key);
+        }
+        if let Some(manifest) = &started.readiness().runtime_manifest {
+            for account in &manifest.bootstrap_accounts {
+                if account.role
+                    == groundhog_json_rpc_types::runtime_manifest::BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER
+                {
+                    print.detail(
+                        "initial allocation",
+                        format_args!(
+                            "{} raw HOG units to {} (nonce 0)",
+                            account.initial_storage_tokens,
+                            crate::codec::format_contract_address(&account.wallet_address.0)
+                        ),
+                    );
+                }
+            }
+        }
+        match startup_wallet(started) {
+            Ok(Some(wallet)) => {
+                print.detail(
+                    "selected wallet",
+                    format_args!("{} ({})", wallet.name, wallet.address),
+                );
+                if let Some(hint) = wallet.funding_hint {
+                    print.note(hint);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => print.warn(format_args!(
+                "selected wallet could not be resolved: {error}"
+            )),
+        }
+        if let Some(hint) = startup_setup_hint(started) {
+            print.note(hint);
         }
         print.detail("rpc", started.rpc_url());
         if started.rpc_addr().ip().is_unspecified() {
@@ -511,7 +723,7 @@ fn print_started_local_node(
                 Err(error) => print.warn(format!("local runtime state was not updated: {error}")),
             }
             print.detail(
-                "dev-key manifest",
+                "account manifest",
                 format_args!(
                     "export GROUNDHOG_RUNTIME_MANIFEST={}",
                     crate::terminal::render_shell_arg(&path.to_string_lossy()),
@@ -943,13 +1155,7 @@ fn local_node_config(
         LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
         LocalNodePidFile::Disabled => hogd,
     };
-    let mut hogd = hogd;
-    if let Some(count) = options.dev_account_count {
-        hogd = hogd.with_dev_account_count(count);
-    }
-    if let Some(tokens) = options.dev_account_tokens {
-        hogd = hogd.with_dev_account_tokens(tokens);
-    }
+    let hogd = hogd.with_bootstrap_accounts(options.bootstrap_accounts);
     let hogd = match options.startup_timeout {
         Some(timeout) => hogd.with_startup_timeout(timeout),
         None => hogd,
@@ -1025,8 +1231,14 @@ fn rpc_url_for_addr(addr: SocketAddr) -> String {
 }
 
 /// Parse an exact HOG bootstrap allocation into seven-decimal raw units.
-pub fn parse_dev_account_hog(input: &str) -> Result<u64, CliError> {
+pub fn parse_initial_account_hog(input: &str) -> Result<u64, CliError> {
     let raw = crate::hog::parse_amount(input)?;
+    if raw == 0 || raw > i64::MAX as u128 {
+        return Err(CliError::InvalidHogAmount {
+            input: input.to_owned(),
+            message: "amount must be positive and fit signed 64-bit raw units".into(),
+        });
+    }
     u64::try_from(raw).map_err(|_| CliError::InvalidHogAmount {
         input: input.to_owned(),
         message: "amount exceeds the supported raw-unit range".to_owned(),
@@ -1106,6 +1318,7 @@ fn hogd_dev_startup_payload(
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "runtime_manifest": runtime_manifest_payload(readiness),
+        "bootstrapAccounts": readiness.runtime_manifest.as_ref().map(|manifest| &manifest.bootstrap_accounts),
         "local_runtime_state": local_runtime_state_payload(local_runtime_state_result),
         "data_dir": data_dir,
         "rpc_listen_address": addr.to_string(),
@@ -1199,6 +1412,44 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn funding_hint_identifies_local_profile_and_exact_node() {
+        let hint = super::local_funding_hint(
+            "0x123",
+            "http://127.0.0.1:1234",
+            Some(std::path::Path::new("/tmp/local state.json")),
+        );
+        assert!(hint.contains("profile with network = local"));
+        assert!(hint.contains("--rpc-url http://127.0.0.1:1234"));
+        assert!(hint.contains("--runtime-manifest '/tmp/local state.json'"));
+    }
+
+    #[test]
+    fn public_allocation_file_rejects_duplicates_and_unknown_fields() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let public_key = format!("0x{}", "11".repeat(32));
+        let allocation = serde_json::json!({"publicKey":public_key,"initialStorageTokens":"12345"});
+        fs::write(
+            file.path(),
+            serde_json::to_vec(&vec![allocation.clone()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            super::load_bootstrap_allocations(file.path()).unwrap()[0].initial_storage_tokens,
+            "12345"
+        );
+        fs::write(
+            file.path(),
+            serde_json::to_vec(&vec![allocation.clone(), allocation.clone()]).unwrap(),
+        )
+        .unwrap();
+        assert!(super::load_bootstrap_allocations(file.path()).is_err());
+        let mut invalid = allocation;
+        invalid["seed"] = serde_json::json!("old-runtime-magic");
+        fs::write(file.path(), serde_json::to_vec(&vec![invalid]).unwrap()).unwrap();
+        assert!(super::load_bootstrap_allocations(file.path()).is_err());
+    }
+
+    #[test]
     fn network_config_override_parsing_and_duplicate_rejection() {
         use super::parse_network_config_override;
         assert_eq!(
@@ -1249,6 +1500,7 @@ mod tests {
                 .with_source_commit(Some("373bec4b9dd9b99abae4f23b82f4e35df61273d1")),
         );
         let config = local_node_config(LocalNodeOptions {
+            selected_key: None,
             host: None,
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
@@ -1259,8 +1511,12 @@ mod tests {
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
-            dev_account_count: Some(3),
-            dev_account_tokens: Some(12_345_678),
+            bootstrap_accounts: vec![
+                groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+                    groundhog_json_rpc_types::hex::Hex0x([7; 32].into()),
+                    "12345678",
+                ),
+            ],
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
@@ -1289,8 +1545,10 @@ mod tests {
             config.hogd_dev.pid_file.as_deref(),
             Some(std::path::Path::new("/tmp/hog-devnode-test.pid"))
         );
-        assert_eq!(config.hogd_dev.dev_account_count, 3);
-        assert_eq!(config.hogd_dev.dev_account_tokens, 12_345_678);
+        assert_eq!(
+            config.hogd_dev.bootstrap_accounts[0].initial_storage_tokens,
+            "12345678"
+        );
         assert_eq!(config.hogd_dev.ramdb_bytes, Some(2_147_483_648));
         assert_eq!(
             config
@@ -1363,14 +1621,14 @@ mod tests {
     #[test]
     fn dev_account_hog_parser_preserves_seven_decimal_places() {
         assert_eq!(
-            super::parse_dev_account_hog("12.3456789").unwrap(),
+            super::parse_initial_account_hog("12.3456789").unwrap(),
             123_456_789
         );
     }
 
     #[test]
     fn dev_account_hog_parser_rejects_more_than_seven_decimal_places() {
-        let error = super::parse_dev_account_hog("1.00000001")
+        let error = super::parse_initial_account_hog("1.00000001")
             .expect_err("more than seven decimal places should fail");
 
         assert_eq!(error.code(), "invalid_hog_amount");
@@ -1378,10 +1636,10 @@ mod tests {
 
     #[test]
     fn dev_account_hog_parser_rejects_values_above_u64_raw_units() {
-        let error = super::parse_dev_account_hog("1844674407370.9551616")
+        let error = super::parse_initial_account_hog("1844674407370.9551616")
             .expect_err("raw allocation above u64 should fail");
 
-        assert!(error.to_string().contains("raw-unit range"));
+        assert!(error.to_string().contains("signed 64-bit raw units"));
     }
 
     #[test]
@@ -1732,7 +1990,7 @@ mod tests {
         }
         let manifest_path = temp.path().join("runtime-manifest.json");
         let manifest = br#"{
-          "schemaVersion": 3,
+          "schemaVersion": 4,
           "kind": "hogd-dev-runtime",
           "chainState": "fresh",
           "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -1740,10 +1998,6 @@ mod tests {
           "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
           "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
           "endpoints": {"scheduler": "127.0.0.1:12345", "schedulerGateway": "127.0.0.1:12346"},
-          "bootstrapAccountDerivation": {
-            "scheme": "groundhog-bootstrap-account-v1",
-            "seed": "groundhog-dev-accounts"
-          },
           "bootstrapAccounts": [],
           "bootstrap": {
             "storageCostModel": {
@@ -1786,7 +2040,7 @@ mod tests {
 
         assert_eq!(payload["schemaVersion"], NODE_STARTUP_SCHEMA_VERSION);
         assert_eq!(payload["chain_state"], "fresh");
-        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 3);
+        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 4);
         assert_eq!(
             payload["runtime_manifest"]["path"],
             manifest_path.display().to_string()

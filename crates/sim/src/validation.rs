@@ -716,9 +716,31 @@ fn validate_hex_len(
 
 fn positive_raw(raw: &str) -> bool {
     raw.bytes().all(|byte| byte.is_ascii_digit())
-        && raw.parse::<u128>().is_ok_and(|value| value > 0)
+        && raw
+            .parse::<u128>()
+            .is_ok_and(|value| value > 0 && value.to_string() == raw)
 }
+pub(crate) fn requires_signing_accounts(manifest: &SimulationManifest) -> bool {
+    !manifest.contract_artifacts.is_empty()
+        || manifest.workloads.iter().any(|w| {
+            matches!(
+                w.name,
+                WorkloadKind::WalletSubmitSmoke
+                    | WorkloadKind::ReceiptPoll
+                    | WorkloadKind::StatusPoll
+                    | WorkloadKind::ContractCall
+                    | WorkloadKind::ReadAfterWrite
+            )
+        })
+}
+
 fn validate_native_accounts(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if manifest.target.provider == TargetProviderKind::Local
+        && manifest.accounts.is_none()
+        && (requires_signing_accounts(manifest) || actor_provisioning_enabled(manifest))
+    {
+        return Err(ValidationError::NativeAccounts { reason: "local signing/provisioning requires explicit native accounts; runtime manifests no longer supply keys".into() });
+    }
     if manifest.accounts.is_none() {
         let raw = manifest
             .bootstrap
@@ -760,12 +782,26 @@ fn validate_native_accounts(manifest: &SimulationManifest) -> Result<(), Validat
                 reason: "explicit accounts cannot use bootstrap.actorProvisioning".into(),
             });
         }
-        if manifest.target.provider != TargetProviderKind::Existing {
-            return Err(ValidationError::NativeAccounts { reason: "native accounts currently require provider existing; local scenarios use native bootstrap accounts".into() });
-        }
-        if manifest.load_shape.iter().any(|phase| phase.users > 1024) {
+        if accounts
+            .funding_amount_raw
+            .as_deref()
+            .is_some_and(|raw| !positive_raw(raw))
+        {
             return Err(ValidationError::NativeAccounts {
-                reason: "native account setup is bounded to 1024 actors".into(),
+                reason: "fundingAmountRaw must be a positive canonical u128 decimal".into(),
+            });
+        }
+        if manifest.target.provider == TargetProviderKind::Local
+            && accounts.funding == crate::manifest::NativeAccountFunding::Faucet
+            && accounts.funding_amount_raw.is_none()
+        {
+            return Err(ValidationError::NativeAccounts {
+                reason: "local faucet setup requires explicit accounts.fundingAmountRaw".into(),
+            });
+        }
+        if manifest.load_shape.iter().any(|phase| phase.users > 1000) {
+            return Err(ValidationError::NativeAccounts {
+                reason: "native account setup is bounded to 1000 actors".into(),
             });
         }
     }
@@ -777,6 +813,27 @@ pub fn validate_against_runtime(
     manifest: &SimulationManifest,
     runtime: &RuntimeManifest,
 ) -> Result<(), ValidationError> {
+    if runtime.kind == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+        && manifest.accounts.is_none()
+        && requires_signing_accounts(manifest)
+    {
+        return Err(ValidationError::NativeAccounts {
+            reason:
+                "local signing workloads require explicit accounts.kind=native with a fixture seed"
+                    .into(),
+        });
+    }
+    if let Some(accounts) = &manifest.accounts {
+        let local = runtime.kind
+            == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND;
+        if (local
+            && accounts.funding == crate::manifest::NativeAccountFunding::Faucet
+            && accounts.funding_amount_raw.is_none())
+            || (!local && accounts.funding_amount_raw.is_some())
+        {
+            return Err(ValidationError::NativeAccounts { reason: "local faucet funding requires fundingAmountRaw; hosted faucets retain their fixed amount".into() });
+        }
+    }
     let account_count = u32::try_from(
         runtime
             .bootstrap_accounts
@@ -794,15 +851,19 @@ pub fn validate_against_runtime(
     let has_provisioning_faucet = runtime
         .bootstrap_accounts
         .iter()
-        .any(|account| account.index == 0 && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
-    if manifest.accounts.is_none()
+        .any(|account| account.index == Some(0) && account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
+    if runtime.kind
+        == groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        && manifest.accounts.is_none()
         && max_users > account_count
         && actor_provisioning_enabled(manifest)
         && !has_provisioning_faucet
     {
         return Err(ValidationError::ActorProvisioningRequiresSponsor);
     }
-    if manifest.accounts.is_none()
+    if runtime.kind
+        == groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        && manifest.accounts.is_none()
         && max_users > account_count
         && !actor_provisioning_enabled(manifest)
     {
@@ -1181,10 +1242,15 @@ mod tests {
             .deployment_collateral_raw = Some("10000000".into());
         validate_manifest(&manifest).expect("explicit deploy collateral");
         manifest.target.provider = TargetProviderKind::Local;
+        validate_manifest(&manifest).expect("local explicit native accounts are supported");
+        let accounts = manifest.accounts.as_mut().unwrap();
+        accounts.funding = crate::manifest::NativeAccountFunding::Faucet;
         assert!(matches!(
             validate_manifest(&manifest),
             Err(ValidationError::NativeAccounts { .. })
         ));
+        manifest.accounts.as_mut().unwrap().funding_amount_raw = Some("1000000000".into());
+        validate_manifest(&manifest).expect("explicit local transfer amount");
     }
 
     #[test]
@@ -1991,7 +2057,7 @@ mod tests {
         manifest.load_shape[0].users = 2;
         let mut runtime = runtime_manifest();
         let mut faucet = runtime.bootstrap_accounts[0].clone();
-        faucet.index = 9;
+        faucet.index = Some(9);
         faucet.role = "faucet".into();
         runtime.bootstrap_accounts.push(faucet);
 
@@ -2025,7 +2091,7 @@ mod tests {
         let runtime = runtime_manifest();
         let mut runtime = runtime;
         let mut faucet = runtime.bootstrap_accounts[0].clone();
-        faucet.index = 0;
+        faucet.index = Some(0);
         faucet.role = BOOTSTRAP_ACCOUNT_ROLE_FAUCET.into();
         runtime.bootstrap_accounts.push(faucet);
 
@@ -2048,7 +2114,7 @@ mod tests {
             }),
         });
         let mut runtime = runtime_manifest();
-        runtime.bootstrap_accounts[0].index = 0;
+        runtime.bootstrap_accounts[0].index = Some(0);
         runtime.bootstrap_accounts[0].role = BOOTSTRAP_ACCOUNT_ROLE_FAUCET.into();
 
         validate_against_runtime(&manifest, &runtime)
@@ -2347,7 +2413,7 @@ mod tests {
         let public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         serde_json::from_value(json!({
             "schemaVersion": 3,
-            "kind": "hogd-dev-runtime",
+            "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test00000000000",

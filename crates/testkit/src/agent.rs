@@ -352,7 +352,8 @@ impl AgentContext {
     }
 
     /// Submit an exact raw HOG transfer from the runtime's bootstrap faucet.
-    /// Native test accounts start empty; funding is never implicit.
+    /// Existing-network fixtures start empty; local fixtures receive explicit genesis allocations.
+    /// Retry uncertain local funding with the same amount on this scenario/network handle.
     pub async fn submit_fund(&self, amount: u128) -> Result<SubmittedTransaction> {
         self.network.submit_fund(self.address(), amount).await
     }

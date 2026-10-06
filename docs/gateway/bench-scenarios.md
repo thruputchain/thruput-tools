@@ -15,7 +15,8 @@ GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode \
 ```
 
 The script starts its own interval-driven local node and standalone gateway.
-It exercises both endpoints through the runtime-manifest handoff. Available
+It creates and retains explicit benchmark fixture keys, supplies their public
+initial allocations, and exercises both endpoints through the runtime-manifest handoff. Available
 scenario names are `smoke`, `gateway-baseline`, and `submit-ramp`; the latter two
 use release builds by default. Use the [script](../../scripts/smoke-runtime-manifest-bench.sh)
 for current rates, durations, account counts, and environment overrides.
@@ -41,7 +42,7 @@ block production. Seed and validate a corpus outside the timed window:
 
 ```sh
 groundhog-bench --url http://127.0.0.1:9546 \
-  --runtime-manifest "$RUNTIME_MANIFEST" \
+  --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
   --method getTransactionReceipt --seed-count 12000 \
   --seed-output ./confirmed-hashes.json --accounts 10 --force \
   --outstanding 128 --workers 2 --warmup 3 --duration 20 --json > receipts.json
@@ -50,6 +51,12 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method getTransactionStatus --hashes-file ./confirmed-hashes.json \
   --outstanding 128 --workers 2 --warmup 3 --duration 20 --json > status.json
 ```
+
+Local writes and corpus seeding require `--account-seed` and matching public
+initial allocations. A local manifest cannot supply signing credentials. This
+check proves allocation identity, not the current available balance; fund the
+fixtures for the chosen load. Read-only imported corpora need no fixture keys.
+Hosted schema-3 targets retain their separate bootstrap adapter.
 
 The seed submits real transactions. A committed execution failure still supplies
 a valid receipt for a read benchmark; it is not evidence of a successful

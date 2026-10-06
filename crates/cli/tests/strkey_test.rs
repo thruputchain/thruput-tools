@@ -153,8 +153,8 @@ fn import_rejects_invalid_secret_types_and_reserved_names_without_echoing_input(
     }
     let home = TempDir::new().unwrap();
     let out = run(&home, &["keys", "import", "dev-1"], Some(&"ab".repeat(32)));
-    assert!(!out.status.success());
-    assert!(!home.path().join("groundhog/keys/dev-1.json").exists());
+    assert!(out.status.success());
+    assert!(home.path().join("groundhog/keys/dev-1.json").exists());
     let good = run(&home, &["keys", "import", "alice"], Some(&"ab".repeat(32)));
     assert!(good.status.success());
 }

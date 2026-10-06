@@ -25,6 +25,45 @@
         "x-description": "One or more JSON-RPC parameters are malformed, out of range, or otherwise invalid.",
         "x-name": "InvalidParams"
       },
+      "LocalFundingUnresolved": {
+        "code": -32003,
+        "message": "Local funding unresolved",
+        "x-data-schema": {
+          "$defs": {
+            "Hex0x_SHA256Hash": {
+              "pattern": "^0x[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "HexBytes": {
+              "pattern": "^0x[0-9a-f]*$",
+              "type": "string"
+            },
+            "TxHash": {
+              "$ref": "#/$defs/Hex0x_SHA256Hash",
+              "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
+            }
+          },
+          "description": "Retained transaction evidence returned when local funding cannot resolve an outcome.\nThis does not prove admission or execution. Reconcile this hash and reuse the original request.",
+          "properties": {
+            "signedTransaction": {
+              "$ref": "#/$defs/HexBytes",
+              "description": "Exact signed bytes persisted before the first submission."
+            },
+            "txHash": {
+              "$ref": "#/$defs/TxHash",
+              "description": "Canonical hash of the retained transaction body."
+            }
+          },
+          "required": [
+            "txHash",
+            "signedTransaction"
+          ],
+          "title": "LocalFundingErrorData",
+          "type": "object"
+        },
+        "x-description": "Local funding retained a signed transaction but could not resolve its outcome. Data contains its transaction hash and exact signed bytes, not proof of admission or execution. Reconcile that hash and retry the original request; do not create a replacement transfer.",
+        "x-name": "LocalFundingUnresolved"
+      },
       "NotImplemented": {
         "code": -32052,
         "message": "Not implemented",
@@ -885,6 +924,63 @@
           }
         ]
       },
+      "FundAccountRequest": {
+        "additionalProperties": false,
+        "description": "Public parameters for local-only `groundhog_fundAccount`.",
+        "properties": {
+          "clientNonce": {
+            "$ref": "#/components/schemas/ClientNonce",
+            "description": "Retained caller-owned idempotency nonce."
+          },
+          "faucet": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Expected random faucet identity; refuses a different chain at the same URL."
+          },
+          "rawAmount": {
+            "description": "Positive canonical decimal amount in raw HOG units.",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Native HOG transfer recipient."
+          }
+        },
+        "required": [
+          "recipient",
+          "rawAmount",
+          "clientNonce",
+          "faucet"
+        ],
+        "type": "object"
+      },
+      "FundAccountResponse": {
+        "description": "Authoritatively admitted (or already committed) local funding submission.",
+        "properties": {
+          "rawAmount": {
+            "description": "Exact requested raw HOG amount.",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Recipient of the retained transfer."
+          },
+          "signedTransaction": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Signed transaction retained before its first broadcast."
+          },
+          "txHash": {
+            "$ref": "#/components/schemas/TxHash",
+            "description": "Canonical body hash for status and receipt queries."
+          }
+        },
+        "required": [
+          "recipient",
+          "rawAmount",
+          "txHash",
+          "signedTransaction"
+        ],
+        "type": "object"
+      },
       "Hex0x_ContractAddress": {
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
@@ -1700,7 +1796,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "9.0.0"
+    "version": "9.1.0"
   },
   "methods": [
     {
@@ -2287,6 +2383,50 @@
       "tags": [
         {
           "name": "Airdrop API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/LocalFundingUnresolved"
+        },
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxRejected"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        }
+      ],
+      "name": "groundhog_fundAccount",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/FundAccountRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "FundAccountResponse",
+        "schema": {
+          "$ref": "#/components/schemas/FundAccountResponse"
+        }
+      },
+      "summary": "Submit an explicit native HOG transfer using a retained caller nonce.  Acceptance does not imply execution success. Observe the returned hash through the ordinary status/receipt APIs. Retry an uncertain response with exactly the same request; retain its chain identity and amount. Hosted servers return standard JSON-RPC `Method not found`.",
+      "tags": [
+        {
+          "name": "Local Funding API"
         }
       ]
     }

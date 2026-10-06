@@ -380,12 +380,26 @@ fn assert_error_data_schemas_are_wired(errors: &serde_json::Map<String, serde_js
         ],
         "TxInvalid data variants should be discriminated by camelCase reason tags"
     );
+    let funding = &errors["LocalFundingUnresolved"]["x-data-schema"];
+    assert_eq!(funding["type"], "object");
+    assert_eq!(
+        funding["required"],
+        serde_json::json!(["txHash", "signedTransaction"])
+    );
+    assert_eq!(funding["properties"]["txHash"]["$ref"], "#/$defs/TxHash");
+    assert_eq!(
+        funding["properties"]["signedTransaction"]["$ref"],
+        "#/$defs/HexBytes"
+    );
     assert!(
         errors
             .values()
-            .filter(|error| error["x-name"] != "TxInvalid")
+            .filter(|error| !matches!(
+                error["x-name"].as_str(),
+                Some("TxInvalid" | "LocalFundingUnresolved")
+            ))
             .all(|error| error["x-data-schema"].is_null()),
-        "only TxInvalid documents a structured data payload today"
+        "only transaction validation and unresolved funding document structured data"
     );
 }
 

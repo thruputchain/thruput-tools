@@ -12,32 +12,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let path = args
         .get(1)
-        .ok_or("usage: submit_traffic RUNTIME_MANIFEST COUNT NONCE_START")?;
+        .ok_or("usage: submit_traffic RUNTIME_MANIFEST COUNT NONCE_START [FIXTURE_SEED]")?;
     let count: u32 = args.get(2).ok_or("missing count")?.parse()?;
     let nonce: u64 = args.get(3).ok_or("missing nonce")?.parse()?;
     let document = std::fs::read(path)?;
     let parsed = groundhog_json_rpc_types::runtime_manifest::parse_runtime_manifest(&document)?;
-    if parsed.bootstrap_account_derivation.scheme != "groundhog-bootstrap-account-v1" {
-        return Err("unsupported bootstrap derivation scheme".into());
-    }
     let endpoint = parsed
         .endpoints
         .scheduler_gateway
         .ok_or("missing schedulerGateway")?;
-    let account = parsed
-        .bootstrap_accounts
-        .get(1)
-        .ok_or("missing bootstrap account")?;
-    let wallet = account.wallet_address.0;
-    let network = parsed.network_hash.to_network_hash();
-    let signer = derive_dev_account_signer(
-        &parsed.bootstrap_account_derivation.seed,
-        usize::try_from(account.index)?,
-    );
+    let signer = if let Some(seed) = args.get(4) {
+        if seed.is_empty() {
+            return Err("fixture seed must be nonempty".into());
+        }
+        derive_dev_account_signer(&format!("groundhog-firehose:{seed}"), 0)
+    } else {
+        if parsed.kind
+            != groundhog_json_rpc_types::runtime_manifest::HOSTED_DEVNET_RUNTIME_MANIFEST_KIND
+        {
+            return Err("local manifests contain public allocations only; supply a fixture seed and matching public initial allocation".into());
+        }
+        let derivation = parsed
+            .bootstrap_account_derivation
+            .as_ref()
+            .ok_or("missing hosted derivation")?;
+        if derivation.scheme != "groundhog-bootstrap-account-v1" {
+            return Err("unsupported hosted derivation".into());
+        }
+        let account = parsed
+            .bootstrap_accounts
+            .iter()
+            .find(|a| a.role == "local_user")
+            .ok_or("missing hosted user account")?;
+        derive_dev_account_signer(
+            &derivation.seed,
+            usize::try_from(account.index.ok_or("missing hosted index")?)?,
+        )
+    };
     let native = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
-    if native.address() != wallet || account.public_key.as_ref() != signer.verifying_key_bytes() {
-        return Err("bootstrap account identity mismatch".into());
+    let wallet = native.address();
+    if !parsed.bootstrap_accounts.iter().any(|a| {
+        a.role == "local_user"
+            && a.wallet_address.0 == wallet
+            && a.public_key.as_ref() == signer.verifying_key_bytes()
+    }) {
+        return Err("fixture account has no matching public initial allocation".into());
     }
+    let network = parsed.network_hash.to_network_hash();
     let calldata = xdrs::cxs::encode(&(wallet,))?;
     let mut bytes = Vec::new();
     for i in 0..count {
