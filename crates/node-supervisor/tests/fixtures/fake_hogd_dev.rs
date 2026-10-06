@@ -35,7 +35,7 @@ use groundhog_scheduler::{
     ParallelTransactionHashBatch, PendingTxCount, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
     SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
     SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
-    SchedulerValidationResult,
+    SchedulerTransactionOutcomeBatch, SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
 };
@@ -1306,7 +1306,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
     async fn schedcoord_lookup_transaction_outcomes(
         &self,
         hashes: TransactionHashBatch,
-    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+    ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
         use groundhog_scheduler::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,
@@ -1387,7 +1387,7 @@ impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
     async fn schedgateway_lookup_transaction_outcomes(
         &self,
         hashes: TransactionHashBatch,
-    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+    ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
         use groundhog_scheduler::{
             SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
             SchedulerTransactionStatus,

@@ -42,27 +42,29 @@ fn embedded_catalog_pins_the_published_default_matrix() {
 }
 
 #[test]
-fn embedded_catalog_keeps_the_previous_release_selectable() {
+fn embedded_catalog_keeps_earlier_releases_selectable() {
     let catalog = Catalog::embedded().expect("bug: embedded catalog should validate");
 
-    // Users may have saved the previous default as their selected version.
-    assert_eq!(
-        catalog
-            .resolve_version(Some("0.1.30-rc.1"))
-            .expect("bug: previous release should remain selectable"),
-        "0.1.30-rc.1"
-    );
-    for target in [
-        HostTarget::LinuxX86_64,
-        HostTarget::LinuxAarch64,
-        HostTarget::MacosAarch64,
-    ] {
-        assert!(
+    // Users may have saved an earlier default as their selected version.
+    for version in ["0.1.29-rc.5", "0.1.30-rc.1"] {
+        assert_eq!(
             catalog
-                .artifact("0.1.30-rc.1", target)
-                .expect("bug: previous release target should exist")
-                .has_required_bundle_files()
+                .resolve_version(Some(version))
+                .expect("bug: earlier release should remain selectable"),
+            version
         );
+        for target in [
+            HostTarget::LinuxX86_64,
+            HostTarget::LinuxAarch64,
+            HostTarget::MacosAarch64,
+        ] {
+            assert!(
+                catalog
+                    .artifact(version, target)
+                    .expect("bug: earlier release target should exist")
+                    .has_required_bundle_files()
+            );
+        }
     }
 }
 

@@ -87,13 +87,13 @@ fn toolchain_use_accepts_the_previous_release() {
     let cache = root.path().join("cache");
 
     let output = groundhog(&config, &cache)
-        .args(["--json", "toolchain", "use", "0.1.29-rc.5"])
+        .args(["--json", "toolchain", "use", "0.1.30-rc.1"])
         .output()
         .expect("bug: groundhog should run");
     assert!(output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("bug: use output should be JSON");
-    assert_eq!(json["data"]["version"], "0.1.29-rc.5");
+    assert_eq!(json["data"]["version"], "0.1.30-rc.1");
     assert_ne!(json["data"]["version"], default_version());
 }
 

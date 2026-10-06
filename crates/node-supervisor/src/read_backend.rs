@@ -513,6 +513,7 @@ mod tests {
     use groundhog_scheduler::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, RPCError,
         SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
+        SchedulerTransactionOutcomeBatch,
         sched_gateway::{
             SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Client,
             SchedGateway_SchedGateway1_Dispatcher,
@@ -684,7 +685,7 @@ mod tests {
         async fn schedgateway_lookup_transaction_outcomes(
             &self,
             hashes: TransactionHashBatch,
-        ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+        ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
             use groundhog_scheduler::{
                 SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
                 SchedulerTransactionStatus,
