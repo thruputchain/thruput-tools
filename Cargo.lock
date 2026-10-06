@@ -1222,7 +1222,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1461,9 +1461,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-access-control-if"
-version = "0.1.44"
+version = "0.1.47"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "096b0933a808ec70b2c19a59545a8e09c8e038fb107daebdd81b39b0a80a7e2b"
+checksum = "bfabd97cfd442a14e35a0e4682db46b96a4f2218b9dd92a717a6cd918da2d8ea"
 dependencies = [
  "sdk",
 ]
@@ -1610,9 +1610,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-spec"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "7e0d6e3fdafd299404170e4c2ba4c261bbab7abacf9ae63bc89ac9b0ca403952"
+checksum = "4bfce9e1cbbe28c69f733ee21133d681b4640e50013179b5e797357479884b15"
 dependencies = [
  "groundhog-spec",
  "groundhog-xdr",
@@ -1623,9 +1623,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-util"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "e9a124e3c655c185c4abed96f7d13d72feb70c904f9ef1ea626afbf5de637d71"
+checksum = "031902bb7f2a3070c47126a2e4085e33f6382d75109c445fa44d8f5852a9a4da"
 dependencies = [
  "groundhog-xdr",
  "sha2",
@@ -1634,9 +1634,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-domain-separator"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "670dc53cda9cc27167f599b668e5de3c8163d75520f32acaa889c02986025671"
+checksum = "fb5e5652136a2873a12cec4007a9415403e28ae08d24583cdd2adfa6dff2c155"
 dependencies = [
  "groundhog-contract-spec",
  "groundhog-xdr",
@@ -1663,9 +1663,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-erc20-if"
-version = "0.1.44"
+version = "0.1.47"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "7ff37043fb067901faa793af0a69f05ffb7119b10f7a2c22d7a4cdb5aca8784c"
+checksum = "5566a8545a5210d24ce04819c6b2cf829693650b42873667720f2e2cc1fd2670"
 dependencies = [
  "groundhog-xdr",
  "sdk",
@@ -1673,18 +1673,18 @@ dependencies = [
 
 [[package]]
 name = "groundhog-erc20-pausable-if"
-version = "0.1.44"
+version = "0.1.47"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "d413f5b519dc9e90d07c65a3a335f542c2ab26c03a0b943f627df1124b3af520"
+checksum = "6b05dd294a3b3c04822aa6ec15e50346eebcd98dfbe6aaed7561b183317ead6c"
 dependencies = [
  "sdk",
 ]
 
 [[package]]
 name = "groundhog-erc20-permit-if"
-version = "0.1.44"
+version = "0.1.47"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "db23efd82c532dad6506397516581ce535dee6f1d7ed8ada4c9c18ec0ef3acc8"
+checksum = "1a21fde161a4eec1faf66eeda1c0f19be013e87565c0ba531ca57051a9cfafc8"
 dependencies = [
  "groundhog-erc20-if",
  "sdk",
@@ -1692,9 +1692,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-event"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "e0179845bb97538340194cf1d3c13589cdd58d621464e11dbbaa023c64f3c023"
+checksum = "572d17aa3496d04914f603d9c1f6ad104fd2baa4c76d2404a2d41febd426d478"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1702,9 +1702,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-exn"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "33c05f090969c903b1fb5931e88f6f528ac03862bc65cb85b05b242f629ac519"
+checksum = "c723de2d70666cb1adc4e6342706ad923a00bd29dcc05bc8ba46b1bf8e3bc488"
 dependencies = [
  "xdrs",
 ]
@@ -1902,9 +1902,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-macros"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "e523c36bd4d5fdb5c7ab7a7b5739c1f13e9bab2a56d328dbc43e7e48dba45c9d"
+checksum = "0936790d22017ff4fd29019b75bd1069c58629df817675bcbc218e6fbb8cf55c"
 dependencies = [
  "darling",
  "groundhog-contract-util",
@@ -2009,15 +2009,15 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-runtime"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "59c3b04f009408f1982b225b48005483c1c2d7dc4e65f827887d4c0bd8535e77"
+checksum = "c24199a6c7e42bdca6b16ec43236a0a95393242ab8d0ba54871c65cba7b98873"
 
 [[package]]
 name = "groundhog-signed-op-if"
-version = "0.1.44"
+version = "0.1.47"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "92ca33d1c0fcf2ac4d36056df415bab5a09bca1c48ea05f044d4c7d4f06cb3ee"
+checksum = "072e7e7997690c6b4528672943158dd4c70fd6b467eb0fd0d5204eca2e4f94db"
 dependencies = [
  "sdk",
  "thiserror 2.0.21",
@@ -2068,9 +2068,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-spec"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "fd6aec7920eac56484187dadbe159632f5ca902f1a9267995cc46670f562cece"
+checksum = "a01a2f1e989a5e54f5c6cf3fb2bd828152cc625025407a294f699388baf84896"
 dependencies = [
  "groundhog-xdr",
  "serde",
@@ -2079,9 +2079,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-spec-tool"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "8677cf30dd9577ac1beafebeb73b8085408a0a83d7fad60e08ac2f0894e7a9bc"
+checksum = "bba99f6dd7daf74f95a2afda74099bb8a0f6d3f27e002ab592265cc12684c540"
 dependencies = [
  "groundhog-access-control-if",
  "groundhog-contract-spec",
@@ -2098,9 +2098,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-syscall"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "2a3ea66a777f65492f274751ab4975b9ff11045e134735bf4450e47ce3ccfc36"
+checksum = "7ec997bf179898573353c7b75e94072fd038f9e5575fca0a8571aebb65de143c"
 
 [[package]]
 name = "groundhog-testkit"
@@ -2146,9 +2146,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-trace"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "aa85a209da1541f313369ea342a80fe494394c62f92695b4203978e7be7a7bc2"
+checksum = "f709f762b9a5d147b7afc58b4f24f08d7c19c96b2d650882873829b4a236a414"
 dependencies = [
  "groundhog-xdr",
  "hogexec-internal",
@@ -2174,9 +2174,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-u256"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "d8310ce6861735a2e52321c7c854dc84c6728c6adbd5f2ecaf5e753e466c8e6e"
+checksum = "1481ddf6ff02ffad397a596a0bed5d4df53452660b4ea98555655ca4781837a7"
 dependencies = [
  "groundhog-contract-spec",
  "xdrs",
@@ -2195,9 +2195,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-xdr"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "e6c70c2dabc8d80c2d1241f16787639cd42bc352fa082b68a9f767b4d8d0e77f"
+checksum = "74230ae3a3d8790ddeaa1a2af2d8da4ac4ed1168dd4301418e24b38e2a2f48a7"
 dependencies = [
  "groundhog-syscall",
  "groundhog-xdr-macros",
@@ -2210,9 +2210,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-xdr-macros"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "abbc46861d0653cd15b44d87a09f3710fb136f158a749f068400c0f926d128ee"
+checksum = "d37125f19a939d9431e97c30edae18b258be6b66219fd6a6d1a0878777c1f58d"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -2225,9 +2225,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog_coordinator"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "125ba45aaaeb9297628f9fb3152764d11be6ef5179639238d2f6145beca30792"
+checksum = "18e37c5f7a731b2cbcb2f4893cf4e9efb1136b634a71883b7dc9f44c505410e4"
 dependencies = [
  "async-trait",
  "groundhog-xdr",
@@ -2240,9 +2240,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog_db_gateway"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "11478b3e8487a04d276a4ba355cc0bc44c3f86fc73a7c307dfbd413349b88202"
+checksum = "0392bd99958b047e09caffd5349aea5289253751932a4c76570fb696f1f33ea9"
 dependencies = [
  "async-trait",
  "groundhog-xdr",
@@ -2256,9 +2256,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog_indexer"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "0b4c36cb0aeff2cb6d29eee0d05b2453e77e49d355810eeafd02201dc4f352be"
+checksum = "d6649ea982e35bab5ae957e519286f3d21eb238b8e179ffb3fce3b58a88ad5b5"
 dependencies = [
  "async-trait",
  "groundhog-trace",
@@ -2274,9 +2274,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog_scheduler"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "25105fec33b81a2e4a1d74605b8ca6d0a68004f015a71a8ff715d8a778b59f7f"
+checksum = "25ed2c954ec5e64ae2885aeeb6a928541b2b5858d205e9a3d453f6423523fdf6"
 dependencies = [
  "async-trait",
  "groundhog-trace",
@@ -2292,9 +2292,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog_scp"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "3f8cad6f0c820806b164cf5ceb5f7e11dab0eab00ab8702b7a713a49140be434"
+checksum = "cd312bca623ed4ed8b3fcdf3c1625cae6c167c537cc6de41c6cfbde9e3072d78"
 dependencies = [
  "async-trait",
  "groundhog-xdr",
@@ -2307,9 +2307,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog_view"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "91d3bd0a351dd665d3f56535184a18adc1341128704813c518f60c86387d1f0d"
+checksum = "2cd8775db76716858f50ef1d6dc17eccdbb8d3d8412dd1256d9575af369c6d61"
 dependencies = [
  "async-trait",
  "groundhog-xdr",
@@ -2429,9 +2429,9 @@ dependencies = [
 
 [[package]]
 name = "hogexec-internal"
-version = "0.43.0"
+version = "0.46.0"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "4143e2e16a9deaf59c6f43d420333ad416f3dcebd5920b25b5cd77397dc2da47"
+checksum = "8a1fcea71e80264322b1912a65836e8285bc33ca9c47fd5b4c106bf5c358a79e"
 dependencies = [
  "xdrs",
 ]
@@ -3203,7 +3203,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3836,7 +3836,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3978,9 +3978,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sdk"
-version = "0.42.2"
+version = "0.44.2"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "9eb8b4b1a98a9f6880742e548698f3f5e4dfd7519d3e4e009322d6aacebeddd2"
+checksum = "fe20e11ec2c49d6ba757523b75ec909f0239272ccdae4f87fc821cb9465c9def"
 dependencies = [
  "groundhog-contract-spec",
  "groundhog-event",
@@ -4419,7 +4419,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5060,7 +5060,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5290,9 +5290,9 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xdr-common"
-version = "0.10.2"
+version = "0.10.3"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "60b53dc86cc6d89204bed084f8207cc2e24bdc5db888a031e3d92a180990034e"
+checksum = "aa40706c1eb7e8483c8ac185fbcb52d4b70495f0a1c50bf8ee3428ad3b9aef0c"
 dependencies = [
  "escape-bytes",
  "schemars",
@@ -5301,9 +5301,9 @@ dependencies = [
 
 [[package]]
 name = "xdr-derive"
-version = "0.10.2"
+version = "0.10.3"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "5b24ad2f23fd8e15e61099b2fd21fcba4ddd65785f9d21dbf05a5c33ca2a387b"
+checksum = "c0da7fabeb5ec487a4e0ec25f49aa39ba8358fc13a201fa9705eb354b04794a2"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -5313,9 +5313,9 @@ dependencies = [
 
 [[package]]
 name = "xdr-repr"
-version = "0.10.2"
+version = "0.10.3"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "e8d59bfc840e3602caabf0c22ebffbd6991ed22b3630327668c1d01567354040"
+checksum = "60cb85a5282a084a86e1c3c6d2eb02168bd3438ebb3f076521903afae97c50fa"
 dependencies = [
  "heapless",
  "xdr-common",
@@ -5323,9 +5323,9 @@ dependencies = [
 
 [[package]]
 name = "xdrs"
-version = "0.10.2"
+version = "0.10.3"
 source = "sparse+https://crates.thruput.network/api/v1/crates/"
-checksum = "084c9cb4a5e73d5472b44a1d2025278ab7cb550fcf9b4976ae46c9eeb6ef3f6d"
+checksum = "2411efb4631e1c11edac3c600cd1a15c32fc7d8c39bea364d8b3af2a25956eb6"
 dependencies = [
  "heapless",
  "xdr-common",
