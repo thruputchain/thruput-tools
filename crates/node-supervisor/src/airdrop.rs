@@ -20,7 +20,7 @@ use groundhog_json_rpc_types::{
     hex::Hex0x,
     receipt::ExecStatus,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, RuntimeManifest},
-    transaction::{TransactionStatus, TxHash},
+    transaction::{SchedulerTransactionError, TransactionStatus, TxHash},
 };
 use groundhog_signing::{
     DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
@@ -407,7 +407,11 @@ impl LocalAirdropRpc {
                 TransactionStatus::Invalid { reason } => {
                     return Err(RpcServerError::TxRejected(reason));
                 }
+                TransactionStatus::Dropped { error } => {
+                    return Err(dropped_funding_error(&error));
+                }
                 TransactionStatus::Unknown
+                | TransactionStatus::Retry { .. }
                 | TransactionStatus::RecentFailure { .. }
                 | TransactionStatus::Other => {}
                 _ => {
@@ -465,6 +469,44 @@ impl LocalAirdropRpc {
         Ok(())
     }
 
+    async fn reconcile_restored_attempt(
+        &self,
+        attempt: &Attempt,
+        signed: &SignedAirdrop,
+        recipient: ContractAddress,
+        context: RpcRequestContext,
+    ) -> Result<Option<AirdropAttemptResponse>, RpcServerError> {
+        if let Some(receipt) = self.backend.receipt(context, signed.tx_hash).await? {
+            if matches!(receipt.status, ExecStatus::Ok) {
+                return Ok(Some(AirdropAttemptResponse::Succeeded {
+                    recipient,
+                    tx_hash: signed.tx_hash,
+                    raw_amount: self.raw_amount.to_string(),
+                    height: receipt.height,
+                    status: receipt.status,
+                }));
+            }
+            return Err(RpcServerError::TxRejected(format!(
+                "local airdrop execution failed: {:?}",
+                receipt.status
+            )));
+        }
+        match self.backend.status(context, signed.tx_hash).await? {
+            TransactionStatus::Pending | TransactionStatus::Committed { .. } => {
+                return Ok(Some(self.pending_response(recipient, signed.tx_hash)));
+            }
+            TransactionStatus::Invalid { reason } => {
+                return Err(RpcServerError::TxRejected(reason));
+            }
+            TransactionStatus::Dropped { error } => {
+                attempt.set_terminal(true)?;
+                return Err(dropped_funding_error(&error));
+            }
+            _ => self.check_retained_expiry(signed, context).await?,
+        }
+        Ok(None)
+    }
+
     async fn advance_attempt(
         &self,
         attempt: &Attempt,
@@ -472,31 +514,12 @@ impl LocalAirdropRpc {
         context: RpcRequestContext,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
         let signed = self.prepare_signed(attempt, context).await?;
-        if attempt.restored {
-            if let Some(receipt) = self.backend.receipt(context, signed.tx_hash).await? {
-                if matches!(receipt.status, ExecStatus::Ok) {
-                    return Ok(AirdropAttemptResponse::Succeeded {
-                        recipient,
-                        tx_hash: signed.tx_hash,
-                        raw_amount: self.raw_amount.to_string(),
-                        height: receipt.height,
-                        status: receipt.status,
-                    });
-                }
-                return Err(RpcServerError::TxRejected(format!(
-                    "local airdrop execution failed: {:?}",
-                    receipt.status
-                )));
-            }
-            match self.backend.status(context, signed.tx_hash).await? {
-                TransactionStatus::Pending | TransactionStatus::Committed { .. } => {
-                    return Ok(self.pending_response(recipient, signed.tx_hash));
-                }
-                TransactionStatus::Invalid { reason } => {
-                    return Err(RpcServerError::TxRejected(reason));
-                }
-                _ => self.check_retained_expiry(&signed, context).await?,
-            }
+        if attempt.restored
+            && let Some(response) = self
+                .reconcile_restored_attempt(attempt, &signed, recipient, context)
+                .await?
+        {
+            return Ok(response);
         }
 
         let mut submit_error = if attempt.is_submitted()? {
@@ -537,6 +560,14 @@ impl LocalAirdropRpc {
                 Ok(TransactionStatus::Invalid { reason }) => {
                     attempt.set_terminal(true)?;
                     Err(RpcServerError::TxRejected(reason))
+                }
+                Ok(TransactionStatus::Dropped { error }) => {
+                    attempt.set_terminal(true)?;
+                    Err(dropped_funding_error(&error))
+                }
+                Ok(TransactionStatus::Retry { .. }) => {
+                    attempt.set_submitted(false)?;
+                    Ok(self.pending_response(recipient, signed.tx_hash))
                 }
                 Ok(TransactionStatus::Pending) => {
                     if submit_error.is_some() {
@@ -917,6 +948,13 @@ fn classify_backend_error(error: RpcServerError) -> RpcServerError {
 
 fn is_deterministic_failure(error: &RpcServerError) -> bool {
     matches!(error, RpcServerError::TxRejected(_))
+}
+
+fn dropped_funding_error(error: &SchedulerTransactionError) -> RpcServerError {
+    RpcServerError::TxRejected(format!(
+        "local funding transaction dropped: {:?} code {}",
+        error.source, error.code
+    ))
 }
 
 fn nonce_from_timestamp() -> u64 {

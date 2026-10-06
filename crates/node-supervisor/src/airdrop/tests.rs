@@ -35,6 +35,7 @@ struct TestBackend {
     submit_results: Mutex<VecDeque<Result<(), RpcServerError>>>,
     status_results: Mutex<VecDeque<Result<TransactionStatus, RpcServerError>>>,
     submissions: Mutex<Vec<Vec<u8>>>,
+    receipt: Mutex<Option<groundhog_json_rpc_types::receipt::TransactionReceipt>>,
     submit_delay: Duration,
     submit_gate: Option<Arc<Semaphore>>,
     contexts: Mutex<Vec<RpcRequestContext>>,
@@ -46,6 +47,7 @@ impl TestBackend {
             submit_results: Mutex::new(submit_results.into()),
             status_results: Mutex::new(VecDeque::new()),
             submissions: Mutex::new(Vec::new()),
+            receipt: Mutex::new(None),
             submit_delay: Duration::ZERO,
             submit_gate: None,
             contexts: Mutex::new(Vec::new()),
@@ -103,7 +105,7 @@ impl AirdropBackend for TestBackend {
         _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<Option<groundhog_json_rpc_types::receipt::TransactionReceipt>, RpcServerError> {
-        Ok(None)
+        Ok(self.receipt.lock().unwrap().clone())
     }
 
     async fn status(
@@ -635,6 +637,51 @@ async fn recent_failure_retry_resubmits_exact_signed_bytes() {
     );
 }
 
+fn scheduler_failure() -> SchedulerTransactionError {
+    SchedulerTransactionError::new(
+        groundhog_json_rpc_types::transaction::SchedulerTransactionErrorSource::Executor,
+        -7,
+    )
+}
+
+#[tokio::test]
+async fn retry_outcome_resubmits_same_airdrop_and_dropped_is_terminal() {
+    for status in [
+        TransactionStatus::Retry {
+            error: scheduler_failure(),
+        },
+        TransactionStatus::Dropped {
+            error: scheduler_failure(),
+        },
+    ] {
+        let retryable = matches!(status, TransactionStatus::Retry { .. });
+        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
+        let builder = Arc::new(CountingBuilder {
+            constructions: AtomicUsize::new(0),
+            bytes: vec![5, 4, 3],
+        });
+        let rpc = test_rpc(backend.clone(), builder.clone(), 8, 4);
+        let request = test_request(10, 10);
+        let first = rpc.request(request.clone()).await;
+        let second = rpc.request(request).await;
+        assert_eq!(builder.constructions.load(Ordering::SeqCst), 1);
+        if retryable {
+            assert!(matches!(first, Ok(AirdropAttemptResponse::Pending { .. })));
+            assert!(matches!(second, Ok(AirdropAttemptResponse::Pending { .. })));
+            assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![5, 4, 3]; 2]);
+        } else {
+            assert!(
+                matches!(first, Err(RpcServerError::TxRejected(ref reason)) if reason.contains("Executor code -7"))
+            );
+            assert_eq!(
+                first.unwrap_err().to_string(),
+                second.unwrap_err().to_string()
+            );
+            assert_eq!(*backend.submissions.lock().unwrap(), vec![vec![5, 4, 3]]);
+        }
+    }
+}
+
 #[tokio::test]
 async fn registered_unsigned_attempt_consumes_capacity_and_can_resume() {
     let backend = Arc::new(TestBackend::new(vec![Ok(())]));
@@ -872,62 +919,177 @@ async fn lost_admission_response_reuses_exact_retained_bytes_after_restart() {
 }
 
 #[tokio::test]
-async fn expired_retained_funding_without_outcome_never_creates_another_transfer() {
+async fn retained_funding_retry_reuses_bytes_and_dropped_never_resubmits() {
+    for status in [
+        TransactionStatus::Retry {
+            error: scheduler_failure(),
+        },
+        TransactionStatus::Dropped {
+            error: scheduler_failure(),
+        },
+    ] {
+        let retryable = matches!(status, TransactionStatus::Retry { .. });
+        let dir = tempfile::tempdir().unwrap();
+        let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
+        let request = funding_request("42");
+        let original = rpc.fund(request.clone()).await.unwrap();
+        drop(rpc);
+        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
+        let restarted = durable_rpc(dir.path(), false, backend.clone());
+        let result = restarted.fund(request).await;
+        if retryable {
+            assert_eq!(result.unwrap(), original);
+            assert_eq!(
+                *backend.submissions.lock().unwrap(),
+                vec![original.signed_transaction.0]
+            );
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains("Executor code -7"));
+            let object: jsonrpsee::types::ErrorObjectOwned = error.into();
+            let evidence: LocalFundingErrorData =
+                serde_json::from_str(object.data().unwrap().get()).unwrap();
+            assert_eq!(evidence.tx_hash, original.tx_hash);
+            assert_eq!(evidence.signed_transaction, original.signed_transaction);
+            assert!(backend.submissions.lock().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn restored_airdrop_outcome_retries_same_bytes_or_stops_on_dropped() {
+    for status in [
+        TransactionStatus::Retry {
+            error: scheduler_failure(),
+        },
+        TransactionStatus::Dropped {
+            error: scheduler_failure(),
+        },
+    ] {
+        let retryable = matches!(status, TransactionStatus::Retry { .. });
+        let dir = tempfile::tempdir().unwrap();
+        let original_backend = Arc::new(TestBackend::new(vec![]));
+        let rpc = durable_rpc(dir.path(), true, original_backend.clone());
+        let request = test_request(0x44, 9);
+        assert!(matches!(
+            rpc.request(request.clone()).await,
+            Ok(AirdropAttemptResponse::Pending { .. })
+        ));
+        let bytes = original_backend.submissions.lock().unwrap()[0].clone();
+        drop(rpc);
+        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
+        let restarted = durable_rpc(dir.path(), false, backend.clone());
+        for _ in 0..2 {
+            let result = restarted.request(request.clone()).await;
+            if retryable {
+                assert!(matches!(result, Ok(AirdropAttemptResponse::Pending { .. })));
+            } else {
+                assert!(
+                    matches!(result, Err(RpcServerError::TxRejected(ref reason)) if reason.contains("Executor code -7"))
+                );
+            }
+        }
+        assert_eq!(
+            *backend.submissions.lock().unwrap(),
+            if retryable { vec![bytes] } else { vec![] }
+        );
+    }
+}
+
+#[tokio::test]
+async fn committed_receipt_wins_over_retained_dropped_funding_status() {
     let dir = tempfile::tempdir().unwrap();
     let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
-    let request = funding_request("42");
-    let signed = NativeAirdropBuilder {
-        network_hash: groundhog_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
-        signer: fixture_signer(),
-        next_nonce: AtomicU64::new(7),
-    }
-    .build(request.recipient, 6, 42)
-    .unwrap();
-    {
-        let mut journal = rpc.journal.lock().unwrap();
-        journal.register(request.clone()).unwrap();
-        journal
-            .retain_signed(
-                &request,
-                RetainedFundingTransaction {
-                    tx_hash: signed.tx_hash,
-                    signed_transaction: groundhog_json_rpc_types::hex::HexBytes(signed.bytes),
-                },
-            )
-            .unwrap();
-    }
+    let request = funding_request(&rpc.raw_amount.to_string());
+    let original = rpc.fund(request.clone()).await.unwrap();
     drop(rpc);
-    let backend = Arc::new(
-        TestBackend::new(vec![]).with_status_results(vec![Ok(TransactionStatus::Unknown)]),
-    );
+    let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(
+        TransactionStatus::Dropped {
+            error: scheduler_failure(),
+        },
+    )]));
+    *backend.receipt.lock().unwrap() =
+        Some(groundhog_json_rpc_types::receipt::TransactionReceipt {
+            tx_hash: original.tx_hash,
+            height: BlockHeight::from(9),
+            status: ExecStatus::Ok,
+            events: vec![],
+            return_data: None,
+            abort_data: None,
+            gas_used: 1,
+        });
     let restarted = durable_rpc(dir.path(), false, backend.clone());
-    let error = restarted.fund(request).await.unwrap_err();
-    assert!(error.to_string().contains("expired"));
-    let object: jsonrpsee::types::ErrorObjectOwned = error.into();
-    assert_eq!(
-        object.code(),
-        groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
-    );
-    let evidence: LocalFundingErrorData =
-        serde_json::from_str(object.data().unwrap().get()).unwrap();
-    assert_eq!(evidence.tx_hash, signed.tx_hash);
-    let original = FundingJournal::open(
-        dir.path(),
-        [0; 32].into(),
-        funding_request("42").faucet,
-        false,
-        &fixture_signer(),
-    )
-    .unwrap();
-    assert_eq!(
-        evidence.signed_transaction,
-        original.records()[0]
-            .signed
-            .as_ref()
-            .unwrap()
-            .signed_transaction
-    );
+    assert_eq!(restarted.fund(request.clone()).await.unwrap(), original);
+    assert!(matches!(restarted.request(AirdropRequest {
+        recipient: request.recipient,
+        client_nonce: request.client_nonce,
+    }).await, Ok(AirdropAttemptResponse::Succeeded { height, .. }) if *height == 9));
     assert!(backend.submissions.lock().unwrap().is_empty());
+    assert_eq!(backend.status_results.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn expired_retained_funding_without_outcome_never_creates_another_transfer() {
+    for status in [
+        TransactionStatus::Unknown,
+        TransactionStatus::Retry {
+            error: scheduler_failure(),
+        },
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
+        let request = funding_request("42");
+        let signed = NativeAirdropBuilder {
+            network_hash: groundhog_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+            signer: fixture_signer(),
+            next_nonce: AtomicU64::new(7),
+        }
+        .build(request.recipient, 6, 42)
+        .unwrap();
+        {
+            let mut journal = rpc.journal.lock().unwrap();
+            journal.register(request.clone()).unwrap();
+            journal
+                .retain_signed(
+                    &request,
+                    RetainedFundingTransaction {
+                        tx_hash: signed.tx_hash,
+                        signed_transaction: groundhog_json_rpc_types::hex::HexBytes(signed.bytes),
+                    },
+                )
+                .unwrap();
+        }
+        drop(rpc);
+        let backend = Arc::new(TestBackend::new(vec![]).with_status_results(vec![Ok(status)]));
+        let restarted = durable_rpc(dir.path(), false, backend.clone());
+        let error = restarted.fund(request).await.unwrap_err();
+        assert!(error.to_string().contains("expired"));
+        let object: jsonrpsee::types::ErrorObjectOwned = error.into();
+        assert_eq!(
+            object.code(),
+            groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+        );
+        let evidence: LocalFundingErrorData =
+            serde_json::from_str(object.data().unwrap().get()).unwrap();
+        assert_eq!(evidence.tx_hash, signed.tx_hash);
+        let original = FundingJournal::open(
+            dir.path(),
+            [0; 32].into(),
+            funding_request("42").faucet,
+            false,
+            &fixture_signer(),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.signed_transaction,
+            original.records()[0]
+                .signed
+                .as_ref()
+                .unwrap()
+                .signed_transaction
+        );
+        assert!(backend.submissions.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
