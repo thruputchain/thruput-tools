@@ -131,12 +131,20 @@ fn write_chain_data_fixture(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("indexer")).unwrap();
     std::fs::write(
         root.join("hog-devnode-data.json"),
-        br#"{"schemaVersion":1,"kind":"hog-devnode-data"}"#,
+        br#"{"schemaVersion":4,"kind":"hog-devnode-data"}"#,
     )
     .unwrap();
     std::fs::write(root.join("ramdb/0.log"), b"ramdb-state").unwrap();
     std::fs::write(root.join("events/block.events"), b"event-state").unwrap();
     std::fs::write(root.join("indexer/CURRENT"), b"MANIFEST-1\n").unwrap();
+    for relative in [
+        groundhog_node_supervisor::LOCAL_FAUCET_KEY_FILE,
+        groundhog_node_supervisor::LOCAL_FUNDING_ATTEMPTS_FILE,
+    ] {
+        let path = root.join(relative);
+        std::fs::write(&path, b"private fixture").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -166,7 +174,7 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     let dump_json: serde_json::Value = serde_json::from_slice(&dump.stdout).unwrap();
     assert_eq!(dump_json["command"], "chain.dump");
     assert_eq!(dump_json["data"]["schemaVersion"], 2);
-    assert_eq!(dump_json["data"]["fileCount"], "4");
+    assert_eq!(dump_json["data"]["fileCount"], "6");
     assert!(archive.is_file());
 
     let original_archive = std::fs::read(&archive).unwrap();
@@ -1907,6 +1915,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
     let data_root = TempDir::new().unwrap();
     let data_dir = data_root.path().join("node-data");
     let config_home = TempDir::new().unwrap();
+    generate_key_public_key(config_home.path(), "alice");
     let pid_path = pid_dir.path().join("hogd.pid");
     let child = groundhog()
         .arg("--json")
@@ -1919,7 +1928,7 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
         .arg(fake)
         .arg("--data-dir")
         .arg(&data_dir)
-        .arg("--dev-account-hog")
+        .arg("--initial-account-hog")
         .arg("25.0000001")
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
@@ -1942,10 +1951,9 @@ fn node_hogd_dev_binary_json_binds_public_host_and_starts_supervisor() {
 
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
-    assert_eq!(payload["data"]["schemaVersion"], 3);
+    assert_eq!(payload["data"]["schemaVersion"], 4);
     assert_eq!(payload["data"]["chain_state"], "fresh");
     assert_eq!(payload["data"]["data_dir"], data_dir.display().to_string());
-    assert_eq!(payload["data"]["experimental"], false);
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["stability"], "supported");
     assert!(payload["data"]["backend"].get("limitations").is_none());
@@ -2261,7 +2269,7 @@ fn node_human_startup_reports_chain_state() {
         .stderr
         .take()
         .expect("bug: stderr should be piped");
-    let output = read_until_with_timeout(stderr, "dev-key manifest", CLI_ACTION_TIMEOUT)
+    let output = read_until_with_timeout(stderr, "account manifest", CLI_ACTION_TIMEOUT)
         .expect("bug: human startup output should be readable");
 
     assert!(output.contains("chain state"), "startup output: {output}");
@@ -2283,7 +2291,7 @@ fn node_human_startup_reports_chain_state() {
 
 #[cfg(unix)]
 #[test]
-fn node_hogd_dev_profile_write_failure_stops_supervisor() {
+fn node_invalid_key_configuration_fails_before_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
     let config_home = TempDir::new().unwrap();
@@ -2308,10 +2316,9 @@ fn node_hogd_dev_profile_write_failure_stops_supervisor() {
         !output.status.success(),
         "profile write failure should make groundhog node fail"
     );
-    let pid = read_pid_file(&pid_path);
     assert!(
-        wait_pid_gone(pid, CLI_ACTION_TIMEOUT),
-        "fake hogd-dev pid {pid} still alive after profile write failure"
+        !pid_path.exists(),
+        "invalid configuration must fail before child startup"
     );
 }
 
@@ -3015,7 +3022,7 @@ fn global_non_interactive_key_import_accepts_piped_seed() {
 }
 
 #[test]
-fn key_generation_rejects_reserved_dev_names_without_mutation() {
+fn key_generation_stores_dev_named_keys_without_implicit_derivation() {
     for name in ["dev-0", "dev-1", "dev-01"] {
         let tmp = TempDir::new().unwrap();
         let config = tmp.path().join("groundhog/config.toml");
@@ -3028,10 +3035,14 @@ fn key_generation_rejects_reserved_dev_names_without_mutation() {
             .env("XDG_CONFIG_HOME", tmp.path())
             .output()
             .unwrap();
-        assert!(!output.status.success());
-        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert_eq!(report["error"]["code"], "reserved_dev_key_name");
-        assert!(!tmp.path().join("groundhog/keys").exists());
+        assert!(output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["data"]["key"]["name"], name);
+        assert!(
+            tmp.path()
+                .join(format!("groundhog/keys/{name}.json"))
+                .exists()
+        );
         assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
     }
 }
@@ -4080,9 +4091,9 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--hog-devnode-version"));
     assert!(stdout.contains("--data-dir"));
     assert!(stdout.contains("persistent hog-devnode state"));
-    assert!(stdout.contains("--dev-account-count"));
-    assert!(stdout.contains("--dev-account-hog <HOG>"));
-    assert!(stdout.contains("Initial HOG allocated to each dev-1+ user account"));
+    assert!(stdout.contains("--key <KEY>"));
+    assert!(stdout.contains("--initial-account-hog <HOG>"));
+    assert!(stdout.contains("Initial HOG for the selected key"));
     assert!(stdout.contains("--hogd-protocol"));
     assert!(stdout.contains("GROUNDHOG_DEVNODE_BINARY"));
     assert!(stdout.contains("GROUNDHOG_OFFLINE"));
@@ -6097,7 +6108,7 @@ fn airdrop_dry_run_json_uses_default_wallet_when_recipient_is_omitted() {
     assert_eq!(stdout["data"]["recipientWallet"], recipient_wallet);
     assert_eq!(stdout["data"]["amountHog"], "1.25");
     assert_eq!(stdout["data"]["rawAmount"], "12500000");
-    assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
+    assert_eq!(stdout["data"]["faucet"]["address"], faucet_wallet);
     assert_eq!(stdout["data"]["faucet"]["role"], "faucet");
     assert!(stdout["data"].get("signedTx").is_none());
 }
@@ -6238,6 +6249,62 @@ fn airdrop_default_submits_without_recipient_signer() {
             );
         }
     }
+}
+
+#[test]
+fn local_airdrop_receipt_failure_preserves_acknowledged_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config");
+    let cache_home = tmp.path().join("cache");
+    std::fs::create_dir_all(&project).unwrap();
+    let owner = generate_key_public_key(&config_home, "alice");
+    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
+        groundhog_signing::strkey::parse_public_key(&owner).unwrap(),
+        0,
+    );
+    let recipient = format!("0x{}", hex::encode(account.address().as_ref()));
+    let faucet = advertised_dev_wallet_address(0);
+    let listener = MockListener::bind();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let rpc_url = format!("http://{addr}");
+    let manifest = write_runtime_manifest(&project, 0, &faucet, None);
+    std::fs::write(project.join("groundhog.toml"), format!(
+        "default_profile = 'default'\n[profile.default]\nrpc_url = '{rpc_url}'\ndefault_key = 'alice'\nruntime_manifest = '{}'\n", manifest.display())).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
+        serve_balance(&listener, deadline, &faucet, "200012006", 41);
+        let signed = serve_local_funding_transaction_with_receipt_failure(
+            &listener, deadline, &faucet, &recipient, true,
+        );
+        assert_no_follow_up_rpc(&listener);
+        signed
+    });
+    let output = groundhog()
+        .args(["--json", "airdrop", "--force"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let signed = server.join().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let hash = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::transaction_hash(&signed.tx).unwrap())
+    );
+    assert_eq!(report["error"]["code"], "local_funding_unresolved");
+    assert_eq!(report["error"]["details"]["txHash"], hash);
+    let path = report["error"]["details"]["attemptPath"].as_str().unwrap();
+    let attempt: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(attempt["transaction"]["txHash"], hash);
+    assert_eq!(
+        attempt["transaction"]["signedTransaction"],
+        format!("0x{}", hex::encode(xdrs::txs::encode(&signed).unwrap()))
+    );
+    assert!(attempt["request"]["clientNonce"].is_string());
 }
 
 #[test]
@@ -6660,6 +6727,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     let output = groundhog()
         .args(["--json", "transfer", "alice", "10.5000000", "--dry-run"])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -6762,6 +6830,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     let output = groundhog()
         .args(["transfer", &recipient, "1", "--dry-run"])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -7059,6 +7128,7 @@ fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
             manifest_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -7102,6 +7172,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
         let output = groundhog()
             .args(["--json", "transfer", &recipient, amount, "--dry-run"])
             .current_dir(&project)
+            .env("XDG_CONFIG_HOME", project.join("fixture-config"))
             .output()
             .unwrap();
         assert!(!output.status.success());
@@ -7363,6 +7434,7 @@ fn transfer_live_rejects_invalid_persisted_rpc_url() {
     let output = groundhog()
         .args(["--json", "transfer", &recipient, "1.5"])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
 
@@ -8015,6 +8087,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .output()
         .unwrap();
 
@@ -8037,7 +8110,6 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 #[test]
 fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     let tmp = TempDir::new().unwrap();
-    let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -8066,7 +8138,7 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
-        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
@@ -8119,6 +8191,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
         .output()
         .unwrap();
@@ -8179,6 +8252,7 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
         .output()
         .unwrap();
@@ -8230,6 +8304,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .env("GROUNDHOG_RUNTIME_MANIFEST", "   ")
         .output()
         .unwrap();
@@ -8282,12 +8357,13 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
             rv32_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert_eq!(stderr["error"]["code"], "local_runtime_unavailable");
     assert!(
         stderr["error"]["message"]
             .as_str()
@@ -8297,112 +8373,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
 }
 
 #[test]
-fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let advertised_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, Some([0x99; 32]));
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.display()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = groundhog()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
-    assert!(
-        stderr["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("does not match derivation seed")
-    );
-}
-
-#[test]
-fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
-
-    let signer = groundhog_signing::derive_dev_account_signer("alternate-dev-seed", 0);
-    let advertised_wallet = format!(
-        "0x{}",
-        hex::encode(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                signer.verifying_key_bytes(),
-                0
-            )
-            .address()
-            .as_ref()
-        )
-    );
-    let manifest_path = write_runtime_manifest_with_seed(
-        tmp.path(),
-        0,
-        &advertised_wallet,
-        "alternate-dev-seed",
-        None,
-    );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
-            manifest_path.display()
-        ),
-    )
-    .unwrap();
-
-    let rv32_path = write_opaque_rv32_artifact(tmp.path());
-
-    let output = groundhog()
-        .args([
-            "--json",
-            "deploy",
-            "--fund",
-            "0",
-            "--dry-run",
-            "--artifact",
-            rv32_path.to_str().unwrap(),
-        ])
-        .current_dir(&project)
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
-    assert!(
-        stderr["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("expected 0x")
-    );
-}
-
-#[test]
-fn deploy_dev_key_requires_runtime_manifest() {
+fn deploy_requires_stored_key_even_for_dev_named_selection() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
@@ -8436,12 +8407,12 @@ fn deploy_dev_key_requires_runtime_manifest() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert_eq!(stderr["error"]["code"], "key_not_found");
     assert!(
         stderr["error"]["message"]
             .as_str()
-            .expect("bug: error message should be string")
-            .contains("runtime_manifest"),
+            .unwrap()
+            .contains("dev-0")
     );
 }
 
@@ -9020,7 +8991,13 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
             )
             .unwrap();
         }
-        let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+        let expected_caller = if collision == "none" {
+            &caller
+        } else {
+            &shadow_address
+        };
+        let (rpc_url, rpc_server) =
+            spawn_view_rpc_with_caller(&address, entrypoint, "0x", expected_caller);
         let profile_config = format!(
             "default_profile = 'default'\n[profile.default]\n\
              rpc_url = '{rpc_url}'\nruntime_manifest = '{}'\n{bindings}",
@@ -9031,7 +9008,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
         let output = groundhog()
             .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
             .current_dir(&project)
-            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
             .env_remove("GROUNDHOG_RUNTIME_MANIFEST")
             .output()
             .unwrap();
@@ -9048,7 +9025,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
         let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(stdout["ok"], true);
         assert_eq!(stdout["command"], "view");
-        assert_eq!(stdout["data"]["caller"], caller, "{collision}");
+        assert_eq!(stdout["data"]["caller"], *expected_caller, "{collision}");
     }
 }
 
@@ -9900,6 +9877,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
             "0x0102",
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
@@ -10174,6 +10152,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
             "--force",
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
 
@@ -11308,7 +11287,7 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.show");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["profile"], "devnet");
     assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["txHash"], hash);
@@ -11316,6 +11295,64 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
     assert_eq!(stdout["data"]["status"]["height"], "42");
     assert_eq!(stdout["data"]["receipt"], receipt);
     assert_eq!(stdout["data"]["receipt"]["events"][0], event);
+}
+
+#[test]
+fn tx_show_committed_without_height_handles_indexer_catching_up() {
+    let hash = format!("0x{}", "ab".repeat(32));
+    for json_output in [false, true] {
+        for receipt_available in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let receipt = if receipt_available {
+                serde_json::json!({
+                    "txHash": hash,
+                    "height": "42",
+                    "gasUsed": "1500",
+                    "status": { "result": "ok" },
+                    "events": [],
+                })
+            } else {
+                serde_json::Value::Null
+            };
+            let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+                &hash,
+                TxShowRpcResponse::Result(serde_json::json!({"status": "committed"})),
+                Some(TxShowRpcResponse::Result(receipt.clone())),
+            );
+            let mut command = groundhog();
+            if json_output {
+                command.arg("--json");
+            }
+            let output = command
+                .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+                .current_dir(tmp.path())
+                .output()
+                .unwrap();
+            rpc_server.join().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if json_output {
+                let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(
+                    stdout["data"]["status"],
+                    serde_json::json!({"status": "committed"})
+                );
+                assert_eq!(stdout["data"]["receipt"], receipt);
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(stderr.contains("status: committed"));
+                assert!(!stderr.contains("height: 0"));
+                if receipt_available {
+                    assert!(stderr.contains("receipt height: 42"));
+                } else {
+                    assert!(stderr.contains("receipt: unavailable"));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -11428,12 +11465,14 @@ fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
                 "code": "boundsExceeded",
             } },
         }),
+        serde_json::json!({ "status": "retry", "error": { "source": "scheduler", "code": 1 } }),
+        serde_json::json!({ "status": "dropped", "error": { "source": "auth", "code": 2 } }),
         serde_json::json!({ "status": "unknown" }),
         serde_json::json!({ "status": "futureStatus", "futureField": 1 }),
     ];
 
     for (index, status) in statuses.into_iter().enumerate() {
-        let expected_status = if index == 4 {
+        let expected_status = if status["status"] == "futureStatus" {
             serde_json::json!({ "status": "other" })
         } else {
             status.clone()
@@ -11485,7 +11524,7 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
     assert_eq!(
         stdout["data"],
         serde_json::json!({
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "profile": "default",
             "rpcUrl": rpc_url,
             "txHash": hash,
@@ -11550,7 +11589,7 @@ fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
         (
             serde_json::json!({ "status": "unknown" }),
             None,
-            "status: unknown (not found in the mempool or indexer)",
+            "status: unknown (not found in scheduler outcomes or indexer)",
             "status: invalid",
         ),
     ] {
@@ -12228,6 +12267,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
         let output = groundhog()
             .args(["--json", "tx", "list", &target])
             .current_dir(tmp.path())
+            .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
             .output()
             .unwrap();
         rpc_server.join().unwrap();
@@ -13053,6 +13093,7 @@ fn events_list_resolves_runtime_manifest_dev_account() {
     let output = groundhog()
         .args(["--json", "events", "list", "dev-7"])
         .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("fixture-config"))
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -13178,6 +13219,10 @@ fn events_list_explicit_runtime_manifest_overrides_profile_manifest_for_dev_acco
             explicit_manifest.to_str().unwrap(),
         ])
         .current_dir(tmp.path())
+        .env(
+            "XDG_CONFIG_HOME",
+            explicit_tmp.path().join("fixture-config"),
+        )
         .output()
         .unwrap();
     rpc_server.join().unwrap();
@@ -14587,8 +14632,7 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + CLI_ACTION_TIMEOUT;
         serve_balance(&listener, deadline, &faucet, "200012006", 41);
-        serve_chain_tip(&listener, deadline, 42);
-        let signed_tx = serve_successful_transaction(&listener, deadline, 43);
+        let signed_tx = serve_local_funding_transaction(&listener, deadline, &faucet, &recipient);
         assert_eq!(
             signed_tx.tx.invocation.entrypoint,
             groundhog_signing::default_wallet::DEFAULT_WALLET_EXECUTE_ENTRYPOINT
@@ -14643,6 +14687,81 @@ fn spawn_local_airdrop_rpc(faucet: &str, recipient: &str) -> (String, thread::Jo
     (format!("http://{addr}"), handle)
 }
 
+fn serve_local_funding_transaction(
+    listener: &TcpListener,
+    deadline: Instant,
+    faucet: &str,
+    recipient: &str,
+) -> groundhog_xdr::transaction::SignedTransaction {
+    serve_local_funding_transaction_with_receipt_failure(
+        listener, deadline, faucet, recipient, false,
+    )
+}
+
+fn serve_local_funding_transaction_with_receipt_failure(
+    listener: &TcpListener,
+    deadline: Instant,
+    faucet: &str,
+    recipient: &str,
+    fail_receipt: bool,
+) -> groundhog_xdr::transaction::SignedTransaction {
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "fundAccount");
+    assert_eq!(request["method"], "groundhog_fundAccount");
+    assert_eq!(request["params"][0]["faucet"], faucet);
+    assert_eq!(request["params"][0]["recipient"], recipient);
+    assert_eq!(request["params"][0]["rawAmount"], "100000000");
+    let sponsor = groundhog_signing::derive_default_dev_account_signer(0);
+    let network = groundhog_json_rpc_types::NetworkHashHex::try_from(TEST_NETWORK_HASH)
+        .unwrap()
+        .to_network_hash();
+    let account =
+        groundhog_signing::PubkeyAccount::from_public_key_bytes(sponsor.verifying_key_bytes(), 0);
+    let recipient_address = groundhog_signing::strkey::parse_contract_address(recipient).unwrap();
+    let calldata = xdrs::cxs::encode(&(recipient_address, 100_000_000u128)).unwrap();
+    let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
+        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
+            account: &account,
+            target_address: groundhog_signing::NATIVE_HOG_ADDRESS,
+            target_entrypoint: groundhog_signing::NATIVE_HOG_TRANSFER_ENTRYPOINT,
+            target_calldata: &calldata,
+            gas_limit: groundhog_signing::DEFAULT_TX_GAS_LIMIT * 2,
+            target_gas_limit: groundhog_signing::DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: 100,
+            nonce: 42,
+        },
+    )
+    .unwrap();
+    let signed_tx = groundhog_signing::sign_transaction(
+        tx,
+        &sponsor,
+        groundhog_signing::SignTransactionParams::default(),
+        &network,
+    )
+    .unwrap();
+    let tx_hash = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+    );
+    send_jsonrpc_response(
+        stream,
+        &request["id"],
+        serde_json::json!({ "recipient":recipient, "rawAmount":"100000000", "txHash":tx_hash, "signedTransaction":format!("0x{}",hex::encode(xdrs::txs::encode(&signed_tx).unwrap())) }),
+    );
+    let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
+    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
+    assert_eq!(request["params"][0], tx_hash);
+    if fail_receipt {
+        send_jsonrpc_error_response(stream, &request["id"], -32050, "receipt read unavailable");
+    } else {
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({ "txHash":tx_hash,"height":"43","gasUsed":"1500","status":{"result":"ok"},"events":[] }),
+        );
+    }
+    signed_tx
+}
+
 fn serve_balance(
     listener: &TcpListener,
     deadline: Instant,
@@ -14685,36 +14804,6 @@ fn serve_chain_tip(listener: &TcpListener, deadline: Instant, height: i64) {
     );
 }
 
-fn serve_successful_transaction(
-    listener: &TcpListener,
-    deadline: Instant,
-    height: i64,
-) -> groundhog_xdr::transaction::SignedTransaction {
-    let (stream, request) = read_jsonrpc_request(listener, deadline, "sendRawTransaction");
-    assert_eq!(request["method"], "groundhog_sendRawTransaction");
-    let signed_tx = decode_signed_tx(request["params"][0].as_str().unwrap());
-    let tx_hash = format!(
-        "0x{}",
-        hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
-    );
-    send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
-
-    let (stream, request) = read_jsonrpc_request(listener, deadline, "getTransactionReceipt");
-    assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-    send_jsonrpc_response(
-        stream,
-        &request["id"],
-        serde_json::json!({
-            "txHash": tx_hash,
-            "height": height.to_string(),
-            "gasUsed": "1500",
-            "status": { "result": "ok" },
-            "events": [],
-        }),
-    );
-    signed_tx
-}
-
 fn spawn_balance_then_chain_tip_rpc(
     address: &str,
     raw_balance: &str,
@@ -14740,16 +14829,6 @@ fn spawn_balance_then_chain_tip_rpc(
             }),
         );
 
-        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
-        assert_eq!(request["method"], "groundhog_chainTip");
-        send_jsonrpc_response(
-            stream,
-            &request["id"],
-            serde_json::json!({
-                "height": height.to_string(),
-                "blockHash": format!("0x{}", "00".repeat(32)),
-            }),
-        );
         assert_no_follow_up_rpc(&listener);
     });
     (format!("http://{addr}"), handle)
@@ -14850,6 +14929,7 @@ fn run_transfer_live_mock_with_rpc_override(
     }
     let output = command
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", project.join("fixture-config"))
         .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
         .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
         .output()
@@ -15382,7 +15462,7 @@ fn write_runtime_manifest_with_seed(
     let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
     let path = dir.join(format!("runtime-manifest-{index}.json"));
     let manifest = serde_json::json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": TEST_NETWORK_HASH,
@@ -15395,19 +15475,14 @@ fn write_runtime_manifest_with_seed(
         "endpoints": {
             "scheduler": "127.0.0.1:1000"
         },
-        "bootstrapAccountDerivation": {
-            "scheme": "groundhog-bootstrap-account-v1",
-            "seed": seed
-        },
         "bootstrapAccounts": [{
-            "index": index,
             "role": if index == 0 { "faucet" } else { "local_user" },
             "publicKey": format!("0x{}", hex::encode(public_key)),
             "walletAddress": address,
             "initialStorageTokens": if index == 0 {
                 groundhog_node_supervisor::config::LOCAL_FAUCET_STORAGE_TOKENS
             } else {
-                groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_ACCOUNT_TOKENS
+                groundhog_node_supervisor::config::DEFAULT_LOCAL_ACCOUNT_TOKENS
             }.to_string()
         }],
         "bootstrap": {
@@ -15425,6 +15500,18 @@ fn write_runtime_manifest_with_seed(
         }
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    std::fs::create_dir_all(dir.join("fixture-config/groundhog")).unwrap();
+    std::fs::write(
+        dir.join("fixture-config/groundhog/config.toml"),
+        "default_profile = 'default'\n[profile.default]\n",
+    )
+    .unwrap();
+    let key_dir = dir.join("fixture-config/groundhog/keys");
+    std::fs::create_dir_all(&key_dir).unwrap();
+    let key_path = key_dir.join(format!("dev-{index}.json"));
+    std::fs::write(&key_path, serde_json::to_vec(&serde_json::json!({"version":1,"scheme":"ed25519","keypair_hex":hex::encode(signer.to_keypair_bytes()),"public_key_hex":hex::encode(signer.verifying_key_bytes())})).unwrap()).unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     path
 }
 
@@ -15938,4 +16025,56 @@ fn issuer_token_movements_count_clawback_once() {
     let alice = format!("0x{}", "13".repeat(32));
     assert_eq!(clawback_burn["transfer"]["from"], alice);
     assert!(clawback_burn["transfer"]["to"].is_null());
+}
+
+#[test]
+fn transfer_live_scheduler_failures_preserve_json_outcome() {
+    for tag in ["retry", "dropped"] {
+        let status =
+            serde_json::json!({ "status": tag, "error": { "source": "scheduler", "code": 1 } });
+        let run = run_transfer_live_mock_with_hash(
+            TransferRpcMock {
+                submit: TransferSubmitMock::MatchingHash,
+                poll: Some(TransferPollMock::Status(status.clone())),
+            },
+            true,
+        );
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
+        assert_eq!(stdout["ok"], false);
+        assert_eq!(stdout["error"]["code"], format!("transaction_{tag}"));
+        assert_eq!(stdout["data"]["confirmation"], tag);
+        assert_eq!(stdout["data"]["transactionStatus"], status);
+    }
+}
+
+#[test]
+fn tx_show_scheduler_failures_render_next_steps() {
+    let hash = format!("0x{}", "bc".repeat(32));
+    for (tag, next_step) in [
+        ("retry", "resubmit the transaction"),
+        ("dropped", "modify the transaction"),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Result(serde_json::json!({
+                "status":tag, "error":{"source":"scheduler", "code":3}
+            })),
+            None,
+        );
+        let output = groundhog()
+            .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(&format!("status: {tag}")), "{stderr}");
+        assert!(stderr.contains("error source: scheduler"), "{stderr}");
+        assert!(stderr.contains("error code: 3"), "{stderr}");
+        assert!(stderr.contains(next_step), "{stderr}");
+    }
 }

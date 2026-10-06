@@ -20,7 +20,7 @@ const KEY_NAME_HINT: &str = "key names may only contain letters, digits, \
 
 /// Accepted spellings of an account or contract the command acts on.
 const ADDRESS_TARGET_HINT: &str =
-    "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address";
+    "use a saved wallet, contract alias, stored key, or 32-byte 0x-prefixed address";
 
 /// Accepted spelling of any 32-byte value passed on the command line.
 const HASH_32_BYTES_HINT: &str =
@@ -302,9 +302,6 @@ pub enum CliError {
         "provide one private seed through stdin or the hidden prompt; never pass it as a command argument"
     )]
     InvalidSecretSeed,
-    #[error("dev-N key names are reserved for local bootstrap identities")]
-    #[hint("choose a name other than dev-N for a stored key")]
-    ReservedDevKeyName,
     #[error("`--json` is not supported for `{0}`")]
     #[hint("run `groundhog {0}` without `--json`")]
     JsonUnsupported(&'static str),
@@ -618,12 +615,27 @@ pub enum CliError {
         method: &'static str,
         message: String,
     },
-    #[error("dev key `{key_name}` requires a local dev node: {message}")]
+    #[error("local funding attempt: {0}")]
     #[hint(
-        "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints"
+        "retry the original request to reconcile its outcome; do not delete an uncertain attempt"
     )]
-    LocalDevAccountUnavailable {
-        /// Dev key name that required local dev-account metadata.
+    LocalFundingAttempt(String),
+    #[error("local funding transaction {tx_hash} is unresolved: {message}")]
+    #[hint(
+        "inspect this hash with groundhog tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it"
+    )]
+    #[details(tx_hash, attempt_path)]
+    LocalFundingUnresolved {
+        tx_hash: String,
+        attempt_path: String,
+        message: String,
+    },
+    #[error("local runtime for `{key_name}` is unavailable: {message}")]
+    #[hint(
+        "use a current local runtime manifest; old local state requires the previous runtime and tooling"
+    )]
+    LocalRuntimeUnavailable {
+        /// Account role or key whose runtime metadata was requested.
         key_name: String,
         /// Specific metadata lookup or validation failure.
         message: String,
@@ -703,13 +715,6 @@ pub enum CliError {
         configured: String,
         local: String,
     },
-    #[error("dev key `{key_name}` uses its manifest wallet and cannot select `{wallet_name}`")]
-    #[hint("remove the explicit/default wallet selection when using a manifest-backed dev key")]
-    #[details]
-    DevWalletSelectionUnsupported {
-        key_name: String,
-        wallet_name: String,
-    },
     #[error(
         "cannot remove wallet `{wallet_name}` from profile `{profile}` because it is the inherited default wallet"
     )]
@@ -775,6 +780,20 @@ pub enum CliError {
         tx_hash: String,
         attempt_height: i64,
         cause: groundhog_json_rpc_types::transaction::TransactionFailureCause,
+    },
+    #[error("transaction {tx_hash} needs resubmission: {error:?}")]
+    #[hint("resubmit the same transaction; the mempool does not retry it automatically")]
+    #[details]
+    TransactionRetry {
+        tx_hash: String,
+        error: groundhog_json_rpc_types::transaction::SchedulerTransactionError,
+    },
+    #[error("transaction {tx_hash} was dropped: {error:?}")]
+    #[hint("modify the transaction before resubmitting; inspect its error source and code")]
+    #[details]
+    TransactionDropped {
+        tx_hash: String,
+        error: groundhog_json_rpc_types::transaction::SchedulerTransactionError,
     },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,

@@ -12,10 +12,10 @@ use tempfile::TempDir;
 
 use super::{
     DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
-    PERSISTENT_PID_FILE_NAME, RuntimeManifestChainState, build_hogd_dev_spec,
+    PERSISTENT_PID_FILE_NAME, RuntimeManifestChainState,
     build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line, prepare_persistent_data_dir,
     resolve_hogd_dev_binary, resolve_hogd_dev_binary_before_path, resolve_hogd_dev_binary_on_path,
-    validate_dev_accounts, validate_runtime_identity, write_bootstrap_manifest,
+    validate_bootstrap_accounts, validate_runtime_identity, write_bootstrap_manifest,
 };
 use crate::{
     ConfigParamName, HogdDevConfig, NodeSupervisorError,
@@ -77,7 +77,11 @@ fn network_config_overrides_are_forwarded_in_both_launch_paths() {
             &config,
             "/tmp/bootstrap.json",
         ),
-        build_hogd_dev_spec("/tmp/hog-devnode", &config),
+        build_hogd_dev_spec_with_bootstrap_manifest(
+            "/tmp/hog-devnode",
+            &config,
+            "/tmp/bootstrap.json",
+        ),
     ];
     for spec in specs {
         let forwarded: Vec<_> = spec
@@ -103,7 +107,11 @@ fn ramdb_bytes_forwarded_when_set() {
         &config,
         "/tmp/bootstrap-manifest.json",
     );
-    let compat_spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
+    let compat_spec = build_hogd_dev_spec_with_bootstrap_manifest(
+        "/tmp/hog-devnode",
+        &config,
+        "/tmp/bootstrap.json",
+    );
 
     for spec in [supervisor_spec, compat_spec] {
         let args = spec.program_args();
@@ -125,7 +133,11 @@ fn contract_artifact_directories_are_forwarded_in_order() {
         &config,
         "/tmp/bootstrap-manifest.json",
     );
-    let compat_spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
+    let compat_spec = build_hogd_dev_spec_with_bootstrap_manifest(
+        "/tmp/hog-devnode",
+        &config,
+        "/tmp/bootstrap.json",
+    );
 
     for spec in [supervisor_spec, compat_spec] {
         let forwarded = spec
@@ -145,42 +157,20 @@ fn contract_artifact_directories_are_forwarded_in_order() {
 }
 
 #[test]
-fn public_command_builder_keeps_shorthand_compatibility() {
-    let config = HogdDevConfig::default()
-        .with_listen_host("127.0.0.2")
-        .with_data_dir("/tmp/hog-devnode-data");
-    let spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
-
-    assert_eq!(
-        spec.program_args(),
-        &[
-            OsString::from("--listen-host"),
-            OsString::from("127.0.0.2"),
-            OsString::from("--scheduler-port"),
-            OsString::from("0"),
-            OsString::from("--readiness"),
-            OsString::from("stdout"),
-            OsString::from("--dev-accounts"),
-            OsString::from("10"),
-            OsString::from("--dev-account-seed"),
-            OsString::from("groundhog-dev-accounts"),
-            OsString::from("--dev-account-tokens"),
-            OsString::from("1000000000"),
-            OsString::from("--data-dir"),
-            OsString::from("/tmp/hog-devnode-data"),
-        ]
-    );
-}
-
-#[test]
 fn bootstrap_manifest_file_serializes_config() {
-    let config = HogdDevConfig::default()
-        .with_dev_account_count(2)
-        .with_dev_account_seed("manifest-seed")
-        .with_dev_account_tokens(1234);
+    let config = HogdDevConfig::default().with_bootstrap_accounts(vec![
+        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+            fixture_public_key(1),
+            "1234",
+        ),
+        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+            fixture_public_key(2),
+            "1234",
+        ),
+    ]);
 
-    let manifest =
-        write_bootstrap_manifest(&config).expect("bug: bootstrap manifest file should be written");
+    let manifest = write_bootstrap_manifest(&config, fixture_public_key(0))
+        .expect("bug: bootstrap manifest file should be written");
     let value: serde_json::Value = serde_json::from_slice(
         &std::fs::read(manifest.path()).expect("bug: bootstrap manifest should be readable"),
     )
@@ -193,16 +183,21 @@ fn bootstrap_manifest_file_serializes_config() {
     );
     assert_eq!(value["profile"], "local-dev");
     assert!(value.get("devWallet").is_none());
-    assert_eq!(value["schemaVersion"], 3);
-    assert_eq!(value["bootstrapFaucet"]["index"], 0);
+    assert_eq!(value["schemaVersion"], 4);
+    assert!(value["bootstrapFaucet"].get("index").is_none());
     assert_eq!(
         value["bootstrapFaucet"]["initialStorageTokens"],
         "10000000000000"
     );
-    assert_eq!(value["bootstrapAccounts"]["count"], 2);
-    assert_eq!(value["bootstrapAccounts"]["firstIndex"], 1);
-    assert_eq!(value["bootstrapAccounts"]["seed"], "manifest-seed");
-    assert_eq!(value["bootstrapAccounts"]["initialStorageTokens"], "1234");
+    assert_eq!(value["bootstrapAccounts"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        value["bootstrapAccounts"][0]["initialStorageTokens"],
+        "1234"
+    );
+    assert_eq!(
+        value["bootstrapAccounts"][0]["publicKey"],
+        serde_json::to_value(fixture_public_key(1)).unwrap()
+    );
     assert_eq!(value["storageCostModel"]["profile"], "hogd-default");
 }
 
@@ -521,8 +516,7 @@ fn manifest_readiness_requires_hogd_dev_runtime_kind() {
     assert!(matches!(
         error,
         NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
-            if reason.contains("hog-devnode-runtime")
-                && reason.contains("hogd-dev-runtime")
+            if reason.contains("unsupported runtime manifest kind hog-devnode-runtime")
     ));
 }
 
@@ -768,235 +762,82 @@ fn full_runtime_manifest_uses_canonical_endpoint_names() {
     );
 }
 
+fn fixture_public_key(index: u8) -> groundhog_json_rpc_types::Ed25519PublicKey {
+    groundhog_json_rpc_types::hex::Hex0x(groundhog_xdr::types::Ed25519PublicKey::from(
+        groundhog_signing::LocalSigner::from_secret_key([index; 32]).verifying_key_bytes(),
+    ))
+}
+
 #[test]
-fn readiness_line_parses_dev_accounts() {
-    let faucet_signer = groundhog_signing::derive_default_dev_account_signer(0);
-    let user_signer = groundhog_signing::derive_default_dev_account_signer(1);
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}},{{"index":1,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
-        hex::encode(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                faucet_signer.verifying_key_bytes(),
-                0
-            )
-            .address()
-            .as_ref()
+fn explicit_allocations_validate_native_identity_roles_and_amounts() {
+    let config = HogdDevConfig::default().with_bootstrap_accounts(vec![
+        groundhog_json_rpc_types::bootstrap_manifest::BootstrapManifestAllocation::new(
+            fixture_public_key(1),
+            "42",
         ),
-        hex::encode(faucet_signer.verifying_key_bytes()),
-        hex::encode(
-            groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                user_signer.verifying_key_bytes(),
-                0
-            )
-            .address()
-            .as_ref()
-        ),
-        hex::encode(user_signer.verifying_key_bytes()),
+    ]);
+    let allocations = config.to_bootstrap_manifest([0; 32].into(), fixture_public_key(0));
+    let accounts: Vec<_> = std::iter::once(&allocations.bootstrap_faucet).chain(allocations.bootstrap_accounts.iter())
+            .enumerate().map(|(position, allocation)| {
+                let key: [u8;32] = allocation.public_key.as_ref().try_into().unwrap();
+                serde_json::json!({
+                    "role": if position == 0 { "faucet" } else { "local_user" },
+                    "publicKey": allocation.public_key,
+                    "walletAddress": groundhog_json_rpc_types::hex::Hex0x(groundhog_signing::PubkeyAccount::from_public_key_bytes(key, 0).address()),
+                    "initialStorageTokens": allocation.initial_storage_tokens,
+                })
+            }).collect();
+    let line = manifest_readiness_line(
+        MANIFEST_SCHEDULER_ENDPOINTS,
+        &serde_json::to_string(&accounts).unwrap(),
     );
-    let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-
-    let config = HogdDevConfig::default().with_dev_account_count(1);
-    validate_dev_accounts(&readiness, &config)
-        .expect("bug: matching readiness dev account should validate");
-
+    let readiness = parse_readiness_line("hogd-dev", &line).unwrap();
+    validate_bootstrap_accounts(&readiness, &config, fixture_public_key(0)).unwrap();
+    for recovered in [false, true] {
+        for field in [
+            "role",
+            "publicKey",
+            "walletAddress",
+            "initialStorageTokens",
+            "count",
+        ] {
+            let mut invalid = readiness.clone();
+            if recovered {
+                invalid.chain_state = Some(RuntimeManifestChainState::Recovered);
+            }
+            let manifest = invalid.runtime_manifest.as_mut().unwrap();
+            match field {
+                "role" => manifest.bootstrap_accounts[0].role = "local_user".into(),
+                "publicKey" => {
+                    manifest.bootstrap_accounts[0].public_key = fixture_public_key(2);
+                }
+                "walletAddress" => {
+                    manifest.bootstrap_accounts[0].wallet_address =
+                        groundhog_xdr::types::ContractAddress::from([0; 32]).into();
+                }
+                "initialStorageTokens" => {
+                    manifest.bootstrap_accounts[0].initial_storage_tokens = "999".into();
+                }
+                _ => {
+                    manifest.bootstrap_accounts.pop();
+                }
+            }
+            assert!(
+                validate_bootstrap_accounts(&invalid, &config, fixture_public_key(0)).is_err(),
+                "{field}"
+            );
+        }
+    }
     assert_eq!(readiness.dev_accounts.len(), 2);
-    assert_eq!(
-        serde_json::to_value(readiness.dev_accounts[0].address).expect("bug: address serializes"),
-        format!(
-            "0x{}",
-            hex::encode(
-                groundhog_signing::PubkeyAccount::from_public_key_bytes(
-                    faucet_signer.verifying_key_bytes(),
-                    0
-                )
-                .address()
-                .as_ref()
-            )
-        ),
-    );
-    assert_eq!(
-        readiness.dev_accounts[0].public_key.0,
-        faucet_signer.verifying_key_bytes().to_vec()
-    );
-    assert_eq!(
-        readiness.dev_accounts[0].initial_storage_tokens,
-        10_000_000_000_000
-    );
 }
 
 #[test]
 fn legacy_readiness_without_manifest_is_rejected_by_supervisor_validation() {
-    let readiness =
-        parse_readiness_line("hogd-dev", V1_READY).expect("bug: readiness payload parses");
-    let err = validate_dev_accounts(&readiness, &HogdDevConfig::default())
-        .expect_err("bug: manifest-less readiness should fail validation");
-
-    assert!(matches!(
-        err,
-        NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
-            if reason.contains("runtime manifest")
-    ));
-}
-
-#[test]
-fn dev_account_count_mismatch_is_rejected() {
-    let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, r"[]");
-    let readiness = parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload parses");
-    let err = validate_dev_accounts(&readiness, &HogdDevConfig::default())
-        .expect_err("bug: missing default dev accounts should fail validation");
-
-    assert!(matches!(
-        err,
-        NodeSupervisorError::DevAccountCountMismatch {
-            expected: 11,
-            actual: 0
-        }
-    ));
-}
-
-#[test]
-fn dev_account_public_key_mismatch_is_rejected() {
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
-        "11".repeat(32),
-        "22".repeat(32),
+    let readiness = parse_readiness_line("hogd-dev", V1_READY).unwrap();
+    assert!(
+        validate_bootstrap_accounts(&readiness, &HogdDevConfig::default(), fixture_public_key(0))
+            .is_err()
     );
-    let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-    let config = HogdDevConfig::default().with_dev_account_count(0);
-    let err = validate_dev_accounts(&readiness, &config)
-        .expect_err("bug: wrong readiness public key should fail validation");
-
-    assert!(matches!(
-        err,
-        NodeSupervisorError::DevAccountPublicKeyMismatch { index: 0, .. }
-    ));
-}
-
-#[test]
-fn unsupported_manifest_derivation_scheme_is_rejected() {
-    let signer = groundhog_signing::derive_default_dev_account_signer(0);
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
-        "11".repeat(32),
-        hex::encode(signer.verifying_key_bytes()),
-    );
-    let line = manifest_readiness_line_with_derivation(
-        MANIFEST_SCHEDULER_ENDPOINTS,
-        &accounts,
-        "groundhog-bootstrap-account-v2",
-        "groundhog-dev-accounts",
-    );
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-    let config = HogdDevConfig::default().with_dev_account_count(0);
-    let err = validate_dev_accounts(&readiness, &config)
-        .expect_err("bug: unsupported derivation scheme should fail validation");
-
-    assert!(matches!(
-        err,
-        NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
-            if reason.contains("unsupported bootstrap account derivation scheme")
-    ));
-}
-
-#[test]
-fn manifest_derivation_seed_mismatch_is_rejected() {
-    let signer = groundhog_signing::derive_default_dev_account_signer(0);
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
-        "11".repeat(32),
-        hex::encode(signer.verifying_key_bytes()),
-    );
-    let line = manifest_readiness_line_with_derivation(
-        MANIFEST_SCHEDULER_ENDPOINTS,
-        &accounts,
-        super::SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME,
-        "different-seed",
-    );
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-    let config = HogdDevConfig::default().with_dev_account_count(0);
-    let err = validate_dev_accounts(&readiness, &config)
-        .expect_err("bug: derivation seed mismatch should fail validation");
-
-    assert!(matches!(
-        err,
-        NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
-            if reason.contains("seed")
-    ));
-}
-
-#[test]
-fn zero_user_accounts_still_validates_faucet_derivation() {
-    let signer = groundhog_signing::derive_default_dev_account_signer(0);
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"10000000000000"}}]"#,
-        "11".repeat(32),
-        hex::encode(signer.verifying_key_bytes()),
-    );
-    let line = manifest_readiness_line_with_derivation(
-        MANIFEST_SCHEDULER_ENDPOINTS,
-        &accounts,
-        "groundhog-bootstrap-account-v2",
-        "different-seed",
-    );
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-    let config = HogdDevConfig::default().with_dev_account_count(0);
-
-    let error = validate_dev_accounts(&readiness, &config)
-        .expect_err("zero-user layout must still validate faucet derivation metadata");
-    assert!(error.to_string().contains("derivation scheme"));
-}
-
-#[test]
-fn manifest_token_funding_mismatch_is_rejected() {
-    let signer = groundhog_signing::derive_default_dev_account_signer(0);
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"999"}}]"#,
-        "11".repeat(32),
-        hex::encode(signer.verifying_key_bytes()),
-    );
-    let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
-    let readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-    let config = HogdDevConfig::default().with_dev_account_count(0);
-    let err = validate_dev_accounts(&readiness, &config)
-        .expect_err("bug: token mismatch should fail validation");
-
-    assert!(matches!(
-        err,
-        NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
-            if reason.contains("initialStorageTokens")
-    ));
-}
-
-#[test]
-fn recovered_manifest_validates_effective_faucet_funding() {
-    let signer = groundhog_signing::derive_default_dev_account_signer(0);
-    let accounts = format!(
-        r#"[{{"index":0,"role":"faucet","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"999"}}]"#,
-        "11".repeat(32),
-        hex::encode(signer.verifying_key_bytes()),
-    );
-    let line = manifest_readiness_line(MANIFEST_SCHEDULER_ENDPOINTS, &accounts);
-    let mut readiness =
-        parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
-    readiness.chain_state = Some(RuntimeManifestChainState::Recovered);
-    let config = HogdDevConfig::default().with_dev_account_count(0);
-
-    let error = validate_dev_accounts(&readiness, &config)
-        .expect_err("recovered faucet token mismatch should fail");
-
-    assert!(matches!(
-        error,
-        NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
-            if reason.contains("initialStorageTokens")
-    ));
 }
 
 #[test]
@@ -1411,7 +1252,7 @@ async fn inherited_lease_survives_leader_exit_until_descendant_is_killed() {
     let config = HogdDevConfig::default()
         .with_startup_timeout(Duration::from_secs(2))
         .with_shutdown_grace(Duration::from_millis(150));
-    let bootstrap = write_bootstrap_manifest(&config).unwrap();
+    let bootstrap = write_bootstrap_manifest(&config, fixture_public_key(0)).unwrap();
     let spec = build_hogd_dev_spec_with_bootstrap_manifest(
         fake_hogd_dev_binary(),
         &config,
@@ -1419,7 +1260,7 @@ async fn inherited_lease_survives_leader_exit_until_descendant_is_killed() {
     )
     .env(FAKE_HOGD_DEV_MODE_ENV, "spawn-helper-then-exit");
     let mut process =
-        HogdDevProcess::start_with_spec(&config, spec, Some(bootstrap), Some(inherited))
+        HogdDevProcess::start_with_spec(&config, spec, Some(bootstrap), Some(inherited), None)
             .await
             .unwrap();
     // Reap the leader without invoking process-group cleanup yet.
@@ -1450,15 +1291,15 @@ async fn start_fake_hogd_dev(
     config: &HogdDevConfig,
     mode: &str,
 ) -> Result<HogdDevProcess, NodeSupervisorError> {
-    let bootstrap_manifest =
-        write_bootstrap_manifest(config).expect("bug: bootstrap manifest file should be written");
+    let bootstrap_manifest = write_bootstrap_manifest(config, fixture_public_key(0))
+        .expect("bug: bootstrap manifest file should be written");
     let spec = build_hogd_dev_spec_with_bootstrap_manifest(
         fake_hogd_dev_binary(),
         config,
         bootstrap_manifest.path(),
     )
     .env(FAKE_HOGD_DEV_MODE_ENV, mode);
-    HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest), None).await
+    HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest), None, None).await
 }
 
 async fn start_fake_hogd_dev_with_env(
@@ -1467,8 +1308,8 @@ async fn start_fake_hogd_dev_with_env(
     key: &str,
     value: &std::ffi::OsStr,
 ) -> Result<HogdDevProcess, NodeSupervisorError> {
-    let bootstrap_manifest =
-        write_bootstrap_manifest(config).expect("bug: bootstrap manifest file should be written");
+    let bootstrap_manifest = write_bootstrap_manifest(config, fixture_public_key(0))
+        .expect("bug: bootstrap manifest file should be written");
     let spec = build_hogd_dev_spec_with_bootstrap_manifest(
         fake_hogd_dev_binary(),
         config,
@@ -1476,7 +1317,7 @@ async fn start_fake_hogd_dev_with_env(
     )
     .env(FAKE_HOGD_DEV_MODE_ENV, mode)
     .env(key, value);
-    HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest), None).await
+    HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest), None, None).await
 }
 
 async fn assert_process_group_exits(process_group: i32) {
@@ -1525,20 +1366,6 @@ fn missing_path() -> std::path::PathBuf {
 }
 
 fn manifest_readiness_line(endpoints: &str, accounts: &str) -> String {
-    manifest_readiness_line_with_derivation(
-        endpoints,
-        accounts,
-        super::SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME,
-        "groundhog-dev-accounts",
-    )
-}
-
-fn manifest_readiness_line_with_derivation(
-    endpoints: &str,
-    accounts: &str,
-    derivation_scheme: &str,
-    derivation_seed: &str,
-) -> String {
     let tmp = TempDir::new().expect("bug: temp dir should be created");
     let manifest_dir = tmp.keep();
     fs::set_permissions(&manifest_dir, fs::Permissions::from_mode(0o700))
@@ -1546,17 +1373,13 @@ fn manifest_readiness_line_with_derivation(
     let manifest_path = manifest_dir.join("runtime-manifest.json");
     let manifest = format!(
         r#"{{
-              "schemaVersion":3,
+              "schemaVersion":4,
               "kind":"hogd-dev-runtime",
               "chainState":"fresh",
               "networkHash":"0000000000000000000000000000000000000000000000000000000000000000",
               "protocol":"hogp/test00000000000",
               "producer":{{"binary":"hog-devnode","version":"0.1.0","commitHash":"abcdef0"}},
               "endpoints":{endpoints},
-              "bootstrapAccountDerivation":{{
-                "scheme":"{derivation_scheme}",
-                "seed":"{derivation_seed}"
-              }},
               "bootstrapAccounts":{accounts},
               "bootstrap":{{
                 "storageCostModel":{{

@@ -76,10 +76,11 @@ const CANNED_STORAGE_HEIGHT: i64 = 12;
 // -----------------------------------------------------------------------
 
 /// Controls what `schedgateway_lookup_tx` returns.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum FakeSchedulerMode {
     /// Returns one `None` per queried hash — nothing pending.
     NoPending,
+    Outcome(groundhog_scheduler::SchedulerTransactionOutcome),
     /// Returns one `Some(dummy_tx)` per queried hash — all pending.
     AllPending,
     /// Returns an empty batch — no per-hash answer at all.
@@ -171,7 +172,10 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
         hashes: TransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
-        match self.mode {
+        match &self.mode {
+            FakeSchedulerMode::Outcome(_) => {
+                panic!("old lookup must not be used for retained outcomes")
+            }
             FakeSchedulerMode::NoPending => Ok(VecM(hashes.0.into_iter().map(|_| None).collect())),
             FakeSchedulerMode::AllPending => {
                 // Return one Some(dummy_tx) per queried hash to signal pending.
@@ -188,15 +192,38 @@ impl SchedGateway_SchedGateway1 for FakeScheduler {
         }
     }
 
-    async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
-        Ok(0)
-    }
-
     async fn schedgateway_lookup_transaction_outcomes(
         &self,
-        _hashes: TransactionHashBatch,
+        hashes: TransactionHashBatch,
     ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-        panic!("bug: read backend tests should not look up transaction outcomes")
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus,
+        };
+        if let FakeSchedulerMode::Outcome(outcome) = &self.mode {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
+            return Ok(VecM(vec![outcome.clone(); hashes.0.len()]));
+        }
+        let results = self.schedgateway_lookup_tx(hashes).await?;
+        Ok(VecM(
+            results
+                .0
+                .into_iter()
+                .map(|tx| SchedulerTransactionOutcome {
+                    status: if tx.is_some() {
+                        SchedulerTransactionStatus::SchedulerTransactionPending
+                    } else {
+                        SchedulerTransactionStatus::SchedulerTransactionNotFound
+                    },
+                    error_source: SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                    error_code: 0,
+                })
+                .collect(),
+        ))
+    }
+
+    async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+        Ok(0)
     }
 }
 
@@ -1040,9 +1067,45 @@ async fn transaction_status_committed_not_pending_returns_committed() {
 
     // Assert
     assert!(
-        matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_A),
+        matches!(status, TransactionStatus::Committed { height: Some(ref height) } if **height == CANNED_HEIGHT_A),
         "expected Committed({CANNED_HEIGHT_A}), got {status:?}",
     );
+}
+
+#[tokio::test]
+async fn transaction_status_scheduler_retained_outcomes() {
+    use groundhog_scheduler::{
+        SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+        SchedulerTransactionStatus as Status,
+    };
+    for (status, tag) in [
+        (Status::SchedulerTransactionSucceeded, "committed"),
+        (Status::SchedulerTransactionRetry, "retry"),
+        (Status::SchedulerTransactionDropped, "dropped"),
+    ] {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let outcome = SchedulerTransactionOutcome {
+            status,
+            error_source: Source::SchedulerTransactionErrorExecutor,
+            error_code: -4,
+        };
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let status = backend
+            .transaction_status(RpcRequestContext::unbounded(), canned_tx_hash([0x99; 32]))
+            .await
+            .unwrap();
+        let value = serde_json::to_value(status).unwrap();
+        assert_eq!(value["status"], tag);
+        if tag == "committed" {
+            assert_eq!(value, serde_json::json!({"status": "committed"}));
+        } else {
+            assert_eq!(
+                value["error"],
+                serde_json::json!({"source":"executor", "code":-4})
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -1071,7 +1134,8 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
     // Arrange: scheduler says not pending; indexer holds a recent
     // nondeterministic-failure diagnostic for the hash.
     let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
-    let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+    let (sched_addr, _sched, lookups) =
+        start_counting_fake_scheduler(FakeSchedulerMode::AllPending).await;
     let backend = make_read_backend(idx_addr, sched_addr).await;
     let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
 
@@ -1080,6 +1144,8 @@ async fn transaction_status_recent_failure_returns_diagnostic() {
         .transaction_status(RpcRequestContext::unbounded(), tx_hash)
         .await
         .expect("bug: status check should succeed");
+
+    assert_eq!(lookups.load(Ordering::SeqCst), 0);
 
     // Assert
     match status {
@@ -1137,7 +1203,7 @@ async fn transaction_status_scheduler_rpc_fail_still_returns_committed_from_inde
 
     // Assert: scheduler failure is non-fatal; we still get the indexer answer.
     assert!(
-        matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_B),
+        matches!(status, TransactionStatus::Committed { height: Some(ref height) } if **height == CANNED_HEIGHT_B),
         "expected Committed({CANNED_HEIGHT_B}) despite scheduler failure, got {status:?}",
     );
 }

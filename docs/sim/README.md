@@ -71,14 +71,25 @@ Simulator configuration uses schema 3. Update older scenarios explicitly; schema
 2 is rejected because its bootstrap wallets used a different address and ABI.
 Remove `devWalletProfile` and actor-provisioning wallet artifact fields.
 
-Scenarios without `accounts` use the runtime's funded native bootstrap accounts.
-Contract scenarios must set `bootstrap.deploymentCollateralRaw` to the exact raw
-HOG amount atomically attached to each deployment. Actor provisioning derives
-additional empty native accounts; `actorProvisioning.airdropHog` explicitly funds
-them from the bootstrap faucet. There is no wallet artifact or creation transaction.
-Explicit `accounts` currently use the existing provider. Exact account and funding
-rules live in [native.rs](../../crates/sim/src/native.rs) and scenario
-validation.
+Local signing and artifact scenarios require explicit `accounts.kind: "native"`
+and a fixture-owned seed. Pre-funded local targets pass public initial allocations
+before launch; `fundingAmountRaw` sets the exact raw allocation (default 100 HOG).
+Faucet mode starts those actors empty and requires an explicit positive
+`fundingAmountRaw`. Setup saves the request before sending, retries the same nonce,
+and verifies a successful receipt plus the configured minimum balance before load.
+Local faucet setup requires Unix directory syncing; other platforms can use
+pre-funded fixtures. Read-only local scenarios need no allocated signing accounts.
+
+Only hosted schema-3 targets retain implicit bootstrap derivation and actor
+provisioning. Their faucet keeps its fixed `requestAirdrop` amount. Native
+contract deployment requires `accounts.deploymentCollateralRaw`; funding and
+deployment remain atomic through DefaultWallet.
+
+Funding evidence stays in `native-accounts.json`, including the original request
+and admitted signed bytes. An existing evidence file refuses reuse of that output
+directory, including concurrent runs. Reconcile its saved request before starting
+another run. Automatic process-crash resume is not implemented. Exact account and
+funding rules live in [native.rs](../../crates/sim/src/native.rs) and validation.
 
 ## Local faults and cleanup
 

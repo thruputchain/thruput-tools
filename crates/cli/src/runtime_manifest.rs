@@ -4,25 +4,12 @@ use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_types::runtime_manifest::{
-    BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER, RuntimeManifest, parse_runtime_manifest,
-};
+use groundhog_json_rpc_types::runtime_manifest::{RuntimeManifest, parse_runtime_manifest};
 
 use crate::{CliError, config::ResolvedProfile};
 
 pub(crate) const ENV_RUNTIME_MANIFEST: &str = "GROUNDHOG_RUNTIME_MANIFEST";
-pub(crate) const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
-
-pub(crate) fn lowest_local_user_key(manifest: &RuntimeManifest) -> Option<String> {
-    manifest
-        .bootstrap_accounts
-        .iter()
-        .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_LOCAL_USER)
-        .map(|account| account.index)
-        .min()
-        .map(|index| format!("dev-{index}"))
-}
 
 /// Load the runtime manifest configured by environment or profile.
 ///
@@ -157,7 +144,7 @@ fn manifest_error(path: &Path, key_name: &str, source: &std::io::Error) -> CliEr
 }
 
 fn manifest_message(path: &Path, key_name: &str, message: impl Into<String>) -> CliError {
-    CliError::LocalDevAccountUnavailable {
+    CliError::LocalRuntimeUnavailable {
         key_name: key_name.into(),
         message: format!("{}: {}", path.display(), message.into()),
     }

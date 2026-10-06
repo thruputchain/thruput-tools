@@ -131,7 +131,7 @@ async fn acquire_lookup_permits(
             });
             ctx.metrics.observe_backend_request(
                 HealthBackend::Scheduler,
-                "schedgateway_lookup_tx",
+                "schedgateway_lookup_transaction_outcomes",
                 BackendRequestOutcome::Rejected,
                 std::time::Duration::ZERO,
             );
@@ -164,11 +164,11 @@ async fn acquire_lookup_permits(
     Ok((admission, permit))
 }
 
-async fn transaction_is_pending(
+async fn scheduler_transaction_status(
     ctx: &GatewayContext,
     deadline: Instant,
     tx_hash: TxHash,
-) -> Result<bool, RpcServerError> {
+) -> Result<Option<TransactionStatus>, RpcServerError> {
     let (admission, permit) = acquire_lookup_permits(ctx, deadline).await?;
     let execution = ctx.metrics.scheduler_lookup().executing();
     // Queued requests must use the current generation, not a pre-wait snapshot.
@@ -202,7 +202,7 @@ async fn transaction_is_pending(
         }
         Some(
             lookup_client
-                .schedgateway_lookup_tx(std::slice::from_ref(&hash))
+                .schedgateway_lookup_transaction_outcomes(std::slice::from_ref(&hash))
                 .await,
         )
     });
@@ -225,7 +225,7 @@ async fn transaction_is_pending(
     guard.disarm();
     ctx.metrics.observe_backend_request(
         HealthBackend::Scheduler,
-        "schedgateway_lookup_tx",
+        "schedgateway_lookup_transaction_outcomes",
         match &rpc_result {
             Ok(Ok(_)) => BackendRequestOutcome::Ok,
             Ok(Err(_)) => BackendRequestOutcome::Error,
@@ -234,7 +234,7 @@ async fn transaction_is_pending(
         started_at.elapsed(),
     );
     match rpc_result {
-        Ok(Ok(results)) => shared_scheduler::mempool_holds_tx(SCHEDULER, &results),
+        Ok(Ok(results)) => shared_scheduler::transaction_outcome(SCHEDULER, &results),
         Ok(Err(error)) => Err(RpcServerError::BackendUnavailable(format!(
             "scheduler lookup failed: {error}"
         ))),
@@ -293,8 +293,11 @@ struct GatewayStatusProbe<'a> {
 }
 
 impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
-    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
-        transaction_is_pending(self.ctx, self.deadline, tx_hash).await
+    async fn scheduler_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
+        scheduler_transaction_status(self.ctx, self.deadline, tx_hash).await
     }
 
     async fn indexed_status(
@@ -308,7 +311,7 @@ impl shared_status::StatusProbe for GatewayStatusProbe<'_> {
 /// Status by the probe order shared with the node supervisor
 /// (`groundhog_hogd_backend::status`). All stages share one deadline, so a
 /// slow indexer can consume the budget before the scheduler lookup is
-/// dispatched. A pending answer remains available if the indexer is
+/// dispatched. Scheduler outcomes remain available if the indexer is
 /// disconnected.
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
@@ -431,6 +434,7 @@ mod tests {
     enum FakeSchedulerMode {
         GatedMiss(Arc<LookupGate>),
         Pending,
+        Outcome(groundhog_scheduler::SchedulerTransactionOutcome),
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
         /// Mempool lookup succeeds but returns no slot for the queried hash.
@@ -538,6 +542,9 @@ mod tests {
                     gate.active.fetch_sub(1, Ordering::SeqCst);
                     Ok(VecM(vec![None]))
                 }
+                FakeSchedulerMode::Outcome(_) => {
+                    panic!("old lookup must not be used for retained outcomes")
+                }
                 FakeSchedulerMode::Pending => {
                     let TxInfoResult::TxInfoFound { info } = committed_result() else {
                         unreachable!()
@@ -571,15 +578,38 @@ mod tests {
             }
         }
 
-        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
-            panic!("bug: status tests should not read the pending count")
-        }
-
         async fn schedgateway_lookup_transaction_outcomes(
             &self,
-            _hashes: TransactionHashBatch,
+            hashes: TransactionHashBatch,
         ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
-            panic!("bug: status tests should not look up transaction outcomes")
+            use groundhog_scheduler::{
+                SchedulerTransactionErrorSource, SchedulerTransactionOutcome,
+                SchedulerTransactionStatus,
+            };
+            if let FakeSchedulerMode::Outcome(outcome) = &self.mode {
+                return Ok(VecM(vec![outcome.clone(); hashes.0.len()]));
+            }
+            let results = self.schedgateway_lookup_tx(hashes).await?;
+            Ok(VecM(
+                results
+                    .0
+                    .into_iter()
+                    .map(|tx| SchedulerTransactionOutcome {
+                        status: if tx.is_some() {
+                            SchedulerTransactionStatus::SchedulerTransactionPending
+                        } else {
+                            SchedulerTransactionStatus::SchedulerTransactionNotFound
+                        },
+                        error_source:
+                            SchedulerTransactionErrorSource::SchedulerTransactionErrorNone,
+                        error_code: 0,
+                    })
+                    .collect(),
+            ))
+        }
+
+        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+            panic!("bug: status tests should not read the pending count")
         }
     }
 
@@ -939,7 +969,7 @@ mod tests {
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
         let mut callers = Vec::new();
         for _ in 0..SCHEDULER_LOOKUP_MAX_OUTSTANDING {
-            let mut caller = Box::pin(transaction_is_pending(
+            let mut caller = Box::pin(scheduler_transaction_status(
                 &ctx,
                 Instant::now() + std::time::Duration::from_secs(4),
                 test_hash(),
@@ -951,7 +981,7 @@ mod tests {
         assert_lookup_gauges(&gathered_metrics(&ctx).await, 64, 4);
         assert_eq!(ctx.scheduler_lookup_admission.available_permits(), 0);
         assert!(matches!(
-            watchdog(transaction_is_pending(
+            watchdog(scheduler_transaction_status(
                 &ctx,
                 Instant::now() + std::time::Duration::from_secs(4),
                 test_hash()
@@ -978,7 +1008,7 @@ mod tests {
         assert_eq!(gate.calls.load(Ordering::SeqCst), 4);
         gate.release.add_permits(4);
         for caller in callers {
-            assert!(!watchdog(caller).await.unwrap());
+            assert!(watchdog(caller).await.unwrap().is_none());
         }
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1010,7 +1040,7 @@ mod tests {
             .unwrap();
         let context = RpcRequestContext::new(Some(std::time::Duration::from_millis(20)));
         let deadline = context.deadline().unwrap();
-        let mut lookup = Box::pin(transaction_is_pending(&ctx, deadline, test_hash()));
+        let mut lookup = Box::pin(scheduler_transaction_status(&ctx, deadline, test_hash()));
         poll_pending(lookup.as_mut());
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1035,7 +1065,7 @@ mod tests {
         assert!(ctx.scheduler.read().await.is_some());
         // An expired request must not dispatch even when execution is immediately available.
         assert!(matches!(
-            watchdog(transaction_is_pending(&ctx, deadline, test_hash())).await,
+            watchdog(scheduler_transaction_status(&ctx, deadline, test_hash())).await,
             Err(RpcServerError::BackendTimeout)
         ));
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
@@ -1063,7 +1093,7 @@ mod tests {
 
         tokio::time::pause();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut lookup = Box::pin(transaction_is_pending(&ctx, deadline, test_hash()));
+        let mut lookup = Box::pin(scheduler_transaction_status(&ctx, deadline, test_hash()));
         poll_pending(lookup.as_mut());
         assert_eq!(
             ctx.scheduler_lookup_admission.available_permits(),
@@ -1112,13 +1142,14 @@ mod tests {
         // The backend may finish the canceled call later; the replacement lane remains usable.
         gate.release.add_permits(2);
         assert!(
-            !watchdog(transaction_is_pending(
+            watchdog(scheduler_transaction_status(
                 &ctx,
                 (tokio::time::Instant::now() + Duration::from_secs(4)).into_std(),
                 test_hash()
             ))
             .await
             .unwrap()
+            .is_none()
         );
         assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
         assert_eq!(
@@ -1139,7 +1170,7 @@ mod tests {
             .clone()
             .try_acquire_many_owned(4)
             .unwrap();
-        let mut lookup = Box::pin(transaction_is_pending(
+        let mut lookup = Box::pin(scheduler_transaction_status(
             &ctx,
             Instant::now() + std::time::Duration::from_secs(4),
             test_hash(),
@@ -1157,7 +1188,7 @@ mod tests {
         let generation = replacement.generation();
         *ctx.scheduler.write().await = Some(replacement);
         drop(slots);
-        assert!(!watchdog(lookup).await.unwrap());
+        assert!(watchdog(lookup).await.unwrap().is_none());
         assert_eq!(
             ctx.scheduler.read().await.as_ref().unwrap().generation(),
             generation
@@ -1275,20 +1306,82 @@ mod tests {
         ))
         .await
         .unwrap();
-        assert!(matches!(status, TransactionStatus::Committed { height } if height == 42.into()));
+        assert!(
+            matches!(status, TransactionStatus::Committed { height } if height == Some(42.into()))
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
-    async fn pending_wins_over_miss_recent_failure_and_indexer_failure() {
-        for result in [
-            Some(indexer_miss()),
-            Some(TxInfoResult::TxInfoRecentFailure {
-                recent_failure: recent_diagnostic(),
-            }),
-            None,
+    async fn scheduler_retained_outcomes_are_exposed_when_indexer_misses() {
+        use groundhog_scheduler::{
+            SchedulerTransactionErrorSource as Source, SchedulerTransactionOutcome,
+            SchedulerTransactionStatus as Status,
+        };
+        for (status, tag) in [
+            (Status::SchedulerTransactionSucceeded, "committed"),
+            (Status::SchedulerTransactionRetry, "retry"),
+            (Status::SchedulerTransactionDropped, "dropped"),
         ] {
+            let outcome = SchedulerTransactionOutcome {
+                status,
+                error_source: Source::SchedulerTransactionErrorScheduler,
+                error_code: 3,
+            };
+            let (scheduler_addr, _scheduler) =
+                start_fake_scheduler(FakeSchedulerMode::Outcome(outcome)).await;
+            let (indexer_addr, _indexer) = start_not_found_indexer().await;
+            let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+            let status = watchdog(get_transaction_status(
+                &ctx,
+                RpcRequestContext::unbounded(),
+                test_hash(),
+            ))
+            .await
+            .unwrap();
+            let value = serde_json::to_value(status).unwrap();
+            assert_eq!(value["status"], tag);
+            if tag == "committed" {
+                assert_eq!(value, serde_json::json!({"status": "committed"}));
+            } else {
+                assert_eq!(
+                    value["error"],
+                    serde_json::json!({"source":"scheduler", "code":3})
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn indexer_diagnostic_skips_scheduler_lookup() {
+        let gate = LookupGate::new();
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::GatedMiss(gate.clone())).await;
+        let (indexer_addr, _indexer) = start_fake_indexer(
+            TxInfoResult::TxInfoRecentFailure {
+                recent_failure: recent_diagnostic(),
+            },
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        assert!(matches!(
+            watchdog(get_transaction_status(
+                &ctx,
+                RpcRequestContext::unbounded(),
+                test_hash()
+            ))
+            .await
+            .unwrap(),
+            TransactionStatus::RecentFailure { .. }
+        ));
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn pending_answers_after_miss_or_indexer_failure() {
+        for result in [Some(indexer_miss()), None] {
             let (scheduler_addr, _scheduler) =
                 start_fake_scheduler(FakeSchedulerMode::Pending).await;
             let calls = Arc::new(AtomicUsize::new(0));
@@ -1395,7 +1488,9 @@ mod tests {
         for (result, expected) in [
             (
                 committed,
-                TransactionStatus::Committed { height: 42.into() },
+                TransactionStatus::Committed {
+                    height: Some(42.into()),
+                },
             ),
             (
                 TxInfoResult::TxInfoRecentFailure {
@@ -1415,7 +1510,6 @@ mod tests {
                 .acquire_many_owned(SCHEDULER_LOOKUP_MAX_OUTSTANDING.try_into().unwrap())
                 .await
                 .unwrap();
-            let is_committed = matches!(expected, TransactionStatus::Committed { .. });
             let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
                 .await
                 .unwrap();
@@ -1426,15 +1520,12 @@ mod tests {
             assert!(ctx.scheduler.read().await.is_some());
             let metrics = gathered_metrics(&ctx).await;
             assert_lookup_gauges(&metrics, 0, 0);
-            assert_lookup_admission(&metrics, "full", usize::from(!is_committed));
+            assert_lookup_admission(&metrics, "full", 0);
             assert_lookup_admission(&metrics, "accepted", 0);
-            assert_eq!(
-                metrics.contains(concat!(
-                    "groundhog_gateway_backend_requests_total{backend=\"scheduler\",",
-                    "operation=\"schedgateway_lookup_tx\",outcome=\"rejected\"} 1",
-                )),
-                !is_committed,
-            );
+            assert!(!metrics.contains(concat!(
+                "groundhog_gateway_backend_requests_total{backend=\"scheduler\",",
+                "operation=\"schedgateway_lookup_transaction_outcomes\",outcome=\"rejected\"} 1",
+            )));
         }
     }
 
@@ -1452,7 +1543,7 @@ mod tests {
         assert_lookup_gauges(&metrics, 0, 0);
         // Acquiring an empty client lock is ready, not a healthy backend call.
         assert!(metrics.contains("groundhog_gateway_scheduler_lookup_wait_duration_seconds_count{outcome=\"ready\",stage=\"scheduler_client\"} 1\n"));
-        assert!(!metrics.contains("groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_lookup_tx\",outcome=\"ok\"}"));
+        assert!(!metrics.contains("groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedgateway_lookup_transaction_outcomes\",outcome=\"ok\"}"));
     }
 
     #[tokio::test]
@@ -1461,7 +1552,7 @@ mod tests {
         let ctx = test_context(None, indexer_addr).await;
         let write_lock = ctx.scheduler.write().await;
         let deadline = Instant::now() + std::time::Duration::from_millis(20);
-        let mut lookup = Box::pin(transaction_is_pending(&ctx, deadline, test_hash()));
+        let mut lookup = Box::pin(scheduler_transaction_status(&ctx, deadline, test_hash()));
         poll_pending(lookup.as_mut());
         assert_lookup_gauges(&gathered_metrics(&ctx).await, 0, 1);
         assert!(matches!(

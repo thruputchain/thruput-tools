@@ -180,10 +180,16 @@ The examples are **local-node test drivers**, not production coordinators:
 cargo build -p groundhog-firehose --examples
 # Mirrors node-supervisor's proposal/commit and compatibility hash sequence:
 target/debug/examples/drive_blocks <scheduler-coord> <archive> 30 250
-# Same dev-wallet self-call shape as the workspace benchmark; unique nonce start:
-target/debug/examples/submit_traffic <runtime-manifest.json> 100 100000
+# Same native wallet self-call shape as the workspace benchmark; unique nonce start:
+target/debug/examples/submit_traffic <runtime-manifest.json> 100 100000 traffic-fixture-v1
 target/debug/examples/drive_blocks <scheduler-coord> <archive> 5 250
 ```
+
+For local schema-4 nodes, the example owns account zero derived from
+`groundhog-firehose:traffic-fixture-v1`. Supply that fixture's public allocation
+before starting the node; the manifest cannot supply a signer. Hosted schema-3
+manifests retain the separate bootstrap adapter when the seed argument is omitted.
+
 
 The block driver reports elapsed commit-RPC time and commit-request-to-file
 visibility, polling the archive filename at approximately 1 ms. It fails a

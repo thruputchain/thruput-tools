@@ -891,15 +891,15 @@ mod tests {
             panic!("bug: intro test should not look up transactions")
         }
 
-        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
-            panic!("bug: intro test should not read pending count")
-        }
-
         async fn schedgateway_lookup_transaction_outcomes(
             &self,
             _hashes: TransactionHashBatch,
         ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
             panic!("bug: intro test should not look up transaction outcomes")
+        }
+
+        async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
+            panic!("bug: intro test should not read pending count")
         }
     }
 

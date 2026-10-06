@@ -487,7 +487,7 @@ mod tests {
                 "actorProvisioning":{"enabled":true,"airdropHog":funding}
             })).unwrap());
             let runtime: RuntimeManifest = serde_json::from_str(include_str!(
-                "../../../docs/gateway/examples/runtime-manifest.hogd-dev.example.json"
+                "../../testkit/tests/fixtures/hosted-runtime.json"
             ))
             .unwrap();
             let client = RecordingClient::default();

@@ -6,14 +6,17 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use groundhog_json_rpc_api::AirdropApiServer;
+use groundhog_json_rpc_api::{AirdropApiServer, LocalFundingApiServer};
 use groundhog_json_rpc_server::{
     ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane,
     tx::validate_raw_transaction_bytes,
 };
 use groundhog_json_rpc_types::{
     ContractAddress,
-    airdrop::{AirdropAttemptResponse, AirdropRequest},
+    airdrop::{
+        AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse,
+        LocalFundingErrorData,
+    },
     hex::Hex0x,
     receipt::ExecStatus,
     runtime_manifest::{BOOTSTRAP_ACCOUNT_ROLE_FAUCET, RuntimeManifest},
@@ -21,14 +24,16 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_signing::{
     DEFAULT_TX_GAS_LIMIT, LocalSigner, PubkeyAccount, SignTransactionParams,
-    derive_dev_account_signer, encode_signed_transaction_xdr, sign_transaction, transaction_hash,
+    encode_signed_transaction_xdr, sign_transaction, transaction_hash,
 };
 use groundhog_tx_validation::NetworkConfigParams;
 use jsonrpsee::core::RpcResult;
 use tokio::sync::Semaphore;
 
 use crate::{
-    LocalAirdropConfig, NodeSupervisorConfig, block_driver::BlockDriverTrigger,
+    LocalAirdropConfig, NodeSupervisorConfig,
+    block_driver::BlockDriverTrigger,
+    funding_journal::{FundingJournal, FundingRecord, RetainedFundingTransaction},
     request_deadline::within_request_deadline,
 };
 
@@ -40,39 +45,41 @@ pub(crate) struct LocalAirdropContext {
     network_hash: groundhog_xdr::types::NetworkHash,
     signer: Arc<LocalSigner>,
     config: LocalAirdropConfig,
+    journal: Arc<Mutex<FundingJournal>>,
+    lock_lease: Option<Arc<std::fs::File>>,
 }
 
 impl LocalAirdropContext {
     pub(crate) fn from_validated_runtime(
         manifest: &RuntimeManifest,
         config: &NodeSupervisorConfig,
+        signer: Arc<LocalSigner>,
+        journal: Arc<Mutex<FundingJournal>>,
+        lock_lease: Option<Arc<std::fs::File>>,
     ) -> Result<Self, String> {
-        let faucet = manifest
+        let mut faucets = manifest
             .bootstrap_accounts
             .iter()
-            .find(|account| account.index == 0)
-            .ok_or_else(|| "runtime manifest is missing dev-0".to_owned())?;
-        if faucet.role != BOOTSTRAP_ACCOUNT_ROLE_FAUCET
-            || manifest.bootstrap_account_derivation.seed != config.hogd_dev.dev_account_seed
-        {
-            return Err(
-                "runtime manifest dev-0 faucet derivation does not match configuration".into(),
-            );
+            .filter(|account| account.role == BOOTSTRAP_ACCOUNT_ROLE_FAUCET);
+        let faucet = faucets
+            .next()
+            .ok_or_else(|| "runtime manifest is missing its local faucet".to_owned())?;
+        if faucets.next().is_some() {
+            return Err("runtime manifest has multiple local faucets".into());
         }
-        let signer = derive_dev_account_signer(&config.hogd_dev.dev_account_seed, 0);
         if faucet.public_key.as_ref() != signer.verifying_key_bytes() {
-            return Err("runtime manifest dev-0 public key does not match configuration".into());
+            return Err("runtime faucet public key does not match its private credential".into());
         }
         let account = PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0);
         if faucet.wallet_address.0 != account.address() {
-            return Err(
-                "runtime manifest dev-0 address is not its nonce-zero native account".into(),
-            );
+            return Err("runtime faucet address is not its nonce-zero native account".into());
         }
         Ok(Self {
             network_hash: manifest.network_hash.to_network_hash(),
-            signer: Arc::new(signer),
+            signer,
             config: config.local_airdrop,
+            journal,
+            lock_lease,
         })
     }
 }
@@ -85,8 +92,12 @@ pub(crate) struct LocalAirdropRpc {
     capacity: usize,
     concurrency: Arc<Semaphore>,
     admission: Arc<Semaphore>,
+    persistence: Arc<Semaphore>,
     timeout: Duration,
     raw_amount: u128,
+    faucet: ContractAddress,
+    journal: Arc<Mutex<FundingJournal>>,
+    lock_lease: Option<Arc<std::fs::File>>,
     block_driver: BlockDriverTrigger,
 }
 
@@ -101,18 +112,24 @@ impl LocalAirdropRpc {
         S: SubmitPlane + ChainPlane,
         R: ReadPlane,
     {
+        let faucet = Hex0x(
+            PubkeyAccount::from_public_key_bytes(context.signer.verifying_key_bytes(), 0).address(),
+        );
         let builder = NativeAirdropBuilder {
             network_hash: context.network_hash,
             signer: context.signer,
             next_nonce: AtomicU64::new(nonce_from_timestamp()),
-            raw_amount: context.config.raw_amount,
         };
-        Self::with_parts(
+        let mut rpc = Self::with_parts(
             Arc::new(PlaneAirdropBackend { submit_chain, read }),
             Arc::new(builder),
             context.config,
             block_driver,
-        )
+        );
+        rpc.faucet = faucet;
+        rpc.journal = context.journal;
+        rpc.lock_lease = context.lock_lease;
+        rpc
     }
 
     fn with_parts(
@@ -135,8 +152,15 @@ impl LocalAirdropRpc {
                     .saturating_mul(16)
                     .min(Semaphore::MAX_PERMITS),
             )),
+            persistence: Arc::new(Semaphore::new(config.max_concurrency)),
+            lock_lease: None,
             timeout: config.request_timeout,
             raw_amount: config.raw_amount,
+            faucet: Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
+            journal: Arc::new(Mutex::new(FundingJournal::memory(
+                [0; 32].into(),
+                Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
+            ))),
             block_driver,
         }
     }
@@ -157,8 +181,14 @@ impl LocalAirdropRpc {
         request: AirdropRequest,
         context: RpcRequestContext,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
-        let key = AttemptKey::new(&request);
-        let attempt = self.find_or_admit(key)?;
+        let attempt = self
+            .find_or_admit(FundAccountRequest {
+                recipient: request.recipient,
+                raw_amount: self.raw_amount.to_string(),
+                client_nonce: request.client_nonce.clone(),
+                faucet: self.faucet,
+            })
+            .await?;
         let observed_revision = attempt.revision()?;
         let _operation = attempt.operation.lock().await;
 
@@ -194,29 +224,245 @@ impl LocalAirdropRpc {
         result
     }
 
-    fn find_or_admit(&self, key: AttemptKey) -> Result<Arc<Attempt>, RpcServerError> {
-        let mut attempts = self.attempts.lock().map_err(|_| {
-            RpcServerError::BackendUnavailable("local airdrop attempt store is poisoned".into())
-        })?;
+    async fn find_or_admit(
+        &self,
+        request: FundAccountRequest,
+    ) -> Result<Arc<Attempt>, RpcServerError> {
+        let permit = self
+            .persistence
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                RpcServerError::BackendUnavailable("funding persistence is closed".into())
+            })?;
+        let rpc = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            rpc.register_attempt(request)
+        })
+        .await
+        .map_err(|_| {
+            RpcServerError::BackendUnavailable("funding persistence worker stopped".into())
+        })?
+    }
+
+    fn register_attempt(
+        &self,
+        request: FundAccountRequest,
+    ) -> Result<Arc<Attempt>, RpcServerError> {
+        let key = AttemptKey::funding(&request);
+        let mut attempts = self.attempts.lock().map_err(|_| attempt_state_poisoned())?;
+        let mut journal = self.journal.lock().map_err(|_| attempt_state_poisoned())?;
+        let retained = journal
+            .records()
+            .iter()
+            .any(|record| AttemptKey::funding(&record.request) == key);
+        if !retained && journal.records().len() >= self.capacity {
+            return Err(RpcServerError::Overloaded(
+                "local funding attempt capacity reached; existing requests can still reconcile"
+                    .into(),
+            ));
+        }
+        let record = journal.register(request)?;
         if let Some(attempt) = attempts.get(&key) {
             return Ok(attempt.clone());
         }
-        if attempts.len() >= self.capacity
-            && let Some(terminal_key) = attempts
-                .iter()
-                .find(|(_, attempt)| Arc::strong_count(attempt) == 1 && attempt.is_evictable())
-                .map(|(key, _)| key.clone())
-        {
-            attempts.remove(&terminal_key);
-        }
-        if attempts.len() >= self.capacity {
-            return Err(RpcServerError::Overloaded(
-                "local airdrop attempt capacity reached".into(),
-            ));
-        }
-        let attempt = Arc::new(Attempt::new());
+        let attempt = Arc::new(Attempt::from_record(record));
         attempts.insert(key, attempt.clone());
         Ok(attempt)
+    }
+
+    async fn retain_signed(
+        &self,
+        attempt: &Attempt,
+        signed: &SignedAirdrop,
+    ) -> Result<(), RpcServerError> {
+        let permit = self
+            .persistence
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                RpcServerError::BackendUnavailable("funding persistence is closed".into())
+            })?;
+        let lock_lease = self.lock_lease.clone();
+        let journal = self.journal.clone();
+        let request = attempt.request.clone();
+        let retained = RetainedFundingTransaction {
+            tx_hash: signed.tx_hash,
+            signed_transaction: groundhog_json_rpc_types::hex::HexBytes(signed.bytes.clone()),
+        };
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _lock_lease = lock_lease;
+            journal
+                .lock()
+                .map_err(|_| attempt_state_poisoned())?
+                .retain_signed(&request, retained)
+        })
+        .await
+        .map_err(|_| {
+            RpcServerError::BackendUnavailable("funding persistence worker stopped".into())
+        })?
+    }
+
+    async fn prepare_signed(
+        &self,
+        attempt: &Attempt,
+        context: RpcRequestContext,
+    ) -> Result<SignedAirdrop, RpcServerError> {
+        if attempt.signed()?.is_none() {
+            let tip = self.backend.chain_tip(context).await?;
+            let signed = self.builder.build(
+                attempt.request.recipient,
+                (*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET),
+                attempt
+                    .request
+                    .amount()
+                    .map_err(|e| RpcServerError::InvalidParam(e.into()))?,
+            )?;
+            attempt.store_signed(signed)?;
+        }
+        let signed = attempt.signed()?.ok_or_else(|| {
+            RpcServerError::BackendUnavailable("local funding transaction was not retained".into())
+        })?;
+        self.retain_signed(attempt, &signed).await?;
+        Ok(signed)
+    }
+
+    async fn fund(
+        &self,
+        request: FundAccountRequest,
+    ) -> Result<FundAccountResponse, RpcServerError> {
+        request
+            .amount()
+            .map_err(|e| RpcServerError::InvalidParam(e.into()))?;
+        if request.faucet != self.faucet {
+            return Err(RpcServerError::InvalidParam(
+                "expected faucet belongs to a different local chain".into(),
+            ));
+        }
+        let _admission = self.admission.try_acquire().map_err(|_| {
+            RpcServerError::Overloaded("local funding admission capacity reached".into())
+        })?;
+        let context = RpcRequestContext::new(Some(self.timeout));
+        within_request_deadline(context, self.fund_admitted(request.clone(), context))
+            .await
+            .map_err(|error| {
+                // Do not extend the request deadline waiting for a persistence worker.
+                // A retry can recover evidence if that worker still holds the journal.
+                let evidence = self
+                    .journal
+                    .try_lock()
+                    .ok()
+                    .and_then(|journal| journal.durable_signed(&request));
+                match evidence {
+                    Some(retained) => RpcServerError::LocalFundingUnresolved {
+                        reason: error.to_string(),
+                        evidence: LocalFundingErrorData::new(
+                            retained.tx_hash,
+                            retained.signed_transaction,
+                        ),
+                    },
+                    None => error,
+                }
+            })
+    }
+
+    async fn fund_admitted(
+        &self,
+        request: FundAccountRequest,
+        context: RpcRequestContext,
+    ) -> Result<FundAccountResponse, RpcServerError> {
+        let attempt = self.find_or_admit(request).await?;
+        let _operation = attempt.operation.lock().await;
+        let _permit =
+            self.concurrency.acquire().await.map_err(|_| {
+                RpcServerError::BackendUnavailable("local funding is closed".into())
+            })?;
+        let replay = attempt.signed()?.is_some();
+        let signed = self.prepare_signed(&attempt, context).await?;
+        let response = || {
+            FundAccountResponse::new(
+                attempt.request.recipient,
+                attempt.request.raw_amount.clone(),
+                signed.tx_hash,
+                groundhog_json_rpc_types::hex::HexBytes(signed.bytes.clone()),
+            )
+        };
+        if replay {
+            if self
+                .backend
+                .receipt(context, signed.tx_hash)
+                .await?
+                .is_some()
+            {
+                return Ok(response());
+            }
+            match self.backend.status(context, signed.tx_hash).await? {
+                TransactionStatus::Pending | TransactionStatus::Committed { .. } => {
+                    return Ok(response());
+                }
+                TransactionStatus::Invalid { reason } => {
+                    return Err(RpcServerError::TxRejected(reason));
+                }
+                TransactionStatus::Unknown
+                | TransactionStatus::RecentFailure { .. }
+                | TransactionStatus::Other => {}
+                _ => {
+                    return Err(RpcServerError::BackendUnavailable(
+                        "unrecognized retained funding status".into(),
+                    ));
+                }
+            }
+            self.check_retained_expiry(&signed, context).await?;
+        }
+        match self.backend.submit(context, &signed).await {
+            Ok(()) => {
+                attempt.set_submitted(true)?;
+                self.block_driver.trigger_after_submit();
+                Ok(response())
+            }
+            Err(error) => {
+                // A request-scoped admission error must not overwrite an older
+                // accepted or committed copy of this same retained transaction.
+                if self
+                    .backend
+                    .receipt(context, signed.tx_hash)
+                    .await?
+                    .is_some()
+                {
+                    return Ok(response());
+                }
+                match self.backend.status(context, signed.tx_hash).await? {
+                    TransactionStatus::Pending | TransactionStatus::Committed { .. } => {
+                        self.block_driver.trigger_after_submit();
+                        Ok(response())
+                    }
+                    _ => Err(classify_backend_error(error)),
+                }
+            }
+        }
+    }
+
+    async fn check_retained_expiry(
+        &self,
+        signed: &SignedAirdrop,
+        context: RpcRequestContext,
+    ) -> Result<(), RpcServerError> {
+        let tx =
+            validate_raw_transaction_bytes(signed.bytes.clone(), &NetworkConfigParams::default())
+                .map_err(|_| {
+                RpcServerError::BackendUnavailable(
+                    "retained funding transaction is malformed".into(),
+                )
+            })?;
+        let tip = self.backend.chain_tip(context).await?;
+        if *tx.block_expiry_height <= *tip.height {
+            return Err(RpcServerError::BackendUnavailable("retained funding expired with no authoritative outcome; reconcile its hash instead of creating another transfer".into()));
+        }
+        Ok(())
     }
 
     async fn advance_attempt(
@@ -225,23 +471,33 @@ impl LocalAirdropRpc {
         recipient: ContractAddress,
         context: RpcRequestContext,
     ) -> Result<AirdropAttemptResponse, RpcServerError> {
-        if attempt.signed()?.is_none() {
-            let tip = self.backend.chain_tip(context).await?;
-            let signed = match self.builder.build(
-                recipient,
-                (*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET),
-            ) {
-                Ok(signed) => signed,
-                Err(error) => {
-                    attempt.set_terminal(true)?;
-                    return Err(error);
+        let signed = self.prepare_signed(attempt, context).await?;
+        if attempt.restored {
+            if let Some(receipt) = self.backend.receipt(context, signed.tx_hash).await? {
+                if matches!(receipt.status, ExecStatus::Ok) {
+                    return Ok(AirdropAttemptResponse::Succeeded {
+                        recipient,
+                        tx_hash: signed.tx_hash,
+                        raw_amount: self.raw_amount.to_string(),
+                        height: receipt.height,
+                        status: receipt.status,
+                    });
                 }
-            };
-            attempt.store_signed(signed)?;
+                return Err(RpcServerError::TxRejected(format!(
+                    "local airdrop execution failed: {:?}",
+                    receipt.status
+                )));
+            }
+            match self.backend.status(context, signed.tx_hash).await? {
+                TransactionStatus::Pending | TransactionStatus::Committed { .. } => {
+                    return Ok(self.pending_response(recipient, signed.tx_hash));
+                }
+                TransactionStatus::Invalid { reason } => {
+                    return Err(RpcServerError::TxRejected(reason));
+                }
+                _ => self.check_retained_expiry(&signed, context).await?,
+            }
         }
-        let signed = attempt.signed()?.ok_or_else(|| {
-            RpcServerError::BackendUnavailable("local airdrop transaction was not retained".into())
-        })?;
 
         let mut submit_error = if attempt.is_submitted()? {
             None
@@ -335,6 +591,14 @@ impl AirdropApiServer for LocalAirdropRpc {
     }
 }
 
+#[async_trait]
+impl LocalFundingApiServer for LocalAirdropRpc {
+    #[tracing::instrument(skip_all, fields(?request.recipient))]
+    async fn fund_account(&self, request: FundAccountRequest) -> RpcResult<FundAccountResponse> {
+        self.fund(request).await.map_err(Into::into)
+    }
+}
+
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct AttemptKey {
     recipient: [u8; 32],
@@ -342,7 +606,7 @@ struct AttemptKey {
 }
 
 impl AttemptKey {
-    fn new(request: &AirdropRequest) -> Self {
+    fn funding(request: &FundAccountRequest) -> Self {
         Self {
             recipient: request.recipient.0.into_inner(),
             client_nonce: request.client_nonce.as_bytes().to_vec(),
@@ -351,6 +615,8 @@ impl AttemptKey {
 }
 
 struct Attempt {
+    request: FundAccountRequest,
+    restored: bool,
     operation: tokio::sync::Mutex<()>,
     state: Mutex<AttemptState>,
 }
@@ -365,10 +631,19 @@ struct AttemptState {
 }
 
 impl Attempt {
-    fn new() -> Self {
+    fn from_record(record: FundingRecord) -> Self {
+        let signed = record.signed.map(|signed| SignedAirdrop {
+            bytes: signed.signed_transaction.0,
+            tx_hash: signed.tx_hash,
+        });
         Self {
+            request: record.request,
+            restored: signed.is_some(),
             operation: tokio::sync::Mutex::new(()),
-            state: Mutex::new(AttemptState::default()),
+            state: Mutex::new(AttemptState {
+                signed,
+                ..AttemptState::default()
+            }),
         }
     }
 
@@ -443,12 +718,6 @@ impl Attempt {
             Err(error) => tracing::error!(%error, "local airdrop outcome store is poisoned"),
         }
     }
-
-    fn is_evictable(&self) -> bool {
-        self.state.lock().is_ok_and(|state| {
-            state.signed.is_none() || state.terminal && state.last_result.is_some()
-        })
-    }
 }
 
 fn attempt_state_poisoned() -> RpcServerError {
@@ -466,6 +735,7 @@ trait AirdropTransactionBuilder: Send + Sync + 'static {
         &self,
         recipient: ContractAddress,
         block_expiry_height: i64,
+        raw_amount: u128,
     ) -> Result<SignedAirdrop, RpcServerError>;
 }
 
@@ -473,7 +743,36 @@ struct NativeAirdropBuilder {
     network_hash: groundhog_xdr::types::NetworkHash,
     signer: Arc<LocalSigner>,
     next_nonce: AtomicU64,
-    raw_amount: u128,
+}
+
+/// Rebuild retained bytes from their immutable request and saved uniquifier.
+/// This checks the transfer intent, network signature, and every transaction field.
+pub(crate) fn validate_retained_funding(
+    request: &FundAccountRequest,
+    retained: &RetainedFundingTransaction,
+    network_hash: groundhog_xdr::types::NetworkHash,
+    signer: Arc<LocalSigner>,
+) -> Result<(), String> {
+    let retained_tx: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&retained.signed_transaction.0)
+            .map_err(|_| "retained funding transaction is malformed")?;
+    let expected = NativeAirdropBuilder {
+        network_hash,
+        signer,
+        next_nonce: AtomicU64::new(retained_tx.tx.uniquifier.nonce),
+    }
+    .build(
+        request.recipient,
+        *retained_tx.tx.uniquifier.block_expiry_height,
+        request.amount()?,
+    )
+    .map_err(|_| "could not validate retained funding intent")?;
+    if expected.tx_hash != retained.tx_hash || expected.bytes != retained.signed_transaction.0 {
+        return Err(
+            "retained funding transaction differs from its request or faucet signature".into(),
+        );
+    }
+    Ok(())
 }
 
 impl AirdropTransactionBuilder for NativeAirdropBuilder {
@@ -481,12 +780,13 @@ impl AirdropTransactionBuilder for NativeAirdropBuilder {
         &self,
         recipient: ContractAddress,
         block_expiry_height: i64,
+        raw_amount: u128,
     ) -> Result<SignedAirdrop, RpcServerError> {
         let build = || {
             let account =
                 PubkeyAccount::from_public_key_bytes(self.signer.verifying_key_bytes(), 0);
             let calldata =
-                groundhog_signing::native_hog_transfer_calldata(&recipient.0, self.raw_amount)?;
+                groundhog_signing::native_hog_transfer_calldata(&recipient.0, raw_amount)?;
             let tx = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
                 groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
                     account: &account,

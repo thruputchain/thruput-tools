@@ -1,16 +1,16 @@
 //! Bootstrap manifest types consumed by local and benchmark backend launchers.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::NetworkHashHex;
+use crate::{Ed25519PublicKey, NetworkHashHex};
 
 /// Current bootstrap manifest schema version.
-pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 3;
+pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 4;
 
 /// Bootstrap intent consumed by a backend launcher before genesis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[non_exhaustive]
 pub struct BootstrapManifest {
     /// Version of this JSON contract.
@@ -21,10 +21,10 @@ pub struct BootstrapManifest {
     pub network_hash: NetworkHashHex,
     /// Free-form profile name used by launcher-specific defaults.
     pub profile: String,
-    /// Fixed local faucet bootstrap intent.
-    pub bootstrap_faucet: BootstrapManifestFaucet,
-    /// Desired deterministic local-user account group.
-    pub bootstrap_accounts: BootstrapManifestAccounts,
+    /// Public allocation for the supervisor-owned faucet.
+    pub bootstrap_faucet: BootstrapManifestAllocation,
+    /// Explicit nonce-zero native account allocations.
+    pub bootstrap_accounts: Vec<BootstrapManifestAllocation>,
     /// Desired storage-cost profile.
     pub storage_cost_model: BootstrapManifestStorageCostModel,
 }
@@ -35,8 +35,8 @@ impl BootstrapManifest {
         kind: impl Into<String>,
         network_hash: NetworkHashHex,
         profile: impl Into<String>,
-        bootstrap_faucet: BootstrapManifestFaucet,
-        bootstrap_accounts: BootstrapManifestAccounts,
+        bootstrap_faucet: BootstrapManifestAllocation,
+        bootstrap_accounts: Vec<BootstrapManifestAllocation>,
         storage_cost_model: BootstrapManifestStorageCostModel,
     ) -> Self {
         Self {
@@ -51,62 +51,59 @@ impl BootstrapManifest {
     }
 }
 
-/// Fixed local faucet bootstrap intent.
+/// Public intent for a nonce-zero native account. Private signers remain with callers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[non_exhaustive]
-pub struct BootstrapManifestFaucet {
-    /// Deterministic derivation index reserved for the faucet.
-    pub index: u32,
-    /// Initial faucet funding as a decimal string.
+pub struct BootstrapManifestAllocation {
+    /// Public key authorized to sign for the account.
+    #[serde(deserialize_with = "canonical_public_key")]
+    pub public_key: Ed25519PublicKey,
+    /// Positive canonical decimal allocation in raw HOG units.
+    #[serde(deserialize_with = "positive_amount")]
     pub initial_storage_tokens: String,
 }
 
-impl BootstrapManifestFaucet {
-    /// Construct fixed local faucet intent.
-    pub fn new(index: u32, initial_storage_tokens: impl Into<String>) -> Self {
+impl BootstrapManifestAllocation {
+    /// Construct an explicit public allocation.
+    pub fn new(public_key: Ed25519PublicKey, initial_storage_tokens: impl Into<String>) -> Self {
         Self {
-            index,
+            public_key,
             initial_storage_tokens: initial_storage_tokens.into(),
         }
     }
 }
 
-/// Homogeneous deterministic local-user bootstrap account group.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[non_exhaustive]
-pub struct BootstrapManifestAccounts {
-    /// Number of local-user accounts to materialize, excluding the faucet.
-    pub count: u32,
-    /// First deterministic derivation index used by local-user accounts.
-    pub first_index: u32,
-    /// Seed consumed by the selected account derivation scheme.
-    pub seed: String,
-    /// Initial storage-token funding per account as a decimal string.
-    pub initial_storage_tokens: String,
+fn canonical_public_key<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Ed25519PublicKey, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    if text.len() != 66
+        || !text.starts_with("0x")
+        || !text[2..]
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return Err(serde::de::Error::custom(
+            "publicKey must be 0x-prefixed lowercase 32-byte hex",
+        ));
+    }
+    serde_json::from_value(serde_json::Value::String(text)).map_err(serde::de::Error::custom)
 }
 
-impl BootstrapManifestAccounts {
-    /// Construct a homogeneous deterministic bootstrap account group.
-    pub fn new(
-        count: u32,
-        first_index: u32,
-        seed: impl Into<String>,
-        initial_storage_tokens: impl Into<String>,
-    ) -> Self {
-        Self {
-            count,
-            first_index,
-            seed: seed.into(),
-            initial_storage_tokens: initial_storage_tokens.into(),
-        }
+fn positive_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    match text.parse::<i64>() {
+        Ok(amount) if amount > 0 && amount.to_string() == text => Ok(text),
+        _ => Err(serde::de::Error::custom(
+            "initialStorageTokens must be a positive canonical decimal amount",
+        )),
     }
 }
 
 /// Storage-cost bootstrap intent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[non_exhaustive]
 pub struct BootstrapManifestStorageCostModel {
     /// Launcher-defined storage-cost profile, for example `hogd-default`.
@@ -127,8 +124,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BOOTSTRAP_MANIFEST_SCHEMA_VERSION, BootstrapManifest, BootstrapManifestAccounts,
-        BootstrapManifestFaucet, BootstrapManifestStorageCostModel,
+        BOOTSTRAP_MANIFEST_SCHEMA_VERSION, BootstrapManifest, BootstrapManifestAllocation,
+        BootstrapManifestStorageCostModel,
     };
 
     #[test]
@@ -138,20 +135,18 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 3,
+                "schemaVersion": 4,
                 "kind": "groundhog-bootstrap",
                 "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",
                 "bootstrapFaucet": {
-                    "index": 0,
+                    "publicKey": "0x1111111111111111111111111111111111111111111111111111111111111111",
                     "initialStorageTokens": "10000000000000",
                 },
-                "bootstrapAccounts": {
-                    "count": 100,
-                    "firstIndex": 1,
-                    "seed": "groundhog-bench-accounts",
+                "bootstrapAccounts": [{
+                    "publicKey": "0x2222222222222222222222222222222222222222222222222222222222222222",
                     "initialStorageTokens": "1000000000",
-                },
+                }],
                 "storageCostModel": {
                     "profile": "hogd-default",
                 },
@@ -185,22 +180,38 @@ mod tests {
         assert!(error.to_string().contains("lowercase hexadecimal"));
     }
 
+    #[test]
+    fn bootstrap_allocations_reject_legacy_and_noncanonical_fields() {
+        for (field, value) in [
+            ("seed", json!("old")),
+            ("index", json!(0)),
+            ("publicKey", json!("0xAA")),
+            ("initialStorageTokens", json!("01")),
+            ("initialStorageTokens", json!("0")),
+        ] {
+            let mut allocation = serde_json::to_value(full_manifest().bootstrap_faucet).unwrap();
+            allocation[field] = value;
+            assert!(
+                serde_json::from_value::<BootstrapManifestAllocation>(allocation).is_err(),
+                "{field}"
+            );
+        }
+    }
+
     fn full_manifest() -> BootstrapManifest {
         BootstrapManifest {
             schema_version: BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
             kind: "groundhog-bootstrap".into(),
             network_hash: crate::NetworkHashHex::from([0x51; 32]),
             profile: "local-dev".into(),
-            bootstrap_faucet: BootstrapManifestFaucet {
-                index: 0,
-                initial_storage_tokens: "10000000000000".into(),
-            },
-            bootstrap_accounts: BootstrapManifestAccounts {
-                count: 100,
-                first_index: 1,
-                seed: "groundhog-bench-accounts".into(),
-                initial_storage_tokens: "1000000000".into(),
-            },
+            bootstrap_faucet: BootstrapManifestAllocation::new(
+                crate::hex::Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x11; 32])),
+                "10000000000000",
+            ),
+            bootstrap_accounts: vec![BootstrapManifestAllocation::new(
+                crate::hex::Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x22; 32])),
+                "1000000000",
+            )],
             storage_cost_model: BootstrapManifestStorageCostModel {
                 profile: "hogd-default".into(),
             },

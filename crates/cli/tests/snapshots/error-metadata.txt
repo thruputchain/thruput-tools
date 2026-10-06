@@ -200,10 +200,6 @@ InvalidSecretSeed
   code: invalid_secret_seed
   hint text: provide one private seed through stdin or the hidden prompt; never pass it as a command argument
 
-ReservedDevKeyName
-  code: reserved_dev_key_name
-  hint text: choose a name other than dev-N for a stored key
-
 JsonUnsupported
   code: json_unsupported
   hint format: run `groundhog {0}` without `--json`
@@ -313,12 +309,12 @@ InvalidHogAmount
 
 InvalidAddressTarget
   code: invalid_address_target
-  hint text: use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address
+  hint text: use a saved wallet, contract alias, stored key, or 32-byte 0x-prefixed address
   details: target, message
 
 UnknownAddressTarget
   code: unknown_address_target
-  hint text: use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address
+  hint text: use a saved wallet, contract alias, stored key, or 32-byte 0x-prefixed address
   details: target
 
 UnknownContractAlias
@@ -403,9 +399,18 @@ RpcCapabilityUnsupported
   hint text: use a full local devnode or a compatible remote RPC that supports the required RPC method
   details: method, message
 
-LocalDevAccountUnavailable
-  code: local_dev_account_unavailable
-  hint text: run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints
+LocalFundingAttempt
+  code: local_funding_attempt
+  hint text: retry the original request to reconcile its outcome; do not delete an uncertain attempt
+
+LocalFundingUnresolved
+  code: local_funding_unresolved
+  hint text: inspect this hash with groundhog tx show, then retry the original recipient and amount; keep the retained attempt until an authoritative receipt resolves it
+  details: txHash, attemptPath
+
+LocalRuntimeUnavailable
+  code: local_runtime_unavailable
+  hint text: use a current local runtime manifest; old local state requires the previous runtime and tooling
 
 ManifestEntrypoint
   code: manifest_entrypoint_invalid
@@ -441,11 +446,6 @@ SavedWalletOwnerMismatch
   hint format: select a wallet owned by key `{key_name}`, or change the effective default key
   details: walletName, keyName, configured, local
 
-DevWalletSelectionUnsupported
-  code: dev_wallet_selection_unsupported
-  hint text: remove the explicit/default wallet selection when using a manifest-backed dev key
-  details: keyName, walletName
-
 InheritedDefaultWalletRemoval
   code: inherited_default_wallet_removal
   hint format: run `groundhog wallet use <NAME> --profile={}` to select a project default before removing this wallet
@@ -479,6 +479,16 @@ TransactionRecentFailure
   code: transaction_recent_failure
   hint: computed
   details: txHash, attemptHeight, cause
+
+TransactionRetry
+  code: transaction_retry
+  hint text: resubmit the same transaction; the mempool does not retry it automatically
+  details: txHash, error
+
+TransactionDropped
+  code: transaction_dropped
+  hint text: modify the transaction before resubmitting; inspect its error source and code
+  details: txHash, error
 
 ReceiptPollingExhausted
   code: receipt_polling_exhausted

@@ -6,13 +6,6 @@
   "target": {
     "provider": "local"
   },
-  "bootstrap": {
-    "accounts": 2,
-    "accountSeed": "sim-local-nnint-heavy-accounts",
-    "initialStorageTokens": "1000000000",
-    "storageCostProfile": "default",
-    "deploymentCollateralRaw": "100000000"
-  },
   "loadShape": [
     {
       "duration": "20s",
@@ -49,5 +42,13 @@
   ],
   "assertions": {
     "maxErrorRate": 0.001
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-nnint-heavy:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

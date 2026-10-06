@@ -21,6 +21,7 @@ impl AirdropTransactionBuilder for CountingBuilder {
         &self,
         _recipient: ContractAddress,
         _block_expiry_height: i64,
+        _raw_amount: u128,
     ) -> Result<SignedAirdrop, RpcServerError> {
         self.constructions.fetch_add(1, Ordering::SeqCst);
         Ok(SignedAirdrop {
@@ -127,11 +128,11 @@ fn native_builder_binds_signatures_to_network_hash() {
             ),
             signer: Arc::new(LocalSigner::from_secret_key([0x33; 32])),
             next_nonce: AtomicU64::new(7),
-            raw_amount: 100_000_000,
         }
         .build(
             ContractAddress::from(groundhog_xdr::types::ContractAddress::from([0x44; 32])),
             1_000,
+            100_000_000,
         )
         .expect("bug: local airdrop should build")
     };
@@ -168,7 +169,7 @@ async fn registered_http_small_array_waits_without_raising_execution_limit() {
             .await
             .unwrap();
         let address = server.local_addr().unwrap();
-        let handle = server.start(rpc.clone().into_rpc());
+        let handle = server.start(AirdropApiServer::into_rpc(rpc.clone()));
         let body = serde_json::to_string(
             &(1..=20)
                 .map(|id| {
@@ -236,7 +237,9 @@ async fn admission_bounds_same_key_waiters_and_recovers_after_cancellation() {
         tasks.spawn(async move { rpc.request_airdrop(test_request(1, 1)).await });
     }
     tokio::time::timeout(Duration::from_secs(5), async {
-        while rpc.admission.available_permits() != 0 {
+        // Admission precedes journal registration on a blocking worker.
+        // Wait for both before checking the retained attempt or cancelling callers.
+        while rpc.admission.available_permits() != 0 || rpc.attempts.lock().unwrap().len() != 1 {
             tokio::task::yield_now().await;
         }
     })
@@ -264,7 +267,7 @@ async fn deadline_covers_queue_and_submission_and_retains_signed_bytes() {
         constructions: AtomicUsize::new(0),
         bytes: vec![9, 8, 7],
     });
-    let mut rpc = test_rpc(backend.clone(), builder.clone(), 1, 1);
+    let mut rpc = test_rpc(backend.clone(), builder.clone(), 2, 1);
     rpc.timeout = Duration::from_millis(10);
     let execution = rpc.concurrency.acquire().await.unwrap();
     assert!(matches!(
@@ -274,7 +277,7 @@ async fn deadline_covers_queue_and_submission_and_retains_signed_bytes() {
     assert_eq!(rpc.admission.available_permits(), 16);
     assert_eq!(builder.constructions.load(Ordering::SeqCst), 0);
     drop(execution);
-    // A pristine expired waiter can be evicted, but signed ambiguous work cannot.
+    // Both registered requests remain retained after timeout.
     assert!(matches!(
         rpc.request(test_request(2, 2)).await,
         Err(RpcServerError::BackendTimeout)
@@ -321,24 +324,36 @@ fn local_context_rejects_wrong_faucet_role() {
     let mut manifest = runtime_manifest(&config);
     manifest.bootstrap_accounts[0].role = "local_user".into();
 
-    let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
-        .err()
-        .expect("wrong dev-0 role must fail validation");
+    let error = LocalAirdropContext::from_validated_runtime(
+        &manifest,
+        &config,
+        fixture_signer(),
+        fixture_journal(),
+        None,
+    )
+    .err()
+    .expect("wrong dev-0 role must fail validation");
 
-    assert!(error.contains("derivation does not match"));
+    assert!(error.contains("missing its local faucet"));
 }
 
 #[test]
-fn local_context_rejects_wrong_derivation_seed() {
+fn local_context_rejects_multiple_faucets() {
     let config = NodeSupervisorConfig::default();
     let mut manifest = runtime_manifest(&config);
-    manifest.bootstrap_account_derivation.seed = "wrong-seed".into();
-
-    let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
-        .err()
-        .expect("wrong derivation seed must fail validation");
-
-    assert!(error.contains("derivation does not match"));
+    manifest
+        .bootstrap_accounts
+        .push(manifest.bootstrap_accounts[0].clone());
+    let error = LocalAirdropContext::from_validated_runtime(
+        &manifest,
+        &config,
+        fixture_signer(),
+        fixture_journal(),
+        None,
+    )
+    .err()
+    .unwrap();
+    assert!(error.contains("multiple local faucets"));
 }
 
 #[test]
@@ -348,9 +363,15 @@ fn local_context_rejects_wrong_faucet_public_key() {
     manifest.bootstrap_accounts[0].public_key =
         Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([0x99; 32]));
 
-    let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
-        .err()
-        .expect("wrong faucet public key must fail validation");
+    let error = LocalAirdropContext::from_validated_runtime(
+        &manifest,
+        &config,
+        fixture_signer(),
+        fixture_journal(),
+        None,
+    )
+    .err()
+    .expect("wrong faucet public key must fail validation");
 
     assert!(error.contains("public key does not match"));
 }
@@ -361,9 +382,15 @@ fn local_context_rejects_non_native_faucet_address() {
     let mut manifest = runtime_manifest(&config);
     manifest.bootstrap_accounts[0].wallet_address = Hex0x([0; 32].into());
 
-    let error = LocalAirdropContext::from_validated_runtime(&manifest, &config)
-        .err()
-        .expect("non-native faucet address must fail validation");
+    let error = LocalAirdropContext::from_validated_runtime(
+        &manifest,
+        &config,
+        fixture_signer(),
+        fixture_journal(),
+        None,
+    )
+    .err()
+    .expect("non-native faucet address must fail validation");
 
     assert!(error.contains("address is not its nonce-zero native account"));
 }
@@ -608,79 +635,54 @@ async fn recent_failure_retry_resubmits_exact_signed_bytes() {
     );
 }
 
-#[test]
-fn attempt_is_evictable_when_pristine_or_terminal_with_an_outcome() {
-    let attempt = Attempt::new();
-    assert!(attempt.is_evictable());
-    attempt
-        .store_signed(SignedAirdrop {
-            bytes: vec![1, 2, 3],
-            tx_hash: test_tx_hash(),
-        })
-        .expect("bug: signed transaction should be stored");
-    attempt
-        .set_terminal(true)
-        .expect("bug: terminal state should update");
-
-    assert!(!attempt.is_evictable());
-
-    attempt.record_result(Err(RpcServerError::TxRejected("failed".into())));
-    assert!(attempt.is_evictable());
-}
-
 #[tokio::test]
-async fn abandoned_pristine_attempt_does_not_consume_capacity() {
+async fn registered_unsigned_attempt_consumes_capacity_and_can_resume() {
     let backend = Arc::new(TestBackend::new(vec![Ok(())]));
     let builder = Arc::new(CountingBuilder {
         constructions: AtomicUsize::new(0),
         bytes: vec![1, 2, 3],
     });
     let rpc = test_rpc(backend, builder, 1, 1);
-    let abandoned = test_request(1, 1);
-    rpc.attempts
-        .lock()
-        .expect("bug: attempt store should be available")
-        .insert(AttemptKey::new(&abandoned), Arc::new(Attempt::new()));
-
-    let result = rpc.request(test_request(2, 2)).await;
-
-    assert!(matches!(result, Ok(AirdropAttemptResponse::Pending { .. })));
-}
-
-#[tokio::test]
-async fn borrowed_terminal_attempt_is_not_evicted() {
-    let backend = Arc::new(TestBackend::new(vec![
-        Err(RpcServerError::TxRejected("first".into())),
-        Err(RpcServerError::TxRejected("second".into())),
-    ]));
-    let builder = Arc::new(CountingBuilder {
-        constructions: AtomicUsize::new(0),
-        bytes: vec![1, 2, 3],
-    });
-    let rpc = test_rpc(backend, builder, 1, 1);
-    let first_request = test_request(1, 1);
-    let first_key = AttemptKey::new(&first_request);
-    assert!(matches!(
-        rpc.request(first_request).await,
-        Err(RpcServerError::TxRejected(_))
-    ));
-    let borrowed = rpc
-        .attempts
-        .lock()
-        .expect("bug: attempt store should be available")
-        .get(&first_key)
-        .expect("bug: terminal attempt should be retained")
-        .clone();
-
+    let first = test_request(1, 1);
+    rpc.find_or_admit(FundAccountRequest {
+        recipient: first.recipient,
+        client_nonce: first.client_nonce.clone(),
+        raw_amount: rpc.raw_amount.to_string(),
+        faucet: rpc.faucet,
+    })
+    .await
+    .unwrap();
     assert!(matches!(
         rpc.request(test_request(2, 2)).await,
         Err(RpcServerError::Overloaded(_))
     ));
-    drop(borrowed);
+    assert!(rpc.request(first).await.is_ok());
+}
+
+#[tokio::test]
+async fn terminal_attempt_remains_retained_at_capacity() {
+    let backend = Arc::new(TestBackend::new(vec![Err(RpcServerError::TxRejected(
+        "rejected".into(),
+    ))]));
+    let builder = Arc::new(CountingBuilder {
+        constructions: AtomicUsize::new(0),
+        bytes: vec![1, 2, 3],
+    });
+    let rpc = test_rpc(backend.clone(), builder, 1, 1);
+    let first = test_request(1, 1);
     assert!(matches!(
-        rpc.request(test_request(2, 2)).await,
+        rpc.request(first.clone()).await,
         Err(RpcServerError::TxRejected(_))
     ));
+    assert!(matches!(
+        rpc.request(test_request(2, 2)).await,
+        Err(RpcServerError::Overloaded(_))
+    ));
+    assert!(matches!(
+        rpc.request(first).await,
+        Err(RpcServerError::TxRejected(_))
+    ));
+    assert_eq!(backend.submissions.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -770,6 +772,325 @@ async fn unresolved_attempt_prevents_capacity_eviction() {
     assert!(matches!(second, Err(RpcServerError::Overloaded(_))));
 }
 
+fn funding_request(raw_amount: &str) -> FundAccountRequest {
+    let request = test_request(0x44, 9);
+    FundAccountRequest {
+        recipient: request.recipient,
+        client_nonce: request.client_nonce,
+        raw_amount: raw_amount.into(),
+        faucet: Hex0x(
+            PubkeyAccount::from_public_key_bytes(fixture_signer().verifying_key_bytes(), 0)
+                .address(),
+        ),
+    }
+}
+
+fn durable_rpc(dir: &std::path::Path, fresh: bool, backend: Arc<TestBackend>) -> LocalAirdropRpc {
+    let signer = fixture_signer();
+    let faucet = funding_request("42").faucet;
+    let journal = FundingJournal::open(dir, [0; 32].into(), faucet, fresh, &signer).unwrap();
+    let mut rpc = LocalAirdropRpc::with_parts(
+        backend,
+        Arc::new(NativeAirdropBuilder {
+            network_hash: groundhog_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+            signer,
+            next_nonce: AtomicU64::new(42),
+        }),
+        LocalAirdropConfig {
+            attempt_capacity: 1,
+            ..LocalAirdropConfig::default()
+        },
+        BlockDriverTrigger::noop(),
+    );
+    rpc.journal = Arc::new(std::sync::Mutex::new(journal));
+    rpc.faucet = faucet;
+    rpc
+}
+
+#[tokio::test]
+async fn local_funding_admits_explicit_amount_before_production_and_retains_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![Ok(())]));
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = funding_request("123456");
+    let response = rpc.fund(request.clone()).await.unwrap();
+    assert_eq!(response.raw_amount, "123456");
+    assert_eq!(
+        backend.submissions.lock().unwrap().as_slice(),
+        std::slice::from_ref(&response.signed_transaction.0)
+    );
+    // No receipt exists yet: admission preserves submit -> produce -> receipt.
+    drop(rpc);
+    let restarted_backend = Arc::new(TestBackend::new(vec![]));
+    let restarted = durable_rpc(dir.path(), false, restarted_backend.clone());
+    assert_eq!(restarted.fund(request.clone()).await.unwrap(), response);
+    assert!(restarted_backend.submissions.lock().unwrap().is_empty());
+    let mut conflict = request.clone();
+    conflict.raw_amount = "123457".into();
+    assert!(matches!(
+        restarted.fund(conflict).await,
+        Err(RpcServerError::InvalidParam(_))
+    ));
+    let mut wrong_chain = request.clone();
+    wrong_chain.faucet = Hex0x([0; 32].into());
+    assert!(matches!(
+        restarted.fund(wrong_chain).await,
+        Err(RpcServerError::InvalidParam(_))
+    ));
+    let mut another = request;
+    another.client_nonce = ClientNonce::new(vec![10]).unwrap();
+    assert!(matches!(
+        restarted.fund(another).await,
+        Err(RpcServerError::Overloaded(_))
+    ));
+}
+
+#[tokio::test]
+async fn lost_admission_response_reuses_exact_retained_bytes_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(
+        TestBackend::new(vec![Err(RpcServerError::BackendUnavailable(
+            "lost response".into(),
+        ))])
+        .with_status_results(vec![Ok(TransactionStatus::Unknown)]),
+    );
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = funding_request("42");
+    assert!(matches!(
+        rpc.fund(request.clone()).await,
+        Err(RpcServerError::LocalFundingUnresolved { .. })
+    ));
+    let retained = backend.submissions.lock().unwrap()[0].clone();
+    drop(rpc);
+    let restarted_backend = Arc::new(
+        TestBackend::new(vec![Ok(())]).with_status_results(vec![Ok(TransactionStatus::Unknown)]),
+    );
+    let restarted = durable_rpc(dir.path(), false, restarted_backend.clone());
+    let response = restarted.fund(request).await.unwrap();
+    assert_eq!(response.signed_transaction.0, retained);
+    assert_eq!(restarted_backend.submissions.lock().unwrap()[0], retained);
+}
+
+#[tokio::test]
+async fn expired_retained_funding_without_outcome_never_creates_another_transfer() {
+    let dir = tempfile::tempdir().unwrap();
+    let rpc = durable_rpc(dir.path(), true, Arc::new(TestBackend::new(vec![])));
+    let request = funding_request("42");
+    let signed = NativeAirdropBuilder {
+        network_hash: groundhog_json_rpc_types::NetworkHashHex::from([0; 32]).to_network_hash(),
+        signer: fixture_signer(),
+        next_nonce: AtomicU64::new(7),
+    }
+    .build(request.recipient, 6, 42)
+    .unwrap();
+    {
+        let mut journal = rpc.journal.lock().unwrap();
+        journal.register(request.clone()).unwrap();
+        journal
+            .retain_signed(
+                &request,
+                RetainedFundingTransaction {
+                    tx_hash: signed.tx_hash,
+                    signed_transaction: groundhog_json_rpc_types::hex::HexBytes(signed.bytes),
+                },
+            )
+            .unwrap();
+    }
+    drop(rpc);
+    let backend = Arc::new(
+        TestBackend::new(vec![]).with_status_results(vec![Ok(TransactionStatus::Unknown)]),
+    );
+    let restarted = durable_rpc(dir.path(), false, backend.clone());
+    let error = restarted.fund(request).await.unwrap_err();
+    assert!(error.to_string().contains("expired"));
+    let object: jsonrpsee::types::ErrorObjectOwned = error.into();
+    assert_eq!(
+        object.code(),
+        groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+    );
+    let evidence: LocalFundingErrorData =
+        serde_json::from_str(object.data().unwrap().get()).unwrap();
+    assert_eq!(evidence.tx_hash, signed.tx_hash);
+    let original = FundingJournal::open(
+        dir.path(),
+        [0; 32].into(),
+        funding_request("42").faucet,
+        false,
+        &fixture_signer(),
+    )
+    .unwrap();
+    assert_eq!(
+        evidence.signed_transaction,
+        original.records()[0]
+            .signed
+            .as_ref()
+            .unwrap()
+            .signed_transaction
+    );
+    assert!(backend.submissions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn corrupt_retained_intent_fails_startup_and_failed_persistence_never_broadcasts() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = funding_request("42");
+    rpc.fund(request.clone()).await.unwrap();
+    drop(rpc);
+    let path = dir.path().join(crate::LOCAL_FUNDING_ATTEMPTS_FILE);
+    let mut data: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    data["records"][0]["request"]["rawAmount"] = serde_json::json!("43");
+    std::fs::write(&path, serde_json::to_vec(&data).unwrap()).unwrap();
+    assert!(
+        FundingJournal::open(
+            dir.path(),
+            [0; 32].into(),
+            request.faucet,
+            false,
+            &fixture_signer()
+        )
+        .is_err()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    // A directory at the journal path makes its atomic replacement fail.
+    let path = dir.path().join(crate::LOCAL_FUNDING_ATTEMPTS_FILE);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(rpc.fund(request).await.is_err());
+    assert!(backend.submissions.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn failed_signed_persistence_does_not_expose_restart_unstable_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = funding_request("42");
+    rpc.find_or_admit(request.clone()).await.unwrap();
+    let path = dir.path().join(crate::LOCAL_FUNDING_ATTEMPTS_FILE);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let error = rpc.fund(request.clone()).await.unwrap_err();
+    assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
+    let journal = rpc.journal.lock().unwrap();
+    assert!(journal.records()[0].signed.is_some());
+    assert!(journal.durable_signed(&request).is_none());
+    assert!(backend.submissions.lock().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn blocked_persistence_respects_deadline_without_broadcast_or_runtime_stall() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let mut rpc = durable_rpc(dir.path(), true, backend.clone());
+    rpc.timeout = Duration::from_millis(20);
+    let journal = rpc.journal.clone();
+    let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+    let (release_sender, release_receiver) = std::sync::mpsc::channel();
+    let holder = tokio::task::spawn_blocking(move || {
+        let _held = journal.lock().unwrap();
+        ready_sender.send(()).unwrap();
+        release_receiver.recv().unwrap();
+    });
+    ready_receiver.await.unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(1), rpc.fund(funding_request("42")))
+        .await
+        .unwrap();
+    assert!(matches!(response, Err(RpcServerError::BackendTimeout)));
+    assert!(backend.submissions.lock().unwrap().is_empty());
+    release_sender.send(()).unwrap();
+    holder.await.unwrap();
+    // Cancellation leaves only registered intent; retry can advance it safely.
+    rpc.timeout = Duration::from_secs(1);
+    assert!(rpc.fund(funding_request("42")).await.is_ok());
+    assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn unchanged_durable_retry_does_not_require_another_journal_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let rpc = durable_rpc(dir.path(), true, backend.clone());
+    let request = funding_request("42");
+    let admitted = rpc.fund(request.clone()).await.unwrap();
+    let path = dir.path().join(crate::LOCAL_FUNDING_ATTEMPTS_FILE);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert_eq!(rpc.fund(request).await.unwrap(), admitted);
+    assert_eq!(backend.submissions.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cancelled_persistence_holds_chain_lock_and_bounds_workers_until_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::HogdDevConfig::default().with_data_dir(dir.path());
+    let state = crate::local_state::LocalChainState::prepare(&config).unwrap();
+    let intent = config.to_bootstrap_manifest([0; 32].into(), state.public_key());
+    std::fs::write(dir.path().join("hog-devnode-data.json"), serde_json::to_vec(&serde_json::json!({
+            "schemaVersion":4, "kind":"hog-devnode-data", "bootstrapConfig": {
+                "bootstrapFaucet": intent.bootstrap_faucet, "bootstrapAccounts": intent.bootstrap_accounts
+            }
+        })).unwrap()).unwrap();
+    let backend = Arc::new(TestBackend::new(vec![]));
+    let builder = Arc::new(CountingBuilder {
+        constructions: AtomicUsize::new(0),
+        bytes: vec![1],
+    });
+    let mut rpc = test_rpc(backend.clone(), builder, 8, 1);
+    rpc.journal = state.journal.clone();
+    rpc.lock_lease = state.lock.clone();
+    rpc.faucet = Hex0x(
+        PubkeyAccount::from_public_key_bytes(state.signer.verifying_key_bytes(), 0).address(),
+    );
+    rpc.timeout = Duration::from_millis(20);
+    let request = FundAccountRequest {
+        faucet: rpc.faucet,
+        ..funding_request("42")
+    };
+    let journal = rpc.journal.clone();
+    let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+    let (release_sender, release_receiver) = std::sync::mpsc::channel();
+    let holder = tokio::task::spawn_blocking(move || {
+        let _held = journal.lock().unwrap();
+        ready_sender.send(()).unwrap();
+        release_receiver.recv().unwrap();
+    });
+    ready_receiver.await.unwrap();
+    for _ in 0..3 {
+        assert!(matches!(
+            rpc.fund(request.clone()).await,
+            Err(RpcServerError::BackendTimeout)
+        ));
+        assert_eq!(
+            rpc.persistence.available_permits(),
+            0,
+            "only one detached worker is admitted"
+        );
+    }
+    assert!(backend.submissions.lock().unwrap().is_empty());
+    // Simulate shutdown dropping both owners while the cancelled worker remains.
+    drop(state);
+    drop(rpc);
+    assert!(crate::local_state::LocalChainState::prepare(&config).is_err());
+    release_sender.send(()).unwrap();
+    holder.await.unwrap();
+    let recovered = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(state) = crate::local_state::LocalChainState::prepare(&config) {
+                break state;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(recovered.journal.lock().unwrap().records().len(), 1);
+}
+
 fn test_rpc(
     backend: Arc<TestBackend>,
     builder: Arc<CountingBuilder>,
@@ -816,10 +1137,10 @@ fn test_tx_hash() -> TxHash {
     TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xaa; 32])))
 }
 
-fn runtime_manifest(config: &NodeSupervisorConfig) -> RuntimeManifest {
-    let signer = derive_dev_account_signer(&config.hogd_dev.dev_account_seed, 0);
+fn runtime_manifest(_config: &NodeSupervisorConfig) -> RuntimeManifest {
+    let signer = fixture_signer();
     serde_json::from_value(serde_json::json!({
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "kind": "hogd-dev-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
@@ -827,12 +1148,7 @@ fn runtime_manifest(config: &NodeSupervisorConfig) -> RuntimeManifest {
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": { "binary": "hogd-dev", "version": "0.1.0" },
             "endpoints": { "scheduler": "127.0.0.1:1000" },
-            "bootstrapAccountDerivation": {
-                "scheme": "groundhog-bootstrap-account-v1",
-                "seed": config.hogd_dev.dev_account_seed,
-            },
             "bootstrapAccounts": [{
-                "index": 0,
                 "role": "faucet",
                 "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
                 "walletAddress": format!("0x{}", hex::encode(PubkeyAccount::from_public_key_bytes(signer.verifying_key_bytes(), 0).address().as_ref())),
@@ -853,4 +1169,16 @@ fn runtime_manifest(config: &NodeSupervisorConfig) -> RuntimeManifest {
             },
         }))
         .expect("bug: runtime manifest fixture should deserialize")
+}
+fn fixture_signer() -> Arc<LocalSigner> {
+    Arc::new(LocalSigner::from_secret_key([0x33; 32]))
+}
+fn fixture_journal() -> Arc<std::sync::Mutex<FundingJournal>> {
+    Arc::new(std::sync::Mutex::new(FundingJournal::memory(
+        [0; 32].into(),
+        Hex0x(
+            PubkeyAccount::from_public_key_bytes(fixture_signer().verifying_key_bytes(), 0)
+                .address(),
+        ),
+    )))
 }

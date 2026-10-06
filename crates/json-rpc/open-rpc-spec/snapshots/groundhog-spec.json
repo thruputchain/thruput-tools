@@ -25,6 +25,45 @@
         "x-description": "One or more JSON-RPC parameters are malformed, out of range, or otherwise invalid.",
         "x-name": "InvalidParams"
       },
+      "LocalFundingUnresolved": {
+        "code": -32003,
+        "message": "Local funding unresolved",
+        "x-data-schema": {
+          "$defs": {
+            "Hex0x_SHA256Hash": {
+              "pattern": "^0x[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "HexBytes": {
+              "pattern": "^0x[0-9a-f]*$",
+              "type": "string"
+            },
+            "TxHash": {
+              "$ref": "#/$defs/Hex0x_SHA256Hash",
+              "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
+            }
+          },
+          "description": "Retained transaction evidence returned when local funding cannot resolve an outcome.\nThis does not prove admission or execution. Reconcile this hash and reuse the original request.",
+          "properties": {
+            "signedTransaction": {
+              "$ref": "#/$defs/HexBytes",
+              "description": "Exact signed bytes persisted before the first submission."
+            },
+            "txHash": {
+              "$ref": "#/$defs/TxHash",
+              "description": "Canonical hash of the retained transaction body."
+            }
+          },
+          "required": [
+            "txHash",
+            "signedTransaction"
+          ],
+          "title": "LocalFundingErrorData",
+          "type": "object"
+        },
+        "x-description": "Local funding retained a signed transaction but could not resolve its outcome. Data contains its transaction hash and exact signed bytes, not proof of admission or execution. Reconcile that hash and retry the original request; do not create a replacement transfer.",
+        "x-name": "LocalFundingUnresolved"
+      },
       "NotImplemented": {
         "code": -32052,
         "message": "Not implemented",
@@ -885,6 +924,63 @@
           }
         ]
       },
+      "FundAccountRequest": {
+        "additionalProperties": false,
+        "description": "Public parameters for local-only `groundhog_fundAccount`.",
+        "properties": {
+          "clientNonce": {
+            "$ref": "#/components/schemas/ClientNonce",
+            "description": "Retained caller-owned idempotency nonce."
+          },
+          "faucet": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Expected random faucet identity; refuses a different chain at the same URL."
+          },
+          "rawAmount": {
+            "description": "Positive canonical decimal amount in raw HOG units.",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Native HOG transfer recipient."
+          }
+        },
+        "required": [
+          "recipient",
+          "rawAmount",
+          "clientNonce",
+          "faucet"
+        ],
+        "type": "object"
+      },
+      "FundAccountResponse": {
+        "description": "Authoritatively admitted (or already committed) local funding submission.",
+        "properties": {
+          "rawAmount": {
+            "description": "Exact requested raw HOG amount.",
+            "type": "string"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Recipient of the retained transfer."
+          },
+          "signedTransaction": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Signed transaction retained before its first broadcast."
+          },
+          "txHash": {
+            "$ref": "#/components/schemas/TxHash",
+            "description": "Canonical body hash for status and receipt queries."
+          }
+        },
+        "required": [
+          "recipient",
+          "rawAmount",
+          "txHash",
+          "signedTransaction"
+        ],
+        "type": "object"
+      },
       "Hex0x_ContractAddress": {
         "pattern": "^0x[0-9a-f]{64}$",
         "type": "string"
@@ -1098,6 +1194,51 @@
               "result"
             ],
             "type": "object"
+          }
+        ]
+      },
+      "SchedulerTransactionError": {
+        "additionalProperties": false,
+        "description": "A scheduler processing failure. The source identifies the protocol enum of `code`.",
+        "properties": {
+          "code": {
+            "description": "`AuthErrorCode`, `SchedulerErrorCode`, or `ExecResult` for the indicated source.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SchedulerTransactionErrorSource",
+            "description": "Subsystem that reported the failure."
+          }
+        },
+        "required": [
+          "source",
+          "code"
+        ],
+        "type": "object"
+      },
+      "SchedulerTransactionErrorSource": {
+        "description": "Subsystem whose protocol error enum supplies a scheduler failure code.",
+        "oneOf": [
+          {
+            "const": "auth",
+            "description": "Authentication subsystem (`AuthErrorCode`).",
+            "type": "string"
+          },
+          {
+            "const": "scheduler",
+            "description": "Mempool scheduler (`SchedulerErrorCode`).",
+            "type": "string"
+          },
+          {
+            "const": "executor",
+            "description": "Executor (`ExecResult`).",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "A source added by a newer server.",
+            "type": "string"
           }
         ]
       },
@@ -1469,7 +1610,7 @@
         "type": "object"
       },
       "TransactionStatus": {
-        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
+        "description": "Lightweight transaction status from the mempool and indexer.\n\nPending reports mempool presence; Committed reports scheduler success or an indexed record.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
         "oneOf": [
           {
             "description": "In the mempool, not yet in a committed block.",
@@ -1488,7 +1629,15 @@
             "description": "Included in a committed block. SCP finality = done.\nNo `block_hash`: SCP instant finality means no forks/reorgs,\nso height alone is sufficient for confirmation.",
             "properties": {
               "height": {
-                "$ref": "#/components/schemas/DecimalBlockHeight"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DecimalBlockHeight"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Committed block height, omitted until an indexed record supplies it."
               },
               "status": {
                 "const": "committed",
@@ -1496,8 +1645,7 @@
               }
             },
             "required": [
-              "status",
-              "height"
+              "status"
             ],
             "type": "object"
           },
@@ -1542,7 +1690,41 @@
             "type": "object"
           },
           {
-            "description": "Not found in mempool or indexer.",
+            "description": "Scheduler processing failed; resubmitting the transaction may succeed.",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/SchedulerTransactionError"
+              },
+              "status": {
+                "const": "retry",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Scheduler processing failed permanently; modify the transaction before resubmitting.",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/SchedulerTransactionError"
+              },
+              "status": {
+                "const": "dropped",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Not found in the scheduler's retained outcomes or indexer.",
             "properties": {
               "status": {
                 "const": "unknown",
@@ -1700,7 +1882,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "9.0.0"
+    "version": "10.0.1"
   },
   "methods": [
     {
@@ -1838,7 +2020,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check. The indexer is asked first, so `committed` wins; a mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown` is returned only after both backends answered without a match. If the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
+      "summary": "Lightweight status check. Any indexer record takes priority and skips the scheduler lookup. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome. Scheduler commitments omit `height`; indexed commitments include the actual block height, including block zero. `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
       "tags": [
         {
           "name": "Core API"
@@ -2287,6 +2469,50 @@
       "tags": [
         {
           "name": "Airdrop API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/LocalFundingUnresolved"
+        },
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxRejected"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        }
+      ],
+      "name": "groundhog_fundAccount",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/FundAccountRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "FundAccountResponse",
+        "schema": {
+          "$ref": "#/components/schemas/FundAccountResponse"
+        }
+      },
+      "summary": "Submit an explicit native HOG transfer using a retained caller nonce.  Acceptance does not imply execution success. Observe the returned hash through the ordinary status/receipt APIs. Retry an uncertain response with exactly the same request; retain its chain identity and amount. Hosted servers return standard JSON-RPC `Method not found`.",
+      "tags": [
+        {
+          "name": "Local Funding API"
         }
       ]
     }

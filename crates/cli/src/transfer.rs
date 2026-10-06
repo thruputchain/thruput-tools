@@ -124,7 +124,9 @@ pub fn run(
     let _ = task.finish();
     match outcome {
         LiveOutcome::Committed(receipt) => print_committed(&prepared, receipt, cmd, print),
-        LiveOutcome::Invalid(status) => print_invalid(&prepared, status, cmd, print),
+        LiveOutcome::ProcessingFailure(status) => {
+            print_processing_failure(&prepared, status, cmd, print)
+        }
         LiveOutcome::Unavailable {
             transaction_status,
             reason,
@@ -135,7 +137,7 @@ pub fn run(
 #[derive(Debug)]
 enum LiveOutcome {
     Committed(TransactionReceipt),
-    Invalid(TransactionStatus),
+    ProcessingFailure(TransactionStatus),
     Unavailable {
         transaction_status: Option<TransactionStatus>,
         reason: &'static str,
@@ -330,9 +332,14 @@ async fn poll_local_hash(
         }),
         Ok(receipt) => Ok(LiveOutcome::Committed(receipt)),
         Err(PollTransactionReceiptError::TransactionStatus { status, .. })
-            if matches!(status, TransactionStatus::Invalid { .. }) =>
+            if matches!(
+                status,
+                TransactionStatus::Invalid { .. }
+                    | TransactionStatus::Retry { .. }
+                    | TransactionStatus::Dropped { .. }
+            ) =>
         {
-            Ok(LiveOutcome::Invalid(status))
+            Ok(LiveOutcome::ProcessingFailure(status))
         }
         Err(PollTransactionReceiptError::TransactionStatus { status, .. }) => {
             let transaction_status =
@@ -424,30 +431,58 @@ fn print_committed(
     print.json(&CommandResult::new(cmd, report))
 }
 
-fn print_invalid(
+fn print_processing_failure(
     prepared: &PreparedTransfer,
     status: TransactionStatus,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
+    let (confirmation, code, message, next_step) = match &status {
+        TransactionStatus::Retry { .. } => (
+            TransferConfirmation::Retry,
+            "transaction_retry",
+            "transaction processing failed and needs resubmission",
+            "resubmit the transaction; the mempool will not retry it automatically",
+        ),
+        TransactionStatus::Dropped { .. } => (
+            TransferConfirmation::Dropped,
+            "transaction_dropped",
+            "transaction processing failed permanently",
+            "modify the transaction before resubmitting",
+        ),
+        _ => (
+            TransferConfirmation::Invalid,
+            "transaction_invalid",
+            "transaction was rejected before commitment",
+            "check the transaction arguments and signing wallet",
+        ),
+    };
     let reason = match &status {
         TransactionStatus::Invalid { reason } => terminal_safe(reason),
-        _ => "invalid".to_owned(),
+        TransactionStatus::Retry { error } | TransactionStatus::Dropped { error } => {
+            format!("{message}: {error:?}")
+        }
+        _ => message.to_owned(),
     };
-    print.group(crate::print::Outcome::Error, "Transfer rejected", |print| {
-        print.warn(format_args!("Transfer was rejected: {reason}"));
+    let (title, action) = if matches!(status, TransactionStatus::Invalid { .. }) {
+        ("Transfer rejected", "was rejected")
+    } else {
+        ("Transfer failed", "failed")
+    };
+    print.group(crate::print::Outcome::Error, title, |print| {
+        print.warn(format_args!("Transfer {action}: {reason}"));
         print.detail("tx", &tx_hash);
+        print.detail("next step", next_step);
     });
-
     let report = TransferUnconfirmedReport {
         common: report_common(prepared, false, true),
-        confirmation: TransferConfirmation::Invalid,
+        confirmation,
         transaction_status: Some(status.clone()),
     };
     let error = CommandError::new(
-        "transaction_invalid",
-        "transaction was rejected before commitment",
+        code,
+        message,
         serde_json::to_value(status).unwrap_or(serde_json::Value::Null),
     );
     print.json(&CommandResult::failure_with_error(cmd, report, error))?;

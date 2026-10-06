@@ -32,5 +32,12 @@
     "maxReceiptTimeoutRate": 1.0,
     "maxChainStall": "10s",
     "p99SubmitLatencyMs": 750
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "local-mixed-wallet-receipt-soak-v1:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

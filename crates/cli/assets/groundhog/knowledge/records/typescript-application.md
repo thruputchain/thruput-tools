@@ -9,11 +9,11 @@ bootstrap_order = 50
 +++
 ## TypeScript Application Path
 
-Use public exports and generated bindings. Connect a cluster-aware client, load
-an account, and bind a wallet. One client supports multiple wallets. Pubkey and
-schema-3 bootstrap accounts use DefaultWallet. Historical source-address wallets
-use `devWalletAdapter`; preserve their addresses. Never submit an application
-invocation directly as the transaction root.
+Use public exports and generated bindings. Connect a cluster-aware client, create
+or load an account, and bind a wallet. One client supports multiple wallets.
+Pubkey accounts, including hosted schema-3 bootstrap accounts, use DefaultWallet.
+Historical source-address wallets use `devWalletAdapter`; preserve their addresses.
+Never submit an application invocation directly as the transaction root.
 
 Select an interface version for values; explicit types use the full namespace:
 
@@ -55,7 +55,7 @@ broadcast. Explicit prepare/sign/persist/submit remains available.
   failure. Classification does not authorize transaction resubmission.
 - `getVersion` returns nullable `releaseVersion` and `bundleManifestDigest`.
   Use `wireFormat` for compatibility; release identity is diagnostic.
-- RPC wire 9 and CLI JSON use canonical decimal strings for all 64-bit-or-wider
+- RPC wire 10 and CLI JSON use canonical decimal strings for all 64-bit-or-wider
   integers; TypeScript uses `bigint`, never `Number`. Smaller integers stay numbers.
 
 ### HTTP batching

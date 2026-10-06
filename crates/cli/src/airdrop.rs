@@ -1,15 +1,11 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_client::AirdropApiClient;
+use groundhog_json_rpc_client::{AirdropApiClient, LocalFundingApiClient};
 use groundhog_json_rpc_types::{
-    airdrop::{AirdropAttemptResponse, AirdropRequest},
+    airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, LocalFundingErrorData},
     receipt::ExecStatus,
 };
-use groundhog_signing::{
-    DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams, sign_and_encode_transaction_hex,
-};
-use groundhog_xdr::transaction::Transaction;
 use groundhog_xdr::types::NetworkHash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -32,10 +28,7 @@ use crate::remote_attempt::{
 };
 use crate::result::CommandResult;
 use crate::runtime_manifest::load_configured_runtime_manifest;
-use crate::tx_utils::{
-    ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
-    submit_and_poll_blocking,
-};
+use crate::tx_utils::{ensure_tx_success, format_tx_hash};
 use crate::{CliError, Print};
 
 /// Schema version of the `airdrop --json` data payload.
@@ -55,12 +48,11 @@ pub(crate) struct PreparedLocalAirdrop {
     pub(crate) recipient_wallet: String,
     pub(crate) amount_hog: String,
     pub(crate) raw_amount: u128,
-    pub(crate) faucet_key_name: String,
     pub(crate) faucet_role: String,
     pub(crate) faucet_wallet: String,
     pub(crate) faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
     pub(crate) funding_projection: LocalFundingProjection,
-    pub(crate) tx_hex: String,
+    pub(crate) network_hash: NetworkHash,
 }
 
 #[derive(Debug)]
@@ -98,13 +90,10 @@ struct LocalAirdropPlan {
     recipient_wallet: String,
     amount_hog: String,
     raw_amount: u128,
-    faucet_key_name: String,
     faucet_role: String,
     faucet_wallet: String,
     faucet_balance_height: groundhog_json_rpc_types::BlockHeight,
     funding_projection: LocalFundingProjection,
-    transaction: Transaction,
-    signer: LocalSigner,
     network_hash: NetworkHash,
 }
 
@@ -248,18 +237,134 @@ fn prepare_remote_airdrop_dry_run(
     }))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalFundingAttempt {
+    rpc_url: String,
+    network_hash: String,
+    request: FundAccountRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transaction: Option<LocalFundingErrorData>,
+}
+
+fn local_funding_attempt_path(
+    network_hash: &str,
+    faucet: &str,
+    recipient: &str,
+) -> Result<PathBuf, CliError> {
+    attempt_path("local-funding", &[network_hash, faucet, recipient])
+}
+
+fn retain_local_funding_request(
+    prepared: &PreparedLocalAirdrop,
+) -> Result<(PathBuf, File, FundAccountRequest), CliError> {
+    let network_hash = hex::encode(prepared.network_hash.as_ref());
+    let path = local_funding_attempt_path(
+        &network_hash,
+        &prepared.faucet_wallet,
+        &prepared.recipient_wallet,
+    )?;
+    let lock = lock_attempt(&path, "airdrop", "recipient and local chain")?;
+    let recipient = parse_contract_address(&prepared.recipient_wallet)?.into();
+    let faucet = parse_contract_address(&prepared.faucet_wallet)?.into();
+    if let Some(mut attempt) = read_attempt::<LocalFundingAttempt>(&path)? {
+        if attempt.network_hash != network_hash
+            || attempt.request.recipient != recipient
+            || attempt.request.faucet != faucet
+            || attempt.request.raw_amount != prepared.raw_amount.to_string()
+        {
+            return Err(CliError::LocalFundingAttempt("a retained request has different parameters; reconcile that request before changing the amount".into()));
+        }
+        if attempt.rpc_url != prepared.rpc_url {
+            prepared.rpc_url.clone_into(&mut attempt.rpc_url);
+            write_attempt(&path, &attempt)?;
+        }
+        return Ok((path, lock, attempt.request));
+    }
+    let mut nonce = [0; 16];
+    getrandom::fill(&mut nonce)
+        .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?;
+    let request = FundAccountRequest {
+        recipient,
+        faucet,
+        raw_amount: prepared.raw_amount.to_string(),
+        client_nonce: groundhog_json_rpc_types::airdrop::ClientNonce::new(nonce.to_vec())
+            .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?,
+    };
+    write_attempt(
+        &path,
+        &LocalFundingAttempt {
+            rpc_url: prepared.rpc_url.clone(),
+            network_hash,
+            request: request.clone(),
+            transaction: None,
+        },
+    )?;
+    Ok((path, lock, request))
+}
+
 fn run_local_airdrop(
     prepared: &PreparedLocalAirdrop,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    crate::tx_utils::print_prepared_transaction(&prepared.tx_hex, print);
     let task = crate::print::progress::Task::start(print, "Requesting airdrop", true);
     task.print().phase(format_args!(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
     ));
-    let (tx_hash, receipt) = submit_and_poll_blocking(&prepared.rpc_url, &prepared.tx_hex)?;
+    let (path, _lock, request) = retain_local_funding_request(prepared)?;
+    let runtime =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let (tx_hash, receipt) = runtime.block_on(async {
+        let client = crate::http_client::rpc_client(&prepared.rpc_url)?;
+        let response = match client.fund_account(request.clone()).await {
+            Ok(response) => response,
+            Err(error) => {
+                if let jsonrpsee::core::client::Error::Call(call) = &error
+                    && call.code()
+                        == groundhog_json_rpc_types::error::codes::LOCAL_FUNDING_UNRESOLVED
+                    && let Some(data) = call.data()
+                {
+                    let evidence: LocalFundingErrorData = serde_json::from_str(data.get())
+                        .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
+                    retain_local_funding_evidence(&path, &evidence)?;
+                }
+                return Err(local_funding_recovery_error(
+                    &path,
+                    CliError::RpcMethodFailed {
+                        method: "groundhog_fundAccount",
+                        message: error.to_string(),
+                    },
+                )?);
+            }
+        };
+        if response.recipient != request.recipient || response.raw_amount != request.raw_amount {
+            return Err(CliError::LocalFundingAttempt(
+                "funding response does not match the retained request".into(),
+            ));
+        }
+        // Retain acknowledged evidence before the next await or fallible observation.
+        retain_local_funding_evidence(
+            &path,
+            &LocalFundingErrorData::new(response.tx_hash, response.signed_transaction.clone()),
+        )?;
+        let receipt = groundhog_json_rpc_client::poll_transaction_receipt_with_client_config(
+            &client,
+            response.tx_hash,
+            groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,
+            groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL,
+        )
+        .await
+        .map_err(|error| CliError::LocalFundingUnresolved {
+            tx_hash: format_tx_hash(&response.tx_hash),
+            attempt_path: path.display().to_string(),
+            message: crate::tx_utils::map_poll_receipt_error(error).to_string(),
+        })?;
+        Ok::<_, CliError>((response.tx_hash, receipt))
+    })?;
+    // A receipt closes this attempt even when execution failed. Uncertain outcomes keep it.
+    remove_attempt(&path)?;
     let tx_hash = format_tx_hash(&tx_hash);
     ensure_local_airdrop_success(prepared, &receipt, &tx_hash)?;
     let _ = task.finish();
@@ -291,7 +396,7 @@ fn run_local_airdrop(
             "amountHog": prepared.amount_hog,
             "rawAmount": prepared.raw_amount.to_string(),
             "faucet": {
-                "key": prepared.faucet_key_name,
+                "address": prepared.faucet_wallet,
                 "role": prepared.faucet_role,
             },
             "txHash": tx_hash,
@@ -300,6 +405,58 @@ fn run_local_airdrop(
             "observations": observations,
         }),
     ))
+}
+
+fn retain_local_funding_evidence(
+    path: &Path,
+    evidence: &LocalFundingErrorData,
+) -> Result<(), CliError> {
+    let signed: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&evidence.signed_transaction.0)
+            .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
+    let hash = groundhog_signing::transaction_hash(&signed.tx)
+        .map_err(|e| CliError::LocalFundingAttempt(e.to_string()))?;
+    if evidence.tx_hash != groundhog_json_rpc_types::transaction::TxHash(hash.into()) {
+        return Err(CliError::LocalFundingAttempt(
+            "retained funding hash does not match signed bytes".into(),
+        ));
+    }
+    let unresolved = |error: CliError| CliError::LocalFundingUnresolved {
+        tx_hash: format_tx_hash(&evidence.tx_hash),
+        attempt_path: path.display().to_string(),
+        message: error.to_string(),
+    };
+    let mut attempt = read_attempt::<LocalFundingAttempt>(path)
+        .map_err(&unresolved)?
+        .ok_or_else(|| {
+            unresolved(CliError::LocalFundingAttempt(
+                "retained request disappeared".into(),
+            ))
+        })?;
+    if attempt
+        .transaction
+        .as_ref()
+        .is_some_and(|original| original != evidence)
+    {
+        return Err(CliError::LocalFundingAttempt(
+            "funding response replaced the retained transaction".into(),
+        ));
+    }
+    attempt.transaction = Some(evidence.clone());
+    write_attempt(path, &attempt).map_err(unresolved)
+}
+
+fn local_funding_recovery_error(path: &Path, error: CliError) -> Result<CliError, CliError> {
+    Ok(
+        match read_attempt::<LocalFundingAttempt>(path)?.and_then(|attempt| attempt.transaction) {
+            Some(evidence) => CliError::LocalFundingUnresolved {
+                tx_hash: format_tx_hash(&evidence.tx_hash),
+                attempt_path: path.display().to_string(),
+                message: error.to_string(),
+            },
+            None => error,
+        },
+    )
 }
 
 fn ensure_local_airdrop_success(
@@ -327,10 +484,7 @@ fn print_low_faucet_warning(prepared: &LocalAirdropPlan, print: &Print) {
         return;
     }
 
-    print.status(format_args!(
-        "Local faucet: {} ({})",
-        prepared.faucet_key_name, prepared.faucet_wallet
-    ));
+    print.status(format_args!("Local faucet: {}", prepared.faucet_wallet));
     print.status(format_args!(
         "Committed balance: {} HOG at block {}",
         hog::format_amount(prepared.funding_projection.committed_balance),
@@ -380,6 +534,12 @@ fn prepare_local_airdrop_plan(
         .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
     let recipient_wallet = recipient.wallet.clone();
     let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
+    if raw_amount == 0 {
+        return Err(CliError::InvalidHogAmount {
+            input: amount.unwrap_or(DEFAULT_AIRDROP_HOG).into(),
+            message: "amount must be positive".into(),
+        });
+    }
     let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
     let faucet_wallet = format_contract_address(&faucet.wallet_address);
     let faucet_balance = fetch_balance_blocking(
@@ -392,35 +552,20 @@ fn prepare_local_airdrop_plan(
         raw_amount,
         1,
     )?;
-    if funding_projection.projected_balance.is_none() {
+    // A retained request may already have spent this balance. Let the service
+    // reconcile it instead of rejecting a retry against the post-transfer balance.
+    let pending_path = local_funding_attempt_path(
+        &hex::encode(faucet.network_hash.as_ref()),
+        &faucet_wallet,
+        &recipient_wallet,
+    )?;
+    let retained = read_attempt::<LocalFundingAttempt>(&pending_path)?.is_some();
+    if funding_projection.projected_balance.is_none() && !retained {
         return Err(insufficient_local_faucet_error(
             raw_amount,
             funding_projection.estimated_max,
         ));
     }
-    let recipient_address = parse_contract_address(&recipient_wallet)?;
-    let runtime =
-        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    let block_expiry_height =
-        runtime.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
-    let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
-    let account = groundhog_signing::PubkeyAccount::from_public_key_bytes(
-        faucet.signer.verifying_key_bytes(),
-        0,
-    );
-    let transaction = groundhog_signing::default_wallet::build_default_wallet_call_transaction(
-        groundhog_signing::default_wallet::BuildDefaultWalletCallTransaction {
-            account: &account,
-            target_address: hog::token_address(),
-            target_entrypoint: hog::transfer_entrypoint(),
-            target_calldata: &transfer_calldata,
-            gas_limit: DEFAULT_TX_GAS_LIMIT * 2,
-            target_gas_limit: DEFAULT_TX_GAS_LIMIT,
-            block_expiry_height,
-            nonce: nonce_from_timestamp(),
-        },
-    )
-    .map_err(|error| CliError::Other(error.to_string()))?;
     Ok(LocalAirdropPlan {
         rpc_url: rpc_url.to_owned(),
         profile_name: profile.name.clone(),
@@ -428,13 +573,10 @@ fn prepare_local_airdrop_plan(
         recipient_wallet,
         amount_hog: hog::format_amount(raw_amount),
         raw_amount,
-        faucet_key_name: faucet.key_name,
         faucet_role: faucet.role,
         faucet_wallet,
         faucet_balance_height: faucet_balance.height,
         funding_projection,
-        transaction,
-        signer: faucet.signer,
         network_hash: faucet.network_hash,
     })
 }
@@ -671,28 +813,18 @@ fn prepare_remote_airdrop_plan(
 
 fn finalize_airdrop_plan(plan: AirdropPlan) -> Result<PreparedAirdrop, CliError> {
     match plan {
-        AirdropPlan::Local(plan) => {
-            let tx_hex = sign_and_encode_transaction_hex(
-                plan.transaction,
-                &plan.signer,
-                SignTransactionParams::default(),
-                &plan.network_hash,
-            )
-            .map_err(|error| CliError::Other(error.to_string()))?;
-            Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
-                rpc_url: plan.rpc_url,
-                recipient_input: plan.recipient_input,
-                recipient_wallet: plan.recipient_wallet,
-                amount_hog: plan.amount_hog,
-                raw_amount: plan.raw_amount,
-                faucet_key_name: plan.faucet_key_name,
-                faucet_role: plan.faucet_role,
-                faucet_wallet: plan.faucet_wallet,
-                faucet_balance_height: plan.faucet_balance_height,
-                funding_projection: plan.funding_projection,
-                tx_hex,
-            }))
-        }
+        AirdropPlan::Local(plan) => Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
+            rpc_url: plan.rpc_url,
+            recipient_input: plan.recipient_input,
+            recipient_wallet: plan.recipient_wallet,
+            amount_hog: plan.amount_hog,
+            raw_amount: plan.raw_amount,
+            faucet_role: plan.faucet_role,
+            faucet_wallet: plan.faucet_wallet,
+            faucet_balance_height: plan.faucet_balance_height,
+            funding_projection: plan.funding_projection,
+            network_hash: plan.network_hash,
+        })),
         AirdropPlan::Remote(plan) => prepare_remote_airdrop_with_descriptor(
             &plan.profile,
             &plan.recipient_input,
@@ -899,7 +1031,7 @@ fn print_dry_run(
                 print.status(format_args!("  raw amount: {}", prepared.raw_amount));
                 print.status(format_args!(
                     "  faucet: {} ({})",
-                    prepared.faucet_key_name, prepared.faucet_role
+                    prepared.faucet_wallet, prepared.faucet_role
                 ));
                 print.status("  submitted: no (--dry-run)");
             });
@@ -916,9 +1048,10 @@ fn print_dry_run(
                     "amountHog": prepared.amount_hog,
                     "rawAmount": prepared.raw_amount.to_string(),
                     "faucet": {
-                        "key": prepared.faucet_key_name,
+                        "address": prepared.faucet_wallet,
                         "role": prepared.faucet_role,
                     },
+                    "plannedRequests": ["groundhog_fundAccount"],
                 }),
             ))?;
         }
@@ -1032,6 +1165,39 @@ mod tests {
             } else {
                 unsafe { std::env::remove_var(self.key) };
             }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn local_funding_reuses_retained_nonce_and_refuses_changed_amount() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _cache = EnvGuard::set_str("XDG_CACHE_HOME", tmp.path().to_str().unwrap());
+        let mut prepared = prepared_local_airdrop();
+        let (path, lock, first) = super::retain_local_funding_request(&prepared).unwrap();
+        drop(lock);
+        let (_, lock, retry) = super::retain_local_funding_request(&prepared).unwrap();
+        assert_eq!(first, retry);
+        drop(lock);
+        prepared.rpc_url = "http://127.0.0.1:4444".into();
+        let (routed_path, lock, routed) = super::retain_local_funding_request(&prepared).unwrap();
+        assert_eq!(path, routed_path);
+        assert_eq!(first, routed);
+        drop(lock);
+        prepared.raw_amount += 1;
+        assert!(super::retain_local_funding_request(&prepared).is_err());
+        prepared.raw_amount -= 1;
+        prepared.faucet_wallet = format!("0x{}", "55".repeat(32));
+        let (other_path, _, other) = super::retain_local_funding_request(&prepared).unwrap();
+        assert_ne!(path, other_path);
+        assert_ne!(first.client_nonce, other.client_nonce);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 
@@ -1479,7 +1645,6 @@ mod tests {
             recipient_wallet: format!("0x{}", "ab".repeat(32)),
             amount_hog: "10".into(),
             raw_amount: 100_000_000,
-            faucet_key_name: "dev-0".into(),
             faucet_role: "faucet".into(),
             faucet_wallet: format!("0x{}", "cd".repeat(32)),
             faucet_balance_height: groundhog_json_rpc_types::BlockHeight::from(42),
@@ -1489,7 +1654,9 @@ mod tests {
                 estimated_max: 199_987_993,
                 projected_balance: Some(99_987_993),
             },
-            tx_hex: String::new(),
+            network_hash: groundhog_xdr::types::NetworkHash::new(
+                groundhog_xdr::types::SHA256Hash::from([0; 32]),
+            ),
         }
     }
 

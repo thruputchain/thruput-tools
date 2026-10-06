@@ -472,6 +472,22 @@ async fn run_resolved_target(
             required_actor_count(&loaded_sim.manifest),
             &loaded_runtime.manifest,
         )?
+    } else if loaded_runtime.manifest.kind
+        == groundhog_json_rpc_types::runtime_manifest::HOGD_DEV_RUNTIME_MANIFEST_KIND
+    {
+        let fixtures = crate::manifest::NativeAccountsSpec {
+            kind: crate::manifest::NativeAccountKind::Native,
+            seed: format!("hogsim-read-only:{}", loaded_sim.manifest.seed),
+            funding: crate::manifest::NativeAccountFunding::PreFunded,
+            funding_amount_raw: None,
+            minimum_balance_raw: "1".into(),
+            deployment_collateral_raw: None,
+        };
+        crate::native::derive_accounts(
+            &fixtures,
+            required_actor_count(&loaded_sim.manifest),
+            &loaded_runtime.manifest,
+        )?
     } else {
         derive_accounts(&loaded_runtime.manifest)?
     };
@@ -528,6 +544,7 @@ async fn run_resolved_target(
         crate::native::prepare_accounts(
             spec,
             &actor_states,
+            &loaded_runtime.manifest,
             &target.rpc_url,
             &out_dir,
             rpc_client_config.request_timeout,
@@ -1897,7 +1914,7 @@ mod tests {
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(json!({
             "schemaVersion": 3,
-            "kind": "hogd-dev-runtime",
+            "kind": "hosted-devnet-runtime",
             "chainState": "fresh",
             "networkHash": "00".repeat(32),
             "protocol": "hogp/test00000000000",

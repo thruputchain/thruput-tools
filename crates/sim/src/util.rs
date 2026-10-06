@@ -101,9 +101,15 @@ pub async fn write_json_pretty_atomic(
 ) -> Result<(), SimError> {
     let tmp = path.with_extension("json.tmp");
     write_json_pretty(tmp.clone(), value).await?;
+    let file = tokio::fs::File::open(&tmp).await?;
+    file.sync_all().await?;
     if let Err(error) = tokio::fs::rename(&tmp, &path).await {
         let _ = tokio::fs::remove_file(&tmp).await;
         return Err(error.into());
+    }
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        tokio::fs::File::open(parent).await?.sync_all().await?;
     }
     Ok(())
 }

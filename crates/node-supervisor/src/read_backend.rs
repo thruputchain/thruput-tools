@@ -2,7 +2,7 @@
 //!
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` runs the indexer-and-mempool probe the gateway
+//! calls; `transaction_status` runs the indexer-and-scheduler probe the gateway
 //! runs, from `groundhog_hogd_backend::status`, so both answer alike.
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
@@ -46,7 +46,7 @@ const HOGD_DEV_POOL_SIZE: usize = 2;
 /// Indexer-backed read plane for hogd-dev.
 ///
 /// Implements the `ReadPlane` trait: receipts and events come from the indexer;
-/// pending-tx detection for `transaction_status` borrows the shared scheduler
+/// scheduler outcome lookup for `transaction_status` borrows the shared scheduler
 /// client from the chain/submit backend.
 #[derive(Clone)]
 pub(crate) struct HogdDevReadBackend {
@@ -138,16 +138,19 @@ impl HogdDevReadBackend {
 /// The supervisor's two status lookups. Neither is metered or bounded here:
 /// the caller's request deadline bounds the whole probe.
 impl shared_status::StatusProbe for HogdDevReadBackend {
-    async fn mempool_holds(&self, tx_hash: TxHash) -> Result<bool, RpcServerError> {
+    async fn scheduler_status(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionStatus>, RpcServerError> {
         let hash = shared_receipt::tx_hash_to_wire(tx_hash);
         let results = self
             .scheduler_gateway
-            .schedgateway_lookup_tx(std::slice::from_ref(&hash))
+            .schedgateway_lookup_transaction_outcomes(std::slice::from_ref(&hash))
             .await
             .map_err(|error| {
                 RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
             })?;
-        shared_scheduler::mempool_holds_tx(SCHEDULER_GATEWAY, &results)
+        shared_scheduler::transaction_outcome(SCHEDULER_GATEWAY, &results)
     }
 
     async fn indexed_status(
