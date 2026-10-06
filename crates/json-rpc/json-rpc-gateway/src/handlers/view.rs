@@ -162,6 +162,7 @@ mod tests {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum FakeViewGatewayMode {
         Slow,
+        Batch,
     }
 
     struct FakeViewGateway {
@@ -172,10 +173,43 @@ mod tests {
     impl ViewGateway_ViewGateway1 for FakeViewGateway {
         async fn viewgateway_view_batch(
             &self,
-            _: groundhog_view::ViewGatewayBatchQuery,
+            query: groundhog_view::ViewGatewayBatchQuery,
         ) -> Result<groundhog_view::ViewGatewayBatchResult, ProgramError> {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            Ok(groundhog_view::ViewGatewayBatchResult::Default { outcome: 6 })
+            use groundhog_view::{
+                ViewGatewayBatchPayload, ViewGatewayBatchResult, ViewGatewayHeightUnavailable,
+            };
+            if self.mode == FakeViewGatewayMode::Slow {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                return Ok(ViewGatewayBatchResult::Default { outcome: 6 });
+            }
+            assert!((1..=30_000).contains(&query.budget_millis));
+            if let Some(requested) = query.min_height.filter(|height| **height > 42) {
+                return Ok(ViewGatewayBatchResult::ViewGatewayBatchHeightUnavailable {
+                    height_unavailable: ViewGatewayHeightUnavailable {
+                        requested,
+                        observed: 42.into(),
+                    },
+                });
+            }
+            Ok(ViewGatewayBatchResult::ViewGatewayBatchOk {
+                payload: ViewGatewayBatchPayload {
+                    height: 42.into(),
+                    results: VecM(
+                        query
+                            .calls
+                            .0
+                            .into_iter()
+                            .map(|call| groundhog_xdr::view::TransactionViewResult {
+                                output: InvocationFrameOutput::Return {
+                                    return_buffer: BytesM(call.invocation.calldata.0),
+                                },
+                                gas_consumed: call.invocation.gas_limit,
+                                events: VecM(vec![]),
+                            })
+                            .collect(),
+                    ),
+                },
+            })
         }
         async fn viewgateway_intro(
             &self,
@@ -275,6 +309,65 @@ mod tests {
         assert_eq!(response.events[0].topics[0].0, topic0);
         assert_eq!(response.events[0].topics[1].0, topic1);
         assert_eq!(response.events[0].data.0, data);
+    }
+
+    #[tokio::test]
+    async fn public_batch_preserves_order_gas_height_and_freshness_errors() {
+        use crate::{backend::GatewayBackend, config::GatewayConfig, context::BackendClient};
+        use groundhog_json_rpc_api::GroundhogApiServer;
+        use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+        use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
+        use groundhog_xdr::{PROTOCOL_VERSION, types::SHA256Hash};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
+        let socket = FixedSerialPool::connect(&addr, 1).await.unwrap();
+        let client = ViewGateway_ViewGateway1_Client::new(Arc::new(socket));
+        let context = Arc::new(GatewayContext::assemble(
+            PROTOCOL_VERSION,
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(Some(BackendClient::new(
+                client.clone(),
+                client,
+            )))),
+            Arc::new(RwLock::new(None)),
+            Arc::new(GatewayConfig::default()),
+            GatewayMetrics::for_tests(),
+        ));
+        let module = GroundhogRpcServer::unified(
+            GatewayBackend::new(context),
+            NetworkInfo::new(NetworkHash::from(SHA256Hash::from([0; 32]))),
+            RpcServerConfig::default(),
+            BuildInfo::new("test", None),
+        )
+        .into_rpc();
+        for min_height in ["42", "43"] {
+            let calls: Vec<_> = [("0x01", "123"), ("0x02", "456")].into_iter().map(|(calldata, gas)| serde_json::json!({
+                "contract": format!("0x{}", "07".repeat(32)), "entrypoint": "0x0808080808080808",
+                "calldata": calldata, "gasLimit": gas,
+            })).collect();
+            let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"groundhog_viewBatch", "params":[{"calls":calls,"minHeight":min_height}]}).to_string();
+            let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
+            let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+            if min_height == "42" {
+                assert_eq!(
+                    response["result"],
+                    serde_json::json!({"height":"42", "results":[
+                        {"output":{"result":"return","returnData":"0x01"},"gasUsed":"123","events":[]},
+                        {"output":{"result":"return","returnData":"0x02"},"gasUsed":"456","events":[]}
+                    ]})
+                );
+            } else {
+                assert_eq!(response["error"]["code"], -32011);
+                assert_eq!(
+                    response["error"]["data"],
+                    serde_json::json!({"requested":"43","observed":"42"})
+                );
+            }
+        }
+        fake.abort();
     }
 
     #[test]

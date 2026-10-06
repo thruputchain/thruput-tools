@@ -270,6 +270,7 @@ pub const fn outcome_for_code(code: i32) -> &'static str {
         codes::TX_NOT_FOUND | codes::BLOCK_NOT_FOUND => "not_found",
         codes::BACKEND_UNAVAILABLE => "backend_unavailable",
         codes::BACKEND_TIMEOUT => "backend_timeout",
+        codes::VIEW_HEIGHT_UNAVAILABLE => "view_height_unavailable",
         codes::NOT_IMPLEMENTED | -32601 => "not_implemented",
         codes::OVERLOADED | -32006 | -32009 => "overloaded",
         _ => "internal_error",
