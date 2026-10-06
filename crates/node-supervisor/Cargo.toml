@@ -31,6 +31,8 @@ groundhog_indexer = { workspace = true }
 groundhog_scheduler = { workspace = true }
 groundhog_view = { workspace = true }
 groundhog_scp = { workspace = true }
+getrandom = { workspace = true }
+zeroize = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
 libc = { workspace = true }

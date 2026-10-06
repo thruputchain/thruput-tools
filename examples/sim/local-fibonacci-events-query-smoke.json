@@ -6,13 +6,6 @@
   "target": {
     "provider": "local"
   },
-  "bootstrap": {
-    "accounts": 1,
-    "accountSeed": "sim-local-fibonacci-events-query-smoke-accounts",
-    "initialStorageTokens": "1000000000",
-    "storageCostProfile": "default",
-    "deploymentCollateralRaw": "100000000"
-  },
   "loadShape": [
     {
       "duration": "3s",
@@ -50,5 +43,13 @@
   ],
   "assertions": {
     "maxErrorRate": 0.001
+  },
+  "accounts": {
+    "kind": "native",
+    "seed": "sim-local-fibonacci-events-query-smoke:fixture-accounts",
+    "funding": "pre-funded",
+    "minimumBalanceRaw": "100000000",
+    "deploymentCollateralRaw": "100000000",
+    "fundingAmountRaw": "1000000000"
   }
 }

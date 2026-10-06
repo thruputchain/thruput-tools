@@ -7,14 +7,10 @@ use std::{
 };
 
 use groundhog_bundle_identity::BundleIdentity;
-use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_json_rpc_types::bootstrap_manifest::{
-    BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestFaucet,
-    BootstrapManifestStorageCostModel,
+    BootstrapManifest, BootstrapManifestAllocation, BootstrapManifestStorageCostModel,
 };
-use groundhog_signing::{
-    DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
-};
+use groundhog_json_rpc_types::{Ed25519PublicKey, NetworkHashHex};
 use groundhog_tx_validation::ConfigParamName;
 
 /// Default JSON-RPC listen address for `groundhog node`.
@@ -44,25 +40,13 @@ pub const DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE: Duration = Duration::from_
 /// Default startup timeout while waiting for hogd-dev readiness.
 pub const DEFAULT_HOGD_DEV_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Default number of local-user accounts requested from hogd-dev, excluding the faucet.
-pub const DEFAULT_HOGD_DEV_ACCOUNT_COUNT: usize = DEFAULT_DEV_ACCOUNT_COUNT;
-
-/// Default dev account signer seed requested from hogd-dev.
-pub const DEFAULT_HOGD_DEV_ACCOUNT_SEED: &str = DEFAULT_DEV_ACCOUNT_SEED;
-
 /// Fixed local faucet allocation in raw HOG units.
 pub const LOCAL_FAUCET_STORAGE_TOKENS: u64 = 10_000_000_000_000;
 
-/// Default local-user allocation in raw HOG units.
-pub const DEFAULT_HOGD_DEV_ACCOUNT_TOKENS: u64 = DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS;
+/// Default ordinary user allocation in raw HOG units (100 HOG).
+pub const DEFAULT_LOCAL_ACCOUNT_TOKENS: u64 = 1_000_000_000;
 
-/// Fixed local faucet derivation index.
-pub const LOCAL_FAUCET_INDEX: u32 = 0;
-
-/// First local-user derivation index.
-pub const FIRST_LOCAL_USER_INDEX: u32 = 1;
-
-/// Bootstrap manifest kind emitted for hogd-dev shorthand lowering.
+/// Bootstrap manifest kind consumed by hog-devnode.
 pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "groundhog-bootstrap";
 
 /// Default bootstrap profile requested from hogd-dev.
@@ -80,7 +64,7 @@ pub const DEFAULT_LOCAL_AIRDROP_RAW_AMOUNT: u128 = 10 * groundhog_signing::NATIV
 pub struct LocalAirdropConfig {
     /// Native amount transferred by each logical attempt.
     pub raw_amount: u128,
-    /// Maximum retained process-local attempt records.
+    /// Maximum retained requests for the chain lifetime; completed requests remain retained.
     pub attempt_capacity: usize,
     /// Maximum concurrently advancing attempts.
     pub max_concurrency: usize,
@@ -402,14 +386,10 @@ pub struct HogdDevConfig {
     pub shutdown_grace: Duration,
     /// Maximum time to wait for the readiness line after spawning hogd-dev.
     pub startup_timeout: Duration,
-    /// Number of deterministic local-user accounts hogd-dev should bootstrap.
+    /// Explicit public allocations for a fresh local chain.
     ///
-    /// The always-present faucet at `dev-0` is excluded.
-    pub dev_account_count: usize,
-    /// Seed used by hogd-dev and the supervisor to derive dev-account signers.
-    pub dev_account_seed: String,
-    /// Storage-token funding target per local-user account.
-    pub dev_account_tokens: u64,
+    /// On restart the persisted public intent remains authoritative.
+    pub bootstrap_accounts: Vec<BootstrapManifestAllocation>,
     /// RAM database capacity in bytes hog-devnode reserves at startup.
     ///
     /// When unset, hog-devnode uses its built-in default capacity.
@@ -432,9 +412,7 @@ impl Default for HogdDevConfig {
             listen_host: DEFAULT_HOGD_DEV_LISTEN_HOST.to_string(),
             shutdown_grace: DEFAULT_HOGD_DEV_SHUTDOWN_GRACE,
             startup_timeout: DEFAULT_HOGD_DEV_STARTUP_TIMEOUT,
-            dev_account_count: DEFAULT_HOGD_DEV_ACCOUNT_COUNT,
-            dev_account_seed: DEFAULT_HOGD_DEV_ACCOUNT_SEED.to_string(),
-            dev_account_tokens: DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
+            bootstrap_accounts: Vec::new(),
             ramdb_bytes: None,
             network_config_overrides: BTreeMap::new(),
             pid_file: None,
@@ -510,24 +488,10 @@ impl HogdDevConfig {
         self
     }
 
-    /// Return a copy with a different dev-account count.
+    /// Return a copy with caller-owned public bootstrap allocations.
     #[must_use]
-    pub fn with_dev_account_count(mut self, dev_account_count: usize) -> Self {
-        self.dev_account_count = dev_account_count;
-        self
-    }
-
-    /// Return a copy with a different dev-account derivation seed.
-    #[must_use]
-    pub fn with_dev_account_seed(mut self, dev_account_seed: impl Into<String>) -> Self {
-        self.dev_account_seed = dev_account_seed.into();
-        self
-    }
-
-    /// Return a copy with a different dev-account storage-token funding target.
-    #[must_use]
-    pub fn with_dev_account_tokens(mut self, dev_account_tokens: u64) -> Self {
-        self.dev_account_tokens = dev_account_tokens;
+    pub fn with_bootstrap_accounts(mut self, accounts: Vec<BootstrapManifestAllocation>) -> Self {
+        self.bootstrap_accounts = accounts;
         self
     }
 
@@ -545,30 +509,23 @@ impl HogdDevConfig {
         self
     }
 
-    /// Lower the current hogd-dev shorthand settings into bootstrap intent.
-    ///
-    /// Supervisor launch code serializes this manifest and passes it to
-    /// `hogd-dev --bootstrap-manifest`.
+    /// Build public intent using the supervisor-owned faucet's public key.
     pub fn to_bootstrap_manifest(
         &self,
         network_hash: NetworkHashHex,
-    ) -> Result<BootstrapManifest, std::num::TryFromIntError> {
-        Ok(BootstrapManifest::new(
+        faucet_public_key: Ed25519PublicKey,
+    ) -> BootstrapManifest {
+        BootstrapManifest::new(
             HOGD_DEV_BOOTSTRAP_MANIFEST_KIND,
             network_hash,
             DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE,
-            BootstrapManifestFaucet::new(
-                LOCAL_FAUCET_INDEX,
+            BootstrapManifestAllocation::new(
+                faucet_public_key,
                 LOCAL_FAUCET_STORAGE_TOKENS.to_string(),
             ),
-            BootstrapManifestAccounts::new(
-                u32::try_from(self.dev_account_count)?,
-                FIRST_LOCAL_USER_INDEX,
-                self.dev_account_seed.clone(),
-                self.dev_account_tokens.to_string(),
-            ),
+            self.bootstrap_accounts.clone(),
             BootstrapManifestStorageCostModel::profile(DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE),
-        ))
+        )
     }
 }
 

@@ -51,7 +51,7 @@ pub struct SimulationManifest {
     pub resolved: Option<ResolvedRunSpec>,
 }
 
-/// Explicit native pubkey workload accounts; omission keeps local bootstrap wallets.
+/// Explicit fixture-owned native workload accounts; omission permits the hosted bootstrap adapter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeAccountsSpec {
@@ -62,6 +62,10 @@ pub struct NativeAccountsSpec {
     /// Whether setup may request faucet funds; defaults to balance verification only.
     #[serde(default)]
     pub funding: NativeAccountFunding,
+    /// Raw amount for local initial allocation or faucet transfer. Faucet mode requires it.
+    /// Choose an amount that covers the minimum balance plus account storage costs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funding_amount_raw: Option<String>,
     /// Minimum raw HOG balance required per actor before load, as a decimal string.
     /// Defaults to one raw unit; this is a setup check, not a workload cost estimate.
     #[serde(default = "default_native_minimum_balance")]

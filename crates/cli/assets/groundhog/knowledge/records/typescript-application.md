@@ -9,11 +9,11 @@ bootstrap_order = 50
 +++
 ## TypeScript Application Path
 
-Use public exports and generated bindings. Connect a cluster-aware client, load
-an account, and bind a wallet. One client supports multiple wallets. Pubkey and
-schema-3 bootstrap accounts use DefaultWallet. Historical source-address wallets
-use `devWalletAdapter`; preserve their addresses. Never submit an application
-invocation directly as the transaction root.
+Use public exports and generated bindings. Connect a cluster-aware client, create
+or load an account, and bind a wallet. One client supports multiple wallets.
+Pubkey accounts, including hosted schema-3 bootstrap accounts, use DefaultWallet.
+Historical source-address wallets use `devWalletAdapter`; preserve their addresses.
+Never submit an application invocation directly as the transaction root.
 
 Select an interface version for values; explicit types use the full namespace:
 

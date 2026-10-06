@@ -24,10 +24,15 @@ See [benchmark scenarios](bench-scenarios.md) for heavier runs and saved results
 
 ## Manual local loop
 
-Use an installed CLI or build the binaries from this checkout. In one terminal:
+Use an installed CLI or build the binaries from this checkout. A write benchmark
+must own fixture keys and supply their public initial allocations. Prepare
+`bench-accounts.json` with keys derived from the benchmark namespace
+`groundhog-bench:benchmark-fixtures-v1`; each account seed is SHA-256 of that
+namespace followed by `:account-N`. The smoke script shows the executable setup.
+These deterministic keys are disposable fixtures. In one terminal:
 
 ```sh
-groundhog --json node --hog-devnode-binary /absolute/path/to/hog-devnode \
+groundhog --json node --bootstrap-accounts ./bench-accounts.json --hog-devnode-binary /absolute/path/to/hog-devnode \
   --block-driver interval --block-interval-ms 500 > /tmp/groundhog-node.json
 ```
 
@@ -45,7 +50,7 @@ Leave the gateway running too. In a third terminal:
 ```sh
 RUNTIME_MANIFEST=$(jq -er '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 groundhog-bench --url http://127.0.0.1:9546 \
-  --runtime-manifest "$RUNTIME_MANIFEST" \
+  --runtime-manifest "$RUNTIME_MANIFEST" --account-seed benchmark-fixtures-v1 \
   --method sendRawTransaction --accounts 3 --rate 3 --duration 2 --force
 ```
 
@@ -67,10 +72,13 @@ includes the producer's recovered/fresh chain state; directory existence alone
 is not evidence of recovery. Ordinary child logs go to stderr and are forwarded
 through Rust tracing, leaving stdout available for startup protocol.
 
-Runtime, bootstrap and readiness manifests use schema 3. Every bootstrap account
-is a native pubkey account with nonce zero; its address must match its public key.
-The seed and derivation scheme still determine the same signing keys. Bootstrap
-metadata contains the storage cost model; native wallets need no RV32 artifact.
+Local runtime and bootstrap manifests use schema 4; the readiness pointer retains
+schema 3. Local accounts have public keys, addresses and initial raw allocations,
+with no derivation seed or account indices. The supervisor owns the private
+faucet key; users and harnesses own their signing keys. Hosted Devnet retains its
+separate schema-3 deterministic adapter. Every native account has nonce zero and
+an address matching its public key. Bootstrap metadata contains the storage cost
+model; native wallets need no RV32 artifact.
 
 The manifest carries bound endpoints, network identity, and bootstrap account
 metadata. Do not construct a runnable manifest by copying an example's ports,
@@ -107,8 +115,13 @@ runtime selection, logging, persistence, and supported overrides. The lifecycle
 implementation is in [process.rs](../../crates/node-supervisor/src/process.rs)
 and [pid_file.rs](../../crates/node-supervisor/src/pid_file.rs).
 
-Schema-2 runtimes and state directories require their original runtime. A native
+Older local runtimes and state directories require their original runtime and tooling. A native
 runtime refuses old metadata before opening the database and preserves the data.
-Use a new data directory for a native chain; saved legacy wallet identities remain
+Use a new data directory for an ordinary-account chain; saved legacy wallet identities remain
 explicit CLI bindings. Consumer and catalog promotion must follow publication of
 the matching native producer.
+
+The chain directory also owns a private faucet credential and retained funding
+journal. Missing, corrupt or mismatched private state fails startup. Dump/restore
+preserves both files and their private permissions. The supervisor and runtime
+retain one exclusive chain-directory lock through startup and shutdown.

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::io::{IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use zeroize::{Zeroize, Zeroizing};
 
 const DEFAULT_KEY_NAME: &str = "default";
@@ -296,7 +296,13 @@ pub fn export_with_format(
     }
 
     // Do not load secret key material until export has been authorized.
-    let keypair_bytes = load_stored_keypair_bytes(name)?;
+    validate_key_name(name)?;
+    let keypair_bytes = load_stored_keypair_bytes(name).map_err(|error| match error {
+        CliError::Io(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            CliError::KeyNotFound(name.into())
+        }
+        error => error,
+    })?;
     LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))?;
     let report = KeysExportReport {
         schema_version: KEYS_EXPORT_JSON_SCHEMA_VERSION,
@@ -406,9 +412,6 @@ fn validate_key_name(name: &str) -> Result<(), CliError> {
 
 fn validate_stored_key_name(name: &str) -> Result<(), CliError> {
     validate_key_name(name)?;
-    if crate::dev_keys::is_dev_key(name) {
-        return Err(CliError::ReservedDevKeyName);
-    }
     Ok(())
 }
 
@@ -516,11 +519,13 @@ fn keyfile_public_key(keyfile: &KeyFile) -> Result<[u8; 32], CliError> {
 /// Private key material is zeroized from the temporary keypair buffer
 /// after construction. Used by deploy and call to sign transactions.
 pub fn load_local_signer(name: &str) -> Result<LocalSigner, CliError> {
-    if crate::dev_keys::is_dev_key(name) {
-        return crate::dev_keys::load_dev_signer(name);
-    }
-
-    let keypair_bytes = load_stored_keypair_bytes(name)?;
+    validate_key_name(name)?;
+    let keypair_bytes = load_stored_keypair_bytes(name).map_err(|error| match error {
+        CliError::Io(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            CliError::KeyNotFound(name.into())
+        }
+        error => error,
+    })?;
     LocalSigner::from_keypair_bytes(*keypair_bytes).map_err(|error| signing_error(&error))
 }
 
@@ -536,6 +541,33 @@ fn load_stored_keypair_bytes(name: &str) -> Result<Zeroizing<[u8; 64]>, CliError
     Ok(Zeroizing::new(parse_stored_hex::<64>(
         &keyfile.keypair_hex,
     )?))
+}
+
+/// Write an isolated harness-owned key without changing user configuration.
+pub(crate) fn write_fixture_key(
+    directory: &Path,
+    name: &str,
+    signer: &LocalSigner,
+) -> Result<(), CliError> {
+    validate_key_name(name)?;
+    fs::create_dir_all(directory)?;
+    let keypair = Zeroizing::new(signer.to_keypair_bytes());
+    let key = KeyFile {
+        version: 1,
+        scheme: "ed25519".into(),
+        keypair_hex: hex::encode(keypair.as_ref()),
+        public_key_hex: Some(hex::encode(signer.verifying_key_bytes())),
+    };
+    let contents = Zeroizing::new(
+        serde_json::to_vec(&key)
+            .map_err(|error| CliError::LocalFundingAttempt(error.to_string()))?,
+    );
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    file.write_all(&contents)?;
+    file.as_file().sync_all()?;
+    file.persist_noclobber(directory.join(format!("{name}.json")))
+        .map_err(|error| CliError::Io(error.error))?;
+    Ok(())
 }
 
 fn read_keyfile(name: &str) -> Result<KeyFile, CliError> {

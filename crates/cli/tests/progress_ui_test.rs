@@ -1025,7 +1025,7 @@ fn node_phases_keep_warnings_after_results_and_leave_a_short_stop_message() {
             assert!(!String::from_utf8_lossy(&pty.raw).contains("startup warning fixture"));
         }
         if mode != "failure" {
-            pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("dev-key manifest"));
+            pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("account manifest"));
             std::fs::write(root.path().join("log-now"), "").unwrap();
             pty.until(|pty| {
                 pty.parser
