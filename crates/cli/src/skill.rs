@@ -32,6 +32,10 @@ pub enum SkillError {
     NotInstalled,
     #[error("cannot read the skills installation report: {0}")]
     InstallerReport(serde_json::Error),
+    #[error(
+        "skills did not confirm a global Groundhog refresh; check repository access and retry `groundhog skill update --global`"
+    )]
+    UpdateUnconfirmed,
     #[error("skill installation and updates require network access; remove --offline")]
     Offline,
     #[error("unattended skill setup requires --yes and, for installation, --agent <name>")]
@@ -268,19 +272,14 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
     }
     if update {
         require_installed(options.global)?;
+        if options.global {
+            return refresh_global();
+        }
     }
     let mut child = Command::new("npx");
     child.args(["--yes", SKILLS_PACKAGE]);
     if update {
-        child.args([
-            "update",
-            "groundhog",
-            if options.global {
-                "--global"
-            } else {
-                "--project"
-            },
-        ]);
+        child.args(["update", "groundhog", "--project"]);
     } else {
         child.args(["add", REPOSITORY, "--skill", "groundhog"]);
         if options.global {
@@ -315,6 +314,47 @@ fn run_installer(update: bool, options: &InstallOptions, print: &Print) -> Resul
         }
     }
     Ok(())
+}
+
+fn refresh_global() -> Result<(), CliError> {
+    #[derive(Deserialize)]
+    struct RefreshReport {
+        name: Option<String>,
+        status: String,
+        source: Option<String>,
+        scope: Option<String>,
+    }
+
+    // skills@1.7.0 update can exit zero after a failed global source check.
+    // Its add --json path fetches the source and reports each installation,
+    // including refreshes whose content has not changed. Consent is checked above.
+    let mut command = Command::new("npx");
+    command.args([
+        "--yes",
+        SKILLS_PACKAGE,
+        "add",
+        REPOSITORY,
+        "--skill",
+        "groundhog",
+        "--global",
+        "--yes",
+        "--json",
+    ]);
+    let output = Print::run_setup_process_report(&mut command)?;
+    if !output.status.success() {
+        return Err(SkillError::Failed(output.status.code()).into());
+    }
+    let reports: Vec<RefreshReport> =
+        serde_json::from_slice(&output.stdout).map_err(SkillError::InstallerReport)?;
+    if !matches!(reports.as_slice(), [report]
+        if report.name.as_deref() == Some("groundhog")
+            && report.status == "installed"
+            && report.source.as_deref() == Some(REPOSITORY)
+            && report.scope.as_deref() == Some("global"))
+    {
+        return Err(SkillError::UpdateUnconfirmed.into());
+    }
+    require_installed(true)
 }
 
 fn require_installed(global: bool) -> Result<(), CliError> {

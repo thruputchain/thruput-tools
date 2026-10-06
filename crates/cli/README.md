@@ -933,6 +933,9 @@ select agents and choose project or global scope; `--global` fixes the scope
 before starting the installer. Repeat `--agent` to select more than one explicitly. Updates
 affect only the installed Groundhog skill in the selected scope. An absent
 installation needs `skill install` first. Reinstalling refreshes its files.
+Global updates fetch and reinstall the skill, even when its content has not
+changed. The CLI requires a successful installation report: the upstream global
+update check can exit successfully after a source-check failure.
 
 These commands wrap `skills@1.7.0` and require Node.js 22.20 or newer, npm, Git,
 and network access. The skill source is `groundhogchain/agent-skills`. While
@@ -942,6 +945,7 @@ authentication, or SSH authentication. The equivalent direct commands are:
 ```sh
 npx skills@1.7.0 add groundhogchain/agent-skills --skill groundhog
 npx skills@1.7.0 update groundhog --project
+npx skills@1.7.0 add groundhogchain/agent-skills --skill groundhog --global --yes --json
 ```
 
 For automation, authorize setup with `--yes` and select the installation agent:

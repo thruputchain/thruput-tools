@@ -91,7 +91,12 @@ fn the_documented_docs_export_works_outside_the_generated_project() {
     let report: serde_json::Value = serde_json::from_slice(&exported.stdout).unwrap();
     assert_eq!(
         report["data"]["index"],
-        destination.join("index.md").to_str().unwrap()
+        destination
+            .canonicalize()
+            .unwrap()
+            .join("index.md")
+            .to_str()
+            .unwrap()
     );
     assert!(destination.join("sections/contracts.md").is_file());
     assert!(!project.join("docs").exists());

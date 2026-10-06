@@ -63,6 +63,24 @@ impl Print {
         }
         command.status()
     }
+
+    /// Capture a setup tool's machine report while streaming diagnostics to stderr.
+    /// The caller must obtain consent before starting this non-interactive process.
+    pub(crate) fn run_setup_process_report(
+        command: &mut std::process::Command,
+    ) -> io::Result<std::process::Output> {
+        use std::process::Stdio;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .env("CI", "1")
+            .env("NO_COLOR", "1")
+            .env_remove("FORCE_COLOR")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+    }
+
     /// Apply the shared error color to framework diagnostics before argument parsing.
     pub fn command_styles() -> clap::builder::Styles {
         let (r, g, b) = theme::ERROR_RGB;

@@ -36,6 +36,15 @@ fn skill_errors_use_stdout_envelopes_without_installer_execution() {
         vec!["skill", "show", "missing", "--json"],
         vec!["skill", "install", "--non-interactive", "--json"],
         vec!["skill", "install", "--non-interactive", "--yes", "--json"],
+        vec!["skill", "update", "--global", "--non-interactive", "--json"],
+        vec![
+            "skill",
+            "update",
+            "--global",
+            "--yes",
+            "--offline",
+            "--json",
+        ],
         vec![
             "skill",
             "install",
@@ -146,6 +155,102 @@ mod installer {
         assert!(report["error"]["message"].as_str().unwrap().contains('7'));
     }
 
+    fn global_update_fixture() -> tempfile::TempDir {
+        let root = fixture();
+        fs::write(
+            root.path().join("npx"),
+            r#"#!/bin/sh
+printf '%s\n' "$@" >> "$SKILL_ARGS"
+case "$3" in
+  list)
+    printf '%s\n' '[{"name":"groundhog","source":"groundhogchain/agent-skills"}]'
+    ;;
+  update)
+    printf 'Failed to check skills\nAll global skills are up to date\n'
+    ;;
+  add)
+    if read -r answer; then exit 99; fi
+    printf 'source diagnostics\n' >&2
+    printf '%s\n' "$SKILL_REPORT"
+    exit "${SKILL_EXIT:-0}"
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        root
+    }
+
+    const REFRESHED: &str = r#"[{"name":"groundhog","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#;
+
+    fn global_update(root: &tempfile::TempDir, report: &str) -> Command {
+        let mut cmd = command(root);
+        cmd.env("SKILL_REPORT", report).args([
+            "update",
+            "--global",
+            "--yes",
+            "--non-interactive",
+            "--json",
+        ]);
+        cmd
+    }
+
+    #[test]
+    fn global_update_requires_a_confirmed_refresh_even_when_files_are_unchanged() {
+        let root = global_update_fixture();
+        // Both invocations return the same report without modifying any files.
+        // A successful refresh must not depend on a change in installed content.
+        for _ in 0..2 {
+            let result = global_update(&root, REFRESHED).output().unwrap();
+            assert!(result.status.success(), "{result:?}");
+            let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(report["ok"], true);
+            assert_eq!(report["command"], "skill update");
+            assert_eq!(report["data"]["scope"], "global");
+            assert!(String::from_utf8_lossy(&result.stderr).contains("source diagnostics"));
+        }
+        let invocation = "--yes\nskills@1.7.0\nlist\n--json\n--global\n--yes\nskills@1.7.0\nadd\ngroundhogchain/agent-skills\n--skill\ngroundhog\n--global\n--yes\n--json\n--yes\nskills@1.7.0\nlist\n--json\n--global\n";
+        assert_eq!(
+            fs::read_to_string(root.path().join("args")).unwrap(),
+            invocation.repeat(2)
+        );
+    }
+
+    #[test]
+    fn global_update_rejects_zero_exit_without_a_successful_source_refresh() {
+        let root = global_update_fixture();
+        for report in [
+            "Failed to check skills\nAll global skills are up to date",
+            "[]",
+            r#"[{"name":"groundhog","status":"failed","error":"source unavailable"}]"#,
+            r#"[{"name":"groundhog","status":"skipped","reason":"source unavailable"}]"#,
+            r#"[{"name":"groundhog","status":"installed"}]"#,
+            r#"[{"name":"groundhog","status":"installed","source":"other/source","scope":"global"}]"#,
+            r#"[{"name":"groundhog","status":"installed","source":"groundhogchain/agent-skills","scope":"project"}]"#,
+            r#"[{"name":"other","status":"installed","source":"groundhogchain/agent-skills","scope":"global"}]"#,
+        ] {
+            let result = global_update(&root, report).output().unwrap();
+            assert!(!result.status.success(), "{report}: {result:?}");
+            let failure: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(failure["ok"], false, "{report}");
+            assert_eq!(failure["error"]["code"], "skill_error");
+            assert!(!String::from_utf8_lossy(&result.stderr).contains("update complete"));
+        }
+    }
+
+    #[test]
+    fn global_update_propagates_refresh_exit_failure_despite_success_report() {
+        let root = global_update_fixture();
+        let result = global_update(&root, REFRESHED)
+            .env("SKILL_EXIT", "7")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["ok"], false);
+        assert!(report["error"]["message"].as_str().unwrap().contains('7'));
+    }
+
     #[test]
     fn missing_prerequisite_and_old_node_produce_actionable_errors() {
         let root = fixture();
@@ -178,18 +283,21 @@ mod installer {
                 format!("#!/bin/sh\nprintf '%s\\n' '{installed}'\n"),
             )
             .unwrap();
-            let result = command(&root)
-                .args(["update", "--yes", "--json"])
-                .output()
-                .unwrap();
-            assert!(!result.status.success());
-            let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-            assert!(
-                report["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("not installed from")
-            );
+            for scope in [vec![], vec!["--global"]] {
+                let result = command(&root)
+                    .args(["update", "--yes", "--json"])
+                    .args(scope)
+                    .output()
+                    .unwrap();
+                assert!(!result.status.success());
+                let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+                assert!(
+                    report["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("not installed from")
+                );
+            }
         }
     }
 

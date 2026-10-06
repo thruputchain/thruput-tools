@@ -424,7 +424,12 @@ fn markdown_export_is_portable_and_preserves_existing_destinations() {
     assert_eq!(report["command"], "docs export");
     assert_eq!(
         report["data"]["index"],
-        output.join("index.md").to_str().unwrap()
+        output
+            .canonicalize()
+            .unwrap()
+            .join("index.md")
+            .to_str()
+            .unwrap()
     );
     assert_eq!(
         std::fs::read(output.join("contracts/start.md")).unwrap(),
