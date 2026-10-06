@@ -70,7 +70,7 @@ pub fn entrypoint_id(interface: &str, version: &str, method: &str) -> ContractEn
         method_sig: NormalizedMethodSignature::new(method),
     };
 
-    ContractEntrypointID::from(sig.id().into_inner())
+    sig.id()
 }
 
 /// Fallible form of [`entrypoint_id`] for interface identities from untrusted input.

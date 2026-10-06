@@ -52,13 +52,6 @@ impl PubkeyAccount {
     /// CXS encodings of both, matching what hogd's auth verifier derives. Every
     /// `PublicKey` variant encodes, so derivation cannot fail.
     pub fn address(&self) -> ContractAddress {
-        use groundhog_domain_separator::Sha256Backend;
-
-        // Use the SDK's generic domain encoder with the node's protocol types.
-        // All fields in this preimage are bounded scalars and fixed-size keys.
-        let preimage = groundhog_domain_separator::PUBKEY_ACCOUNT
-            .preimage(&self.preimage())
-            .expect("bug: fixed-size pubkey-account preimage must encode");
-        ContractAddress::from(groundhog_domain_separator::Sha2::sha256(&preimage))
+        groundhog_domain_separator::sha2::pubkey_account_address(&self.preimage())
     }
 }
