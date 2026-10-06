@@ -44,6 +44,12 @@ If you reset the node, deploy again. The app checks the saved deployment receipt
 and reports when it is unavailable. Ctrl-C stops the app; your node keeps running.
 Decrementing zero demonstrates a rejected transaction.
 
+After a successful increment or decrement, the app briefly retries the counter
+read until it reaches the transaction's block. This has a five-second read
+budget and never resubmits the transaction. There is no background polling.
+If the read cannot catch up, the app reports the confirmed transaction and asks
+you to reload for a fresh value.
+
 Deployment uses the `local` profile. `GROUNDHOG_RPC_URL` overrides its endpoint
 when deploying; the dev server uses the saved endpoint. If deployment changes
 the endpoint, restart `npm run dev`. `PORT` overrides Vite's default 5173.

@@ -7,6 +7,7 @@ import {
 } from "@groundhogchain/client";
 import { Counter } from "./generated/counter";
 import { getSession } from "./wallet";
+import { refreshCounter } from "./refresh-counter";
 import "./style.css";
 
 type Session = Awaited<ReturnType<typeof getSession>>;
@@ -64,18 +65,24 @@ function App() {
         gasAmount(1_000_000n),
         { amount: 1n },
       );
-      await session.wallet.executeAndWait({
+      const { receipt } = await session.wallet.executeAndWait({
         invocation,
         gasLimit: gasAmount(5_000_000n),
       });
-      setMessage("Transaction executed successfully.");
+      setMessage("Transaction executed successfully. Refreshing the counter…");
       try {
-        const result = await Counter.v0_1.get.view({
-          client: session.client,
-          contract: session.contract,
-          caller: session.wallet.account.address,
-        });
-        setValue(result.value);
+        const current = await refreshCounter(
+          (signal) =>
+            Counter.v0_1.get.view({
+              client: session.client,
+              contract: session.contract,
+              caller: session.wallet.account.address,
+              signal,
+            }),
+          receipt.height,
+        );
+        setValue(current);
+        setMessage("Transaction executed successfully.");
       } catch {
         setError(
           "Transaction executed successfully, but the value could not be refreshed. Reload to read it again.",

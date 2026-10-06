@@ -27,6 +27,7 @@ fn counter_app_guide_describes_the_generated_frontend_and_its_real_scripts() {
     for path in [
         "web/main.tsx",
         "web/wallet.ts",
+        "web/refresh-counter.ts",
         "scripts/groundhog.mjs",
         "README.md",
     ] {
@@ -34,7 +35,8 @@ fn counter_app_guide_describes_the_generated_frontend_and_its_real_scripts() {
     }
     assert!(web.contains("private key in memory"));
     assert!(web.contains("deploys a new counter"));
-    assert!(web.contains("It is not a\nread-only check"));
+    assert!(web.contains("not a read-only check"));
+    assert!(web.contains("`npm run dev` uses the saved deployment"));
     assert!(web.contains("Regenerate bindings"));
     assert!(web.contains("original transaction hash"));
 }

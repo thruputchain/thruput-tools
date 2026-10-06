@@ -115,6 +115,10 @@ const APP: &[File] = &[
         include_str!("../templates/counter-app/wallet.ts.tmpl"),
     ),
     (
+        "web/refresh-counter.ts",
+        include_str!("../templates/counter-app/refresh-counter.ts.tmpl"),
+    ),
+    (
         "web/style.css",
         include_str!("../templates/counter-app/style.css.tmpl"),
     ),

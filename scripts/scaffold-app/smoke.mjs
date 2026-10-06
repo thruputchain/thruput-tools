@@ -292,6 +292,25 @@ try {
   const page = await browser.newPage();
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  let lastView;
+  let staleView;
+  let staleReads = 0;
+  let submissions = 0;
+  let views = 0;
+  await page.route("**/rpc", async (route) => {
+    const request = route.request().postDataJSON();
+    if (request.method === "groundhog_sendRawTransaction") submissions++;
+    if (request.method !== "groundhog_view") return route.continue();
+    views++;
+    const response = await route.fetch();
+    const body = await response.json();
+    lastView = body.result;
+    if (staleReads > 0) {
+      staleReads--;
+      return route.fulfill({ response, json: { ...body, result: staleView } });
+    }
+    return route.fulfill({ response });
+  });
   async function walletReady() {
     await waitFor(
       async () => {
@@ -344,11 +363,24 @@ try {
       );
       assert.equal(await page.getByTestId("counter-value").textContent(), "0");
     }
+    // Reproduce a view backend lagging behind a successful receipt. Only reads
+    // are held back; the transaction is submitted and executed by the real node.
+    staleView = structuredClone(lastView);
+    staleReads = 3;
+    const submissionsBefore = submissions;
+    const viewsBefore = views;
     await page.getByRole("button", { name: "Increment", exact: true }).click();
     await waitFor(
-      async () =>
-        (await page.getByTestId("counter-value").textContent()) ===
-        updatedValue,
+      async () => {
+        if (await page.getByRole("alert").isVisible()) {
+          throw new Error(
+            `Increment failed: ${await page.getByRole("alert").textContent()}`,
+          );
+        }
+        return (
+          (await page.getByTestId("counter-value").textContent()) === updatedValue
+        );
+      },
       app,
       "increment",
     );
@@ -356,6 +388,16 @@ try {
       await page.getByRole("status").textContent(),
       /executed successfully/,
     );
+    assert.equal(staleReads, 0, "refresh must read past all stale snapshots");
+    assert.ok(views >= viewsBefore + 4);
+    assert.equal(
+      submissions,
+      submissionsBefore + 1,
+      "refresh must not resubmit the transaction",
+    );
+    const viewsAfter = views;
+    await delay(600);
+    assert.equal(views, viewsAfter, "refresh must stop once caught up");
     const wallet = await page.getByTestId("wallet-address").textContent();
     await page.reload();
     await walletReady();
@@ -382,6 +424,33 @@ try {
         path: join(work, `counter-${attempt}-${width}.png`),
         fullPage: true,
       });
+    }
+    if (attempt === 1) {
+      staleView = structuredClone(lastView);
+      staleReads = Infinity;
+      const beforeTimeout = submissions;
+      await page.getByRole("button", { name: "Increment", exact: true }).click();
+      await waitFor(
+        () => page.getByRole("alert").isVisible(),
+        app,
+        "refresh timeout",
+        15_000,
+      );
+      assert.match(
+        await page.getByRole("alert").textContent(),
+        /Transaction executed successfully, but the value could not be refreshed/,
+      );
+      assert.equal(submissions, beforeTimeout + 1);
+      const stoppedViews = views;
+      await delay(600);
+      assert.equal(views, stoppedViews, "a timed-out refresh must stop reading");
+      staleReads = 0;
+      await page.reload();
+      await walletReady();
+      assert.equal(
+        await page.getByTestId("counter-value").textContent(),
+        (BigInt(updatedValue) + 1n).toString(),
+      );
     }
     await stop(app);
     assert.equal(node.done, false, "app shutdown must leave the node running");

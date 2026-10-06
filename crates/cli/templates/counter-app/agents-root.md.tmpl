@@ -5,8 +5,8 @@ local startup workflow and `web/AGENTS.md` before changing the frontend.
 
 - `web/`: browser UI and temporary native wallet.
 - `scripts/`: contract build, local deployment, and Vite startup.
-- `web/generated/` and `.groundhog/app.json`: generated bindings and local
-  deployment data. Rebuild them through the project scripts.
+- `web/generated/`: regenerate bindings with `npm run contract:build`.
+- `.groundhog/app.json`: save a fresh deployment with `npm run contract:deploy`.
 
 Use the project's local-node workflow. The hosted Devnet quickstarts describe
 a different setup.
