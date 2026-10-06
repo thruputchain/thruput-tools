@@ -30,7 +30,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 /// Current schema version for `deploy --json` data payloads.
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 6;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 7;
 
 /// HOG that `groundhog test --integration` transfers to the contract it deploys.
 ///
@@ -57,6 +57,8 @@ pub struct DeploymentOptions<'a> {
 struct InitializerReport {
     method: String,
     entrypoint_id: String,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
     calldata: HexBytes,
 }
@@ -69,7 +71,11 @@ struct NativeDeployment {
     network_hash: String,
     contract_hash: String,
     deployment_nonce: String,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<i64>")]
     expiry_height: i64,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<u64>")]
     gas_limit: u64,
     funding_hog: String,
     funding_raw_amount: String,
@@ -346,16 +352,16 @@ pub fn run(
         "txHash": tx_hash_formatted,
         "artifactKind": prepared.artifact.kind.as_str(),
         "artifactPath": &prepared.artifact.path,
-        "artifactBytes": prepared.artifact_bytes_len,
+        "artifactBytes": prepared.artifact_bytes_len.to_string(),
         "address": contract_addr_hex,
         "addressSource": match address_source {
             Some(DeployAddressSource::Receipt) => Some("receipt"),
             Some(DeployAddressSource::Derived) => Some("derived"),
             None => None,
         },
-        "height": receipt.height,
+        "height": receipt.height.to_string(),
         "status": receipt.status,
-        "gasUsed": receipt.gas_used,
+        "gasUsed": receipt.gas_used.to_string(),
         "transactionDetail": transaction_detail,
         "walletEntrypointId": prepared.wallet_entrypoint_id,
         "walletEntrypointSource": prepared.wallet_entrypoint_source,
@@ -513,7 +519,7 @@ fn print_dry_run(
             "rpcUrl": prepared.rpc_url,
             "artifactKind": prepared.artifact.kind.as_str(),
             "artifactPath": &prepared.artifact.path,
-            "artifactBytes": prepared.artifact_bytes_len,
+            "artifactBytes": prepared.artifact_bytes_len.to_string(),
             "predictedAddress": prepared.predicted_address,
             "walletEntrypointId": prepared.wallet_entrypoint_id,
             "walletEntrypointSource": prepared.wallet_entrypoint_source,

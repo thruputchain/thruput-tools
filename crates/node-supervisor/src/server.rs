@@ -1013,7 +1013,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             client
                 .pending_transaction_count()
                 .await
-                .expect("bug: pendingTransactionCount should use SchedGateway"),
+                .expect("bug: pendingTransactionCount should use SchedGateway")
+                .0,
             0
         );
 
@@ -2340,7 +2341,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "expected committed status for known tx, got {status}"
         );
         assert_eq!(
-            status["height"], CANNED_HEIGHT_A,
+            status["height"],
+            CANNED_HEIGHT_A.to_string(),
             "committed status height should be CANNED_HEIGHT_A"
         );
 
@@ -2422,7 +2424,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "receipt should be non-null for committed tx"
         );
         assert_eq!(
-            receipt["height"], CANNED_HEIGHT_A,
+            receipt["height"],
+            CANNED_HEIGHT_A.to_string(),
             "receipt height should be CANNED_HEIGHT_A"
         );
         assert_eq!(
@@ -2431,7 +2434,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "receipt txHash should round-trip"
         );
         assert_eq!(
-            receipt["gasUsed"], CANNED_GAS_USED_A,
+            receipt["gasUsed"],
+            CANNED_GAS_USED_A.to_string(),
             "receipt should carry the gas the fake indexer's event log records"
         );
 
@@ -2534,7 +2538,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: getStorageAt should succeed");
 
         // Assert
-        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
         assert_eq!(read["item"]["kind"], "bytestring");
         assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
 
@@ -2573,7 +2577,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: getStorageAt should succeed with DbGateway only");
 
         // Assert
-        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
         assert_eq!(read["item"]["kind"], "bytestring");
         assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
 
@@ -2624,7 +2628,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: getStorageAt miss should succeed");
 
         // Assert
-        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT.to_string());
         assert!(
             read["item"].is_null(),
             "missing storage item should serialize as null"

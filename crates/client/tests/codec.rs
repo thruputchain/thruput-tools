@@ -26,6 +26,167 @@ fn spec_id(declared: &str) -> ContractSpecId {
     }
 }
 
+fn numeric_tuple_metadata(ty: ContractType) -> CallMetadata {
+    let tuple = ContractType::Tuple {
+        tuple: vec![ty].try_into().unwrap(),
+    };
+    CallMetadata::Spec(SpecMethodMetadata {
+        interface_name: "Numbers".into(),
+        version: "1".into(),
+        method: ContractSpecMethod {
+            name: spec_string("echo"),
+            args: vec![ContractField {
+                name: spec_string("values"),
+                ty: tuple.clone(),
+            }]
+            .try_into()
+            .unwrap(),
+            return_type: tuple,
+        },
+        type_defs: vec![],
+        throws: vec![],
+    })
+}
+
+#[test]
+fn nested_wide_integers_reject_numbers_and_noncanonical_strings() {
+    for ty in [
+        ContractType::U64,
+        ContractType::I64,
+        ContractType::U128,
+        ContractType::I128,
+        ContractType::U256,
+        ContractType::I256,
+    ] {
+        let metadata = numeric_tuple_metadata(ty);
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(7),
+            serde_json::json!(9_007_199_254_740_993u64),
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!(""),
+            serde_json::json!("01"),
+            serde_json::json!("-01"),
+            serde_json::json!("+1"),
+            serde_json::json!("-0"),
+            serde_json::json!("-"),
+            serde_json::json!(" 1"),
+            serde_json::json!("1\n"),
+            serde_json::json!("1.0"),
+            serde_json::json!("1e3"),
+        ] {
+            let argument = serde_json::json!([value]).to_string();
+            assert!(
+                encode_args(std::slice::from_ref(&argument), Some(&metadata)).is_err(),
+                "accepted {argument} with {metadata:?}"
+            );
+        }
+    }
+}
+
+fn assert_numeric_tuple_roundtrip<T: std::fmt::Display + xdrs::WriteXDR>(
+    ty: ContractType,
+    values: &[T],
+) {
+    let metadata = numeric_tuple_metadata(ty);
+    for value in values {
+        let json = serde_json::json!([value.to_string()]);
+        let encoded = encode_args(&[json.to_string()], Some(&metadata)).unwrap();
+        assert_eq!(encoded, xdrs::cxs::encode(value).unwrap(), "{json}");
+        assert_eq!(decode_return(&encoded, Some(&metadata)), Some(json));
+    }
+}
+
+#[test]
+fn nested_wide_integers_preserve_precision_and_type_boundaries() {
+    assert_numeric_tuple_roundtrip(
+        ContractType::U64,
+        &[0, 1, (1 << 53) - 1, 1 << 53, (1 << 53) + 1, u64::MAX],
+    );
+    assert_numeric_tuple_roundtrip(
+        ContractType::I64,
+        &[i64::MIN, -((1 << 53) + 1), -1, 0, (1 << 53) + 1, i64::MAX],
+    );
+    assert_numeric_tuple_roundtrip(ContractType::U128, &[0, 1, u128::MAX]);
+    assert_numeric_tuple_roundtrip(ContractType::I128, &[i128::MIN, -1, 0, i128::MAX]);
+    assert_numeric_tuple_roundtrip(
+        ContractType::U256,
+        &[
+            "0".parse().unwrap(),
+            "1".parse().unwrap(),
+            groundhog_u256::U256::MAX,
+        ],
+    );
+    assert_numeric_tuple_roundtrip(
+        ContractType::I256,
+        &[
+            groundhog_u256::I256::MIN,
+            "-1".parse().unwrap(),
+            "0".parse().unwrap(),
+            "1".parse().unwrap(),
+            groundhog_u256::I256::MAX,
+        ],
+    );
+}
+
+#[test]
+fn nested_wide_integers_reject_out_of_range_strings() {
+    for (ty, values) in [
+        (ContractType::U64, ["-1", "18446744073709551616"]),
+        (
+            ContractType::I64,
+            ["-9223372036854775809", "9223372036854775808"],
+        ),
+        (
+            ContractType::U128,
+            ["-1", "340282366920938463463374607431768211456"],
+        ),
+        (
+            ContractType::I128,
+            [
+                "-170141183460469231731687303715884105729",
+                "170141183460469231731687303715884105728",
+            ],
+        ),
+        (
+            ContractType::U256,
+            [
+                "-1",
+                "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+            ],
+        ),
+        (
+            ContractType::I256,
+            [
+                "-57896044618658097711785492504343953926634992332820282019728792003956564819969",
+                "57896044618658097711785492504343953926634992332820282019728792003956564819968",
+            ],
+        ),
+    ] {
+        let metadata = numeric_tuple_metadata(ty);
+        for value in values {
+            let argument = serde_json::json!([value]).to_string();
+            assert!(
+                encode_args(&[argument], Some(&metadata)).is_err(),
+                "accepted {value} with {metadata:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_narrow_integers_still_accept_json_numbers() {
+    for ty in [ContractType::U8, ContractType::U32, ContractType::I32] {
+        let metadata = numeric_tuple_metadata(ty);
+        let encoded = encode_args(&["[7]".into()], Some(&metadata)).unwrap();
+        assert_eq!(
+            decode_return(&encoded, Some(&metadata)),
+            Some(serde_json::json!([7]))
+        );
+    }
+}
+
 #[test]
 fn spec_string_text_accepts_valid_identifiers() {
     assert_eq!(
@@ -153,7 +314,7 @@ fn encode_abort_bytes(
 #[test]
 fn decode_abort_decodes_declared_spec_exception() {
     let metadata = CallMetadata::Spec(throwing_spec_metadata());
-    let expected = serde_json::json!({"case": "Bounds", "value": [7]});
+    let expected = serde_json::json!({"case": "Bounds", "value": ["7"]});
     let bytes = encode_abort_bytes(
         COUNTER_ERROR_SELECTOR,
         ContractType::Named {

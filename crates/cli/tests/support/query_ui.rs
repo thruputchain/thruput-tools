@@ -97,11 +97,11 @@ fn address() -> String {
 }
 
 fn balance(raw: &str) -> Value {
-    json!({"result": {"address": address(), "rawBalance": raw, "height": 34}})
+    json!({"result": {"address": address(), "rawBalance": raw, "height": "34"}})
 }
 
 fn view(output: Value) -> Value {
-    let mut response = json!({"result": {"events": [], "height": 12, "gasUsed": 7}});
+    let mut response = json!({"result": {"events": [], "height": "12", "gasUsed": "7"}});
     response["result"]["output"] = output;
     response
 }
@@ -225,7 +225,7 @@ fn inspection_commands_render_complete_empty_and_pending_results() {
     for (args, result, method, title) in [
         (
             vec!["storage", "counter", &hash],
-            json!({"item":null,"blockHeight":12}),
+            json!({"item":null,"blockHeight":"12"}),
             "groundhog_getStorageAt",
             "Storage",
         ),
@@ -237,19 +237,19 @@ fn inspection_commands_render_complete_empty_and_pending_results() {
         ),
         (
             vec!["tx", "list"],
-            json!({"refs":[],"cursor":"0xaabb","latestBlock":12,"oldestBlock":0}),
+            json!({"refs":[],"cursor":"0xaabb","latestBlock":"12","oldestBlock":"0"}),
             "groundhog_getTransactionsByAddress",
             "Transaction history",
         ),
         (
             vec!["events", "list", "counter"],
-            json!({"events":[],"cursor":"0x","latestBlock":12,"oldestBlock":0}),
+            json!({"events":[],"cursor":"0x","latestBlock":"12","oldestBlock":"0"}),
             "groundhog_getEvents",
             "Events",
         ),
         (
             vec!["token", "transfers", "counter"],
-            json!({"events":[],"cursor":"0x","latestBlock":12,"oldestBlock":0}),
+            json!({"events":[],"cursor":"0x","latestBlock":"12","oldestBlock":"0"}),
             "groundhog_getEvents",
             "Token transfers",
         ),
@@ -363,7 +363,7 @@ fn named_view_shows_decoded_value_and_method() {
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '│')
         .collect();
-    assert!(compact.contains("Value:7"), "{history}");
+    assert!(compact.contains("Value:\"7\""), "{history}");
     query.finish("groundhog_view");
 }
 

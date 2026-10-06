@@ -420,7 +420,7 @@ mod tests {
             .expect("endpoint");
         let (url, server) = public_server(
             json!({"networkHash":prefixed_hex(0)}),
-            json!({"height":1,"blockHash":prefixed_hex(1)}),
+            json!({"height":"1","blockHash":prefixed_hex(1)}),
         )
         .await;
         preflight_chain_identity(&manifest, &url, Duration::from_secs(1))
@@ -438,7 +438,7 @@ mod tests {
     async fn runtime_preflight_rejects_public_network_mismatch() {
         let (url, server) = public_server(
             json!({"networkHash":prefixed_hex(0xff)}),
-            json!({"height":1,"blockHash":prefixed_hex(1)}),
+            json!({"height":"1","blockHash":prefixed_hex(1)}),
         )
         .await;
         let error =

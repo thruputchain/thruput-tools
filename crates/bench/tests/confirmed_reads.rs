@@ -45,20 +45,20 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
             json!({"wireFormat":"3.0.0","implementation":"fixture","commitHash":"target-commit"})
         }
         "groundhog_networkInfo" => json!({"networkHash":NETWORK}),
-        "groundhog_chainTip" => json!({"height":7}),
+        "groundhog_chainTip" => json!({"height":"7"}),
         "groundhog_getTransactionStatus" => {
             assert_eq!(request["params"], json!([HASH]));
             let count = state.statuses.fetch_add(1, Ordering::SeqCst);
             if count > 0 && state.invalid {
                 json!({"status":"pending"})
             } else {
-                json!({"status":"committed","height":7})
+                json!({"status":"committed","height":"7"})
             }
         }
         "groundhog_getTransactionReceipt" => {
             assert_eq!(request["params"], json!([HASH]));
             let count = state.receipts.fetch_add(1, Ordering::SeqCst);
-            json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":7,"status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":1500})
+            json!({"txHash":if count > 0 && state.invalid {NETWORK} else {HASH},"height":"7","status":{"result":"deterministicError","kind":"fault"},"events":[],"gasUsed":"1500"})
         }
         _ => panic!("unexpected method {method}"),
     };

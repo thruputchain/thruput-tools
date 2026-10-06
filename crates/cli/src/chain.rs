@@ -18,7 +18,7 @@ use crate::{CliError, Print};
 
 const ARCHIVE_SCHEMA_VERSION: u32 = 3;
 const LEGACY_ARCHIVE_SCHEMA_VERSION: u32 = 1;
-const REPORT_SCHEMA_VERSION: u32 = 1;
+const REPORT_SCHEMA_VERSION: u32 = 2;
 const ARCHIVE_KIND: &str = "groundhog-chain-dump";
 // Files are compressed independently in bounded chunks so restore never has to
 // hold an entire database file in memory.
@@ -42,6 +42,8 @@ pub struct ChainDumpReport {
     pub schema_version: u32,
     pub archive_path: PathBuf,
     pub data_dir: PathBuf,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<usize>")]
     pub file_count: usize,
     pub uncompressed_bytes: String,
     pub archive_bytes: String,
@@ -55,6 +57,8 @@ pub struct ChainRestoreReport {
     pub schema_version: u32,
     pub archive_path: PathBuf,
     pub data_dir: PathBuf,
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
+    #[schemars(with = "groundhog_json_rpc_types::decimal::Decimal<usize>")]
     pub file_count: usize,
     pub uncompressed_bytes: String,
     #[serde(skip_serializing_if = "Option::is_none")]

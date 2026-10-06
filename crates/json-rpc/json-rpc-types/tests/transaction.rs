@@ -26,7 +26,7 @@ fn recent_failure_serializes_camel_case() {
     let value = serde_json::to_value(&status).expect("recent failure should serialize");
 
     assert_eq!(value["status"], "recentFailure");
-    assert_eq!(value["attemptHeight"], 1234);
+    assert_eq!(value["attemptHeight"], "1234");
     assert_eq!(
         value["cause"]["conflict"]["address"],
         format!("0x{}", "11".repeat(32))
@@ -133,7 +133,7 @@ fn contract_rejection_preserves_attachment_index_and_all_codes() {
         let value = serde_json::to_value(&status).unwrap();
         assert_eq!(
             value,
-            json!({"status":"recentFailure", "attemptHeight":1234,
+            json!({"status":"recentFailure", "attemptHeight":"1234",
             "cause":{"kind":"contractRejected", "contractIndex":3, "code":expected}})
         );
         let roundtrip: TransactionStatus = serde_json::from_value(value.clone()).unwrap();

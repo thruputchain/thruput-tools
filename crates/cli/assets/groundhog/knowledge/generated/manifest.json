@@ -5,7 +5,7 @@
     "groundhog-rpc"
   ],
   "compatibility": {
-    "groundhog-cli": "0.22.1"
+    "groundhog-cli": "0.23.0"
   },
   "records": [
     "groundhog.local-development",
@@ -19,15 +19,15 @@
   "artifacts": {
     "agentGuide": {
       "path": "generated/agent-guide.md",
-      "sha256": "sha256:e2c1085cd82b220169f29920472ba6e8a62c964cfdf976b9b223fe66715f75ec"
+      "sha256": "sha256:4bb9e7d7b20d5def453e46e1cce6774171f7d4c7a860333aa504093311b146a4"
     },
     "records": {
       "path": "generated/records.jsonl",
-      "sha256": "sha256:0e8c5aa16659fa6f67ba3ef7900b3ebbfb04a36154b99da27c5339419610aaee"
+      "sha256": "sha256:3014253fac75eab856d705553fc60545c4e401fca63c96970ccb0c58ecd4e29d"
     },
     "skillTemplate": {
       "path": "generated/SKILL.md",
-      "sha256": "sha256:3c7d1eef61e19e47b9695e17a3d1efe966efa4055dd1347f2eb6b4e476afd08e"
+      "sha256": "sha256:e69b3073d9254798da2c4d93e4ea8c3dd52be77d6aa82a680feb1036aa6dc5d0"
     }
   }
 }

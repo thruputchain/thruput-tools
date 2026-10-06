@@ -14,6 +14,7 @@ use groundhog_json_rpc_types::{
     airdrop::{AirdropAttemptResponse, AirdropRequest, FundAccountRequest, FundAccountResponse},
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
+    decimal::Decimal,
     events::{EventPage, EventQuery},
     hex::HexBytes,
     network_config::NetworkConfigParams,
@@ -30,7 +31,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "8.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "9.1.0";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -111,11 +112,14 @@ pub trait GroundhogApi {
 
     /// Block data at a given height.
     #[method(name = "getBlockByNumber")]
-    async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>>;
+    async fn get_block_by_number(
+        &self,
+        height: Decimal<BlockHeight>,
+    ) -> RpcResult<Option<BlockInfo>>;
 
     /// Number of transactions in the mempool.
     #[method(name = "pendingTransactionCount")]
-    async fn pending_transaction_count(&self) -> RpcResult<u64>;
+    async fn pending_transaction_count(&self) -> RpcResult<Decimal<u64>>;
 
     /// Paginated, filterable contract events. See `EventQuery` /
     /// `EventPage` for the Soroban-shaped filter / cursor / topic

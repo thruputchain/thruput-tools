@@ -850,6 +850,13 @@ mod tests {
 
     #[async_trait]
     impl SchedGateway_SchedGateway1 for TestSchedulerGateway {
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            _hashes: TransactionHashBatch,
+        ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+            panic!("bug: this test should not look up scheduler outcomes")
+        }
+
         async fn schedgateway_intro(
             &self,
             protocol: Protocol,

@@ -7,7 +7,7 @@ use serde::Serialize;
 ///
 /// Bump this when the shape or semantics of `ViewJsonPayload` change in a
 /// way that could break existing machine consumers.
-pub const VIEW_JSON_SCHEMA_VERSION: u32 = 1;
+pub const VIEW_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Structured machine-readable report for `groundhog view --json`.
 #[derive(Debug, Serialize)]
@@ -21,8 +21,10 @@ pub struct ViewJsonPayload<'a> {
     pub calldata: &'a str,
     pub caller: &'a Option<ContractAddress>,
     pub selector: serde_json::Value,
+    #[serde(serialize_with = "groundhog_json_rpc_types::decimal::serialize::<BlockHeight, _>")]
     pub height: &'a BlockHeight,
     /// Gas the viewed invocation consumed.
+    #[serde(with = "groundhog_json_rpc_types::decimal")]
     pub gas_used: u64,
     pub output: &'a RootInvocationOutput,
     pub events: &'a [EmittedEvent],

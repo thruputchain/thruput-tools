@@ -1021,6 +1021,15 @@ fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> SHA256Hash {
 
 #[async_trait]
 impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
+    async fn schedcoord_lookup_transaction_outcomes(
+        &self,
+        _hashes: TransactionHashBatch,
+    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+        Err(ProgramError::msg(
+            "fake scheduler does not implement outcome lookup",
+        ))
+    }
+
     async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
         Ok(())
     }
@@ -1234,6 +1243,15 @@ struct FakeSchedulerGateway(FakeScheduler);
 
 #[async_trait]
 impl SchedGateway_SchedGateway1 for FakeSchedulerGateway {
+    async fn schedgateway_lookup_transaction_outcomes(
+        &self,
+        _hashes: TransactionHashBatch,
+    ) -> Result<groundhog_scheduler::SchedulerTransactionOutcomeBatch, ProgramError> {
+        Err(ProgramError::msg(
+            "fake scheduler does not implement outcome lookup",
+        ))
+    }
+
     async fn schedgateway_intro(
         &self,
         _protocol: ProtocolCommit,

@@ -538,7 +538,7 @@ mod tests {
                                 gate.acquire().await.unwrap().forget();
                                 Json(json!({
                                     "attemptStatus": "pending", "recipient": request.recipient,
-                                    "rawAmount": "100000000", "retryAfterSeconds": 5
+                                    "rawAmount": "100000000", "retryAfterSeconds": "5"
                                 }))
                             }
                         }
@@ -618,7 +618,7 @@ mod tests {
             network_descriptor("devnet"),
             StatusCode::ACCEPTED,
             json!({"attemptStatus": "pending", "recipient": airdrop_request().recipient,
-                "rawAmount": "100000000", "retryAfterSeconds": 5}),
+                "rawAmount": "100000000", "retryAfterSeconds": "5"}),
             requests.clone(),
         )
         .await;
@@ -707,7 +707,7 @@ mod tests {
                         gate.acquire().await.unwrap().forget();
                         Json(json!({
                             "attemptStatus": "pending", "recipient": airdrop_request().recipient,
-                            "rawAmount": "100000000", "retryAfterSeconds": 5
+                            "rawAmount": "100000000", "retryAfterSeconds": "5"
                         }))
                     }
                 }
@@ -1066,7 +1066,7 @@ mod tests {
                                 "attemptStatus": "pending",
                                 "recipient": format!("0x{}", "11".repeat(32)),
                                 "rawAmount": "100000000",
-                                "retryAfterSeconds": 5
+                                "retryAfterSeconds": "5"
                             }))
                         }
                     }
@@ -1140,7 +1140,7 @@ mod tests {
                                 "recipient": format!("0x{}", "11".repeat(32)),
                                 "rawAmount": "100000000",
                                 "txHash": format!("0x{}", "22".repeat(32)),
-                                "height": 42,
+                                "height": "42",
                                 "status": { "result": "ok" }
                             }))
                         }
@@ -1188,7 +1188,7 @@ mod tests {
             "recipient": format!("0x{}", "11".repeat(32)),
             "rawAmount": "100000000",
             "txHash": format!("0x{}", "22".repeat(32)),
-            "retryAfterSeconds": 5
+            "retryAfterSeconds": "5"
         });
         let (pending_url, _pending_server) = spawn_server(
             network_descriptor("devnet"),
@@ -1212,7 +1212,7 @@ mod tests {
             "recipient": format!("0x{}", "11".repeat(32)),
             "rawAmount": "100000000",
             "txHash": format!("0x{}", "22".repeat(32)),
-            "height": 42,
+            "height": "42",
             "status": { "result": "ok" }
         });
         let (succeeded_url, _succeeded_server) = spawn_server(
@@ -1334,7 +1334,7 @@ mod tests {
                 "recipient": format!("0x{}", "11".repeat(32)),
                 "rawAmount": "100000000",
                 "txHash": format!("0x{}", "22".repeat(32)),
-                "height": 42,
+                "height": "42",
                 "status": { "result": "reverted", "message": "denied" }
             }),
             Arc::new(AtomicUsize::new(0)),
@@ -1376,7 +1376,7 @@ mod tests {
                                     "attemptStatus": "pending",
                                     "recipient": format!("0x{}", "11".repeat(32)),
                                     "rawAmount": "100000000",
-                                    "retryAfterSeconds": 5
+                                    "retryAfterSeconds": "5"
                                 })),
                             )
                         }
@@ -1420,7 +1420,7 @@ mod tests {
                 "attemptStatus": "pending",
                 "recipient": format!("0x{}", "11".repeat(32)),
                 "rawAmount": "100000000",
-                "retryAfterSeconds": 5
+                "retryAfterSeconds": "5"
             }),
             Arc::new(AtomicUsize::new(0)),
         )
@@ -1452,7 +1452,7 @@ mod tests {
                 "attemptStatus": "pending",
                 "recipient": format!("0x{}", "99".repeat(32)),
                 "rawAmount": "100000000",
-                "retryAfterSeconds": 5
+                "retryAfterSeconds": "5"
             }),
             Arc::new(AtomicUsize::new(0)),
         )

@@ -56,6 +56,10 @@ struct FaucetErrorBody {
 struct FaucetErrorDetail {
     code: String,
     message: String,
-    #[serde(rename = "retryAfterSeconds")]
+    #[serde(
+        default,
+        rename = "retryAfterSeconds",
+        with = "groundhog_json_rpc_types::decimal::option"
+    )]
     retry_after_seconds: Option<u64>,
 }

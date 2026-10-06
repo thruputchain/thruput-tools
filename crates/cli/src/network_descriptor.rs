@@ -318,9 +318,9 @@ mod tests {
         assert_invalid_field(error, "airdrop.rawAmount");
 
         let mut value = serde_json::to_value(descriptor()).unwrap();
-        value["airdrop"]["recipientCooldownSeconds"] = serde_json::json!(0);
+        value["airdrop"]["recipientCooldownSeconds"] = serde_json::json!("0");
         value["airdrop"]["clientQuotaMax"] = serde_json::json!(0);
-        value["airdrop"]["clientQuotaWindowSeconds"] = serde_json::json!(0);
+        value["airdrop"]["clientQuotaWindowSeconds"] = serde_json::json!("0");
         value["airdrop"]["maxPendingPerRecipient"] = serde_json::json!(0);
         parse_remote_airdrop_descriptor("https://rpc.devnet.example/", value)
             .expect("bug: zero policy values should be displayed and enforced by the faucet");
@@ -460,9 +460,9 @@ mod tests {
             "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
             "airdrop": {
                 "rawAmount": "100000000",
-                "recipientCooldownSeconds": 43200,
+                "recipientCooldownSeconds": "43200",
                 "clientQuotaMax": 10,
-                "clientQuotaWindowSeconds": 3600,
+                "clientQuotaWindowSeconds": "3600",
                 "maxPendingPerRecipient": 1
             }
         }))

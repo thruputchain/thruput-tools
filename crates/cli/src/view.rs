@@ -421,7 +421,7 @@ mod tests {
 
         assert_eq!(
             decoded_return_value(&prepared, &response),
-            Some(serde_json::json!(7))
+            Some(serde_json::json!("7"))
         );
     }
 }

@@ -432,7 +432,7 @@ pub enum CliError {
             "url": url,
             "httpStatus": http_status,
             "code": service_code,
-            "retryAfterSeconds": retry_after_seconds,
+            "retryAfterSeconds": retry_after_seconds.map(|value| value.to_string()),
         }))
     )]
     FaucetService {

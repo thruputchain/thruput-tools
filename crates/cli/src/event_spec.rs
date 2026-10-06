@@ -1019,7 +1019,7 @@ mod tests {
         ]);
 
         assert_eq!(items[0].decode_status, EventDecodeStatus::Decoded);
-        assert_eq!(items[0].decoded.as_ref().unwrap().fields["value"], 7);
+        assert_eq!(items[0].decoded.as_ref().unwrap().fields["value"], "7");
         assert_eq!(items[1].decode_status, EventDecodeStatus::UnknownSignature);
         assert!(items[1].decode_error.is_none());
         assert_eq!(items[2].decode_status, EventDecodeStatus::Malformed);

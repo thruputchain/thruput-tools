@@ -144,8 +144,8 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.42.2, standard interfaces 0.1.44, protocol-rs 0.43.0,
-and XDR 0.10.2. Update the SDK and interface dependencies together when
+This CLI uses SDK 0.44.2, standard interfaces 0.1.47, protocol-rs 0.46.0,
+and XDR 0.10.3. Update the SDK and interface dependencies together when
 migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where
@@ -231,12 +231,11 @@ and byte slices expose only a hash, not their preimage.
 
 ## TypeScript Application Path
 
-Use public package exports and generated bindings, not package internals.
-Connect a cluster-aware client, create or load an account, then bind a wallet.
-One public client supports multiple independent wallet bindings. Pubkey accounts
-use DefaultWallet, including hosted schema-3 bootstrap accounts. Historical saved
-legacy source-address wallets use `devWalletAdapter`; preserve their addresses.
-Do not submit an application invocation directly as the transaction root.
+Use public exports and generated bindings. Connect a cluster-aware client, create
+or load an account, and bind a wallet. One client supports multiple wallets.
+Pubkey accounts, including hosted schema-3 bootstrap accounts, use DefaultWallet.
+Historical source-address wallets use `devWalletAdapter`; preserve their addresses.
+Never submit an application invocation directly as the transaction root.
 
 Select an interface version for values; explicit types use the full namespace:
 
@@ -278,16 +277,16 @@ broadcast. Explicit prepare/sign/persist/submit remains available.
   failure. Classification does not authorize transaction resubmission.
 - `getVersion` returns nullable `releaseVersion` and `bundleManifestDigest`.
   Use `wireFormat` for compatibility; release identity is diagnostic.
+- RPC wire 9 and CLI JSON use canonical decimal strings for all 64-bit-or-wider
+  integers; TypeScript uses `bigint`, never `Number`. Smaller integers stay numbers.
 
 ### HTTP batching
 
-`new HttpTransport(url, { batch: true })` groups concurrent requests; defaults are
-`{ maxSize: 100, waitMs: 0 }`. It is off by default. Both supported servers cap
-arrays at 1,000 entries. Match responses by ID; RPC errors remain per-call.
-Shared HTTP or malformed-response failures affect the group. No automatic
-retry occurs. `timeoutMs` includes body reading after dispatch. One cancellation
-does not cancel neighboring calls. HTTP grouping provides no shared snapshot,
-execution order, or atomicity. Await dependent operations separately.
+`new HttpTransport(url, { batch: true })` enables batching, off by default, with
+`{ maxSize: 100, waitMs: 0 }`. Servers cap arrays at 1,000. Match responses by ID.
+RPC errors are per-call; HTTP and malformed-response failures affect the group.
+No automatic retries. `timeoutMs` includes body reading. Cancellation is per-call.
+Batching provides no shared snapshot, ordering, or atomicity. Await dependencies.
 
 ### Event pages and restart
 
