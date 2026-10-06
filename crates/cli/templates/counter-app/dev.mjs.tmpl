@@ -10,6 +10,7 @@ onShutdown(async () => {
 try {
   const config = await readDeployment();
   await checkDeployment(config);
+  const rpcUrl = new URL(config.rpcUrl);
   server = await createServer({
     root: "web",
     server: {
@@ -19,7 +20,8 @@ try {
       proxy: {
         "/rpc": {
           target: config.rpcUrl,
-          rewrite: () => new URL(config.rpcUrl).pathname,
+          prependPath: false,
+          rewrite: () => rpcUrl.pathname + rpcUrl.search,
         },
       },
     },
