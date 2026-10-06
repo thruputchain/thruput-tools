@@ -356,7 +356,7 @@ impl Command {
 struct NewArgs {
     /// Project name: lowercase letters, digits, and single hyphens, starting with a letter
     name: Option<String>,
-    /// Destination directory; an existing directory must be empty
+    /// Project directory (relative, absolute, or ~/path); parent must exist, destination must be empty
     #[arg(long)]
     path: Option<PathBuf>,
     /// Named template from `templates list`; omit for a minimal contract

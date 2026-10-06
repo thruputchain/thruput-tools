@@ -138,3 +138,90 @@ fn missing_name_is_actionable_without_a_terminal() {
     );
     assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn explicit_destination_expands_home_without_shell_help() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .args([
+            "new",
+            "example",
+            "--path",
+            "~/example",
+            "--json",
+            "--non-interactive",
+        ])
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["data"]["path"],
+        home.join("example")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    assert!(home.join("example/Cargo.toml").is_file());
+    assert!(!tmp.path().join("~").exists());
+}
+
+#[test]
+fn missing_destination_parent_reports_path_and_recovery_hint() {
+    let tmp = TempDir::new().unwrap();
+    let output = cli(tmp.path(), &["new", "example", "--path", "missing/example"]);
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let error = &report["error"];
+    assert_eq!(error["code"], "project_directory");
+    assert_eq!(
+        error["details"]["path"],
+        tmp.path().join("missing/example").to_str().unwrap()
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing/example")
+    );
+    assert!(error["hint"].as_str().unwrap().contains("existing parent"));
+    assert!(!tmp.path().join("missing").exists());
+}
+
+#[test]
+fn home_destinations_report_invalid_home_and_unsupported_user_expansion() {
+    let tmp = TempDir::new().unwrap();
+    for path in ["~/example", "~someone/example"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_groundhog"))
+            .args([
+                "new",
+                "example",
+                "--path",
+                path,
+                "--json",
+                "--non-interactive",
+            ])
+            .env("HOME", "relative-home")
+            .env("USERPROFILE", "relative-home")
+            .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(report["error"]["code"], "invalid_argument");
+        assert!(
+            report["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("absolute")
+        );
+    }
+}

@@ -800,6 +800,7 @@ fn new_guides_name_destination_and_catalog_selection() {
         command
             .arg("new")
             .current_dir(tmp.path())
+            .env("HOME", tmp.path())
             .env("XDG_CONFIG_HOME", tmp.path().join("config"))
             .env("TERM", "xterm-256color")
             .env("LC_ALL", "C.UTF-8")
@@ -827,7 +828,12 @@ fn new_guides_name_destination_and_catalog_selection() {
         pty.until(|pty| {
             String::from_utf8_lossy(&pty.raw).contains("Destination [guided-project]:")
         });
-        pty.master.write_all(b"chosen-directory\n").unwrap();
+        let destination = if template == "counter" {
+            "~/chosen-directory\n"
+        } else {
+            "chosen-directory\n"
+        };
+        pty.master.write_all(destination.as_bytes()).unwrap();
         pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("Enter for minimal"));
         let screen = pty.parser.screen().contents();
         assert!(screen.contains("Empty contract"), "{screen}");

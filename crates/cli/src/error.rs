@@ -160,6 +160,15 @@ pub enum CliError {
     #[error("directory is not empty")]
     #[hint("use an empty directory, or pick a different target path")]
     DirNotEmpty,
+    #[error("cannot prepare project directory `{}`: {source}", .path.display())]
+    #[hint(
+        "choose a destination with an existing parent directory and check its permissions; relative paths, absolute paths, and ~/ paths are supported"
+    )]
+    #[details(path)]
+    ProjectDirectory {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
     #[error("unknown template: {0}")]
     #[hint(
         "run `groundhog templates list` for available templates; omit --template for a minimal contract"
@@ -915,19 +924,27 @@ pub enum CliError {
 /// Hint for a cargo failure whose captured output names a cause the CLI
 /// recognizes.
 fn cargo_failure_hint(stderr: &str) -> Cow<'static, str> {
-    Cow::Borrowed(if stderr.contains("incompatible with `immediate-abort`") {
-        "the prebuilt `core` uses a different panic strategy than the \
+    Cow::Borrowed(
+        if stderr
+            .contains("failed to select a version for the requirement `groundhog-json-rpc-client =")
+        {
+            "the project's groundhog-json-rpc-client version is unavailable in the configured registry; \
+         use a published CLI with its matching dependencies, or patch the registry dependency to \
+         the matching local RPC client source when testing an unpublished CLI"
+        } else if stderr.contains("incompatible with `immediate-abort`") {
+            "the prebuilt `core` uses a different panic strategy than the \
          `-C panic=immediate-abort` in `.cargo/config.toml`, so `core` has to \
          be rebuilt from source; check that `.cargo/contract.toml` still \
          contains `[unstable]` and `build-std = [\"core\", \"alloc\"]`"
-    } else if stderr.contains("groundhog-rv32.ld") {
-        "the link references `groundhog-rv32.ld`, which the Groundhog SDK's \
+        } else if stderr.contains("groundhog-rv32.ld") {
+            "the link references `groundhog-rv32.ld`, which the Groundhog SDK's \
          build script supplies through a linker search path; check that the \
          `sdk` dependency resolves for this build, and rebuild after \
          `cargo clean` to re-run its build script"
-    } else {
-        CARGO_FAILED_HINT
-    })
+        } else {
+            CARGO_FAILED_HINT
+        },
+    )
 }
 
 /// Hint for a rejected protocol intro, naming the protocol to pass when the

@@ -86,7 +86,7 @@ pub fn run(
         template
     };
     let allow_empty = path.is_some();
-    let dir = env::current_dir()?.join(path.unwrap_or_else(|| PathBuf::from(&name)));
+    let dir = destination_path(&path.unwrap_or_else(|| PathBuf::from(&name)))?;
     template
         .as_deref()
         .map(crate::templates::lookup)
@@ -94,6 +94,29 @@ pub fn run(
     wizard.finish_step(2, StepState::Done);
     wizard.finish_view()?;
     create(&dir, &name, template.as_deref(), allow_empty, cmd, print).map(|_| ())
+}
+
+fn destination_path(path: &Path) -> Result<PathBuf, CliError> {
+    if let Ok(relative) = path.strip_prefix("~") {
+        let home = env::home_dir()
+            .filter(|home| home.is_absolute())
+            .ok_or_else(|| CliError::InvalidArgument {
+                argument: "destination path".into(),
+                message: "cannot expand `~`: no absolute home directory could be determined; use an absolute destination instead".into(),
+            })?;
+        return Ok(home.join(relative));
+    }
+    if path
+        .components()
+        .next()
+        .is_some_and(|part| part.as_os_str().to_string_lossy().starts_with('~'))
+    {
+        return Err(CliError::InvalidArgument {
+            argument: "destination path".into(),
+            message: "use `~/...` for your home directory; `~user` paths are not supported; use an absolute path instead".into(),
+        });
+    }
+    Ok(env::current_dir()?.join(path))
 }
 
 /// Create a new contract project at the given path.
@@ -133,12 +156,24 @@ fn create(
 
     // Use create_dir directly to avoid TOCTOU race with
     // a separate exists() check.
+    let directory_error = |source| CliError::ProjectDirectory {
+        path: dir.to_path_buf(),
+        source,
+    };
     match fs::create_dir(dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && allow_empty => {
-            if fs::symlink_metadata(dir)?.file_type().is_symlink()
+            if fs::symlink_metadata(dir)
+                .map_err(&directory_error)?
+                .file_type()
+                .is_symlink()
                 || !dir.is_dir()
-                || fs::read_dir(dir)?.next().transpose()?.is_some()
+                || fs::read_dir(dir)
+                    .map_err(&directory_error)?
+                    .next()
+                    .transpose()
+                    .map_err(&directory_error)?
+                    .is_some()
             {
                 return Err(CliError::DirNotEmpty);
             }
@@ -146,11 +181,11 @@ fn create(
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(CliError::DirExists(dir.display().to_string()));
         }
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(directory_error(e)),
     }
     // Resolve against the filesystem after creation so symlinks and `..` retain
     // their actual meaning while every reported path is absolute and clean.
-    let dir = fs::canonicalize(dir)?;
+    let dir = fs::canonicalize(dir).map_err(directory_error)?;
     let dir = dir.as_path();
     let task = crate::print::progress::Task::start(print, "Creating project", true);
     task.print()

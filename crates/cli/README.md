@@ -252,8 +252,11 @@ groundhog templates list                    # offline template discovery
 groundhog templates show counter            # contents, prerequisites, next steps
 ```
 
-Explicit names skip prompts. `--path` selects the destination; existing directories
-must be empty and files are never overwritten. `--template stub` now explains how
+Explicit names skip prompts. `--path` and the destination prompt accept relative
+paths, absolute paths, and `~/` paths. The destination is the project directory,
+not its parent: use `~/Work/my-contract`, not `~/Work`. Its parent must exist;
+existing destinations must be empty and files are never overwritten.
+`--template stub` now explains how
 to use the minimal default. Creation JSON uses `data.schemaVersion = 2` and
 `template: null` for the minimal scaffold. Template discovery JSON uses schema v1.
 
