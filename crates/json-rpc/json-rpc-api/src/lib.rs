@@ -31,7 +31,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "10.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "10.0.1";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -68,7 +68,8 @@ pub trait GroundhogApi {
 
     /// Lightweight status check. Any indexer record takes priority and skips the
     /// scheduler lookup. Otherwise, return the scheduler's pending, committed,
-    /// retry, or dropped outcome. Scheduler commitments currently use height "0".
+    /// retry, or dropped outcome. Scheduler commitments omit `height`; indexed
+    /// commitments include the actual block height, including block zero.
     /// `unknown` requires successful misses from both backends; failed lookups
     /// must not be interpreted as absence.
     #[method(name = "getTransactionStatus")]

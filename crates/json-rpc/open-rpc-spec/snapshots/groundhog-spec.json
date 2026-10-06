@@ -1786,7 +1786,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "10.0.0"
+    "version": "10.0.1"
   },
   "methods": [
     {
@@ -1924,7 +1924,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check. Any indexer record takes priority and skips the scheduler lookup. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome. Scheduler commitments currently use height \"0\". `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
+      "summary": "Lightweight status check. Any indexer record takes priority and skips the scheduler lookup. Otherwise, return the scheduler's pending, committed, retry, or dropped outcome. Scheduler commitments omit `height`; indexed commitments include the actual block height, including block zero. `unknown` requires successful misses from both backends; failed lookups must not be interpreted as absence.",
       "tags": [
         {
           "name": "Core API"
