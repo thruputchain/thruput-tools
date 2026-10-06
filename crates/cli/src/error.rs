@@ -781,6 +781,20 @@ pub enum CliError {
         attempt_height: i64,
         cause: groundhog_json_rpc_types::transaction::TransactionFailureCause,
     },
+    #[error("transaction {tx_hash} needs resubmission: {error:?}")]
+    #[hint("resubmit the same transaction; the mempool does not retry it automatically")]
+    #[details]
+    TransactionRetry {
+        tx_hash: String,
+        error: groundhog_json_rpc_types::transaction::SchedulerTransactionError,
+    },
+    #[error("transaction {tx_hash} was dropped: {error:?}")]
+    #[hint("modify the transaction before resubmitting; inspect its error source and code")]
+    #[details]
+    TransactionDropped {
+        tx_hash: String,
+        error: groundhog_json_rpc_types::transaction::SchedulerTransactionError,
+    },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,
     #[error("{path}: {message}")]

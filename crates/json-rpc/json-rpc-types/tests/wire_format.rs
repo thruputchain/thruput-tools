@@ -159,7 +159,7 @@ fn transaction_status_pending() {
 #[test]
 fn transaction_status_committed() {
     let s = TransactionStatus::Committed {
-        height: BlockHeight::from(100i64),
+        height: Some(BlockHeight::from(100i64)),
     };
     let v: Value = serde_json::to_value(&s).unwrap();
     assert_eq!(v["status"], "committed");
@@ -167,6 +167,37 @@ fn transaction_status_committed() {
     // No block_hash field
     assert!(v.get("blockHash").is_none());
     assert!(v.get("block_hash").is_none());
+}
+
+#[test]
+fn committed_height_is_optional_and_zero_is_a_real_height() {
+    for (json, expected) in [
+        (serde_json::json!({"status": "committed"}), None),
+        (
+            serde_json::json!({"status": "committed", "height": "0"}),
+            Some(BlockHeight::from(0)),
+        ),
+        (
+            serde_json::json!({"status": "committed", "height": "42"}),
+            Some(BlockHeight::from(42)),
+        ),
+    ] {
+        let status: TransactionStatus = serde_json::from_value(json.clone()).unwrap();
+        assert!(matches!(&status, TransactionStatus::Committed { height } if *height == expected));
+        assert_eq!(serde_json::to_value(status).unwrap(), json);
+    }
+    for height in [
+        serde_json::json!(0),
+        serde_json::json!("00"),
+        serde_json::json!("9223372036854775808"),
+    ] {
+        assert!(
+            serde_json::from_value::<TransactionStatus>(serde_json::json!({
+                "status": "committed", "height": height,
+            }))
+            .is_err()
+        );
+    }
 }
 
 #[test]

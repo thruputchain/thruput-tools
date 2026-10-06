@@ -16,15 +16,15 @@ use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 /// implementer bounds and meters its requests. Failures are returned, not
 /// swallowed: the sequencer decides which ones a later answer overrides.
 pub trait StatusProbe: Sync {
-    /// Whether the scheduler mempool holds `tx_hash`.
+    /// The scheduler's pending or retained outcome for `tx_hash`, or `None` for a miss.
     ///
     /// An answer that does not account for the transaction (no per-hash
-    /// slot, a transport failure, a timeout) is an error, never `false`:
-    /// see [`crate::scheduler::mempool_holds_tx`].
-    fn mempool_holds(
+    /// slot, a transport failure, a timeout) is an error, never a miss:
+    /// see [`crate::scheduler::transaction_outcome`].
+    fn scheduler_status(
         &self,
         tx_hash: TxHash,
-    ) -> impl Future<Output = Result<bool, RpcServerError>> + Send;
+    ) -> impl Future<Output = Result<Option<TransactionStatus>, RpcServerError>> + Send;
 
     /// The status the indexer records for `tx_hash`, or `None` for a miss.
     ///
@@ -36,40 +36,27 @@ pub trait StatusProbe: Sync {
     ) -> impl Future<Output = Result<Option<TransactionStatus>, RpcServerError>> + Send;
 }
 
-/// Decide a transaction's status: indexer, then mempool. A committed record
-/// or a mempool hit answers at once; `Unknown` only when both backends
-/// answered and missed, and a failed mempool read is returned as its error
-/// instead.
+/// Use any indexer record without consulting the scheduler. On an indexer miss
+/// or failure, consult the scheduler; a known scheduler outcome can still answer
+/// during indexer unavailability. `Unknown` requires successful misses from both.
+#[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn transaction_status<P: StatusProbe + ?Sized>(
     probe: &P,
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, RpcServerError> {
     let indexed = probe.indexed_status(tx_hash).await;
-    if let Ok(Some(TransactionStatus::Committed { height })) = indexed {
-        return Ok(TransactionStatus::Committed { height });
-    }
-    let mempool_failure = match probe.mempool_holds(tx_hash).await {
-        Ok(true) => return Ok(TransactionStatus::Pending),
-        Ok(false) => None,
-        Err(error) => {
-            tracing::warn!(%error, "mempool lookup did not complete; using the indexer answer");
-            Some(error)
-        }
-    };
-    // The indexer's other answer is a recent-failure diagnostic: best-effort,
-    // and about an earlier attempt. A transaction the mempool holds is being
-    // retried, so `Pending` had to win before this is worth returning. The
-    // same deferral keeps an indexer failure from hiding a pending answer.
-    if let Some(status) = indexed? {
+    if let Ok(Some(status)) = indexed {
         return Ok(status);
     }
-    match mempool_failure {
-        Some(RpcServerError::BackendUnavailable(message)) => {
-            Err(RpcServerError::BackendUnavailable(format!(
-                "{message}; the transaction is not committed but may still be pending"
-            )))
+    match probe.scheduler_status(tx_hash).await {
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => {
+            indexed?;
+            Ok(TransactionStatus::Unknown)
         }
-        Some(error) => Err(error),
-        None => Ok(TransactionStatus::Unknown),
+        Err(error) => {
+            indexed?;
+            Err(error)
+        }
     }
 }

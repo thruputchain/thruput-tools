@@ -191,7 +191,7 @@ pub async fn poll_transaction_receipt(
 /// Poll an accepted transaction with explicit retry settings.
 ///
 /// Receipts are authoritative. When a receipt is not yet available, an
-/// An `Invalid` status ends polling early. A best-effort `RecentFailure`
+/// An `Invalid`, `Retry`, or `Dropped` status ends polling early. A best-effort `RecentFailure`
 /// diagnostic is retained while polling continues because the same transaction
 /// may still commit; if no receipt appears, the diagnostic is returned after
 /// polling is exhausted.

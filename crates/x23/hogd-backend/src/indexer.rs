@@ -114,7 +114,7 @@ pub fn tx_lookup(service: &str, result: TxInfoResult) -> Result<TxLookup, RpcSer
 pub fn committed_status(lookup: TxLookup) -> Option<TransactionStatus> {
     match lookup {
         TxLookup::Found(info) => Some(TransactionStatus::Committed {
-            height: info.height,
+            height: Some(info.height),
         }),
         TxLookup::RecentFailure(recent_failure) => Some(TransactionStatus::from(&recent_failure)),
         TxLookup::NotFound => None,

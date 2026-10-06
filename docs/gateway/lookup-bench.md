@@ -7,7 +7,7 @@ never submits. It creates no wallets and sends no transactions.
 On the indexer-first gateway, a successful `Unknown` answer follows this path:
 
 1. Indexer miss.
-2. Scheduler `schedgateway_lookup_tx` miss.
+2. Scheduler `schedgateway_lookup_transaction_outcomes` miss.
 
 This tests the whole status-miss path, including the indexer read. It is not a
 pure scheduler microbenchmark. Random hash absence is not an authoritative

@@ -31,7 +31,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `AGENTS.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "9.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "10.0.1";
 
 /// Optional faucet-backed API registered only when a server supports airdrops.
 #[open_rpc(namespace = "groundhog", tag = "Airdrop API")]
@@ -80,11 +80,12 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check. The indexer is asked first, so `committed` wins; a
-    /// mempool hit then answers `pending`, over a recent-failure diagnostic. `unknown`
-    /// is returned only after both backends answered without a match. If the mempool
-    /// could not be consulted and the indexer has no record, the call fails with
-    /// `BackendUnavailable` because the transaction may still be pending.
+    /// Lightweight status check. Any indexer record takes priority and skips the
+    /// scheduler lookup. Otherwise, return the scheduler's pending, committed,
+    /// retry, or dropped outcome. Scheduler commitments omit `height`; indexed
+    /// commitments include the actual block height, including block zero.
+    /// `unknown` requires successful misses from both backends; failed lookups
+    /// must not be interpreted as absence.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 

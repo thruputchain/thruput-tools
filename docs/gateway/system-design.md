@@ -68,8 +68,14 @@ local waiting, and backend duration.
 
 ## Transaction Status Lookup Order
 
-A committed indexer answer wins immediately. Otherwise the shared probe consults
-the mempool; presence there takes precedence over an older advisory failure.
+Any indexer record wins immediately, including an advisory failure diagnostic;
+the scheduler is not consulted when the indexer has information. Otherwise the
+shared probe looks up pending and retained scheduler outcomes. Scheduler retry
+and dropped outcomes preserve their error source and protocol error code.
+Scheduler success reports `Committed` with the height omitted because its lookup
+response does not carry a block height. Indexed records supply the actual height,
+including block zero. Callers must handle an omitted status height and can obtain
+the height from a receipt once indexing catches up.
 `Unknown` requires successful misses from both backends. Backend unavailability
 cannot establish absence. These rules prevent an unavailable scheduler from
 making a pending transaction appear to have disappeared.

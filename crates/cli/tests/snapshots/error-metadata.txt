@@ -480,6 +480,16 @@ TransactionRecentFailure
   hint: computed
   details: txHash, attemptHeight, cause
 
+TransactionRetry
+  code: transaction_retry
+  hint text: resubmit the same transaction; the mempool does not retry it automatically
+  details: txHash, error
+
+TransactionDropped
+  code: transaction_dropped
+  hint text: modify the transaction before resubmitting; inspect its error source and code
+  details: txHash, error
+
 ReceiptPollingExhausted
   code: receipt_polling_exhausted
 

@@ -1783,6 +1783,7 @@ dependencies = [
  "groundhog_indexer",
  "groundhog_scheduler",
  "groundhog_view",
+ "serde_json",
  "tokio",
  "tracing",
  "xdr-common",
