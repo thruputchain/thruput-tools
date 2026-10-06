@@ -1,5 +1,6 @@
 use groundhog_json_rpc_client::GroundhogApiClient;
 use groundhog_json_rpc_types::{decimal, network_config::ExecutionConfig};
+use groundhog_rv32_artifact::DeclaredSizes;
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -58,17 +59,31 @@ fn price(value: &str) -> Result<u128, CliError> {
 
 fn calculate(
     bytes: u64,
+    sizes: DeclaredSizes,
     execution: ExecutionConfig,
     initializer: bool,
 ) -> Result<FundingReport, CliError> {
-    let max = execution
-        .effective_limits
-        .max_contract_size_bytes
-        .ok_or_else(|| invalid("runtime did not report the effective contract-size limit"))?;
-    if bytes > u64::from(max) {
-        return Err(invalid(format!(
-            "artifact has {bytes} bytes; network limit is {max}"
-        )));
+    let limits = &execution.effective_limits;
+    for (name, actual, limit) in [
+        ("contract size", bytes, limits.max_contract_size_bytes),
+        (
+            "RV32 memory",
+            u64::from(sizes.memory_bytes),
+            limits.max_rv32_memory_bytes,
+        ),
+        (
+            "RV32 code",
+            u64::from(sizes.code_bytes),
+            limits.max_rv32_code_bytes,
+        ),
+    ] {
+        let max = limit
+            .ok_or_else(|| invalid(format!("runtime did not report the effective {name} limit")))?;
+        if actual > u64::from(max) {
+            return Err(invalid(format!(
+                "{name} is {actual} bytes; network limit is {max}"
+            )));
+        }
     }
     let costs = &execution.storage_costs;
     let balance = price(&costs.balance_cost)?;
@@ -95,6 +110,8 @@ pub(super) fn read(
 ) -> Result<FundingReport, CliError> {
     groundhog_rv32_artifact::verify_artifact(artifact)
         .map_err(|error| invalid(error.to_string()))?;
+    let sizes = groundhog_rv32_artifact::declared_sizes(artifact)
+        .ok_or_else(|| invalid("artifact does not report RV32 code and memory sizes"))?;
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let execution = rt.block_on(async {
@@ -108,6 +125,7 @@ pub(super) fn read(
     })?;
     calculate(
         u64::try_from(artifact.len()).map_err(|_| invalid("artifact size exceeds u64"))?,
+        sizes,
         execution,
         initializer,
     )
@@ -121,7 +139,11 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "observedTip": { "height": "42", "blockHash": format!("0x{}", "11".repeat(32)) },
             "configHash": format!("0x{}", "22".repeat(32)),
-            "effectiveLimits": { "maxContractSizeBytes": u32::MAX },
+            "effectiveLimits": {
+                "maxContractSizeBytes": u32::MAX,
+                "maxRv32CodeBytes": 16,
+                "maxRv32MemoryBytes": 4096
+            },
             "storageCosts": {
                 "baseDataItemCost": "12", "bytestringCostPerByte": "10",
                 "baseContractDeploymentCost": base, "contractDeploymentCostPerByte": per_byte,
@@ -132,13 +154,65 @@ mod tests {
         .unwrap()
     }
 
+    const SIZES: DeclaredSizes = DeclaredSizes {
+        code_bytes: 16,
+        memory_bytes: 4096,
+    };
+
+    #[test]
+    fn guest_limits_are_checked_even_when_the_artifact_fits() {
+        let artifact = groundhog_rv32_artifact::build_artifact(&[0; 16], &[], 0, 4096).unwrap();
+        groundhog_rv32_artifact::verify_artifact(&artifact).unwrap();
+        let sizes = groundhog_rv32_artifact::declared_sizes(&artifact).unwrap();
+        let bytes = u64::try_from(artifact.len()).unwrap();
+
+        for (code_limit, memory_limit, expected_error) in [
+            (Some(16), Some(4096), None),
+            (
+                Some(15),
+                Some(4096),
+                Some("RV32 code is 16 bytes; network limit is 15"),
+            ),
+            (
+                Some(16),
+                Some(4095),
+                Some("RV32 memory is 4096 bytes; network limit is 4095"),
+            ),
+            (
+                None,
+                Some(4096),
+                Some("runtime did not report the effective RV32 code limit"),
+            ),
+            (
+                Some(16),
+                None,
+                Some("runtime did not report the effective RV32 memory limit"),
+            ),
+        ] {
+            let mut execution = rules("30", "200", "2");
+            execution.effective_limits.max_contract_size_bytes =
+                Some(u32::try_from(bytes).unwrap());
+            execution.effective_limits.max_rv32_code_bytes = code_limit;
+            execution.effective_limits.max_rv32_memory_bytes = memory_limit;
+            let result = calculate(bytes, sizes, execution, false);
+            if let Some(message) = expected_error {
+                assert!(result.unwrap_err().to_string().contains(message));
+            } else {
+                assert_eq!(
+                    result.unwrap().minimum_funding(),
+                    230 + u128::from(bytes) * 2
+                );
+            }
+        }
+    }
+
     #[test]
     fn minimum_covers_first_credit_and_code_but_not_initializer() {
-        let report = calculate(100, rules("1234", "12000", "10"), true).unwrap();
+        let report = calculate(100, SIZES, rules("1234", "12000", "10"), true).unwrap();
         assert_eq!(report.minimum_funding(), 14_234);
         assert_eq!(report.minimum_funding_hog, "0.0014234");
         assert_eq!(report.initializer_funding_raw, None);
-        let changed = calculate(100, rules("20", "30", "0"), false).unwrap();
+        let changed = calculate(100, SIZES, rules("20", "30", "0"), false).unwrap();
         assert_eq!(changed.minimum_funding(), 50);
         assert_eq!(changed.initializer_funding_raw.as_deref(), Some("0"));
     }
@@ -146,7 +220,7 @@ mod tests {
     #[test]
     fn maximum_wire_prices_remain_exact() {
         let max = u64::MAX.to_string();
-        let result = calculate(u64::from(u32::MAX), rules(&max, &max, &max), false).unwrap();
+        let result = calculate(u64::from(u32::MAX), SIZES, rules(&max, &max, &max), false).unwrap();
         assert_eq!(
             result.minimum_funding(),
             u128::from(u64::MAX) * (u128::from(u32::MAX) + 2)
@@ -165,13 +239,13 @@ mod tests {
     fn unavailable_or_invalid_inputs_are_not_zero_cost() {
         let mut missing = rules("0", "0", "0");
         missing.effective_limits.max_contract_size_bytes = None;
-        assert!(calculate(1, missing, false).is_err());
-        assert!(calculate(u64::from(u32::MAX) + 1, rules("0", "0", "0"), false).is_err());
+        assert!(calculate(1, SIZES, missing, false).is_err());
+        assert!(calculate(u64::from(u32::MAX) + 1, SIZES, rules("0", "0", "0"), false).is_err());
         for invalid_price in ["", "-1", "+1", "1.5", "18446744073709551616"] {
-            assert!(calculate(1, rules(invalid_price, "0", "0"), false).is_err());
+            assert!(calculate(1, SIZES, rules(invalid_price, "0", "0"), false).is_err());
         }
         assert_eq!(
-            calculate(1, rules("0", "0", "0"), false)
+            calculate(1, SIZES, rules("0", "0", "0"), false)
                 .unwrap()
                 .minimum_funding(),
             0

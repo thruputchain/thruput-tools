@@ -8043,8 +8043,40 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
 }
 
 #[test]
-fn deploy_estimate_needs_no_signer_and_never_invents_missing_prices() {
-    for available in [true, false] {
+fn deploy_estimate_needs_no_signer_and_checks_network_rules() {
+    for (available, code_limit, memory_limit, expected_error) in [
+        (true, Some(16), Some(4096), None),
+        (
+            false,
+            None,
+            None,
+            Some("RPC did not supply authoritative execution rules"),
+        ),
+        (
+            true,
+            Some(15),
+            Some(4096),
+            Some("RV32 code is 16 bytes; network limit is 15"),
+        ),
+        (
+            true,
+            Some(16),
+            Some(4095),
+            Some("RV32 memory is 4096 bytes; network limit is 4095"),
+        ),
+        (
+            true,
+            None,
+            Some(4096),
+            Some("runtime did not report the effective RV32 code limit"),
+        ),
+        (
+            true,
+            Some(16),
+            None,
+            Some("runtime did not report the effective RV32 memory limit"),
+        ),
+    ] {
         let tmp = TempDir::new().unwrap();
         std::fs::write(
             tmp.path().join("groundhog.toml"),
@@ -8069,7 +8101,11 @@ fn deploy_estimate_needs_no_signer_and_never_invents_missing_prices() {
                     "execution": {
                         "observedTip": { "height": "7", "blockHash": format!("0x{}", "11".repeat(32)) },
                         "configHash": format!("0x{}", "22".repeat(32)),
-                        "effectiveLimits": { "maxContractSizeBytes": 1_000_000 },
+                        "effectiveLimits": {
+                            "maxContractSizeBytes": 1_000_000,
+                            "maxRv32CodeBytes": code_limit,
+                            "maxRv32MemoryBytes": memory_limit
+                        },
                         "storageCosts": {
                             "baseDataItemCost": "100", "bytestringCostPerByte": "1",
                             "baseContractDeploymentCost": "200", "contractDeploymentCostPerByte": "2",
@@ -8097,27 +8133,35 @@ fn deploy_estimate_needs_no_signer_and_never_invents_missing_prices() {
             .env("XDG_CONFIG_HOME", tmp.path().join("config"))
             .output()
             .unwrap();
-        if available {
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(json["data"]["schemaVersion"], 1);
-            assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
-            assert_eq!(
-                json["data"]["minimumFundingRaw"],
-                (230 + artifact.len() * 2).to_string()
-            );
-            assert_eq!(json["data"]["execution"]["observedTip"]["height"], "7");
-            assert!(json["data"].get("signedTx").is_none());
-            assert!(output.stderr.is_empty());
-        } else {
-            assert!(!output.status.success());
-            let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-            assert_eq!(json["error"]["code"], "deployment_funding");
-            assert!(output.stdout.is_empty());
+        match expected_error {
+            None => {
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(json["data"]["schemaVersion"], 1);
+                assert_eq!(json["data"]["artifactBytes"], artifact.len().to_string());
+                assert_eq!(
+                    json["data"]["minimumFundingRaw"],
+                    (230 + artifact.len() * 2).to_string()
+                );
+                assert_eq!(json["data"]["execution"]["observedTip"]["height"], "7");
+                assert!(json["data"].get("signedTx").is_none());
+                assert!(output.stderr.is_empty());
+            }
+            Some(message) => {
+                assert!(!output.status.success());
+                let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+                assert_eq!(json["error"]["code"], "deployment_funding");
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains(message),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(output.stdout.is_empty());
+            }
         }
         server.join().unwrap();
     }
