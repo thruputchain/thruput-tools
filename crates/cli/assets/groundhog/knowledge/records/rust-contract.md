@@ -41,8 +41,8 @@ generated project needs: Rust's built-in crates (`test`, `core`, `std`,
 error names the collision; pick another name rather than patching the
 generated manifest.
 
-This CLI uses SDK 0.42.2, standard interfaces 0.1.44, protocol-rs 0.43.0,
-and XDR 0.10.2. Update the SDK and interface dependencies together when
+This CLI uses SDK 0.44.2, standard interfaces 0.1.47, protocol-rs 0.46.0,
+and XDR 0.10.3. Update the SDK and interface dependencies together when
 migrating an existing Rust project.
 
 The normal starter contract is a counter, one of the narrower cases where

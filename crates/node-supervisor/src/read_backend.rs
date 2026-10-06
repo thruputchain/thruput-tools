@@ -510,6 +510,7 @@ mod tests {
     use groundhog_scheduler::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount, RPCError,
         SchedGatewayIntroOutcome, SchedGatewaySubmitOutcome, SchedGatewaySubmitOutcomeBatch,
+        SchedulerTransactionOutcomeBatch,
         sched_gateway::{
             SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Client,
             SchedGateway_SchedGateway1_Dispatcher,
@@ -676,6 +677,13 @@ mod tests {
 
         async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
             Ok(0)
+        }
+
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            _hashes: TransactionHashBatch,
+        ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+            panic!("bug: read backend tests should not look up transaction outcomes")
         }
     }
 

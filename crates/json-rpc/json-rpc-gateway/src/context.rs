@@ -782,7 +782,7 @@ mod tests {
     };
     use groundhog_scheduler::{
         ExpectedDBTip, ParallelSignedTransactionBatch, PendingTxCount,
-        SchedGatewaySubmitOutcomeBatch,
+        SchedGatewaySubmitOutcomeBatch, SchedulerTransactionOutcomeBatch,
         sched_gateway::{SchedGateway_SchedGateway1, SchedGateway_SchedGateway1_Dispatcher},
     };
     use groundhog_view::ViewGatewayIntroOutcome;
@@ -893,6 +893,13 @@ mod tests {
 
         async fn schedgateway_pending_tx_count(&self) -> Result<PendingTxCount, ProgramError> {
             panic!("bug: intro test should not read pending count")
+        }
+
+        async fn schedgateway_lookup_transaction_outcomes(
+            &self,
+            _hashes: TransactionHashBatch,
+        ) -> Result<SchedulerTransactionOutcomeBatch, ProgramError> {
+            panic!("bug: intro test should not look up transaction outcomes")
         }
     }
 
