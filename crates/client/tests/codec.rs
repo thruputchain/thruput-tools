@@ -264,7 +264,7 @@ fn throwing_spec_metadata() -> SpecMethodMetadata {
         interface_name: "Counter".into(),
         version: "0.1.0".into(),
         method: ContractSpecMethod {
-            effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+            effect: None,
             name: spec_string("decrement"),
             args: vec![].try_into().unwrap(),
             return_type: ContractType::Void,
@@ -292,7 +292,7 @@ fn encode_abort_bytes(
         interface_name: "Counter".into(),
         version: "0.1.0".into(),
         method: ContractSpecMethod {
-            effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+            effect: None,
             name: spec_string("throwing"),
             args: vec![ContractField {
                 name: spec_string("exn"),
@@ -482,7 +482,7 @@ fn strkey_spec_address_arguments_match_hex_and_reject_wrong_type() {
         interface_name: "test".into(),
         version: "1".into(),
         method: ContractSpecMethod {
-            effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+            effect: None,
             name: spec_string("send"),
             args: vec![ContractField {
                 name: spec_string("to"),

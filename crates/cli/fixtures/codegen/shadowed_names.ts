@@ -113,7 +113,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("holder"), ty: { v: __gh_contract_spec.ContractTypeKind.Named, named: { crate_name: __gh_s("demo"), major: __gh_s("1"), module_path: __gh_s("demo"), declared: __gh_s("Holder") } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.SignedToken, signed_token_preimage: { preimage_type: null } },
-          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
+          effect: null,
         },
       ],
     },
@@ -221,7 +221,6 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const Shadowed = {
   v0_1: {
-    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     authorize: __gh_client_contract.defineContractMethod<
       Shadowed.v0_1.AuthorizeArgs,
       Shadowed.v0_1.AuthorizeResult,

@@ -71,14 +71,14 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("amount"), ty: { v: __gh_contract_spec.ContractTypeKind.U128 } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
-          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
+          effect: null,
         },
         {
           name: __gh_s("get_balance"),
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
-          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
+          effect: null,
         },
         {
           name: __gh_s("get_balance_of"),
@@ -86,7 +86,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("account_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Address } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.U128 },
-          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
+          effect: null,
         },
       ],
     },
@@ -113,7 +113,6 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const ERC20 = {
   v0_1: {
-    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     transfer: __gh_client_contract.defineContractMethod<
       ERC20.v0_1.TransferArgs,
       ERC20.v0_1.TransferResult,
@@ -147,7 +146,6 @@ export const ERC20 = {
       ],
       codecs: __gh_codecs,
     }),
-    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     getBalance: __gh_client_contract.defineContractMethod<
       ERC20.v0_1.GetBalanceArgs,
       ERC20.v0_1.GetBalanceResult,
@@ -171,7 +169,6 @@ export const ERC20 = {
       ],
       codecs: __gh_codecs,
     }),
-    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     getBalanceOf: __gh_client_contract.defineContractMethod<
       ERC20.v0_1.GetBalanceOfArgs,
       ERC20.v0_1.GetBalanceOfResult,

@@ -2145,7 +2145,7 @@ mod tests {
                 vers: spec_string_bytes("0.1.0"),
                 throws: vec![].try_into().unwrap(),
                 methods: vec![ContractSpecMethod {
-                    effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                    effect: None,
                     name: spec_string_bytes("get"),
                     args: vec![].try_into().unwrap(),
                     return_type: ContractType::U64,
@@ -2169,7 +2169,7 @@ mod tests {
                 throws: vec![].try_into().unwrap(),
                 methods: vec![
                     ContractSpecMethod {
-                        effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                        effect: None,
                         name: spec_string_bytes("mint"),
                         args: vec![
                             ContractField {
@@ -2187,7 +2187,7 @@ mod tests {
                         effect: None,
                     },
                     ContractSpecMethod {
-                        effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                        effect: None,
                         name: spec_string_bytes("total_supply"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U128,
@@ -2212,7 +2212,7 @@ mod tests {
                     vers: spec_string_bytes("0.1.0"),
                     throws: vec![].try_into().unwrap(),
                     methods: vec![ContractSpecMethod {
-                        effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                        effect: None,
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
@@ -2226,7 +2226,7 @@ mod tests {
                     vers: spec_string_bytes("0.1.0"),
                     throws: vec![].try_into().unwrap(),
                     methods: vec![ContractSpecMethod {
-                        effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                        effect: None,
                         name: spec_string_bytes("get"),
                         args: vec![].try_into().unwrap(),
                         return_type: ContractType::U64,
@@ -2251,7 +2251,7 @@ mod tests {
             interface_name: "Counter".into(),
             version: "0.1.0".into(),
             method: ContractSpecMethod {
-                effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                effect: None,
                 name: spec_string_bytes("call"),
                 args: args.try_into().unwrap(),
                 return_type,
@@ -2339,7 +2339,7 @@ mod tests {
             interface_name: "Counter".into(),
             version: "0.1.0".into(),
             method: ContractSpecMethod {
-                effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                effect: None,
                 name: spec_string_bytes("call"),
                 args: vec![contract_field("value", return_type.clone())]
                     .try_into()
@@ -2394,7 +2394,7 @@ mod tests {
             interface_name: "Counter".into(),
             version: "0.1.0".into(),
             method: ContractSpecMethod {
-                effect: groundhog_contract_spec::ContractMethodEffect::EffectUnknown,
+                effect: None,
                 name: spec_string_bytes("call"),
                 args: vec![contract_field("value", arg_type.clone())]
                     .try_into()

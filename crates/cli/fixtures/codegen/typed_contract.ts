@@ -76,7 +76,7 @@ export const spec: __gh_client_contract.ContractSpec = {
           args: [
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Tuple, tuple: [{ v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U128 }, { v: __gh_contract_spec.ContractTypeKind.U64 }] },
-          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
+          effect: null,
         },
         {
           name: __gh_s("update"),
@@ -85,7 +85,7 @@ export const spec: __gh_client_contract.ContractSpec = {
             { name: __gh_s("request_id"), ty: { v: __gh_contract_spec.ContractTypeKind.Option, option_inner: { v: __gh_contract_spec.ContractTypeKind.Array, array: { element: { v: __gh_contract_spec.ContractTypeKind.U8 }, len: 32n } } } },
           ],
           return_type: { v: __gh_contract_spec.ContractTypeKind.Void },
-          effect: __gh_client_contract.ContractMethodEffect.EffectUnknown,
+          effect: null,
         },
       ],
     },
@@ -131,7 +131,6 @@ const __gh_codecs = __gh_client_contract.createContractCodecContext(spec.type_de
 
 export const ExampleContract = {
   v0_1: {
-    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     getValues: __gh_client_contract.defineContractMethod<
       ExampleContract.v0_1.GetValuesArgs,
       ExampleContract.v0_1.GetValuesResult,
@@ -155,7 +154,6 @@ export const ExampleContract = {
       ],
       codecs: __gh_codecs,
     }),
-    /** Declared effect: unknown. Author declaration; not compiler/runtime enforced. */
     update: __gh_client_contract.defineContractMethod<
       ExampleContract.v0_1.UpdateArgs,
       ExampleContract.v0_1.UpdateResult,
