@@ -875,6 +875,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         status_read: tokio::sync::Notify,
         event_calls: Mutex<u32>,
         tx_by_address_calls: Mutex<u32>,
+        execution_config_error: Mutex<Option<String>>,
     }
 
     #[derive(Clone)]
@@ -1016,6 +1017,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ReadPlane for Arc<MockBackend> {
+        async fn execution_config(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<Option<groundhog_json_rpc_types::network_config::ChainConfig>, RpcServerError>
+        {
+            match self.execution_config_error.lock().await.as_ref() {
+                Some(message) => Err(RpcServerError::BackendUnavailable(message.clone())),
+                None => Ok(None),
+            }
+        }
+
         async fn transaction_receipt(
             &self,
             _context: RpcRequestContext,
@@ -1934,6 +1946,35 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect_err("bug: nothing to report without a reading");
 
         assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn chain_config_price_read_failure_does_not_use_populated_tip_cache() {
+        let chain = ConfigChain::new(3);
+        let backend = Arc::new(MockBackend::default());
+        let server = GroundhogRpcServer::new(
+            backend.clone(),
+            chain.clone(),
+            backend.clone(),
+            backend.clone(),
+            test_network_info(),
+            RpcServerConfig::default().with_tip_cache_ttl_ms(60_000),
+            BuildInfo::for_tests(),
+        );
+
+        let cached = server.chain_config().await.unwrap();
+        assert_eq!(cached.stated.max_new_contracts_per_tx, Some(3));
+        assert!(cached.execution.is_none());
+        assert_eq!(*chain.tip_calls.lock().await, 1);
+        *backend.execution_config_error.lock().await = Some("storage prices unavailable".into());
+
+        let error = server.chain_config().await.expect_err(
+            "bug: a failed price read must remain an error even with a populated tip cache",
+        );
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+        assert!(error.message().contains("storage prices unavailable"));
+        assert_eq!(*chain.tip_calls.lock().await, 1);
     }
 
     /// Chain plane that yields before answering, so a second caller can
