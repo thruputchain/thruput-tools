@@ -33,8 +33,7 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_scheduler::sched_gateway::SchedGateway_SchedGateway1_Client;
 use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
-use groundhog_xdr::{transaction::TransactionHash, types::StorageKey};
-use xdr_common::VecM;
+use groundhog_xdr::types::{AddressAndKey, StorageKey};
 
 use crate::{
     NodeSupervisorError,
@@ -143,10 +142,10 @@ impl shared_status::StatusProbe for HogdDevReadBackend {
         &self,
         tx_hash: TxHash,
     ) -> Result<Option<TransactionStatus>, RpcServerError> {
-        let batch: VecM<TransactionHash> = VecM(vec![shared_receipt::tx_hash_to_wire(tx_hash)]);
+        let hash = shared_receipt::tx_hash_to_wire(tx_hash);
         let results = self
             .scheduler_gateway
-            .schedgateway_lookup_transaction_outcomes(&batch)
+            .schedgateway_lookup_transaction_outcomes(std::slice::from_ref(&hash))
             .await
             .map_err(|error| {
                 RpcServerError::BackendUnavailable(format!("{SCHEDULER_GATEWAY}: {error}"))
@@ -451,9 +450,12 @@ async fn get_item_from_db_gateway(
     address: ContractAddress,
     key: StorageKey,
 ) -> Result<StorageItemRead, RpcServerError> {
-    let batch = shared_db_gateway::single_key_batch(address, key);
+    let request = AddressAndKey {
+        address: address.0,
+        key,
+    };
     let outer = db_gateway
-        .dbgateway_get_items(&batch)
+        .dbgateway_get_items(std::slice::from_ref(&request))
         .await
         .map_err(|source| RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {source}")))?;
     let payload = shared_db_gateway::payload(DB_GATEWAY, outer)?;
@@ -484,7 +486,7 @@ fn receipt(tx_hash: TxHash, info: TxInfo) -> TransactionReceipt {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
@@ -532,13 +534,13 @@ mod tests {
         exec_result::ExecResult,
         storage_item::WireStorageItem,
         transaction::TransactionHash,
-        types::{ContractAddress, SHA256Hash},
+        types::{AddressAndKey, ContractAddress, SHA256Hash},
     };
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
     use xdr_common::{BytesM, VecM};
 
-    use super::HogdDevReadBackend;
+    use super::{HogdDevReadBackend, shared_db_gateway};
 
     // These constants mirror the fake_hogd_dev fixture. Defined here so the
     // unit tests in this file have no dependency on the example binary's types.
@@ -1028,6 +1030,7 @@ mod tests {
 
     struct FakeDbGateway {
         mode: FakeDbGatewayMode,
+        requests: Arc<Mutex<Vec<AddressAndKeyBatch>>>,
     }
 
     #[async_trait]
@@ -1041,8 +1044,12 @@ mod tests {
 
         async fn dbgateway_get_items(
             &self,
-            _arg0: AddressAndKeyBatch,
+            arg0: AddressAndKeyBatch,
         ) -> Result<DbGatewayResult, ProgramError> {
+            self.requests
+                .lock()
+                .expect("bug: request log lock should not be poisoned")
+                .push(arg0);
             match self.mode {
                 FakeDbGatewayMode::Found => Ok(DbGatewayResult::kRPCNone {
                     payload: DbGatewayPayload {
@@ -1090,19 +1097,35 @@ mod tests {
         SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
+        let (addr, handle, _) = start_recording_fake_db_gateway(mode).await;
+        (addr, handle)
+    }
+
+    /// Like [`start_fake_db_gateway`], also returning every request batch it decoded.
+    async fn start_recording_fake_db_gateway(
+        mode: FakeDbGatewayMode,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        Arc<Mutex<Vec<AddressAndKeyBatch>>>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bug: test DbGateway should bind");
         let addr = listener
             .local_addr()
             .expect("bug: test DbGateway should have local addr");
+        let requests = Arc::new(Mutex::new(Vec::new()));
         let mut services = ServiceMap::new();
         services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
-            FakeDbGateway { mode },
+            FakeDbGateway {
+                mode,
+                requests: Arc::clone(&requests),
+            },
         ))));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
-        (addr, handle)
+        (addr, handle, requests)
     }
 
     // -----------------------------------------------------------------------
@@ -1337,7 +1360,8 @@ mod tests {
         // Arrange
         let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
         let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
-        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::Found).await;
+        let (gateway_addr, _gateway, requests) =
+            start_recording_fake_db_gateway(FakeDbGatewayMode::Found).await;
         let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
 
         // Act
@@ -1351,6 +1375,17 @@ mod tests {
             .expect("bug: storage read should succeed");
 
         // Assert
+        let expected = AddressAndKey {
+            address: canned_storage_address().0,
+            key: shared_db_gateway::contract_data_key(CANNED_STORAGE_KEY),
+        };
+        assert_eq!(
+            *requests
+                .lock()
+                .expect("bug: request log lock should not be poisoned"),
+            [VecM(vec![expected])],
+            "DbGateway should receive exactly the requested key"
+        );
         assert_eq!(*read.block_height, CANNED_STORAGE_HEIGHT);
         let item = read.item.expect("bug: canned key should return an item");
         let item_json = serde_json::to_value(item).expect("bug: storage item should serialize");
