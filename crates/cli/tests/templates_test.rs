@@ -176,15 +176,13 @@ fn explicit_destination_expands_home_without_shell_help() {
 #[test]
 fn missing_destination_parent_reports_path_and_recovery_hint() {
     let tmp = TempDir::new().unwrap();
+    let expected = tmp.path().canonicalize().unwrap().join("missing/example");
     let output = cli(tmp.path(), &["new", "example", "--path", "missing/example"]);
     assert!(!output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     let error = &report["error"];
     assert_eq!(error["code"], "project_directory");
-    assert_eq!(
-        error["details"]["path"],
-        tmp.path().join("missing/example").to_str().unwrap()
-    );
+    assert_eq!(error["details"]["path"], expected.to_str().unwrap());
     assert!(
         error["message"]
             .as_str()
