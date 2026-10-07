@@ -8,7 +8,7 @@ description: >
 ---
 
 <!-- groundhog-cli-version: 0.24.0 -->
-<!-- skill-source: https://github.com/groundhogchain/agent-skills; revision: 03e7080a80be91dfb83a17e3f626636516819cd8; sha256: sha256:c001854d81d003d6bc9c9bec1e884d37d5a8da00ef3bae3ba6215b5e7eeb614a; dirty: false -->
+<!-- skill-source: https://github.com/groundhogchain/agent-skills; revision: 56642f4a2f9a70282eb4ba26ce30406d90d98f39; sha256: sha256:fe990babecca6910dce906e82a30119914e917fc091f30a8fd131bbc50401232; dirty: false -->
 
 # Groundhog
 
@@ -71,7 +71,7 @@ example, then check the project's installed declarations if its versions differ.
 
 # CLI
 
-This reference covers Groundhog CLI 0.23.0 with schema-4 local manifests and
+This reference covers Groundhog CLI 0.24.0 with schema-4 local manifests and
 RPC wire format 10. Run `groundhog --version` and the command's `--help` to
 check the installed build; these contracts can change independently of the
 CLI package version.
@@ -269,7 +269,7 @@ RPC tests against an ephemeral local node. In a multi-contract Cargo workspace,
 Preserve the scaffold's feature names, RV32 binary wrapper, Cargo overlays, and
 self dev-dependency. They are toolchain contracts, not incidental style.
 
-The current CLI 0.23.0 scaffold uses SDK 0.44.2, standard interfaces 0.1.47,
+The current CLI 0.24.0 scaffold uses SDK 0.44.2, standard interfaces 0.1.47,
 protocol-rs 0.46.0, and XDR 0.10.3. Check the generated manifest for the installed
 build. Update SDK and interface dependencies together when migrating a project.
 
@@ -425,7 +425,7 @@ React package.
 
 Record the command, exit code, exact error, selected network, CLI version, and
 relevant dependency versions. Include public addresses and hashes, but redact
-tokens and private keys. Commands below use Groundhog CLI 0.23.0; the status
+tokens and private keys. Commands below use Groundhog CLI 0.24.0; the status
 table describes RPC wire format 10.
 
 ## Diagnose the symptom

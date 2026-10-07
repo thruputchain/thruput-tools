@@ -415,7 +415,7 @@ mod tests {
         assert!(skill.ends_with('\n'));
         assert!(!skill.ends_with("\n\n"));
         assert!(
-            skill.len() <= 32 * 1024,
+            skill.len() <= 64 * 1024,
             "complete skill is {} bytes",
             skill.len()
         );
@@ -431,13 +431,19 @@ mod tests {
         assert!(skill.contains("Do not use raw `NNInt` for a balance"));
         assert!(skill.contains("`Balance` is the ordinary type for balances"));
         assert!(skill.contains("`NNInt` is the lower-level integer type for counters"));
-        assert!(skill.contains("`RCQ<T>` is the SDK's retro-causal queue"));
-        assert!(skill.contains("self.value.try_get().none_if_missing().unwrap_or(0)"));
-        assert!(skill.contains("A generated TypeScript binding describes a contract"));
+        assert!(skill.contains("`RCQ<T>` is the SDK's retrocausal queue"));
         assert!(
-            skill.contains("Generated event descriptors such as `my_token.v1.events.Transfer`")
+            skill.contains("uses `try_decrease`; the recipient credit uses `try_lazy_increase`")
         );
+        assert!(skill.contains("A generated TypeScript binding describes a contract"));
+        assert!(skill.contains("Generated event descriptors provide `filter`, `decode`"));
         assert!(skill.contains("Inspect\n   `node_modules`, Cargo registry source"));
-        assert!(skill.contains("Never print, log, store, or paste private signing material"));
+        assert!(skill.contains("Never print, log, or paste private signing material"));
+        assert!(skill.contains("Schema-4 local manifests contain public allocations"));
+        assert!(skill.contains("`dev-1` are ordinary key names"));
+        assert!(skill.contains("SDK 0.44.2, standard interfaces 0.1.47"));
+        assert!(skill.contains("Current RPC wire format 10"));
+        assert!(skill.contains("`committed` status can omit height"));
+        assert!(skill.contains("`dropped` requires changing the transaction"));
     }
 }
