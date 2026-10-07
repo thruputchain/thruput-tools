@@ -123,6 +123,7 @@ mod tests {
                 name: "increment".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
+                effect: None,
             },
             type_defs: vec![],
             throws: vec![groundhog_contract_spec::ContractExceptionType {
