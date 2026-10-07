@@ -344,9 +344,20 @@ pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8], replace: bool) -> 
     File::open(parent)?.sync_all()
 }
 
+/// How long to retry a contended chain lock before reporting another holder.
+/// As with the PID-file lock, a child spawned concurrently by another thread
+/// briefly co-owns this process's descriptors (and their `flock`s) between
+/// fork and exec, so an instantly contended lock does not yet prove another
+/// process holds the chain.
+#[cfg(unix)]
+const CHAIN_LOCK_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(unix)]
+const CHAIN_LOCK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
 #[cfg(unix)]
 fn acquire_chain_lock(dir: &Path) -> Result<File, NodeSupervisorError> {
     use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    use std::{thread, time::Instant};
     let path = dir.join(".hog-devnode.lock");
     let file = OpenOptions::new()
         .read(true)
@@ -364,9 +375,14 @@ fn acquire_chain_lock(dir: &Path) -> Result<File, NodeSupervisorError> {
     {
         return Err(state_error(&path, "chain lock must be a regular file"));
     }
+    let deadline = Instant::now() + CHAIN_LOCK_RETRY_WINDOW;
     // SAFETY: file owns a valid descriptor; flock retains no pointers.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(state_error(dir, "local chain is locked by another process"));
+    while unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let contended = io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock;
+        if !contended || Instant::now() >= deadline {
+            return Err(state_error(dir, "local chain is locked by another process"));
+        }
+        thread::sleep(CHAIN_LOCK_RETRY_INTERVAL);
     }
     Ok(file)
 }
@@ -401,6 +417,65 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    /// A child spawned from another thread and held between fork and exec,
+    /// where it co-owns every descriptor this process had open at the fork.
+    struct PausedChild {
+        release: io::PipeWriter,
+        spawner: std::thread::JoinHandle<std::process::ExitStatus>,
+    }
+
+    impl PausedChild {
+        fn spawn() -> Self {
+            use std::os::{fd::AsRawFd, unix::process::CommandExt};
+
+            let (mut forked, forked_writer) = io::pipe().unwrap();
+            let (release_reader, release) = io::pipe().unwrap();
+            let (forked_fd, release_fd) = (forked_writer.as_raw_fd(), release_reader.as_raw_fd());
+            let spawner = std::thread::spawn(move || {
+                let mut command = std::process::Command::new("true");
+                // SAFETY: the hook only calls write(2) and read(2), which are
+                // async-signal-safe, on descriptors this thread keeps open.
+                unsafe {
+                    command.pre_exec(move || {
+                        let mut byte = 0u8;
+                        libc::write(forked_fd, (&raw const byte).cast(), 1);
+                        libc::read(release_fd, (&raw mut byte).cast(), 1);
+                        Ok(())
+                    });
+                }
+                let status = command.status().unwrap();
+                drop((forked_writer, release_reader));
+                status
+            });
+            forked.read_exact(&mut [0]).unwrap();
+            Self { release, spawner }
+        }
+
+        /// Let the child exec after `delay`, from another thread.
+        fn release_after(mut self, delay: std::time::Duration) -> std::thread::JoinHandle<()> {
+            std::thread::spawn(move || {
+                std::thread::sleep(delay);
+                self.release.write_all(&[0]).unwrap();
+                assert!(self.spawner.join().unwrap().success());
+            })
+        }
+    }
+
+    // A child spawned by another thread keeps the released lock's descriptor
+    // until it execs, so the next owner must wait out that window rather than
+    // report another process.
+    #[test]
+    fn chain_lock_handoff_waits_out_a_concurrent_spawn() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config(dir.path());
+        let first = LocalChainState::prepare(&config).unwrap();
+        let child = PausedChild::spawn();
+        drop(first);
+        let released = child.release_after(std::time::Duration::from_millis(50));
+        LocalChainState::prepare(&config).unwrap();
+        released.join().unwrap();
     }
 
     #[test]
