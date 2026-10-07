@@ -2,7 +2,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::ViewPlane;
+use groundhog_json_rpc_server::{
+    ChainPlane, SubmitPlane, TipReading, ValidatedTransaction, ViewPlane,
+};
 use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::protocol_token::protocol_text;
@@ -19,6 +21,37 @@ use tokio::net::TcpListener;
 use xdr_common::{BytesM, VecM};
 
 use super::*;
+
+#[derive(Clone)]
+struct UnusedPlane;
+
+#[async_trait]
+impl SubmitPlane for UnusedPlane {
+    async fn submit_raw_transaction(
+        &self,
+        _: RpcRequestContext,
+        _: ValidatedTransaction,
+    ) -> Result<(), RpcServerError> {
+        panic!("views must not submit transactions")
+    }
+}
+
+#[async_trait]
+impl ChainPlane for UnusedPlane {
+    async fn chain_tip(&self, _: RpcRequestContext) -> Result<TipReading, RpcServerError> {
+        Err(RpcServerError::NotImplemented("chainTip".into()))
+    }
+    async fn get_block_by_number(
+        &self,
+        _: RpcRequestContext,
+        _: groundhog_json_rpc_types::BlockHeight,
+    ) -> Result<Option<groundhog_json_rpc_types::block::BlockInfo>, RpcServerError> {
+        panic!("views must not fetch blocks")
+    }
+    async fn pending_transaction_count(&self, _: RpcRequestContext) -> Result<u64, RpcServerError> {
+        panic!("views must not read the mempool")
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FakeViewGatewayMode {
@@ -88,7 +121,7 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
 
     async fn viewgateway_view(
         &self,
-        _arg0: TransactionViewQuery,
+        query: TransactionViewQuery,
     ) -> Result<ViewGatewayResult, ProgramError> {
         if self.mode == FakeViewGatewayMode::ViewSlow {
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -96,7 +129,7 @@ impl ViewGateway_ViewGateway1 for FakeViewGateway {
 
         Ok(ViewGatewayResult::ViewGatewayOk {
             payload: ViewGatewayPayload {
-                gas_consumed: 0,
+                gas_consumed: query.invocation.gas_limit,
                 height: 42.into(),
                 output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![1, 2, 3]),
@@ -130,6 +163,7 @@ async fn start_fake_view_gateway(
 
 fn request(caller: Option<ContractAddress>) -> ViewRequest {
     ViewRequest {
+        min_height: None,
         contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from([7; 32])),
         entrypoint: HexBytes(vec![8; 8]),
         calldata: HexBytes(vec![1, 2, 3]),
@@ -153,7 +187,15 @@ async fn batch_pending_io_respects_the_public_deadline() {
         .view_batch(
             RpcRequestContext::new(Some(Duration::from_millis(10))),
             groundhog_json_rpc_types::view::ViewBatchRequest {
-                calls: vec![request(None)],
+                calls: vec![groundhog_json_rpc_types::view::ViewCall {
+                    contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
+                        [7; 32],
+                    )),
+                    entrypoint: HexBytes(vec![8; 8]),
+                    calldata: HexBytes(vec![1, 2, 3]),
+                    caller: None,
+                    gas_limit: None,
+                }],
                 min_height: None,
             },
             10_000_000,
@@ -164,48 +206,13 @@ async fn batch_pending_io_respects_the_public_deadline() {
 }
 
 #[tokio::test]
-async fn public_batch_preserves_order_gas_height_and_freshness_errors() {
+async fn public_views_preserve_order_gas_height_and_freshness_errors() {
     use crate::stub_backend::StubBackend;
     use groundhog_json_rpc_api::GroundhogApiServer;
-    use groundhog_json_rpc_server::{
-        BuildInfo, ChainPlane, GroundhogRpcServer, RpcServerConfig, SubmitPlane, TipReading,
-        ValidatedTransaction,
-    };
+    use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
     use groundhog_json_rpc_types::{NetworkHash, network_info::NetworkInfo};
     use groundhog_xdr::types::SHA256Hash;
 
-    #[derive(Clone)]
-    struct UnusedPlane;
-
-    #[async_trait]
-    impl SubmitPlane for UnusedPlane {
-        async fn submit_raw_transaction(
-            &self,
-            _: RpcRequestContext,
-            _: ValidatedTransaction,
-        ) -> Result<(), RpcServerError> {
-            panic!("batch reads must not submit transactions")
-        }
-    }
-    #[async_trait]
-    impl ChainPlane for UnusedPlane {
-        async fn chain_tip(&self, _: RpcRequestContext) -> Result<TipReading, RpcServerError> {
-            Err(RpcServerError::NotImplemented("chainTip".into()))
-        }
-        async fn get_block_by_number(
-            &self,
-            _: RpcRequestContext,
-            _: groundhog_json_rpc_types::BlockHeight,
-        ) -> Result<Option<groundhog_json_rpc_types::block::BlockInfo>, RpcServerError> {
-            panic!("batch reads must not fetch blocks")
-        }
-        async fn pending_transaction_count(
-            &self,
-            _: RpcRequestContext,
-        ) -> Result<u64, RpcServerError> {
-            panic!("batch reads must not read the mempool")
-        }
-    }
     let (addr, fake) = start_fake_view_gateway(FakeViewGatewayMode::Batch).await;
     let backend = HogdDevViewBackend::connect_optional(
         Some(addr),
@@ -251,6 +258,31 @@ async fn public_batch_preserves_order_gas_height_and_freshness_errors() {
             assert_eq!(
                 response["error"]["data"],
                 serde_json::json!({"requested":"43","observed":"42"})
+            );
+        }
+    }
+    for floor in [None, Some("0"), Some("41"), Some("42"), Some("43")] {
+        let mut call = serde_json::to_value(request(None)).unwrap();
+        call["gasLimit"] = serde_json::json!("2000");
+        if let Some(floor) = floor {
+            call["minHeight"] = serde_json::json!(floor);
+        }
+        let request = serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"groundhog_view", "params":[call]}).to_string();
+        let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
+        let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+        if floor == Some("43") {
+            assert_eq!(response["error"]["code"], -32011);
+            assert_eq!(
+                response["error"]["data"],
+                serde_json::json!({"requested":"43","observed":"42"})
+            );
+        } else {
+            assert_eq!(
+                response["result"],
+                serde_json::json!({
+                    "height":"42", "gasUsed":"2000", "events":[],
+                    "output":{"result":"return", "returnData":"0x010203"},
+                })
             );
         }
     }

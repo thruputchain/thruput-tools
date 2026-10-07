@@ -715,6 +715,12 @@ where
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
+            let min_height = request.min_height.as_ref().map(|height| **height);
+            if min_height.is_some_and(|height| height < 0) {
+                return Err(
+                    RpcServerError::InvalidParam("minHeight must be non-negative".into()).into(),
+                );
+            }
             if request.entrypoint.0.len() != 8 {
                 return Err(ErrorObjectOwned::owned(
                     codes::INVALID_PARAMS,
@@ -734,7 +740,17 @@ where
                 ));
             }
             let gas_limit = view_gas_limit(request.gas_limit, self.config.view_gas_limit)?;
-            Ok(self.view.view(context, request, gas_limit).await?)
+            let response = self.view.view(context, request, gas_limit).await?;
+            if let Some(requested) = min_height.filter(|height| *response.height < *height) {
+                return Err(RpcServerError::ViewHeightUnavailable(
+                    groundhog_json_rpc_types::view::ViewHeightUnavailable {
+                        requested: requested.into(),
+                        observed: response.height,
+                    },
+                )
+                .into());
+            }
+            Ok(response)
         })
         .await
     }
@@ -837,11 +853,14 @@ fn validate_view_batch(
 #[cfg(test)]
 mod view_batch_validation_tests {
     use super::*;
-    use groundhog_json_rpc_types::{hex::HexBytes, view::ViewBatchRequest};
+    use groundhog_json_rpc_types::{
+        hex::HexBytes,
+        view::{ViewBatchRequest, ViewCall},
+    };
 
     #[test]
     fn operator_limits_can_exceed_defaults_and_still_bound_aggregate_work() {
-        let call = ViewRequest {
+        let call = ViewCall {
             contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![0; 4096]),
@@ -871,7 +890,7 @@ mod view_batch_validation_tests {
 
     #[test]
     fn validates_call_count_calldata_gas_and_height_bounds() {
-        let call = ViewRequest {
+        let call = ViewCall {
             contract: groundhog_xdr::types::ContractAddress::from([0; 32]).into(),
             entrypoint: HexBytes(vec![0; 8]),
             calldata: HexBytes(vec![0; 4096]),
@@ -2409,6 +2428,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
 
         let request = ViewRequest {
+            min_height: None,
             contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
             entrypoint: HexBytes(vec![0u8; 8]),
             calldata: HexBytes(vec![]),
@@ -2428,6 +2448,97 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let (result, seen) = view_with_gas(None, 123_456).await;
         result.expect("bug: valid view request should dispatch to view plane");
         assert_eq!(seen, vec![123_456]);
+    }
+
+    #[tokio::test]
+    async fn single_view_checks_its_execution_snapshot_without_retrying_or_waiting() {
+        use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+
+        struct SnapshotView {
+            height: Arc<AtomicI64>,
+            calls: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl ViewPlane for SnapshotView {
+            async fn view(
+                &self,
+                _: RpcRequestContext,
+                _: ViewRequest,
+                gas_limit: u64,
+            ) -> Result<ViewResponse, RpcServerError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ViewResponse {
+                    height: self.height.load(Ordering::SeqCst).into(),
+                    gas_used: gas_limit,
+                    output: groundhog_json_rpc_types::view::RootInvocationOutput::Fault,
+                    events: vec![],
+                })
+            }
+        }
+        let height = Arc::new(AtomicI64::new(9_007_199_254_740_993));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let server = GroundhogRpcServer::new(
+            SubmitOnly {
+                submitted: Arc::default(),
+            },
+            ChainOnly,
+            ReadOnly {
+                event_calls: Arc::default(),
+            },
+            SnapshotView {
+                height: height.clone(),
+                calls: calls.clone(),
+            },
+            test_network_info(),
+            RpcServerConfig::default(),
+            BuildInfo::for_tests(),
+        );
+        let request = |min_height: Option<i64>| ViewRequest {
+            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0; 32])),
+            entrypoint: HexBytes(vec![0; 8]),
+            calldata: HexBytes(vec![]),
+            caller: None,
+            gas_limit: Some(123),
+            min_height: min_height.map(Into::into),
+        };
+        for floor in [
+            None,
+            Some(0),
+            Some(9_007_199_254_740_992),
+            Some(9_007_199_254_740_993),
+        ] {
+            let response = server.view(request(floor)).await.unwrap();
+            assert_eq!(*response.height, 9_007_199_254_740_993);
+            assert_eq!(response.gas_used, 123);
+            assert!(matches!(
+                response.output,
+                groundhog_json_rpc_types::view::RootInvocationOutput::Fault
+            ));
+        }
+        let error = server
+            .view(request(Some(9_007_199_254_740_994)))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), codes::VIEW_HEIGHT_UNAVAILABLE);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(error.data().unwrap().get()).unwrap(),
+            serde_json::json!({"requested":"9007199254740994","observed":"9007199254740993"})
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        let error = server.view(request(Some(-1))).await.unwrap_err();
+        assert_eq!(error.code(), codes::INVALID_PARAMS);
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+
+        height.store(9_007_199_254_740_994, Ordering::SeqCst);
+        assert_eq!(
+            *server
+                .view(request(Some(9_007_199_254_740_994)))
+                .await
+                .unwrap()
+                .height,
+            9_007_199_254_740_994
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
     }
 
     #[tokio::test]

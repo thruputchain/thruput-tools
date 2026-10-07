@@ -2479,6 +2479,7 @@ mod tests {
 
     fn lifecycle_view_request() -> ViewRequest {
         ViewRequest {
+            min_height: None,
             contract: lifecycle_contract_address(),
             entrypoint: HexBytes(vec![0x77; 8]),
             calldata: HexBytes(vec![0x88]),

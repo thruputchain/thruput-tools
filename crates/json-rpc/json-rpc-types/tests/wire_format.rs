@@ -242,6 +242,7 @@ fn transaction_receipt_wire_format() {
 #[test]
 fn view_request_wire_format() {
     let request = ViewRequest {
+        min_height: None,
         contract: zero_address(),
         entrypoint: HexBytes(vec![1, 2, 3, 4, 5, 6, 7, 8]),
         calldata: HexBytes(vec![0xca, 0xfe]),
@@ -451,6 +452,7 @@ fn request_types_reject_unknown_fields() {
     }
 
     let view = serde_json::to_value(ViewRequest {
+        min_height: None,
         contract: zero_address(),
         entrypoint: HexBytes(vec![0; 8]),
         calldata: HexBytes(vec![]),

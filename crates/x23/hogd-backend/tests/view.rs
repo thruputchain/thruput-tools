@@ -17,6 +17,7 @@ use groundhog_hogd_backend::view::*;
 
 fn request(caller: Option<ContractAddress>) -> ViewRequest {
     ViewRequest {
+        min_height: None,
         contract: ContractAddress::from(XdrContractAddress::from([7; 32])),
         entrypoint: HexBytes(vec![8; 8]),
         calldata: HexBytes(vec![1, 2, 3]),

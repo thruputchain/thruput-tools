@@ -2340,6 +2340,7 @@ where
     let started_at_unix_ms = unix_ms()?.to_string();
     let started = Instant::now();
     let request = ViewRequest {
+        min_height: None,
         contract: Hex0x(prepared.view.contract),
         entrypoint: HexBytes(prepared.view.entrypoint.clone()),
         calldata: HexBytes(prepared.view.calldata.clone()),
@@ -2684,6 +2685,7 @@ where
 {
     let entry = &prepared.entry;
     let request = ViewRequest {
+        min_height: None,
         contract: Hex0x(entry.contract),
         entrypoint: HexBytes(entry.read_entrypoint.clone()),
         calldata: HexBytes(entry.read_calldata.clone()),

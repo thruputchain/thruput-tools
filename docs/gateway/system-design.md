@@ -32,6 +32,12 @@ services. Production topology comes from gateway configuration.
 
 ## Shared-snapshot reads
 
+Single `groundhog_view` calls also accept `minHeight`. The shared RPC server
+checks the height returned by the existing single-view execution path and rejects
+an older result with `ViewHeightUnavailable`. Omitting the option preserves the
+normal single-view behavior. Single views retain their own gas, response, and
+deadline policy; they do not inherit aggregate batch limits.
+
 `groundhog_viewBatch` runs independent calls against one committed snapshot.
 Calls retain input order and do not share simulated writes. A failed snapshot
 attempt discards all partial results; hogd retries the group at most three times.
@@ -40,6 +46,8 @@ attempt discards all partial results; hogd retries the group at most three times
 returns `ViewHeightUnavailable` with requested and observed heights. It does not
 wait for a block or request a snapshot refresh. Hogd maintains snapshots through
 its shared refresh worker; callers choose whether and when to retry.
+For a batch, the floor belongs to the group. A `minHeight` field inside a call
+entry is rejected rather than ignored.
 
 Batch limits are operator policy, not consensus parameters. The gateway's TOML
 defaults are:

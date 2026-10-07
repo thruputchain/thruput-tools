@@ -10,7 +10,7 @@ use crate::{BlockHeight, ContractAddress};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ViewBatchRequest {
     /// Nonempty calls bounded by the endpoint's advertised batch limits.
-    pub calls: Vec<ViewRequest>,
+    pub calls: Vec<ViewCall>,
     /// Freshness floor on the selected snapshot. Does not wait or request a refresh.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "crate::decimal::option")]
@@ -76,6 +76,54 @@ pub struct ViewRequest {
     #[serde(with = "crate::decimal::option")]
     #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
     pub gas_limit: Option<u64>,
+    /// Minimum committed snapshot height. Does not wait or force a refresh.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::decimal::option"
+    )]
+    #[schemars(with = "Option<crate::decimal::Decimal<BlockHeight>>")]
+    pub min_height: Option<BlockHeight>,
+}
+
+/// One batch entry. Freshness belongs to the group, never to an individual call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViewCall {
+    pub contract: ContractAddress,
+    /// Contract entrypoint id. Must be exactly 8 bytes.
+    pub entrypoint: HexBytes,
+    pub calldata: HexBytes,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<ContractAddress>,
+    /// Optional per-call gas budget. The endpoint's per-call and aggregate limits apply.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::decimal::option"
+    )]
+    #[schemars(with = "Option<crate::decimal::Decimal<u64>>")]
+    pub gas_limit: Option<u64>,
+}
+
+impl From<ViewCall> for ViewRequest {
+    fn from(call: ViewCall) -> Self {
+        let ViewCall {
+            contract,
+            entrypoint,
+            calldata,
+            caller,
+            gas_limit,
+        } = call;
+        Self {
+            contract,
+            entrypoint,
+            calldata,
+            caller,
+            gas_limit,
+            min_height: None,
+        }
+    }
 }
 
 /// Result of sandboxed contract simulation.

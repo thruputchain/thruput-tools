@@ -221,7 +221,7 @@ mod tests {
 
         async fn viewgateway_view(
             &self,
-            _arg0: TransactionViewQuery,
+            query: TransactionViewQuery,
         ) -> Result<ViewGatewayResult, ProgramError> {
             if self.mode == FakeViewGatewayMode::Slow {
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -229,7 +229,7 @@ mod tests {
 
             Ok(ViewGatewayResult::ViewGatewayOk {
                 payload: ViewGatewayPayload {
-                    gas_consumed: 0,
+                    gas_consumed: query.invocation.gas_limit,
                     height: 42.into(),
                     output: InvocationFrameOutput::Return {
                         return_buffer: BytesM(vec![1, 2, 3]),
@@ -263,6 +263,7 @@ mod tests {
 
     fn request(caller: Option<ContractAddress>) -> ViewRequest {
         ViewRequest {
+            min_height: None,
             contract: ContractAddress::from(XdrContractAddress::from([7; 32])),
             entrypoint: HexBytes(vec![8; 8]),
             calldata: HexBytes(vec![1, 2, 3]),
@@ -313,7 +314,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_batch_preserves_order_gas_height_and_freshness_errors() {
+    async fn public_views_preserve_order_gas_height_and_freshness_errors() {
         use crate::{backend::GatewayBackend, config::GatewayConfig, context::BackendClient};
         use groundhog_json_rpc_api::GroundhogApiServer;
         use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
@@ -375,6 +376,31 @@ mod tests {
                 assert_eq!(
                     response["error"]["data"],
                     serde_json::json!({"requested":"43","observed":"42"})
+                );
+            }
+        }
+        for floor in [None, Some("0"), Some("41"), Some("42"), Some("43")] {
+            let mut call = serde_json::to_value(request(None)).unwrap();
+            call["gasLimit"] = serde_json::json!("2000");
+            if let Some(floor) = floor {
+                call["minHeight"] = serde_json::json!(floor);
+            }
+            let request = serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"groundhog_view", "params":[call]}).to_string();
+            let (response, _) = module.raw_json_request(&request, 1).await.unwrap();
+            let response: serde_json::Value = serde_json::from_str(response.get()).unwrap();
+            if floor == Some("43") {
+                assert_eq!(response["error"]["code"], -32011);
+                assert_eq!(
+                    response["error"]["data"],
+                    serde_json::json!({"requested":"43","observed":"42"})
+                );
+            } else {
+                assert_eq!(
+                    response["result"],
+                    serde_json::json!({
+                        "height":"42", "gasUsed":"2000", "events":[],
+                        "output":{"result":"return", "returnData":"0x010203"},
+                    })
                 );
             }
         }

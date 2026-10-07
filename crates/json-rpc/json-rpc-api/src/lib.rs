@@ -172,6 +172,9 @@ pub trait GroundhogApi {
     /// snapshot the view ran against. `gasLimit` is optional: absent runs under the
     /// endpoint's `maxViewGas` (see `serverLimits`); zero or a value above it is
     /// rejected as an invalid parameter.
+    /// Optional `minHeight` requires that execution snapshot to be at least the
+    /// requested committed height. An older result returns `ViewHeightUnavailable`.
+    /// This is a freshness floor, not a historical selector, wait, or refresh request.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 

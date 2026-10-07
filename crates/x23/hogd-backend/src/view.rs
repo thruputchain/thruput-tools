@@ -41,7 +41,7 @@ pub fn view_batch_query(
                 .into_iter()
                 .map(|call| {
                     let call_gas = call.gas_limit.unwrap_or(gas_limit);
-                    view_query(call, call_gas)
+                    view_query(call.into(), call_gas)
                 })
                 .collect::<Result<_, _>>()?,
         ),
@@ -141,6 +141,7 @@ pub struct ViewOutcome {
 }
 
 /// Translate a public view request into hogd's query shape.
+/// The shared RPC server checks minimum height against the execution response.
 pub fn view_query(
     request: ViewRequest,
     gas_limit: u64,
@@ -259,7 +260,7 @@ mod batch_tests {
     fn query() -> groundhog_view::ViewGatewayBatchQuery {
         view_batch_query(
             ViewBatchRequest {
-                calls: vec![ViewRequest {
+                calls: vec![groundhog_json_rpc_types::view::ViewCall {
                     gas_limit: Some(123),
                     contract: groundhog_xdr::types::ContractAddress::from([7; 32]).into(),
                     entrypoint: HexBytes(vec![0; 8]),
