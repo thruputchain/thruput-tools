@@ -205,3 +205,4 @@ missing-panics-doc = "allow"
 
 [profile.release]
 overflow-checks = true
+debug = "line-tables-only"

@@ -152,7 +152,9 @@ These are the core Rust checks, not the entire CI pipeline. For documentation
 only, check links, paths, command claims against source, and `git diff --check`.
 Report checks actually run and any environment blockers.
 
-- Unit tests live inline; integration tests in each crate's `tests/`. Use
+- Unit tests live in the module they test: inline, or for a long suite in a
+  sibling `<module>/tests.rs` declared with `#[cfg(test)] mod tests;`.
+  Integration tests go in each crate's `tests/`. Use
   `#[tokio::test]` for async tests and serialize environment-mutating tests
   with `serial_test`. CLI binary tests use `env!("CARGO_BIN_EXE_groundhog")`.
 - Keep generated artifacts under snapshot tests plus structural invariants.
