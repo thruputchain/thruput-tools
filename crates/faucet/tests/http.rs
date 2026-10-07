@@ -349,12 +349,13 @@ async fn airdrop_rejects_mismatched_accepted_amount_without_resubmitting() {
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(airdrop.calls(), 1);
     assert_eq!(airdrop.poll_calls(), 0);
+    assert!(airdrop.broadcasts.lock().unwrap().is_empty());
     let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
     assert_eq!(
         attempt.error_code.as_deref(),
         Some("airdrop_submit_amount_mismatch")
     );
-    assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+    assert_eq!(attempt.status, policy::AirdropAttemptStatus::FailedTerminal);
 }
 
 #[tokio::test]
@@ -898,12 +899,13 @@ async fn airdrop_does_not_retry_ambiguous_submit_error() {
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be retained");
-    assert_eq!(attempt.status, policy::AirdropAttemptStatus::Ambiguous);
+    assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
     assert!(attempt.expires_at.is_none());
 
     let response = airdrop_request(&config).await;
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(airdrop.calls(), 1);
+    assert_eq!(airdrop.broadcasts.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1061,6 +1063,7 @@ fn seed_airdrop_attempt_with_expiry(
             status,
             execution_id: u64::from(status == policy::AirdropAttemptStatus::Executing),
             tx_hash,
+            transaction: None,
             height: None,
             error_code: None,
             created_at: now,
@@ -1080,6 +1083,7 @@ fn stored_airdrop_attempt(config: &FaucetConfig) -> Option<policy::AirdropAttemp
 struct FailFinalPutPolicyStore {
     inner: policy::InMemoryFaucetPolicyStore,
     fail_succeeded_airdrop: bool,
+    fail_prepared_airdrop: bool,
 }
 
 impl FailFinalPutPolicyStore {
@@ -1087,6 +1091,7 @@ impl FailFinalPutPolicyStore {
         Self {
             inner: policy::InMemoryFaucetPolicyStore::new(),
             fail_succeeded_airdrop: true,
+            fail_prepared_airdrop: false,
         }
     }
 }
@@ -1144,6 +1149,9 @@ impl policy::FaucetPolicyStore for FailFinalPutPolicyStore {
         expected: &[policy::AirdropAttemptStatus],
         attempt: policy::AirdropAttempt,
     ) -> Result<policy::AirdropAttempt, policy::PolicyStoreError> {
+        if self.fail_prepared_airdrop && attempt.transaction.is_some() {
+            return Err(policy::PolicyStoreError::LockPoisoned);
+        }
         if self.fail_succeeded_airdrop && attempt.status == policy::AirdropAttemptStatus::Succeeded
         {
             return Err(policy::PolicyStoreError::LockPoisoned);
@@ -1210,6 +1218,8 @@ struct MockAirdropSubmitter {
     poll_failures_remaining: Mutex<usize>,
     calls: Mutex<usize>,
     poll_calls: Mutex<usize>,
+    broadcasts: Mutex<Vec<airdrop::PreparedAirdrop>>,
+    poll_status: Mutex<Option<TransactionStatus>>,
     raw_amount: String,
     accepted_raw_amount: String,
     poll_times_out: bool,
@@ -1229,12 +1239,20 @@ impl airdrop::AirdropSubmitter for PanickingAirdropSubmitter {
         100_000_000
     }
 
-    async fn submit_airdrop(
+    async fn prepare_airdrop(
         &self,
         _recipient: ContractAddress,
-    ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
+    ) -> Result<airdrop::PreparedAirdrop, airdrop::AirdropSubmitError> {
         tokio::time::sleep(Duration::from_millis(25)).await;
         panic!("intentional submission panic")
+    }
+
+    async fn submit_airdrop(
+        &self,
+        _transaction: &airdrop::PreparedAirdrop,
+        _check_expiry: bool,
+    ) -> Result<(), airdrop::AirdropSubmitError> {
+        Ok(())
     }
 
     async fn poll_airdrop(
@@ -1251,14 +1269,19 @@ impl airdrop::AirdropSubmitter for PanickingPollAirdropSubmitter {
         100_000_000
     }
 
-    async fn submit_airdrop(
+    async fn prepare_airdrop(
         &self,
         _recipient: ContractAddress,
-    ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
-        Ok(airdrop::AcceptedAirdrop {
-            raw_amount: "100000000".into(),
-            tx_hash: test_tx_hash(),
-        })
+    ) -> Result<airdrop::PreparedAirdrop, airdrop::AirdropSubmitError> {
+        Ok(prepared_airdrop("100000000"))
+    }
+
+    async fn submit_airdrop(
+        &self,
+        _transaction: &airdrop::PreparedAirdrop,
+        _check_expiry: bool,
+    ) -> Result<(), airdrop::AirdropSubmitError> {
+        Ok(())
     }
 
     async fn poll_airdrop(
@@ -1280,6 +1303,8 @@ impl MockAirdropSubmitter {
             poll_failures_remaining: Mutex::new(0),
             calls: Mutex::new(0),
             poll_calls: Mutex::new(0),
+            broadcasts: Mutex::new(Vec::new()),
+            poll_status: Mutex::new(None),
             raw_amount: raw_amount.into(),
             accepted_raw_amount: raw_amount.into(),
             poll_times_out: false,
@@ -1321,6 +1346,8 @@ impl MockAirdropSubmitter {
             poll_failures_remaining: Mutex::new(0),
             calls: Mutex::new(0),
             poll_calls: Mutex::new(0),
+            broadcasts: Mutex::new(Vec::new()),
+            poll_status: Mutex::new(None),
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1338,6 +1365,8 @@ impl MockAirdropSubmitter {
             poll_failures_remaining: Mutex::new(0),
             calls: Mutex::new(0),
             poll_calls: Mutex::new(0),
+            broadcasts: Mutex::new(Vec::new()),
+            poll_status: Mutex::new(None),
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1359,6 +1388,8 @@ impl MockAirdropSubmitter {
             poll_failures_remaining: Mutex::new(1),
             calls: Mutex::new(0),
             poll_calls: Mutex::new(0),
+            broadcasts: Mutex::new(Vec::new()),
+            poll_status: Mutex::new(None),
             raw_amount: "100000000".into(),
             accepted_raw_amount: "100000000".into(),
             poll_times_out: false,
@@ -1386,10 +1417,10 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
             .expect("bug: mock raw amount should be valid")
     }
 
-    async fn submit_airdrop(
+    async fn prepare_airdrop(
         &self,
         _recipient: ContractAddress,
-    ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
+    ) -> Result<airdrop::PreparedAirdrop, airdrop::AirdropSubmitError> {
         *self.calls.lock().expect("bug: calls lock should succeed") += 1;
         if let Some(delay) = self.submit_delay {
             tokio::time::sleep(delay).await;
@@ -1399,9 +1430,6 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
                 .await
                 .expect("bug: submit gate should stay open")
                 .forget();
-        }
-        if self.ambiguous_submit {
-            return Err(airdrop::AirdropSubmitError::Submit("timeout".into()));
         }
         let mut failures = self
             .failures_remaining
@@ -1413,10 +1441,19 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
             }
             return Err(airdrop::AirdropSubmitError::BuildTransaction("boom".into()));
         }
-        Ok(airdrop::AcceptedAirdrop {
-            raw_amount: self.accepted_raw_amount.clone(),
-            tx_hash: test_tx_hash(),
-        })
+        Ok(prepared_airdrop(&self.accepted_raw_amount))
+    }
+
+    async fn submit_airdrop(
+        &self,
+        transaction: &airdrop::PreparedAirdrop,
+        _check_expiry: bool,
+    ) -> Result<(), airdrop::AirdropSubmitError> {
+        self.broadcasts.lock().unwrap().push(transaction.clone());
+        if self.ambiguous_submit {
+            return Err(airdrop::AirdropSubmitError::Submit("timeout".into()));
+        }
+        Ok(())
     }
 
     async fn poll_airdrop(
@@ -1440,6 +1477,14 @@ impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
         if *failures > 0 {
             *failures -= 1;
             return Err(airdrop::AirdropSubmitError::RpcConnect("boom".into()));
+        }
+        if let Some(status) = self.poll_status.lock().unwrap().clone() {
+            return Err(airdrop::AirdropSubmitError::Poll(
+                groundhog_json_rpc_client::PollTransactionReceiptError::TransactionStatus {
+                    tx_hash,
+                    status,
+                },
+            ));
         }
         if self.poll_times_out {
             return Err(airdrop::AirdropSubmitError::Poll(
@@ -1478,4 +1523,168 @@ fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
         abort_data: None,
         gas_used: 1_500,
     }
+}
+
+fn prepared_airdrop(raw_amount: &str) -> airdrop::PreparedAirdrop {
+    airdrop::PreparedAirdrop {
+        raw_amount: raw_amount.into(),
+        tx_hash: test_tx_hash(),
+        signed_transaction: "0x010203".into(),
+        block_expiry_height: 1000,
+    }
+}
+
+fn scheduler_error() -> groundhog_json_rpc_types::transaction::SchedulerTransactionError {
+    use groundhog_json_rpc_types::transaction::{
+        SchedulerTransactionError, SchedulerTransactionErrorSource,
+    };
+    SchedulerTransactionError::new(SchedulerTransactionErrorSource::Executor, 7)
+}
+
+#[tokio::test]
+async fn scheduler_retries_replay_retained_bytes_once_per_request() {
+    let submitter = Arc::new(MockAirdropSubmitter::success());
+    *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        error: scheduler_error(),
+    });
+    let config = test_config_with_submitters(submitter.clone());
+    for expected_broadcasts in 2..=3 {
+        assert_eq!(
+            airdrop_request(&config).await.status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(submitter.calls(), 1);
+        assert_eq!(
+            submitter.broadcasts.lock().unwrap().len(),
+            expected_broadcasts
+        );
+        let attempt = stored_airdrop_attempt(&config).unwrap();
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+        assert!(attempt.expires_at.is_none());
+        assert_eq!(attempt.transaction, Some(prepared_airdrop("100000000")));
+    }
+    let mut other_nonce = airdrop_body();
+    other_nonce["clientNonce"] = serde_json::json!("0x02");
+    assert_eq!(
+        airdrop_request_with_body(&config, other_nonce)
+            .await
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    *submitter.poll_status.lock().unwrap() = None;
+    assert_eq!(airdrop_request(&config).await.status(), StatusCode::OK);
+    let broadcasts = submitter.broadcasts.lock().unwrap();
+    assert_eq!(broadcasts.len(), 3);
+    assert!(broadcasts.iter().all(|tx| tx == &broadcasts[0]));
+}
+
+#[tokio::test]
+async fn dropped_airdrop_ends_the_attempt_and_reports_the_scheduler_reason() {
+    let submitter = Arc::new(MockAirdropSubmitter::success());
+    *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Dropped {
+        error: scheduler_error(),
+    });
+    let config = test_config_with_submitters(submitter.clone());
+    let response = airdrop_request(&config).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], "airdrop_transaction_failed");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Executor code 7")
+    );
+    let attempt = stored_airdrop_attempt(&config).unwrap();
+    assert_eq!(attempt.status, policy::AirdropAttemptStatus::FailedTerminal);
+    assert!(attempt.expires_at.is_some());
+    assert_eq!(
+        airdrop_request(&config).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn retention_failure_prevents_broadcast() {
+    let submitter = Arc::new(MockAirdropSubmitter::success());
+    let mut config = test_config_with_submitters(submitter.clone());
+    config.policy_store = Arc::new(FailFinalPutPolicyStore {
+        inner: policy::InMemoryFaucetPolicyStore::new(),
+        fail_succeeded_airdrop: false,
+        fail_prepared_airdrop: true,
+    });
+    assert_eq!(
+        airdrop_request(&config).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert!(submitter.broadcasts.lock().unwrap().is_empty());
+    let attempt = stored_airdrop_attempt(&config).unwrap();
+    assert!(attempt.tx_hash.is_none());
+    assert!(attempt.transaction.is_none());
+}
+
+#[tokio::test]
+async fn retry_without_retained_bytes_never_signs_a_replacement() {
+    let submitter = Arc::new(MockAirdropSubmitter::success());
+    *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        error: scheduler_error(),
+    });
+    let config = test_config_with_submitters(submitter.clone());
+    seed_airdrop_attempt(
+        &config,
+        policy::AirdropAttemptStatus::Pending,
+        Some(format!("0x{}", "22".repeat(32))),
+    );
+    assert_eq!(
+        airdrop_request(&config).await.status(),
+        StatusCode::BAD_GATEWAY
+    );
+    assert_eq!(submitter.calls(), 0);
+    assert!(submitter.broadcasts.lock().unwrap().is_empty());
+    assert_eq!(
+        stored_airdrop_attempt(&config).unwrap().status,
+        policy::AirdropAttemptStatus::Pending
+    );
+}
+
+#[tokio::test]
+async fn concurrent_same_key_retry_has_one_broadcast() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let mut submitter = MockAirdropSubmitter::success();
+    submitter.poll_gate = Some(gate.clone());
+    *submitter.poll_status.lock().unwrap() = Some(TransactionStatus::Retry {
+        error: scheduler_error(),
+    });
+    let submitter = Arc::new(submitter);
+    let config = test_config_with_submitters(submitter.clone());
+    seed_airdrop_attempt(
+        &config,
+        policy::AirdropAttemptStatus::Pending,
+        Some(format!("0x{}", "22".repeat(32))),
+    );
+    let mut attempt = stored_airdrop_attempt(&config).unwrap();
+    attempt.transaction = Some(prepared_airdrop("100000000"));
+    config.policy_store.put_airdrop_attempt(attempt).unwrap();
+    let worker_config = config.clone();
+    let first = tokio::spawn(async move { airdrop_request(&worker_config).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while submitter.poll_calls() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        airdrop_request(&config).await.status(),
+        StatusCode::ACCEPTED
+    );
+    assert!(submitter.broadcasts.lock().unwrap().is_empty());
+    gate.add_permits(1);
+    assert_eq!(first.await.unwrap().status(), StatusCode::ACCEPTED);
+    assert_eq!(submitter.broadcasts.lock().unwrap().len(), 1);
+    assert_eq!(submitter.calls(), 0);
 }

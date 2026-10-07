@@ -108,10 +108,12 @@ each time an hourly quota resets. For example, 10,000 accepted attempts/hour
 needs at least 120,000 terminal records plus headroom. Increasing the bound
 increases memory use and policy-store scan costs; storage is allocated on demand.
 
-Accepted transactions remain pending until the backend reports a receipt or a
-definitive invalid status. Submission calls that return without a definitive
-acceptance result are also retained as ambiguous rather than resubmitted. Both
-count toward the bounded attempt capacity while their outcome is unresolved. At
+Signed transactions are retained in the policy store before broadcast. A later
+request with the same client nonce observes the original hash. Scheduler `retry`
+replays the same signed bytes at most once per request, after checking the original
+expiry. Receipts take precedence; `dropped` and `invalid` end the attempt. A lost
+submission response, backend error, or expiry without a receipt keeps the original
+attempt unresolved. These attempts count toward the bounded capacity. At
 capacity, the faucet rejects new attempt keys
 but continues serving existing keys. This fail-closed behavior prevents an
 expired idempotency record from submitting a second transfer. Operators should
