@@ -160,6 +160,10 @@ backtrace = "0.3"
 object = { version = "0.37", default-features = false, features = ["read_core", "elf", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-opentelemetry = "0.34"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace"] }
 prometheus = { version = "0.14", default-features = false }
 time = { version = "0.3", features = ["formatting"] }
 hdrhistogram = "7"

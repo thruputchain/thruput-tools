@@ -10,6 +10,7 @@ use thruput_json_rpc_server::{RpcRequestContext, RpcServerError};
 
 use crate::config::HealthBackend;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
+use tracing::Instrument;
 
 /// How the gateway names hogd's services in diagnostics.
 pub(crate) const INDEXER: &str = "indexer";
@@ -50,7 +51,9 @@ pub(crate) async fn timed_backend_call<T, E: std::fmt::Display>(
     is_ok: impl Fn(&T) -> bool,
 ) -> Result<T, RpcServerError> {
     let started_at = Instant::now();
-    let result = tokio::time::timeout_at(deadline.into(), call).await;
+    let result = tokio::time::timeout_at(deadline.into(), call)
+        .instrument(crate::telemetry::backend_span(service, op))
+        .await;
     let outcome = match &result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(value)) if is_ok(value) => BackendRequestOutcome::Ok,

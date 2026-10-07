@@ -21,6 +21,7 @@ use thruput_json_rpc_types::NetworkHashHex;
 use thruput_json_rpc_types::block::ChainTip;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::Instrument;
 
 use crate::adaptive_batch::deadline_cohorts;
 use crate::config::{HealthBackend, TipConfig};
@@ -76,7 +77,11 @@ impl TipSink for DbTipSink {
         if timeout.is_zero() {
             return Err(RpcServerError::BackendTimeout);
         }
-        let mut call = tokio::spawn(async move { client.dbgateway_get_config().await });
+        let mut call = tokio::spawn(
+            async move { client.dbgateway_get_config().await }.instrument(
+                crate::telemetry::backend_span("db_gateway", "dbgateway_get_config"),
+            ),
+        );
         let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
         let rpc_result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
             Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
@@ -109,6 +114,7 @@ impl TipSink for DbTipSink {
 }
 
 struct Waiter {
+    parent: tracing::Span,
     reply: oneshot::Sender<Result<TipReading, RpcServerError>>,
     backend_deadline: Instant,
 }
@@ -197,7 +203,11 @@ async fn fetch_tip_cohorts(
             continue;
         }
         metrics.observe_coalesced_waiters(TIP_COALESCER_COMPONENT, waiters.len());
-        let result = sink.get_tip(deadline).await;
+        let span = crate::telemetry::shared_work_span(TIP_COALESCER_COMPONENT, &waiters[0].parent);
+        for waiter in &waiters {
+            crate::telemetry::link_request(&span, &waiter.parent);
+        }
+        let result = sink.get_tip(deadline).instrument(span).await;
         for waiter in waiters {
             let _ = waiter.reply.send(result.clone());
         }
@@ -290,6 +300,7 @@ impl TipCoalescer {
         self.inner
             .sender
             .try_send(Waiter {
+                parent: tracing::Span::current(),
                 reply: reply_tx,
                 backend_deadline,
             })
@@ -517,6 +528,53 @@ mod tests {
 
     fn request_context() -> RpcRequestContext {
         RpcRequestContext::unbounded()
+    }
+
+    #[tokio::test]
+    async fn shared_tip_links_every_waiter() {
+        use opentelemetry::trace::TraceContextExt;
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+        let (capture, _provider, subscriber) = crate::telemetry::test_support::subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let mut expected = Vec::new();
+        let mut waiters = Vec::new();
+        let mut replies = Vec::new();
+        for index in 0..150 {
+            let parent = tracing::info_span!(parent: None, "request", index);
+            expected.push(parent.context().span().span_context().clone());
+            let (reply, receiver) = oneshot::channel();
+            waiters.push(Waiter {
+                parent,
+                reply,
+                backend_deadline: Instant::now() + Duration::from_secs(1),
+            });
+            replies.push(receiver);
+        }
+        fetch_tip_cohorts(
+            MockSink::new(42),
+            vec![waiters],
+            GatewayMetrics::for_tests(),
+        )
+        .await;
+        for reply in replies {
+            assert_eq!(
+                reply.await.unwrap().unwrap().tip.height,
+                BlockHeight::new(42)
+            );
+        }
+        let spans = capture.spans.lock().unwrap();
+        let work = spans
+            .iter()
+            .find(|span| span.name == "shared_work")
+            .unwrap();
+        assert_eq!(
+            work.links
+                .links
+                .iter()
+                .map(|link| link.span_context.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 
     #[tokio::test]
@@ -748,10 +806,12 @@ mod tests {
         let (newer_reply, newer_waiter) = oneshot::channel();
         let cohorts = vec![
             vec![Waiter {
+                parent: tracing::Span::none(),
                 reply: old_reply,
                 backend_deadline: now + Duration::from_secs(2),
             }],
             vec![Waiter {
+                parent: tracing::Span::none(),
                 reply: newer_reply,
                 backend_deadline: now + Duration::from_secs(5),
             }],

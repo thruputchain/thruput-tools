@@ -5,12 +5,16 @@ mod error;
 /// Faucet signing-key source configuration and loaders.
 pub mod key_source;
 pub mod policy;
+/// Optional OpenTelemetry setup and shutdown.
+pub mod telemetry;
 mod utils;
 
 use axum::{
     Json, Router,
-    extract::{FromRef, State},
+    extract::{FromRef, MatchedPath, Request, State},
     http::{HeaderValue, Method, header},
+    middleware::Next,
+    response::Response,
     routing::{get, post},
 };
 use serde::Serialize;
@@ -20,8 +24,33 @@ use std::sync::Arc;
 use thruput_json_rpc_types::network_descriptor::NetworkDescriptor;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:8081";
+
+async fn trace_request(request: Request, next: Next) -> Response {
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("unknown", MatchedPath::as_str);
+    let span = tracing::info_span!(
+        target: "groundhog_otel",
+        "http",
+        otel.name = route,
+        otel.kind = "server",
+        http.route = route,
+        http.request.method = %request.method(),
+        http.response.status_code = tracing::field::Empty
+    );
+    if span.is_disabled() {
+        return next.run(request).await;
+    }
+    let _ = span.set_parent(telemetry::extract(request.headers()));
+    let response = next.run(request).instrument(span.clone()).await;
+    span.record("http.response.status_code", response.status().as_u16());
+    response
+}
 
 #[derive(Clone)]
 pub struct FaucetConfig {
@@ -113,7 +142,8 @@ pub fn app(config: FaucetConfig) -> Router {
         .route("/health", get(health))
         .route("/v1/network", get(network))
         .route("/v1/airdrop", post(airdrop::request_airdrop))
-        .with_state(state);
+        .with_state(state)
+        .layer(axum::middleware::from_fn(trace_request));
     if cors_allowed_origins.is_empty() {
         router
     } else {

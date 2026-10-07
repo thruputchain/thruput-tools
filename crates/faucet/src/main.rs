@@ -52,9 +52,11 @@ fn env_filter() -> Result<EnvFilter, std::io::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter()?)
-        .init();
+    let telemetry = thruput_faucet::telemetry::init(
+        "hog-faucet",
+        env_filter()?,
+        tracing_subscriber::fmt::format::FmtSpan::NONE,
+    );
 
     let cli = Cli::parse();
     let heap_dump = heap_profiling::initialize().await?;
@@ -88,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let allow_remote = cli.pprof_allow_remote || heap_profiling::allow_remote_env();
     let listener = pprof_listener(cli.pprof_listen.as_deref(), allow_remote).await?;
-    if let Some(listener) = listener {
+    let (result, profiles) = if let Some(listener) = listener {
         tracing::info!(listen = %listener.local_addr()?, "faucet heap profile server listening");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let profiles = axum::serve(listener, pprof_router(heap_dump, allow_remote))
@@ -98,11 +100,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let profiles = tokio::spawn(async move { profiles.await });
         let result = serve(config).await;
         let _ = shutdown_tx.send(());
-        profiles.await??;
-        result?;
+        (result, Some(profiles.await))
     } else {
-        serve(config).await?;
+        (serve(config).await, None)
+    };
+    thruput_faucet::telemetry::shutdown(telemetry).await;
+    if let Some(profiles) = profiles {
+        profiles??;
     }
+    result?;
     Ok(())
 }
 

@@ -9,6 +9,7 @@ use thruput_scp::network::ProtocolCommit as Protocol;
 use thruput_x23_transport::ConnectError;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
+use tracing::Instrument;
 
 use crate::{
     airdrop::HostedAirdrop,
@@ -933,7 +934,11 @@ async fn probe_scheduler(
     } else {
         let started_at = Instant::now();
         let probe_client = client.probe_client().clone();
-        let mut handle = tokio::spawn(async move { probe_client.schedgateway_get_tip().await });
+        let mut handle = tokio::spawn(
+            async move { probe_client.schedgateway_get_tip().await }.instrument(
+                crate::telemetry::backend_span("scheduler", "schedgateway_get_tip"),
+            ),
+        );
         if let Ok(result) = tokio::time::timeout(probe_timeout, &mut handle).await {
             (
                 result.unwrap_or(Err(rpc_driver::RpcError::SystemError)),
@@ -1048,6 +1053,10 @@ async fn probe_quarantined_scheduler(
             .probe_client()
             .schedgateway_pending_tx_count(),
     )
+    .instrument(crate::telemetry::backend_span(
+        "scheduler",
+        "schedgateway_pending_tx_count",
+    ))
     .await;
     let outcome = match &pending_count_result {
         Err(_) => BackendRequestOutcome::Timeout,
@@ -1089,6 +1098,10 @@ async fn probe_quarantined_scheduler_tip(
         probe_timeout,
         quarantined.client.probe_client().schedgateway_get_tip(),
     )
+    .instrument(crate::telemetry::backend_span(
+        "scheduler",
+        "schedgateway_get_tip",
+    ))
     .await;
     let answer = rpc_result
         .map(|result| result.map(|result| shared_scheduler::tip_answer(SCHEDULER, result)));
@@ -1227,6 +1240,10 @@ async fn probe_optional_backend<C: Clone, O>(
     };
     let started_at = Instant::now();
     let rpc_result = tokio::time::timeout(probe_timeout, intro(client.probe_client(), protocol))
+        .instrument(crate::telemetry::backend_span(
+            names.backend.as_str(),
+            names.intro_service,
+        ))
         .await
         .map(|result| result.map(classify));
     let outcome = match &rpc_result {
