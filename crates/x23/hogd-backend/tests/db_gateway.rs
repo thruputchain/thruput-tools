@@ -2,7 +2,13 @@ use groundhog_db_gateway::DbGatewayItemResult;
 use groundhog_db_gateway::DbGatewayPayload;
 use groundhog_db_gateway::DbGatewayResult;
 use groundhog_json_rpc_server::RpcServerError;
+use groundhog_json_rpc_types::ContractAddress;
+use groundhog_json_rpc_types::address_auth::{AuthPublicKey, AuthSigner};
+use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::RPCError;
+use groundhog_xdr::address_auth::{AddressAuthData, PublicKeyConfig, PublicKeyConfigOpt};
+use groundhog_xdr::storage_item::WireStorageItem;
+use groundhog_xdr::types::{Ed25519PublicKey, PublicKey};
 use xdr_common::VecM;
 
 use groundhog_hogd_backend::db_gateway::*;
@@ -75,4 +81,128 @@ fn a_single_key_read_takes_the_first_item_and_fails_on_a_short_batch() {
     .unwrap_err();
     assert!(error.to_string().contains("fewer items"), "{error}");
     assert!(error.to_string().contains("hogd-dev DbGateway"), "{error}");
+}
+
+fn auth_data_with_slots(slots: &[(usize, u8, u32)], required_weight: u32) -> AddressAuthData {
+    let mut public_keys: [PublicKeyConfigOpt; 21] =
+        std::array::from_fn(|_| PublicKeyConfigOpt::new(None));
+    for &(slot, byte, max_weight) in slots {
+        public_keys[slot] = PublicKeyConfigOpt::new(Some(PublicKeyConfig {
+            key: PublicKey::Ed25519 {
+                ed25519: Ed25519PublicKey::from([byte; 32]),
+            },
+            max_weight,
+        }));
+    }
+    AddressAuthData {
+        public_keys,
+        required_weight,
+        last_written_height: 1.into(),
+    }
+}
+
+fn address(byte: u8) -> ContractAddress {
+    Hex0x(groundhog_xdr::types::ContractAddress::from([byte; 32]))
+}
+
+#[test]
+fn registered_auth_data_projects_occupied_slots_with_their_key_ids() {
+    let read = address_auth_data_read(
+        "DbGateway",
+        address(4),
+        9.into(),
+        DbGatewayItemResult::kRPCNone {
+            item: WireStorageItem::kItemTypeAuthData {
+                auth_data: auth_data_with_slots(&[(0, 0xaa, 1), (5, 0xbb, 3)], 2),
+            },
+        },
+    )
+    .expect("registered auth data is a successful read");
+
+    assert_eq!(read.address, address(4));
+    assert_eq!(read.height, 9.into());
+    let auth_data = read.auth_data.expect("auth data is present");
+    assert_eq!(auth_data.required_weight, 2);
+    assert_eq!(
+        auth_data.signers,
+        vec![
+            AuthSigner {
+                key_id: 0,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(Ed25519PublicKey::from([0xaa; 32])),
+                },
+                max_weight: 1,
+            },
+            AuthSigner {
+                key_id: 5,
+                public_key: AuthPublicKey::Ed25519 {
+                    key: Hex0x(Ed25519PublicKey::from([0xbb; 32])),
+                },
+                max_weight: 3,
+            },
+        ]
+    );
+}
+
+#[test]
+fn missing_auth_data_is_an_unconfigured_address_at_a_known_height() {
+    let read = address_auth_data_read(
+        "DbGateway",
+        address(4),
+        9.into(),
+        DbGatewayItemResult::Default {
+            error: RPCError::kRPCNotFound.0,
+        },
+    )
+    .expect("an address without auth data is a successful read");
+
+    assert_eq!(read.address, address(4));
+    assert_eq!(read.height, 9.into());
+    assert!(read.auth_data.is_none());
+}
+
+#[test]
+fn auth_data_reads_fail_on_item_errors_and_foreign_item_kinds() {
+    let error = address_auth_data_read(
+        "hogd-dev DbGateway",
+        address(4),
+        9.into(),
+        DbGatewayItemResult::Default {
+            error: RPCError::kRPCUnrecoverable.0,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
+    assert!(error.to_string().contains("hogd-dev DbGateway"), "{error}");
+
+    let error = address_auth_data_read(
+        "DbGateway",
+        address(4),
+        9.into(),
+        DbGatewayItemResult::kRPCNone {
+            item: WireStorageItem::kItemTypeReplayCacheData,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, RpcServerError::BackendUnavailable(_)));
+    assert!(
+        error.to_string().contains("unexpected item type"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_single_key_batch_yields_its_item_and_snapshot_height() {
+    let (height, item) = single_item(
+        "DbGateway",
+        DbGatewayPayload {
+            block_height: 6.into(),
+            items: VecM(vec![DbGatewayItemResult::Default {
+                error: RPCError::kRPCNotFound.0,
+            }]),
+        },
+    )
+    .expect("one item answers a one-key batch");
+    assert_eq!(height, 6.into());
+    assert!(matches!(item, DbGatewayItemResult::Default { .. }));
 }

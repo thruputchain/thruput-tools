@@ -132,6 +132,7 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::NOT_IMPLEMENTED,
         ],
         "groundhog_getBalance"
+        | "groundhog_getAddressAuthData"
         | "groundhog_getEvents"
         | "groundhog_getTransactionsByAddress"
         | "groundhog_getStorageAt"

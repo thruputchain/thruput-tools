@@ -1,3 +1,4 @@
+pub mod address_auth;
 pub mod airdrop;
 pub mod balance;
 pub mod block;

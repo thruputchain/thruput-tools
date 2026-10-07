@@ -8,6 +8,7 @@ use groundhog_bundle_identity::BundleIdentity;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    address_auth::AddressAuthDataResponse,
     balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     error::codes,
@@ -683,6 +684,18 @@ where
         .await
     }
 
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn get_address_auth_data(
+        &self,
+        address: ContractAddress,
+    ) -> RpcResult<AddressAuthDataResponse> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            Ok(self.read.read_address_auth_data(context, address).await?)
+        })
+        .await
+    }
+
     #[tracing::instrument(
         skip_all,
         fields(
@@ -1065,6 +1078,18 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 item: None,
             })
         }
+
+        async fn read_address_auth_data(
+            &self,
+            _context: RpcRequestContext,
+            address: ContractAddress,
+        ) -> Result<AddressAuthDataResponse, RpcServerError> {
+            Ok(AddressAuthDataResponse {
+                address,
+                height: BlockHeight::from(0),
+                auth_data: None,
+            })
+        }
     }
 
     #[async_trait::async_trait]
@@ -1190,6 +1215,18 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(StorageItemRead {
                 block_height: BlockHeight::from(0),
                 item: None,
+            })
+        }
+
+        async fn read_address_auth_data(
+            &self,
+            _context: RpcRequestContext,
+            address: ContractAddress,
+        ) -> Result<AddressAuthDataResponse, RpcServerError> {
+            Ok(AddressAuthDataResponse {
+                address,
+                height: BlockHeight::from(0),
+                auth_data: None,
             })
         }
     }

@@ -20,6 +20,7 @@ use groundhog_json_rpc_server::{
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, NetworkHash,
+    address_auth::{AddressAuthDataInfo, AddressAuthDataResponse, AuthPublicKey, AuthSigner},
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{
@@ -55,6 +56,8 @@ const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 type StorageCall = (ContractAddress, [u8; 32]);
 type StorageCalls = Arc<Mutex<Vec<StorageCall>>>;
 type BalanceCalls = Arc<Mutex<Vec<ContractAddress>>>;
+type AuthDataCalls = Arc<Mutex<Vec<ContractAddress>>>;
+type ScriptedAuthDataRead = Arc<Mutex<Option<Result<AddressAuthDataResponse, RpcServerError>>>>;
 
 /// Mock backend that emulates a chosen production capability profile.
 ///
@@ -68,6 +71,8 @@ struct ScriptedBackend {
     get_storage_at_calls: StorageCalls,
     native_balance_calls: BalanceCalls,
     storage_read: Arc<Mutex<Option<Result<StorageItemRead, RpcServerError>>>>,
+    auth_data_calls: AuthDataCalls,
+    auth_data_read: ScriptedAuthDataRead,
 }
 
 #[derive(Clone)]
@@ -217,6 +222,19 @@ impl ReadPlane for ScriptedBackend {
             .await
             .clone()
             .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getBalance".into())))
+    }
+
+    async fn read_address_auth_data(
+        &self,
+        _context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        self.auth_data_calls.lock().await.push(address);
+        self.auth_data_read
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getAddressAuthData".into())))
     }
 }
 
@@ -570,6 +588,73 @@ async fn get_balance_errors_for_unexpected_storage_item_kind() {
         .expect_err("bug: unexpected native HOG balance item kind should fail");
 
     assert_eq!(err.code(), codes::BACKEND_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn get_address_auth_data_reads_auth_data_for_all_shapes() {
+    for backend in all_shapes() {
+        let address: ContractAddress =
+            Hex0x(groundhog_xdr::types::ContractAddress::from([10u8; 32]));
+        let read = AddressAuthDataResponse {
+            address,
+            height: BlockHeight::from(321),
+            auth_data: Some(AddressAuthDataInfo {
+                signers: vec![AuthSigner {
+                    key_id: 0,
+                    public_key: AuthPublicKey::Ed25519 {
+                        key: Hex0x(groundhog_xdr::types::Ed25519PublicKey::from([3u8; 32])),
+                    },
+                    max_weight: 1,
+                }],
+                required_weight: 1,
+            }),
+        };
+        let backend = ScriptedBackend {
+            auth_data_read: Arc::new(Mutex::new(Some(Ok(read.clone())))),
+            ..backend
+        };
+        let storage_calls = backend.get_storage_at_calls.clone();
+        let balance_calls = backend.native_balance_calls.clone();
+        let auth_data_calls = backend.auth_data_calls.clone();
+
+        let response = server(backend)
+            .get_address_auth_data(address)
+            .await
+            .expect("bug: scripted auth data read should return successfully");
+
+        assert_eq!(response, read);
+        assert_eq!(*auth_data_calls.lock().await, vec![address]);
+        assert!(storage_calls.lock().await.is_empty());
+        assert!(balance_calls.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn get_address_auth_data_maps_backend_failures_to_rpc_errors() {
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([11u8; 32]));
+    for (failure, code) in [
+        (
+            RpcServerError::BackendUnavailable("db_gateway item: kRPCUnrecoverable".into()),
+            codes::BACKEND_UNAVAILABLE,
+        ),
+        (RpcServerError::BackendTimeout, codes::BACKEND_TIMEOUT),
+        (
+            RpcServerError::NotImplemented("getAddressAuthData".into()),
+            codes::NOT_IMPLEMENTED,
+        ),
+    ] {
+        let backend = ScriptedBackend {
+            auth_data_read: Arc::new(Mutex::new(Some(Err(failure)))),
+            ..ScriptedBackend::default()
+        };
+
+        let err = server(backend)
+            .get_address_auth_data(address)
+            .await
+            .expect_err("bug: scripted auth data failure should surface");
+
+        assert_eq!(err.code(), code);
+    }
 }
 
 #[tokio::test]

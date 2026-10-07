@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError, ViewPlane};
 use groundhog_json_rpc_types::{
     ContractAddress,
+    address_auth::AddressAuthDataResponse,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -80,6 +81,14 @@ impl ReadPlane for StubBackend {
         _address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBalance".into()))
+    }
+
+    async fn read_address_auth_data(
+        &self,
+        _context: RpcRequestContext,
+        _address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getAddressAuthData".into()))
     }
 }
 

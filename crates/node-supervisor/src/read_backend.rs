@@ -13,7 +13,7 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
-use groundhog_db_gateway::DbGateway_DbGateway1_Client;
+use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayPayload};
 use groundhog_hogd_backend::{
     db_gateway as shared_db_gateway, indexer as shared_indexer, intro, receipt as shared_receipt,
     scheduler as shared_scheduler, status as shared_status,
@@ -23,6 +23,7 @@ use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::protocol_token::protocol_from_text;
 use groundhog_json_rpc_types::{
     ContractAddress,
+    address_auth::AddressAuthDataResponse,
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -254,6 +255,18 @@ impl ReadPlane for HogdDevStorageReadBackend {
         )
         .await
     }
+
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        within_request_deadline(
+            context,
+            get_address_auth_data_from_db_gateway(&self.db_gateway, address),
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -387,6 +400,22 @@ impl ReadPlane for HogdDevReadBackend {
         )
         .await
     }
+
+    async fn read_address_auth_data(
+        &self,
+        context: RpcRequestContext,
+        address: ContractAddress,
+    ) -> Result<AddressAuthDataResponse, RpcServerError> {
+        let db_gateway = self
+            .db_gateway
+            .as_ref()
+            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
+        within_request_deadline(
+            context,
+            get_address_auth_data_from_db_gateway(db_gateway, address),
+        )
+        .await
+    }
 }
 
 async fn connect_db_gateway(
@@ -445,11 +474,29 @@ async fn get_native_hog_balance_from_db_gateway(
     get_item_from_db_gateway(db_gateway, address, StorageKey::FreeNativeTokenBalance).await
 }
 
+async fn get_address_auth_data_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+) -> Result<AddressAuthDataResponse, RpcServerError> {
+    let payload = get_payload_from_db_gateway(db_gateway, address, StorageKey::AuthData).await?;
+    let (block_height, item) = shared_db_gateway::single_item(DB_GATEWAY, payload)?;
+    shared_db_gateway::address_auth_data_read(DB_GATEWAY, address, block_height, item)
+}
+
 async fn get_item_from_db_gateway(
     db_gateway: &DbGateway_DbGateway1_Client,
     address: ContractAddress,
     key: StorageKey,
 ) -> Result<StorageItemRead, RpcServerError> {
+    let payload = get_payload_from_db_gateway(db_gateway, address, key).await?;
+    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
+}
+
+async fn get_payload_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+    key: StorageKey,
+) -> Result<DbGatewayPayload, RpcServerError> {
     let request = AddressAndKey {
         address: address.0,
         key,
@@ -458,8 +505,7 @@ async fn get_item_from_db_gateway(
         .dbgateway_get_items(std::slice::from_ref(&request))
         .await
         .map_err(|source| RpcServerError::BackendUnavailable(format!("{DB_GATEWAY}: {source}")))?;
-    let payload = shared_db_gateway::payload(DB_GATEWAY, outer)?;
-    shared_db_gateway::single_item_read(DB_GATEWAY, payload)
+    shared_db_gateway::payload(DB_GATEWAY, outer)
 }
 
 // ---------------------------------------------------------------------------
