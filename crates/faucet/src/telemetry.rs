@@ -125,27 +125,7 @@ pub fn init(
         Ok(provider) => (provider, None),
         Err(error) => (None, Some(error)),
     };
-    let layer = provider.as_ref().map(|provider| {
-        tracing_opentelemetry::layer().with_tracer(provider.tracer(default_service))
-    });
-    let enabled = provider.is_some();
-    tracing_subscriber::registry()
-        // An absent optional layer alone does not disable span construction.
-        .with(tracing_subscriber::filter::filter_fn(move |metadata| {
-            enabled || metadata.target() != "groundhog_otel"
-        }))
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_span_events(events)
-                // OTLP-only spans must not change existing log context or close events.
-                .with_filter(
-                    filter.and(tracing_subscriber::filter::filter_fn(|metadata| {
-                        metadata.target() != "groundhog_otel"
-                    })),
-                ),
-        )
-        .with(layer)
-        .init();
+    subscriber(default_service, filter, events, provider.as_ref()).init();
     if provider.is_some() && invalid_sampler(std::env::var("OTEL_TRACES_SAMPLER").ok().as_deref()) {
         tracing::warn!(
             "invalid OTEL_TRACES_SAMPLER; using parentbased_traceidratio with ratio 0.05"
@@ -155,6 +135,31 @@ pub fn init(
         tracing::warn!(%error, "cannot configure OTLP tracing; continuing");
     }
     provider
+}
+
+fn subscriber(
+    default_service: &'static str,
+    filter: EnvFilter,
+    events: tracing_subscriber::fmt::format::FmtSpan,
+    provider: Option<&SdkTracerProvider>,
+) -> Box<dyn tracing::Subscriber + Send + Sync> {
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_span_events(events)
+            // Keep OTLP-only spans out of log context and close events.
+            .with_filter(
+                filter.and(tracing_subscriber::filter::filter_fn(|metadata| {
+                    metadata.target() != "groundhog_otel"
+                })),
+            ),
+    );
+    match provider {
+        Some(provider) => Box::new(
+            subscriber
+                .with(tracing_opentelemetry::layer().with_tracer(provider.tracer(default_service))),
+        ),
+        None => Box::new(subscriber),
+    }
 }
 
 /// Flush and stop on a blocking worker so tonic can continue using Tokio.
@@ -235,6 +240,27 @@ pub(crate) async fn submit_transaction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_disabled_tracing() {
+        assert!(tracing::info_span!("ordinary").is_disabled());
+        assert!(!tracing::enabled!(tracing::Level::DEBUG));
+        assert!(!tracing::enabled!(tracing::Level::TRACE));
+        assert!(tracing::info_span!(target: "groundhog_otel", "disabled").is_disabled());
+        assert!(tracing::enabled!(tracing::Level::WARN));
+    }
+
+    #[test]
+    fn disabled_subscriber_respects_filter() {
+        tracing::subscriber::with_default(
+            subscriber(
+                "test",
+                EnvFilter::new("warn"),
+                tracing_subscriber::fmt::format::FmtSpan::NONE,
+                None,
+            ),
+            assert_disabled_tracing,
+        );
+    }
     // Child processes isolate SDK env parsing from concurrently running tests.
     #[test]
     fn sampler_environment() {
@@ -289,12 +315,12 @@ mod tests {
             assert!(
                 init(
                     "test",
-                    EnvFilter::new("trace"),
+                    EnvFilter::new("warn"),
                     tracing_subscriber::fmt::format::FmtSpan::NONE,
                 )
                 .is_none()
             );
-            assert!(tracing::info_span!(target: "groundhog_otel", "disabled").is_disabled());
+            assert_disabled_tracing();
             return;
         }
         assert!(sdk_disabled(Some("true")));
@@ -357,7 +383,33 @@ mod tests {
     }
     #[test]
     fn disabled_without_endpoint_builds_no_exporter() {
-        assert!(provider("test", None).unwrap().is_none());
+        if std::env::var_os("GROUNDHOG_TEST_NO_ENDPOINT").is_some() {
+            assert!(
+                init(
+                    "test",
+                    EnvFilter::new("warn"),
+                    tracing_subscriber::fmt::format::FmtSpan::NONE,
+                )
+                .is_none()
+            );
+            assert_disabled_tracing();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "telemetry::tests::disabled_without_endpoint_builds_no_exporter",
+            ])
+            .env("GROUNDHOG_TEST_NO_ENDPOINT", "1")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .env_remove("OTEL_SDK_DISABLED")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
     #[tokio::test]
     async fn enabled_with_endpoint_builds_provider_without_collector() {

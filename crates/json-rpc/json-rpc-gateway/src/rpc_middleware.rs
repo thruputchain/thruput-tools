@@ -253,7 +253,7 @@ mod tests {
                     .call(Request::borrowed("untrusted_method", None, Id::Number(2)))
                     .await;
                 for span in trace.spans.lock().unwrap().drain(..) {
-                    span.record("http.response.status_code", 200);
+                    span.record("http.response.status_code", 200_i64);
                 }
             })
             .with_subscriber(subscriber)
@@ -270,7 +270,6 @@ mod tests {
         for (key, value) in [
             ("rpc.system", "jsonrpc"),
             ("rpc.method", "groundhog_chainTip"),
-            ("http.response.status_code", "200"),
         ] {
             assert!(
                 method
@@ -280,6 +279,10 @@ mod tests {
                         && attribute.value.to_string() == value)
             );
         }
+        assert!(method.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "http.response.status_code"
+                && attribute.value == opentelemetry::Value::I64(200)
+        }));
         let unknown = spans.iter().find(|span| span.name == "unknown").unwrap();
         assert!(
             unknown

@@ -123,7 +123,7 @@ where
                             for span in spans.iter() {
                                 span.record(
                                     "http.response.status_code",
-                                    response.status().as_u16(),
+                                    i64::from(response.status().as_u16()),
                                 );
                             }
                         }
@@ -176,6 +176,35 @@ mod tests {
     use axum::body::Body;
     use std::time::Duration;
     use tower::{ServiceExt, service_fn};
+
+    #[tokio::test]
+    async fn http_service_success_records_200_on_all_rpc_spans() {
+        let (capture, _provider, subscriber) = crate::telemetry::test_support::subscriber();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let mut service = HttpMetricsService {
+            inner: service_fn(|_: Request<Body>| async {
+                let _first = crate::telemetry::rpc_span("groundhog_chainTip");
+                let _second = crate::telemetry::rpc_span("groundhog_chainTip");
+                Ok::<_, std::convert::Infallible>(Response::new(Body::empty()))
+            }),
+            metrics: GatewayMetrics::for_tests(),
+            endpoint: "jsonrpc",
+        };
+        let response = service.call(Request::new(Body::empty())).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let spans = capture.spans.lock().unwrap();
+        assert_eq!(spans.len(), 2);
+        for span in spans.iter() {
+            assert!(
+                span.attributes.iter().any(|attribute| {
+                    attribute.key.as_str() == "http.response.status_code"
+                        && attribute.value == opentelemetry::Value::I64(200)
+                }),
+                "{:?}",
+                span.attributes
+            );
+        }
+    }
 
     #[tokio::test]
     async fn http_service_error_records_500_on_all_rpc_spans() {
