@@ -35,7 +35,7 @@ use tokio::{
 
 use crate::{
     ChildProcessSpec, ChildSupervisor, HogdDevConfig, NodeSupervisorError, SupervisedChild,
-    local_state::{LocalChainState, preflight_state_version},
+    local_state::{LocalChainState, preflight_state_version, state_error},
     pid_file::PidGuard,
 };
 
@@ -289,7 +289,25 @@ impl HogdDevProcess {
         prepare_persistent_data_dir(config)?;
         let binary = binary.as_ref();
         let pid_guards = acquire_pid_guards(config, binary.as_os_str()).await?;
-        let state = LocalChainState::prepare(config)?;
+        // Preparing the chain does blocking file I/O and may wait out a
+        // contended chain lock, so it runs off the async thread.
+        let prepare_config = config.clone();
+        let state =
+            match tokio::task::spawn_blocking(move || LocalChainState::prepare(&prepare_config))
+                .await
+            {
+                Ok(state) => state?,
+                Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+                Err(_) => {
+                    return Err(state_error(
+                        config
+                            .data_dir
+                            .as_deref()
+                            .unwrap_or(Path::new("ephemeral faucet")),
+                        "local chain preparation was cancelled",
+                    ));
+                }
+            };
         let effective = state.config.clone();
         let bootstrap_manifest = write_bootstrap_manifest(&effective, state.public_key())?;
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
