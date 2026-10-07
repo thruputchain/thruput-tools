@@ -90,32 +90,41 @@ fn assert_agents_guide(dir: &std::path::Path, snake_name: &str) {
     assert_contains_all(
         &agents,
         &[
-            "groundhog --skill",
-            "release-matched guidance",
-            "project-local scaffold invariants",
+            "groundhog skill show contracts",
+            "groundhog skill show cli",
+            "groundhog skill show typescript",
+            "groundhog docs export --output <new-directory>",
+            "temporary directory outside the project",
             "groundhog build",
-            "Never use bare Cargo to build RV32",
-            "feature `entrypoints`",
-            "both test commands",
-            "Release builds wrap on integer",
-            "overflow where host builds panic",
+            "bare Cargo RV32 build misses that configuration",
+            "`entrypoints`",
+            "Run both host and RV32",
+            "release builds wrap on integer overflow",
             "tests/test_rv32.rs",
-            "Keep feature `dev`",
+            "Do not make `dev` a default feature",
             "groundhog-integration-test",
-            "snake_case package name",
             "unification",
             "self-referential dev-dependency",
             "resolved SDK version",
             ".cargo/contract.toml",
             "rust-toolchain.toml",
-            "no active profile",
+            "without overwriting unrelated settings",
             "region 'CODE' already defined",
             "sdk::declare_mock_contract!()",
-            "Do not add contract logic",
-            "update its `extern crate` identifier",
+            "Keep contract logic in `implementation.rs`",
+            "`extern crate` identifier",
         ],
     );
     assert!(agents.contains(snake_name));
+    assert!(agents.contains(&format!(
+        "Scaffolded with Groundhog {}",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(!agents.contains("groundhog --skill"));
+    assert!(
+        !agents.contains("npm run"),
+        "contract-only guides must not invent a frontend"
+    );
     assert!(!agents.contains("{{"), "unsubstituted template placeholder");
 }
 

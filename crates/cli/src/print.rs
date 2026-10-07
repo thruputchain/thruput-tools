@@ -37,6 +37,50 @@ pub struct Print {
 }
 
 impl Print {
+    /// Write plain data without terminal formatting or an added newline.
+    pub fn raw(&self, content: &str) -> io::Result<()> {
+        io::stdout().lock().write_all(content.as_bytes())
+    }
+
+    /// Run an external setup UI, keeping its output out of the JSON data stream.
+    pub(crate) fn run_setup_process(
+        &self,
+        command: &mut std::process::Command,
+    ) -> io::Result<std::process::ExitStatus> {
+        use std::process::Stdio;
+        command
+            .stdout(Stdio::from(io::stderr()))
+            .stderr(Stdio::inherit());
+        if self.can_prompt() {
+            command.stdin(Stdio::inherit());
+        } else {
+            command
+                .stdin(Stdio::null())
+                .env("CI", "1")
+                .env("NO_COLOR", "1")
+                .env_remove("FORCE_COLOR")
+                .env("GIT_TERMINAL_PROMPT", "0");
+        }
+        command.status()
+    }
+
+    /// Capture a setup tool's machine report while streaming diagnostics to stderr.
+    /// The caller must obtain consent before starting this non-interactive process.
+    pub(crate) fn run_setup_process_report(
+        command: &mut std::process::Command,
+    ) -> io::Result<std::process::Output> {
+        use std::process::Stdio;
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .env("CI", "1")
+            .env("NO_COLOR", "1")
+            .env_remove("FORCE_COLOR")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+    }
+
     /// Apply the shared error color to framework diagnostics before argument parsing.
     pub fn command_styles() -> clap::builder::Styles {
         let (r, g, b) = theme::ERROR_RGB;

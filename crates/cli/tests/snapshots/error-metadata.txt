@@ -30,6 +30,9 @@ NativeDeploymentUnverified
 Docs
   code: docs_error
 
+Skill
+  code: skill_error
+
 CargoNotFound
   code: cargo_not_found
   hint text: install Rust and ensure `cargo` is on your PATH

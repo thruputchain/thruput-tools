@@ -8,7 +8,6 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
-import shutil
 import tarfile
 
 MAX_FILES = 4096
@@ -16,7 +15,11 @@ MAX_BYTES = 64 * 1024 * 1024
 MAX_TAR_BYTES = MAX_BYTES + MAX_FILES * 1024 + 10240
 
 
-def verify(directory: Path) -> dict:
+def is_agent_guide(name: str) -> bool:
+    return name == "agent-guide.md" or name.startswith("agents/")
+
+
+def verify(directory: Path, allow_agent_guides: bool = False) -> dict:
     pin = json.loads((directory / "snapshot-lock.json").read_text())
     archive = directory / "snapshot.tar.gz"
     if (pin.get("schemaVersion") != 1 or pin.get("archive") != archive.name
@@ -33,6 +36,7 @@ def verify(directory: Path) -> dict:
     paths = set()
     total = 0
     snapshot = None
+    markdown = None
     with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as tar:
         for entry in tar:
             name = entry.name
@@ -42,17 +46,43 @@ def verify(directory: Path) -> dict:
                     or PurePosixPath(name).is_absolute()):
                 raise ValueError(f"unsupported archive entry: {name}")
             paths.add(name)
+            if is_agent_guide(name) and not allow_agent_guides:
+                raise ValueError(f"skill content must not be bundled: {name}")
             total += entry.size
             if len(paths) > MAX_FILES or total > MAX_BYTES:
                 raise ValueError("archive exceeds content limits")
             if name == "snapshot.json":
                 snapshot = json.load(tar.extractfile(entry))
+            if name == "markdown/manifest.json":
+                markdown = json.load(tar.extractfile(entry))
     fields = ("schemaVersion", "sourceRevision", "sourceDirty", "agentGuideCliVersion")
     if snapshot != {field: pin[field] for field in fields}:
         raise ValueError("archive manifest differs from pin")
-    if not {"index.html", "start/index.html", "agent-guide.md"} <= paths:
+    if not {"index.html", "start/index.html", "markdown/index.md",
+            "markdown/full.md", "markdown/manifest.json", "llms.txt", "llms-full.txt"} <= paths:
         raise ValueError("archive is missing required documentation")
+    if not isinstance(markdown, dict) or markdown.get("schemaVersion") != 1 or markdown.get("snapshot") != snapshot:
+        raise ValueError("Markdown export identity differs from the snapshot")
     return pin
+
+
+def import_snapshot(source: Path, target: Path) -> dict:
+    pin = verify(source, allow_agent_guides=True)
+    # Keep the documentation snapshot, but never ship its historical skill copies.
+    output = io.BytesIO()
+    with tarfile.open(source / "snapshot.tar.gz", "r:gz") as original:
+        with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as filtered:
+            for entry in original:
+                if not is_agent_guide(entry.name):
+                    filtered.addfile(entry, original.extractfile(entry))
+    archive = gzip.compress(output.getvalue(), mtime=0)
+    pin.setdefault("sourceArchiveSha256", pin["sha256"])
+    pin["sha256"] = hashlib.sha256(archive).hexdigest()
+    pin["archiveBytes"] = len(archive)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "snapshot.tar.gz").write_bytes(archive)
+    (target / "snapshot-lock.json").write_text(json.dumps(pin, indent=2) + "\n")
+    return verify(target)
 
 
 def main():
@@ -60,12 +90,7 @@ def main():
     parser.add_argument("artifact", type=Path, nargs="?", help="selected downloaded CI artifact directory")
     args = parser.parse_args()
     target = Path(__file__).resolve().parent.parent / "crates/cli/assets/docs"
-    source = args.artifact if args.artifact else target
-    pin = verify(source)
-    if args.artifact:
-        target.mkdir(parents=True, exist_ok=True)
-        for name in ("snapshot.tar.gz", "snapshot-lock.json"):
-            shutil.copyfile(source / name, target / name)
+    pin = import_snapshot(args.artifact, target) if args.artifact else verify(target)
     print(f"Verified docs {pin['sha256']} from developers-site {pin['sourceRevision']}")
 
 

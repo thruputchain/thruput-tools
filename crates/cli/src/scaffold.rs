@@ -204,7 +204,10 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::write(dir.join("Cargo.toml"), apply(CARGO_TOML, name))?;
     fs::write(dir.join("build.rs"), BUILD_RS)?;
     fs::write(dir.join(".gitignore"), GITIGNORE)?;
-    fs::write(dir.join("AGENTS.md"), apply(AGENTS_MD, name))?;
+    let agents = apply(AGENTS_MD, name)
+        .replace("{{CLI_VERSION}}", env!("CARGO_PKG_VERSION"))
+        .replace("{{TEMPLATE_NAME}}", template);
+    fs::write(dir.join("AGENTS.md"), agents)?;
     fs::write(dir.join("groundhog.toml"), apply(GROUNDHOG_TOML, name))?;
     fs::write(dir.join("rust-toolchain.toml"), apply(RUST_TOOLCHAIN, name))?;
     fs::write(dir.join(".cargo/config.toml"), apply(CARGO_CONFIG, name))?;

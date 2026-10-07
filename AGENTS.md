@@ -182,28 +182,18 @@ Report checks actually run and any environment blockers.
   [runtime-manifest docs](docs/gateway/runtime-manifest.md) and
   [simulator docs](docs/sim/README.md) for details.
 
-## Bundled knowledge and releases
+## Agent guidance and releases
 
 For Groundhog programming-model or developer-workflow changes, load the
-checkout's bundled guidance with `cargo run -p groundhog-cli -- --skill`.
-If building is unavailable, read
-`crates/cli/assets/groundhog/knowledge/generated/agent-guide.md`.
-Editable sources are `knowledge/bundle.toml` and its records; generated files
-must be assembled, not edited. Review the bundle on workspace/CLI version
-bumps and changes to CLI, scaffold, SDK, bindings, client, wallets, or public
-RPC workflows. Verify claims against current APIs, examples, and installable
-versions, then run:
+installed guidance with `cargo run -p groundhog-cli -- skill show`, then read
+the relevant reference with `skill show <topic>`. Install it first with
+`groundhog skill install` if absent. If building is unavailable, read the files
+under `.agents/skills/groundhog` in the project or home directory.
+Maintain skill content in `groundhogchain/agent-skills`; do not copy it into
+this repository or release artifacts. Skill updates are independent of CLI
+releases. Verify guidance against current APIs and installed dependencies.
 
-```sh
-cargo run -p groundhog-agent-knowledge -- build
-cargo run -p groundhog-agent-knowledge -- check
-cargo test -p groundhog-cli skill
-cargo test -p groundhog-agent-knowledge
-cargo package -p groundhog-cli --list --allow-dirty --locked
-```
-
-Inspect the package list for the bundled knowledge files. Keep the selected
-developer-site snapshot explicit; follow
+Keep the selected developer-site documentation snapshot explicit; follow
 [bundled documentation maintenance](docs/bundled-documentation.md).
 
 For releases, keep workspace versions and internal exact dependency pins

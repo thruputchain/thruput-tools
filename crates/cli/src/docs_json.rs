@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub const DOCS_JSON_SCHEMA_VERSION: u32 = 1;
 
 /// Documentation server readiness and the identity of the served snapshot.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DocsReport {
     /// Version of this readiness payload.
@@ -24,10 +24,13 @@ pub struct DocsReport {
     pub cli_version: String,
     /// Whether the included agent guide targets this CLI version.
     pub guide_matches_cli: bool,
+    /// Absolute Markdown index path, absent for older snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown_index: Option<PathBuf>,
 }
 
 /// Identity of the site source and agent guide, not a qualified SDK release set.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     /// Version of the developer-site snapshot manifest.

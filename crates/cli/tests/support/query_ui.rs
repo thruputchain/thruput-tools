@@ -11,6 +11,55 @@ use tempfile::TempDir;
 
 use super::Pty;
 
+#[test]
+fn skill_setup_collects_consent_before_forwarding_the_installer_ui() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().unwrap();
+    for (name, script) in [
+        ("node", "#!/bin/sh\nprintf 'v22.20.0\\n'\n"),
+        ("npm", "#!/bin/sh\nexit 0\n"),
+        ("git", "#!/bin/sh\nexit 0\n"),
+        (
+            "npx",
+            "#!/bin/sh\nif [ \"$3\" = list ]; then\n  if [ \"$SKILL_UI_GLOBAL\" = 1 ] && [ \"$5\" != --global ]; then\n    printf '[]\\n'\n  else\n    printf '%s\\n' '[{\"name\":\"groundhog\",\"source\":\"groundhogchain/agent-skills\"}]'\n  fi\n  exit 0\nfi\nprintf 'installer-agent-selection: '\nread -r agent\nprintf '%s' \"$agent\" > selected-agent\n",
+        ),
+    ] {
+        let path = root.path().join(name);
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    for (approved, global) in [(false, false), (true, false), (true, true)] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+        command
+            .args(["skill", "install", "--no-ui"])
+            .env("SKILL_UI_GLOBAL", if global { "1" } else { "0" })
+            .env("PATH", root.path())
+            .current_dir(root.path());
+        let mut pty = Pty::spawn(command);
+        pty.until(|pty| String::from_utf8_lossy(&pty.raw).contains("[y/N]"));
+        assert!(!root.path().join("selected-agent").exists());
+        pty.master
+            .write_all(if approved { b"y\n" } else { b"n\n" })
+            .unwrap();
+        if approved {
+            pty.until(|pty| {
+                String::from_utf8_lossy(&pty.raw).contains("installer-agent-selection:")
+            });
+            pty.master.write_all(b"opencode\n").unwrap();
+        }
+        assert_eq!(pty.finish().success(), approved);
+        if approved {
+            assert_eq!(
+                fs::read_to_string(root.path().join("selected-agent")).unwrap(),
+                "opencode"
+            );
+            fs::remove_file(root.path().join("selected-agent")).unwrap();
+        } else {
+            assert!(!root.path().join("selected-agent").exists());
+        }
+    }
+}
+
 struct Query {
     root: TempDir,
     server: thread::JoinHandle<Value>,

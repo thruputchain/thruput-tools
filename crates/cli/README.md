@@ -919,16 +919,70 @@ profiles may name a default key.
 
 ## AI-Assisted Development
 
-The installed CLI carries release-matched guidance for coding agents:
+Install the latest maintained Groundhog skill for your coding agent:
 
 ```bash
-groundhog --skill
+groundhog skill install
+groundhog skill install --global --agent opencode
+groundhog skill update
+groundhog skill update --global
 ```
 
-This is a root-only, exclusive mode rather than a global flag; invoke it exactly
-as shown. The command prints the complete Groundhog skill as Markdown without
-network access or filesystem changes. An agent can read it directly, or the
-user can save and install it using the agent's normal skill workflow.
+Installation is project-local by default. Interactive installation lets you
+select agents and choose project or global scope; `--global` fixes the scope
+before starting the installer. Repeat `--agent` to select more than one explicitly. Updates
+affect only the installed Groundhog skill in the selected scope. An absent
+installation needs `skill install` first. Reinstalling refreshes its files.
+Global updates fetch and reinstall the skill, even when its content has not
+changed. The CLI requires a successful installation report: the upstream global
+update check can exit successfully after a source-check failure.
+
+These commands wrap `skills@1.7.0` and require Node.js 22.20 or newer, npm, Git,
+and network access. The skill source is `groundhogchain/agent-skills`. While
+private, it requires repository access and Git credentials, GitHub CLI
+authentication, or SSH authentication. The equivalent direct commands are:
+
+```sh
+npx skills@1.7.0 add groundhogchain/agent-skills --skill groundhog
+npx skills@1.7.0 update groundhog --project
+npx skills@1.7.0 add groundhogchain/agent-skills --skill groundhog --global --yes --json
+```
+
+For automation, authorize setup with `--yes` and select the installation agent:
+
+```sh
+groundhog skill install --agent opencode --yes --non-interactive --json
+groundhog skill update --yes --non-interactive --json
+```
+
+`--non-interactive` alone does not grant consent. Installer diagnostics go to
+stderr; JSON results go to stdout. `--offline` rejects installation and updates.
+
+Read the installed skill without running Node/npm or accessing the network:
+
+```sh
+groundhog skill list
+groundhog skill show
+groundhog skill show contracts
+groundhog skill show references/contracts.md
+groundhog skill show --global
+```
+
+`show` prints the installed `SKILL.md` unchanged. A topic such as `contracts`,
+`contracts.md`, or `references/contracts.md` selects that reference file.
+`list` prints the available reference names in sorted order. Both commands
+support `--json`, which reports the installation scope, file or directory path,
+reference names for `list`, and file content for `show`.
+
+Reads prefer `.agents/skills/groundhog` in the current directory, then
+`$HOME/.agents/skills/groundhog`. Use `--global` to select only the latter.
+If neither is installed, the command fails and asks you to run
+`groundhog skill install`. A missing reference or damaged project installation
+is an error, not a reason to read a different installation.
+
+The CLI contains no skill copy. Updates to the installed files take effect
+immediately. Use installed command help and project dependency versions when
+examples differ.
 
 ## Local documentation
 
@@ -936,6 +990,10 @@ user can save and install it using the agent's normal skill workflow.
 groundhog docs                 # Serve bundled docs at http://127.0.0.1:4321
 groundhog docs --port 8080     # Choose a port (0 selects an available one)
 groundhog docs --dir /path/to/developers-site/dist/docs-snapshot
+groundhog docs --background    # Return after the server is ready
+groundhog docs status          # Inspect the per-user background instance
+groundhog docs stop            # Stop it without deleting documentation
+groundhog docs export --output ./groundhog-docs
 ```
 
 The selected developer-site snapshot is embedded in the CLI. On first use it is
@@ -944,6 +1002,27 @@ keyed by its archive SHA-256. Later runs verify and reuse those files. Damaged o
 partial cache entries are rebuilt from the bundled bytes; no network request or
 administrator access is needed. Clearing the docs cache is safe while servers
 are stopped; the next invocation recreates it.
+
+When a snapshot includes `markdown/index.md`, startup reports its absolute
+path alongside the browser URL. Agents can read those files without HTTP.
+`docs export` copies the Markdown tree and snapshot provenance to a new
+directory without starting a server. The destination's parent must exist;
+an existing destination is rejected so user files are preserved. The exported
+folder can be copied to an agent on another machine.
+
+The bundled snapshot includes individual pages under `pages/`, focused bundles
+under `sections/`, and the complete documentation in `full.md`. Start at
+`index.md` to choose the relevant material. With `--dir`, older snapshots still
+support browser serving; export reports an error if their Markdown set is missing.
+
+Foreground serving remains the default (`--foreground` is explicit).
+Background mode is supported on Unix and does not restart after reboot.
+There is one managed instance per Groundhog cache directory. Repeating the
+same start command reuses it; a different port, snapshot, or executable requires
+`docs stop` first. Startup waits for readiness and reports a log path under
+`groundhog/docs-service/`. Status and stop address only the managed instance,
+not a foreground server. Stale state is cleared when its server is no longer
+present. The browser and control endpoints remain on loopback.
 
 `--dir` serves a trusted local build directly and bypasses the bundled cache.
 Keep such a directory unchanged while serving. Open the printed loopback URL;
