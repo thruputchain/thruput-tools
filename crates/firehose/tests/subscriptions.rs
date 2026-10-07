@@ -1,3 +1,8 @@
+//! This binary spawns processes. A spawned child holds a copy of every open
+//! descriptor until its exec closes them, including the `flock` on an archive
+//! `LOCK`, so tests here must not drop and reopen a `Store` in-process: the reopen
+//! can fail with `WouldBlock`.
+
 use std::{
     sync::{
         Arc, Mutex,
@@ -205,6 +210,23 @@ async fn wait_for_serve(address: std::net::SocketAddr, child: &mut tokio::proces
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_for_tip(client: &WsClient, tip: i64) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let stats: Value = client
+                .request("firehose_stats", rpc_params![])
+                .await
+                .unwrap();
+            if stats["tip"] == tip {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -853,12 +875,16 @@ async fn one_upstream_pull_stream_with_zero_one_and_fifty_real_websocket_subscri
         .spawn()
         .unwrap();
     wait_for_serve(address, &mut child).await;
+    let probe = connect(address).await;
 
     assert_eq!(upstream.active.load(Ordering::SeqCst), 1);
     let mut clients = Vec::new();
     let mut subs = Vec::new();
     let mut current = fixture();
     for (round, count) in [0, 1, 50].into_iter().enumerate() {
+        if round > 0 {
+            wait_for_tip(&probe, i64::try_from(round).unwrap()).await;
+        }
         while clients.len() < count {
             let client = connect(address).await;
             let sub = subscribe(&client, Cursor::Tip).await;
@@ -1135,43 +1161,6 @@ async fn typed_client_future_cursor_and_invalid_cursor() {
     drop(sub);
     drop(client);
     server.stopped().await;
-}
-
-#[tokio::test]
-async fn catchup_refuses_archive_corruption_after_recovery() {
-    for malformed in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
-        let mut original = fixture();
-        let mut store = Store::open(dir.path()).unwrap();
-        store.append(&original).unwrap();
-        drop(store);
-        let store = Store::open(dir.path()).unwrap();
-        let hub = Hub::new(dir.path().to_owned(), store.height(), config());
-        // Keep valid XDR and the expected height, but invalidate its commitment.
-        original.block.payload.consensus_value.prev_hash =
-            original.block.identity.consensus_hash.clone();
-        let bytes = if malformed {
-            vec![0]
-        } else {
-            xdrs::txs::encode(&original).unwrap()
-        };
-        std::fs::write(dir.path().join("00000000000000000001.xdr"), bytes).unwrap();
-        let (address, server) = hub.serve().await.unwrap();
-        let client = connect(address).await;
-        let mut sub = subscribe(&client, Cursor::Height { height: 1 }).await;
-        assert_eq!(
-            receive(&mut sub).await,
-            serde_json::json!({
-                "type": "closed", "reason": "archive_corrupt", "nextHeight": 1
-            })
-        );
-        assert_eq!(hub.stats()["totals"]["blocksSent"], 0);
-        assert_eq!(hub.stats()["totals"]["disconnects"]["archive_corrupt"], 1);
-        server.stop().unwrap();
-        drop(sub);
-        drop(client);
-        server.stopped().await;
-    }
 }
 
 #[tokio::test]
